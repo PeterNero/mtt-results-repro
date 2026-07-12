@@ -1,0 +1,107 @@
+{
+  "certificate": "IwasawaNonInvariantGalerkinExecutionProtocol",
+  "status": "NONINVARIANT_GALERKIN_EXECUTION_PROTOCOL_FORMULATED_VALUES_OPEN",
+  "purpose": "Turn the active non-invariant spectral fallback into a finite executable matrix protocol once a selected D_E source is supplied.",
+  "depends_on": [
+    "iwasawa_spectral_operator_gate_certificate.json",
+    "iwasawa_invariant_a01_repair_obstruction_certificate.json",
+    "iwasawa_selected_de_construction_attempt_certificate.json",
+    "iwasawa_spectral_galerkin_data.template.json"
+  ],
+  "operator_source_gate": {
+    "selected_D_E_supplied_now": false,
+    "accepted_sources": [
+      "typed monad/Cech data plus induced HYM or Dolbeault-Hodge operator",
+      "corrected selected non-invariant A^(0,1) with integrability and residual bounds",
+      "direct selected HYM/Strominger solve with gauge fixing and residual certificate"
+    ],
+    "rejected_sources": [
+      "literal printed invariant A01",
+      "small invariant repair of printed A01",
+      "unselected sparse h1=3 diagnostic candidate",
+      "rank-one Yukawa seed alone",
+      "observed flavor data"
+    ]
+  },
+  "hilbert_space": {
+    "space": "H = L2(Omega^{0,*}(X,E)) or the sector-resolved bundle-valued spinor replacement",
+    "operator": "D_E with L_E = D_E^* D_E, or the corresponding Dolbeault Laplacian",
+    "domain_requirements": [
+      "compact Iwasawa lattice or fundamental-domain boundary conditions",
+      "bundle transition law or chosen global frame with verified equivariance",
+      "Hermitian metric and volume form",
+      "gauge fixing or horizontal condition"
+    ]
+  },
+  "finite_basis_protocol": {
+    "nested_spaces": "V_N subset H with projections P_N and P_N -> I strongly",
+    "basis_options": [
+      "deck-equivariant spectral/Fourier basis on the compact Iwasawa quotient",
+      "finite-element or spectral-element basis on a fundamental domain with periodic/deck constraints"
+    ],
+    "must_include": [
+      "left-invariant seed sector",
+      "non-invariant modes",
+      "bundle fiber basis",
+      "sector labels needed for Q,u,d,L,e,N,H"
+    ],
+    "basis_checks": [
+      "Gram matrix G_N is positive definite",
+      "basis respects the compact quotient identifications",
+      "basis is not just the invariant subspace",
+      "basis does not treat scalar central-circle Fourier modes as untwisted zero modes"
+    ]
+  },
+  "matrix_protocol": {
+    "gram_matrix": "G_N[i,j] = <b_i,b_j>",
+    "stiffness_matrix": "K_N[i,j] = <D_E b_i, D_E b_j>",
+    "generalized_eigenproblem": "K_N v = lambda G_N v",
+    "orthonormal_special_case": "if G_N=I then L_N=K_N",
+    "family_projector": "for a G_N-orthonormal eigenvector matrix V_fam, P_fam,N = V_fam V_fam^* G_N",
+    "green_operator": "G_red,N = sum_{lambda_j outside family} lambda_j^{-1} v_j v_j^* G_N"
+  },
+  "gap_error_certificate": {
+    "computed_cluster": "lambda_1 <= lambda_2 <= lambda_3 <= epsilon_low",
+    "computed_gap": "lambda_4 >= gamma_gap",
+    "total_error_budget": "eta_total = eta_basis + eta_operator_residual + eta_quadrature + eta_HYM",
+    "pass_rule": "epsilon_low + eta_total < tau < gamma_gap - eta_total for some tau > 0",
+    "consequence": "the Riesz projector below tau has rank three and is stable under the certified errors"
+  },
+  "outputs_if_pass": {
+    "kernel_dimension": 3,
+    "Psi_i": "Psi_i: three selected G_N-orthonormal representatives",
+    "anti_family_condition": "anti-family modes absent or separated by the certified gap",
+    "sector_maps": "Q,u,d,L,e,N,H projection matrices",
+    "dotD_alpha1": "dotD_alpha1: matrix of the selected C1 alpha1 variation in the same basis",
+    "cubic_or_overlap_tensor": "E6 cubic or sector overlap tensor evaluated on Psi_i",
+    "feeds": [
+      "iwasawa_selected_cohomology_data.template.json",
+      "selected_zero_mode_basis_dotd_interface_certificate.json",
+      "selected_c1_primitive_contractions.template.json"
+    ]
+  },
+  "values_still_open": {
+    "selected_D_E": true,
+    "basis_B_N": true,
+    "G_N": true,
+    "K_N": true,
+    "eigenpairs": true,
+    "eta_total": true,
+    "Psi_i": true,
+    "sector_maps": true,
+    "dotD_alpha1": true
+  },
+  "guardrails": {
+    "claims_selected_D_E_constructed": false,
+    "claims_kernel_dimension_three_now": false,
+    "uses_observed_masses_or_mixings": false,
+    "uses_invariant_A01_repair": false,
+    "uses_diagnostic_candidate_as_selected": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_execution_protocol": true,
+    "closes_numerical_or_symbolic_values": false,
+    "next_step": "Fill this protocol with one selected D_E source and a first finite non-invariant basis V_N."
+  }
+}

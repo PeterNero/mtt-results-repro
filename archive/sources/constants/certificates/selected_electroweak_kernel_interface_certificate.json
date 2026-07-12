@@ -1,0 +1,50 @@
+{
+  "status": "ELECTROWEAK_KERNEL_INTERFACE_BUILT_NUMERIC_SELECTION_OPEN",
+  "purpose": "Build the selected electroweak threshold/gauge-normalization kernel interface and identify the remaining values.",
+  "kernel": {
+    "matching_scale": "mu_Theta[B]",
+    "weights": "zeta_a[B] from Theta/geometric/twistor overlap ratios",
+    "normalization": "kappa_EW[B]",
+    "threshold_vector": "Delta_a^sel[B]",
+    "scheme": "fixed RG and threshold convention",
+    "prediction_map": "G_a(MZ)=kappa_EW*zeta_a+Delta_a^sel+b_a/(8*pi^2)*log(mu_Theta/MZ)"
+  },
+  "source_supported": {
+    "zeta_ratios": true,
+    "relative_overlap_normalization": true,
+    "tree_gauge_kinetic_slot": true,
+    "threshold_slot": true,
+    "rho_UV_internal_value": true
+  },
+  "not_source_selected_yet": {
+    "kappa_EW": true,
+    "Delta_sel": true,
+    "mu_Theta_no_knob": true,
+    "rho_UV_to_EW_map": true
+  },
+  "candidate_paths": {
+    "A_primitive_common_normalization": {
+      "classification": "CONDITIONAL_PRIMITIVE_ROUTE",
+      "requires": "one universal prior kappa shared across multiple sectors with predictive surplus"
+    },
+    "B_flux_strominger_threshold": {
+      "classification": "BEST_STRICT_NO_KNOB_ROUTE",
+      "requires": "selected spectrum, analytic torsion, or finite threshold determinant on the heterotic flux branch"
+    },
+    "C_rho_uv_response_bridge": {
+      "classification": "POWERFUL_OPEN_ROUTE",
+      "requires": "source-certified map Phi_EW(rho_UV, branch data)->(kappa_EW,Delta_sel,mu_Theta)"
+    }
+  },
+  "forbidden": [
+    "choosing kappa_EW from observed alpha_EM or g2 while claiming prediction",
+    "choosing Delta_sel to match sin^2(theta_W)",
+    "identifying rho_UV with an electroweak threshold without a source map",
+    "using K calibrated from gauge data as a no-knob prediction"
+  ],
+  "verdict": {
+    "kernel_interface_built": true,
+    "numeric_electroweak_closure": false,
+    "next_required_computation": "Select or compute (kappa_EW, Delta_sel, mu_Theta) from selected MTT data."
+  }
+}

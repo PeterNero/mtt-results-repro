@@ -1,0 +1,121 @@
+{
+  "lanes": [
+    {
+      "allowed_to_close": [
+        "diagnostic residual rows",
+        "forbidden fit-factor guard"
+      ],
+      "inputs": [
+        "candidate_data/selected_higgsqcdthresholdrows_or_correlatedprofilefill/qcd_threshold_residual_rows.packet.json"
+      ],
+      "lane_id": "L0_straight_measured_replay",
+      "lane_kind": "STRAIGHT_PATH",
+      "not_allowed_to_close": [
+        "threshold repair values",
+        "selected Qa/SU3 operator packet",
+        "correlated profile"
+      ],
+      "role": "establish current proxy rows and residuals from declared measured parity inputs",
+      "status": "CLOSED_DIAGNOSTIC_ONLY"
+    },
+    {
+      "allowed_to_close": [
+        "acceptance conditions",
+        "scheme/covariance preconditions"
+      ],
+      "inputs": [
+        "candidate_data/selected_thresholdmassschemecovariancefill_or_qasu3packetintegration/threshold_mass_scheme_covariance_acceptance_contract.packet.json"
+      ],
+      "lane_id": "L1_threshold_mass_scheme_contract",
+      "lane_kind": "SUPERSET_CONSTRAINT_PATH",
+      "not_allowed_to_close": [
+        "numeric threshold values"
+      ],
+      "role": "declare legal mass-scheme, alpha_s, threshold, and covariance conditions before any value can promote",
+      "status": "CONSTRAINTS_AVAILABLE_VALUES_OPEN"
+    },
+    {
+      "allowed_to_close": [
+        "operator source attachment if a future promotable packet appears"
+      ],
+      "inputs": [
+        "candidate_data/sm_equivalence_crossrepo_qasu3_status_import.candidate.json"
+      ],
+      "lane_id": "L2_qasu3_source_operator",
+      "lane_kind": "SUPERSET_SOURCE_PATH",
+      "not_allowed_to_close": [
+        "numeric threshold corrections from residuals"
+      ],
+      "role": "supply selected color/Yukawa/trace operator attachment for source-sensitive QCD rows",
+      "status": "SUPPORT_IMPORTED_FINAL_PACKET_OPEN"
+    },
+    {
+      "allowed_to_close": [
+        "QCD covariance/profile block if entries are filled and PSD/profile tests pass"
+      ],
+      "inputs": [
+        "candidate_data/selected_higgsqcdthresholdrows_or_correlatedprofilefill/correlated_profile_fill_status_after_qcd_thresholds.packet.json"
+      ],
+      "lane_id": "L3_correlated_profile",
+      "lane_kind": "SUPERSET_PROFILE_PATH",
+      "not_allowed_to_close": [
+        "source/operator selection",
+        "threshold correction values by fit"
+      ],
+      "role": "supply covariance/profile constraints for the QCD color-threshold block",
+      "status": "BLUEPRINT_AVAILABLE_VALUES_OPEN"
+    },
+    {
+      "allowed_to_close": [
+        "ranked candidate proposals"
+      ],
+      "inputs": [
+        "candidate_data/inverse_superset_search_spec.candidate.json"
+      ],
+      "lane_id": "L4_inverse_discovery",
+      "lane_kind": "SUPERSET_DISCOVERY_PATH",
+      "not_allowed_to_close": [
+        "proof promotion",
+        "residual-selected correction factors"
+      ],
+      "role": "rank candidate threshold/source packets only as discovery; all candidates must replay forward",
+      "status": "DISCOVERY_ONLY"
+    }
+  ],
+  "locked_target": {
+    "channels": [
+      "H_to_ss",
+      "H_to_gg"
+    ],
+    "locked_by": [
+      "declared threshold/mass-scheme contract",
+      "same-branch Qa/SU3 operator attachment or explicit parity-interface substitute",
+      "forward replay before benchmark comparison",
+      "QCD block covariance/profile status recorded separately"
+    ],
+    "must_be_shared_across_channels": true,
+    "must_not_use": [
+      "benchmark_over_proxy_ratio as correction",
+      "separate continuous multiplier per channel",
+      "observed Higgs widths as source selectors",
+      "support-only Qa/SU3 packets as final source closure"
+    ],
+    "name": "non-fit Higgs QCD threshold repair packet"
+  },
+  "observed_data_used_as_selector": false,
+  "schema": "MTTHiggsSupersetQCDRepairController.v1",
+  "status": "SUPERSET_QCD_REPAIR_CONTROLLER_BUILT_VALUES_OPEN",
+  "superset_strategy": {
+    "measured_targets_used_to_lock_source": false,
+    "mode": "MULTI_PATH_CONSTRAINTS_TO_LOCKED_TARGET",
+    "paths_combined_as_knobs": false,
+    "straight_path_used_for": "current replay and residual diagnostics",
+    "superset_paths_used_for": [
+      "threshold/mass-scheme/covariance legality",
+      "selected Qa/SU3 source/operator attachment",
+      "correlated profile validation",
+      "discovery-only candidate generation"
+    ]
+  },
+  "target_fitting_used": false
+}

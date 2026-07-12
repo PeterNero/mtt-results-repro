@@ -1,0 +1,137 @@
+# Q79 Typed Monad/Cech or HYM Connection Witness Interface v1
+
+## Result
+
+Status: `Q79_TYPED_MONAD_CECH_OR_HYM_CONNECTION_WITNESS_INTERFACE_BUILT_VALUES_OPEN`
+
+This builds the executable acceptance interface for
+`Q79_Typed_Monad_Cech_or_HYM_Connection_Witness_v1`. It does not fill the
+witness values. It defines what would count as a proof-source payload and keeps
+the diagnostic shortcuts forbidden.
+
+## Interface Checks
+
+```json
+{
+  "R0_previous_next_is_q79_witness": true,
+  "R1_q79_witness_contract_open": true,
+  "R2_q79_typed_contract_open": true,
+  "R3_exact_three_route_payload_schema": true,
+  "R4_existing_finite_connection_attempt_blocks_on_source": true,
+  "R5_existing_typed_monad_attempt_blocks_on_typed_maps": true,
+  "R6_routec_is_shortest_non_circular_route_but_values_open": true,
+  "R7_forbidden_shortcuts_preserved": true
+}
+```
+
+## Witness Payload Schema
+
+```json
+{
+  "route_A_honest_selected_routec_source_certificate": {
+    "must_pass": [
+      "validate_iwasawa_route_c_residuals.py",
+      "validate_iwasawa_selected_source_promotion.py",
+      "validate_selected_hym_operator_source.py"
+    ],
+    "must_supply": [
+      "source.selected_by_mtt = true",
+      "source.fixture_only = false",
+      "source.source_certificate points to this or stronger witness",
+      "background.charge_sector_only = false",
+      "background.visible_sm_bundle_model_selected = true",
+      "background.matter_operator_source_constructed = true",
+      "operator_source.selected_D_E_constructed = true",
+      "operator_source.selected_dotD_constructed = true",
+      "operator_source.selected_riesz_green_constructed = true",
+      "operator_source.projector_retention_selected = true"
+    ]
+  },
+  "route_B_typed_monad_cech_de_witness": {
+    "must_pass": [
+      "validate_iwasawa_route_c_residuals.py",
+      "validate_iwasawa_de_action.py",
+      "validate_iwasawa_riesz_gap.py",
+      "validate_iwasawa_reduced_green.py",
+      "validate_iwasawa_dotd_response.py",
+      "validate_iwasawa_selected_source_promotion.py",
+      "validate_selected_hym_operator_source.py"
+    ],
+    "must_supply": [
+      "typed f_i and g_i sections in declared line-bundle spaces",
+      "Cech transitions and cocycle data",
+      "machine-checkable g o f = 0",
+      "exactness or controlled torsion-free substitute",
+      "selected Hermitian metric and gauge fixing",
+      "integrability F^(0,2)=0",
+      "finite basis B_N and D_E action on B_N",
+      "Riesz gap, reduced Green, and dotD alpha1 response packets"
+    ],
+    "then_compute": [
+      "basis B_N",
+      "Gram matrix G_N",
+      "operator matrix L_N",
+      "Riesz projector",
+      "gap/error certificate",
+      "selected Psi_i"
+    ]
+  },
+  "route_C_direct_selected_hym_connection": {
+    "must_pass": [
+      "validate_iwasawa_route_c_residuals.py",
+      "validate_iwasawa_de_action.py",
+      "validate_iwasawa_riesz_gap.py",
+      "validate_iwasawa_reduced_green.py",
+      "validate_iwasawa_dotd_response.py",
+      "validate_iwasawa_selected_source_promotion.py",
+      "validate_selected_hym_operator_source.py"
+    ],
+    "must_supply": [
+      "selected stable visible SM bundle or sheaf model",
+      "selected Gauduchon/balanced metric",
+      "explicit HYM or Strominger connection coefficients",
+      "gauge-fixing condition",
+      "F^(0,2)=0 residual bound",
+      "Lambda F = lambda Id residual bound",
+      "Bianchi/Green-Schwarz residual bound",
+      "finite rho_E, D_E, Riesz, Green, dotD, and projector packets"
+    ]
+  }
+}
+```
+
+## Existing Attempts
+
+```json
+{
+  "finite_connection_source_solve": {
+    "all_current_non_source_blockers_reduced": true,
+    "selected_connection_source_solved": false,
+    "status": "QA_SU3_SELECTED_CONNECTION_SOURCE_SOLVE_ATTEMPT_BLOCKED_BY_SELECTED_OPERATOR_SOURCE"
+  },
+  "typed_monad_data_fill": {
+    "de_operator_packet_filled": false,
+    "rhoE_packet_filled": false,
+    "status": "QA_SU3_TYPED_MONAD_DATA_FILL_ATTEMPT_BLOCKED_TYPED_MAPS_MISSING",
+    "typed_maps_filled": false
+  }
+}
+```
+
+## What Remains Open
+
+```json
+{
+  "all_24_primitive_C1_3x3_matrices": true,
+  "finite_rhoE_transition_data": true,
+  "full_SM_or_no_knob_closure": true,
+  "honest_DE_Riesz_Green_dotD_packets": true,
+  "honest_routec_residual_packet": true,
+  "same_source_ChernWeil_GS_row": true,
+  "selected_C1_response_matrices": true,
+  "selected_visible_sm_bundle_or_sheaf_model": true,
+  "typed_f_g_maps_or_direct_connection_coefficients": true
+}
+```
+
+Next required artifact: `Q79_Typed_Monad_Cech_or_HYM_Connection_Witness_Value_Fill_Attempt_v1`.

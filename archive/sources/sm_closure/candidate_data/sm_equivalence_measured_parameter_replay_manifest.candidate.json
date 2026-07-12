@@ -1,0 +1,348 @@
+{
+  "acceptance_tests_for_next_packet": [
+    "every slot has a versioned reference or is explicitly marked out of scope",
+    "all dimensionful slots carry units and conversion policy",
+    "all running quantities carry scheme and scale",
+    "all matrices carry basis and phase conventions",
+    "no reference value is used to alter the selected source boundary"
+  ],
+  "candidate": "MTTSMEquivalenceMeasuredParameterReplayManifest",
+  "closure_claimed": false,
+  "forbidden_promotions": [
+    "measured Yukawa matrix -> selected dynamic overlap tensor",
+    "measured CKM/PMNS phase -> selected CP source",
+    "measured gauge couplings -> selected threshold kernel",
+    "measured masses -> family or representation selector",
+    "good replay residual -> no-knob proof"
+  ],
+  "inputs": {
+    "core_axioms_measured_parameter_interface": "candidate_data/core_axioms_measured_parameter_interface.candidate.json",
+    "empirical_equivalence_ledger": "candidate_data/empirical_equivalence_ledger.candidate.json",
+    "measured_replay_admission": "candidate_data/sm_equivalence_measured_replay_admission.candidate.json",
+    "selected_smslotfunctor_downstream_payload_ledger": "candidate_data/selected_smslotfunctor_downstream_operator_payloads_or_smparity_ledger.candidate.json",
+    "sm_sector_embedding_interface": "candidate_data/sm_sector_embedding_interface.candidate.json"
+  },
+  "next_required_artifact": "MTT_SM_Equivalence_Reference_Data_Packet_v1",
+  "no_knob_closure_claimed": false,
+  "observed_data_used_as_selector": false,
+  "preconditions": {
+    "all_six_static_sm_slot_arrows_closed": true,
+    "empirical_interfaces_ready": true,
+    "measured_admission_closed": true,
+    "measured_inputs_do_not_select_sources": true,
+    "static_source_boundary_closed": true
+  },
+  "reference_data_policy": {
+    "must_record": [
+      "edition or retrieval date",
+      "scheme and scale",
+      "basis and phase convention",
+      "uncertainties and correlations where available",
+      "conversion formulas used by replay"
+    ],
+    "next_packet_must_freeze_values_before_replay": true,
+    "preferred_sources": [
+      "current PDG or equivalent particle-data reference",
+      "current CODATA or equivalent constants reference where dimensionful anchors enter",
+      "explicit experiment/global-fit source for neutrino parameters"
+    ],
+    "values_filled_here": false
+  },
+  "replay_pipeline": [
+    {
+      "inputs": [
+        "candidate_data/selected_smslotfunctor_downstream_operator_payloads_or_smparity_ledger.candidate.json",
+        "candidate_data/sm_sector_embedding_interface.candidate.json"
+      ],
+      "rule": "No measured value may modify the source packet after this step.",
+      "status": "READY",
+      "step": "freeze_selected_source_boundary"
+    },
+    {
+      "inputs": [
+        "MTT_SM_Equivalence_Reference_Data_Packet_v1"
+      ],
+      "rule": "Reference values must be versioned and convention-typed before computation.",
+      "status": "OPEN_NEXT",
+      "step": "load_reference_data_packet"
+    },
+    {
+      "inputs": [
+        "Yukawa/Higgs/mixing/gauge slots"
+      ],
+      "rule": "Replay may compute masses, mixings, invariants, and consistency checks only.",
+      "status": "OPEN",
+      "step": "run_tree_level_replay"
+    },
+    {
+      "inputs": [
+        "scheme/scale/correlation metadata"
+      ],
+      "rule": "RG transport must be declared separately from source selection.",
+      "status": "OPEN",
+      "step": "run_rg_and_scheme_replay"
+    },
+    {
+      "inputs": [
+        "computed replay outputs",
+        "candidate_data/empirical_equivalence_ledger.candidate.json"
+      ],
+      "rule": "Pass/fail compares observables; it cannot promote a no-knob selector.",
+      "status": "OPEN",
+      "step": "empirical_equivalence_audit"
+    }
+  ],
+  "slot_manifest": [
+    {
+      "allowed_replay_targets": [
+        "gauge-running replay",
+        "electroweak mixing convention check",
+        "QCD/electroweak comparison after source boundary"
+      ],
+      "forbidden_uses": [
+        "source selection",
+        "branch or topology selection",
+        "operator-packet selection",
+        "post-hoc residual fitting",
+        "promotion to no-knob derivation"
+      ],
+      "no_knob_upgrade_target": "selected threshold/local determinant spectra",
+      "parameter_class": "MEASURED_PARITY_INPUT",
+      "parity_scope": "SM_EQUIVALENCE",
+      "required_conventions": [
+        "renormalization scheme",
+        "reference scale",
+        "normalization of U(1)_Y"
+      ],
+      "required_reference_fields": [
+        "source_name",
+        "source_version_or_date",
+        "observable_definition",
+        "central_value",
+        "uncertainty",
+        "units",
+        "scheme",
+        "scale",
+        "correlation_policy"
+      ],
+      "sector": "SM gauge/QFT",
+      "slot_id": "gauge.alpha_1_alpha_2_alpha_3",
+      "value_shape": "three running gauge couplings or equivalent inverse couplings",
+      "value_status": "MEASURED_VALUE_NOT_FILLED_IN_THIS_MANIFEST"
+    },
+    {
+      "allowed_replay_targets": [
+        "charged fermion mass spectrum",
+        "CKM reconstruction from diagonalization",
+        "basis-consistency checks against selected SM-slot routing"
+      ],
+      "forbidden_uses": [
+        "source selection",
+        "branch or topology selection",
+        "operator-packet selection",
+        "post-hoc residual fitting",
+        "promotion to no-knob derivation"
+      ],
+      "no_knob_upgrade_target": "selected dynamic overlap tensor and primitive C1 contractions",
+      "parameter_class": "MEASURED_PARITY_INPUT",
+      "parity_scope": "SM_EQUIVALENCE",
+      "required_conventions": [
+        "flavor basis",
+        "left/right field convention",
+        "RG scale",
+        "phase convention"
+      ],
+      "required_reference_fields": [
+        "source_name",
+        "source_version_or_date",
+        "observable_definition",
+        "central_value",
+        "uncertainty",
+        "units",
+        "scheme",
+        "scale",
+        "correlation_policy"
+      ],
+      "sector": "SM flavor",
+      "slot_id": "yukawa.Y_u_Y_d_Y_e",
+      "value_shape": "three complex 3x3 matrices modulo declared basis and phase convention",
+      "value_status": "MEASURED_VALUE_NOT_FILLED_IN_THIS_MANIFEST"
+    },
+    {
+      "allowed_replay_targets": [
+        "unitarity checks",
+        "Jarlskog invariant replay",
+        "quark charged-current replay"
+      ],
+      "forbidden_uses": [
+        "source selection",
+        "branch or topology selection",
+        "operator-packet selection",
+        "post-hoc residual fitting",
+        "promotion to no-knob derivation"
+      ],
+      "no_knob_upgrade_target": "selected CP-odd complex overlap/operator invariant",
+      "parameter_class": "MEASURED_PARITY_INPUT",
+      "parity_scope": "SM_EQUIVALENCE",
+      "required_conventions": [
+        "PDG-like parameterization or explicit matrix convention",
+        "phase convention"
+      ],
+      "required_reference_fields": [
+        "source_name",
+        "source_version_or_date",
+        "observable_definition",
+        "central_value",
+        "uncertainty",
+        "units",
+        "scheme",
+        "scale",
+        "correlation_policy"
+      ],
+      "sector": "SM quark mixing",
+      "slot_id": "mixing.CKM",
+      "value_shape": "unitary 3x3 matrix or equivalent angles plus CP phase",
+      "value_status": "MEASURED_VALUE_NOT_FILLED_IN_THIS_MANIFEST"
+    },
+    {
+      "allowed_replay_targets": [
+        "lepton mixing replay",
+        "Dirac-neutrino route consistency with 1_M=N^c"
+      ],
+      "forbidden_uses": [
+        "source selection",
+        "branch or topology selection",
+        "operator-packet selection",
+        "post-hoc residual fitting",
+        "promotion to no-knob derivation"
+      ],
+      "no_knob_upgrade_target": "selected 1_M Dirac-neutrino overlap and CP kernel",
+      "parameter_class": "MEASURED_PARITY_INPUT",
+      "parity_scope": "SM_EQUIVALENCE",
+      "required_conventions": [
+        "neutrino mass ordering",
+        "Dirac versus Majorana phase policy",
+        "phase convention"
+      ],
+      "required_reference_fields": [
+        "source_name",
+        "source_version_or_date",
+        "observable_definition",
+        "central_value",
+        "uncertainty",
+        "units",
+        "scheme",
+        "scale",
+        "correlation_policy"
+      ],
+      "sector": "SM plus Dirac-neutrino parity extension",
+      "slot_id": "mixing.PMNS",
+      "value_shape": "unitary 3x3 matrix or equivalent angles plus phases",
+      "value_status": "MEASURED_VALUE_NOT_FILLED_IN_THIS_MANIFEST"
+    },
+    {
+      "allowed_replay_targets": [
+        "Higgs-sector replay",
+        "Yukawa-to-mass conversion",
+        "electroweak scale convention check"
+      ],
+      "forbidden_uses": [
+        "source selection",
+        "branch or topology selection",
+        "operator-packet selection",
+        "post-hoc residual fitting",
+        "promotion to no-knob derivation"
+      ],
+      "no_knob_upgrade_target": "selected Higgs projector/source and threshold/RG matching",
+      "parameter_class": "MEASURED_PARITY_INPUT",
+      "parity_scope": "SM_EQUIVALENCE",
+      "required_conventions": [
+        "unit convention",
+        "potential sign convention",
+        "scheme",
+        "scale"
+      ],
+      "required_reference_fields": [
+        "source_name",
+        "source_version_or_date",
+        "observable_definition",
+        "central_value",
+        "uncertainty",
+        "units",
+        "scheme",
+        "scale",
+        "correlation_policy"
+      ],
+      "sector": "SM Higgs",
+      "slot_id": "higgs.v_mh_lambda_or_potential",
+      "value_shape": "vev, Higgs mass, quartic and potential convention, or equivalent parameter set",
+      "value_status": "MEASURED_VALUE_NOT_FILLED_IN_THIS_MANIFEST"
+    },
+    {
+      "allowed_replay_targets": [
+        "nuD mass/mixing replay",
+        "1_M=N^c shift-side routing check"
+      ],
+      "forbidden_uses": [
+        "source selection",
+        "branch or topology selection",
+        "operator-packet selection",
+        "post-hoc residual fitting",
+        "promotion to no-knob derivation"
+      ],
+      "no_knob_upgrade_target": "selected 1_M sector overlap response",
+      "parameter_class": "MEASURED_PARITY_INPUT",
+      "parity_scope": "SM_EQUIVALENCE",
+      "required_conventions": [
+        "absolute-mass policy",
+        "ordering",
+        "RG scale",
+        "Dirac-neutrino normalization"
+      ],
+      "required_reference_fields": [
+        "source_name",
+        "source_version_or_date",
+        "observable_definition",
+        "central_value",
+        "uncertainty",
+        "units",
+        "scheme",
+        "scale",
+        "correlation_policy"
+      ],
+      "sector": "SM plus Dirac-neutrino parity extension",
+      "slot_id": "neutrino.yukawa_or_mass_splittings",
+      "value_shape": "Dirac neutrino Yukawa matrix or masses/splittings with explicit reconstruction policy",
+      "value_status": "MEASURED_VALUE_NOT_FILLED_IN_THIS_MANIFEST"
+    }
+  ],
+  "sm_equivalence_claimed": false,
+  "status": "MTT_SM_EQUIVALENCE_MEASURED_PARAMETER_REPLAY_MANIFEST_BUILT_VALUES_OPEN",
+  "superset_strategy_use": {
+    "explanation": "Topology, terminal-monad, q79/theta, Qa/SU3, HYM, and dynamic-overlap paths are combined only to lock the selected source/operator boundary. The measured parameter replay then proceeds as a straight SM-standard downstream computation.",
+    "locked_target": "static SM source/interface boundary plus measured-slot policy",
+    "measured_targets_used_to_lock_source": false,
+    "mode": "SUPERSET_TO_LOCKED_SOURCE_THEN_STRAIGHT_MEASURED_REPLAY"
+  },
+  "target_fitting_used": false,
+  "theorem": {
+    "name": "SMEquivalenceMeasuredParameterReplayManifestTheorem",
+    "proved": true,
+    "statement": "Given the closed measured-replay admission policy and the static SM source boundary, the listed measured gauge, Yukawa, CKM/PMNS, Higgs, and Dirac-neutrino parity-extension slots form a typed downstream replay manifest. Filling those slots from versioned external references can support SM-equivalence calculations, but cannot select source data or count as no-knob closure."
+  },
+  "what_closes_now": {
+    "SM_equivalence_replay_pipeline_declared": true,
+    "measured_slot_manifest_built": true,
+    "reference_data_packet_schema_declared": true,
+    "source_selection_guardrails_preserved": true,
+    "superset_use_limited_to_source_boundary": true
+  },
+  "what_remains_open": {
+    "RG_scheme_transport_replay": true,
+    "actual_numeric_tree_level_replay": true,
+    "empirical_equivalence_audit_run": true,
+    "full_SM_equivalence_closure": true,
+    "full_no_knob_closure": true,
+    "reference_data_packet_values": true
+  }
+}

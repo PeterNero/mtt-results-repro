@@ -1,0 +1,64 @@
+{
+  "certificate": "IwasawaConstantWilsonScalarCentralWeylAnsatzScan",
+  "status": "IWASAWA_CONSTANT_WILSON_SCALAR_CENTRAL_ANSATZ_OBSTRUCTED",
+  "purpose": "Test the first nontrivial constant rank-three Wilson/finite-Heisenberg rho_E ansatz before spending Route C effort on a too-small carrier.",
+  "depends_on": [
+    "iwasawa_rhoE_validator_certificate.json",
+    "iwasawa_route_c_finite_solve_scaffold_certificate.json"
+  ],
+  "scan_script": "scripts/scan_iwasawa_constant_wilson_ansatz.py",
+  "ansatz_scope": {
+    "rank": 3,
+    "field": "F3",
+    "generator_form": "R_i=P^a_i Q^b_i from one clock/shift pair",
+    "central_generator_form": "g5=omega^s5 I and g6=omega^s6 I",
+    "constant_generators_only": true,
+    "scalar_central_only": true,
+    "coordinate_dependent_or_table_valued_rhoE": false,
+    "general_non_scalar_central_3x3_matrices": false
+  },
+  "relation_equations": {
+    "<v1,v2>": 0,
+    "<v3,v4>": 0,
+    "<v1,v3>": "s5",
+    "<v1,v4>": "s6",
+    "<v2,v3>": "s6",
+    "<v2,v4>": "-s5"
+  },
+  "linear_algebra_obstruction": {
+    "rank_reason": "in F3^2, each commuting pair spans dimension at most one, so the cross-pairing matrix must have determinant zero",
+    "cross_pairing_matrix": "[[s5, s6], [s6, -s5]]",
+    "determinant": "-(s5^2+s6^2)",
+    "over_F3": "the determinant vanishes only for s5=s6=0, so every nontrivial scalar central phase is impossible in this ansatz"
+  },
+  "expected_scan_counts": {
+    "total_vector_assignments": 6561,
+    "trivial_phase_solution_count": 321,
+    "nontrivial_scalar_central_solutions": 0,
+    "central_phase_solution_counts": {
+      "0,0": 321,
+      "0,1": 0,
+      "0,2": 0,
+      "1,0": 0,
+      "1,1": 0,
+      "1,2": 0,
+      "2,0": 0,
+      "2,1": 0,
+      "2,2": 0
+    }
+  },
+  "guardrails": {
+    "claims_selected_rho_E_constructed": false,
+    "claims_all_constant_3x3_rhoE_obstructed": false,
+    "claims_coordinate_dependent_rhoE_obstructed": false,
+    "claims_typed_monad_or_cech_route_obstructed": false,
+    "uses_benchmark_or_observed_flavor_data": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "first_nontrivial_scalar_central_wilson_ansatz_retired": true,
+    "identity_phase_schema_remains_only_a_smoke_test": true,
+    "route_c_still_required": true,
+    "next_step": "Search coordinate-dependent/table-valued rho_E, typed Cech/monad transitions, or a higher-dimensional auxiliary Wilson carrier with a rank-three selected quotient."
+  }
+}

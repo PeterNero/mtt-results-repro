@@ -1,0 +1,97 @@
+{
+  "certificate": "IwasawaSelectedSourcePromotionGate",
+  "status": "IWASAWA_SELECTED_SOURCE_PROMOTION_GATE_FORMULATED",
+  "purpose": "Prevent finite rho_E/D_E prototypes from being promoted to selected proof evidence unless they pass the lower-level validators and, for D_E response promotion, carry a nonzero selected dotD response.",
+  "depends_on": [
+    "iwasawa_face_graph_coboundary_diagnostic_certificate.json",
+    "iwasawa_rhoE_mesh_validator_certificate.json",
+    "iwasawa_rhoE_metric_validator_certificate.json",
+    "iwasawa_sector_projection_validator_certificate.json",
+    "iwasawa_route_c_residuals.template.json",
+    "iwasawa_de_action_validator_certificate.json",
+    "iwasawa_riesz_gap_validator_certificate.json",
+    "iwasawa_reduced_green_validator_certificate.json",
+    "iwasawa_dotd_response_validator_certificate.json"
+  ],
+  "promotion_packet_schema": "IwasawaSelectedSourcePromotionPacket.v1",
+  "promotion_levels": {
+    "rhoE_source": {
+      "required_validators": [
+        "validate_iwasawa_rhoE_mesh.py",
+        "validate_iwasawa_rhoE_metric.py",
+        "validate_iwasawa_sector_maps.py",
+        "detect_iwasawa_face_graph_coboundary.py"
+      ],
+      "rule": "The finite face graph must be non-coboundary; rho_E tables that trivialize as U(source)^-1 U(target) cannot be promoted from rho_E data alone."
+    },
+    "de_response": {
+      "required_validators": [
+        "validate_iwasawa_rhoE_mesh.py",
+        "validate_iwasawa_rhoE_metric.py",
+        "validate_iwasawa_sector_maps.py",
+        "validate_iwasawa_route_c_residuals.py",
+        "validate_iwasawa_de_action.py",
+        "validate_iwasawa_riesz_gap.py",
+        "validate_iwasawa_reduced_green.py",
+        "validate_iwasawa_dotd_response.py"
+      ],
+      "rule": "A face-graph coboundary rho_E table can only survive at this level if the selected D_E/dotD response data pass and have nonzero source and horizontal response norms."
+    }
+  },
+  "source_kinds_allowed": [
+    "typed_Cech_monad_transition_data",
+    "finite_HYM_Strominger_solve"
+  ],
+  "required_guardrails": {
+    "selected_source_verified": true,
+    "no_observed_flavor_inputs": true,
+    "uses_execution_ii_benchmarks": false,
+    "uses_observed_masses_or_mixings": false,
+    "uses_diagnostic_h1_three_as_selected": false,
+    "uses_pure_gauge_prototype_as_selected": false
+  },
+  "implemented_checks": {
+    "rejects_open_promotion_packets_with_exit_2": true,
+    "checks_source_kind_whitelist": true,
+    "checks_no_proxy_guardrails": true,
+    "runs_rhoE_mesh_metric_sector_validators": true,
+    "runs_face_graph_coboundary_diagnostic": true,
+    "rejects_face_graph_coboundary_for_rhoE_source_promotion": true,
+    "runs_route_c_de_riesz_green_dotd_validators_for_de_response": true,
+    "computes_dotd_source_and_horizontal_response_norms": true,
+    "requires_nonzero_dotd_source_and_response_for_de_response": true
+  },
+  "audit_cases": {
+    "open_packet_refused_with_exit_2": true,
+    "pure_gauge_nonabelian_source_packet_rejected": true,
+    "benchmark_flagged_packet_rejected": true,
+    "de_response_packet_without_downstream_data_incomplete": true
+  },
+  "what_this_closes": {
+    "promotion_guardrail_for_finite_rhoE_prototypes": true,
+    "pure_gauge_table_not_selected_source_rule": true,
+    "nonzero_D_E_response_required_for_response_promotion": true,
+    "next_candidate_contract": true
+  },
+  "still_open": {
+    "actual_selected_non_coboundary_rho_E": true,
+    "actual_selected_D_E_action": true,
+    "actual_selected_dotD_response": true,
+    "primitive_C1_contractions": true,
+    "Yukawa_matrices_and_CKM_magnitudes": true,
+    "full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_selected_rho_E_constructed": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_pure_gauge_prototype_is_physical": false,
+    "uses_observed_flavor_data": false,
+    "claims_yukawa_matrices_computed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "promotion_gate_ready": true,
+    "current_finite_noncommuting_prototypes_remain_unpromoted": true,
+    "next_step": "Fill a promotion packet from typed Cech/monad transition data or a finite HYM/Strominger solve, then pass de_response promotion with nonzero selected dotD response norms."
+  }
+}

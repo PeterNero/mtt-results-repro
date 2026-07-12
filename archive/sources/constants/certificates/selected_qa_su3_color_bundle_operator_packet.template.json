@@ -1,0 +1,105 @@
+{
+  "status": "OPEN_SELECTED_QA_SU3_COLOR_BUNDLE_OPERATOR_PACKET_REQUIRED",
+  "description": "Fill this only with selected Qa/SU3 color-bundle operator data chosen before comparison with the Qa residual.",
+  "selected_packet": {
+    "branch_id": null,
+    "source_certificate": null,
+    "selection_rule": null,
+    "operator_domain": {
+      "geometry": "compact Nil/Iwasawa Qa branch",
+      "gauge_factor": "SU3",
+      "representation": null,
+      "p0_rule": "import selected p0 ghost measure normalization",
+      "p_nonzero_rule": "import selected p!=0 physical quotient determinant domain",
+      "boundary_or_lattice_conditions": null,
+      "zero_mode_policy": null
+    },
+    "color_source": {
+      "bundle_or_sheaf": null,
+      "rank": null,
+      "structure_group": null,
+      "chern_or_mukai_data": null,
+      "gerbe_or_twist_data": null,
+      "freed_witten_or_bianchi_check": null
+    },
+    "connection_or_residual": {
+      "connection_type": null,
+      "connection_data": null,
+      "curvature_data": null,
+      "hym_or_strominger_residual": null,
+      "retired_hym_matrix_used": false
+    },
+    "operator_blocks": {
+      "laplace_type_principal_symbol": null,
+      "endomorphism_E": null,
+      "heat_coefficient_table": null,
+      "spectrum": null,
+      "analytic_or_reidemeister_torsion": null
+    },
+    "normalization": {
+      "trace_normalization": null,
+      "gauge_quotient_scheme": null,
+      "reference_scale_squared": 1.0,
+      "target_residual_used": false
+    }
+  },
+  "promotion_gates": [
+    {
+      "id": "source_selection",
+      "required": [
+        "branch_id",
+        "source_certificate",
+        "selection_rule",
+        "color_source.bundle_or_sheaf"
+      ]
+    },
+    {
+      "id": "domain_compatibility",
+      "required": [
+        "operator_domain.representation",
+        "operator_domain.boundary_or_lattice_conditions",
+        "operator_domain.zero_mode_policy"
+      ]
+    },
+    {
+      "id": "geometry_and_anomaly",
+      "required": [
+        "color_source.structure_group",
+        "color_source.chern_or_mukai_data",
+        "color_source.freed_witten_or_bianchi_check"
+      ]
+    },
+    {
+      "id": "operator_data",
+      "required": [
+        "connection_or_residual.connection_type",
+        "connection_or_residual.curvature_data",
+        "operator_blocks.laplace_type_principal_symbol",
+        "operator_blocks.endomorphism_E"
+      ]
+    },
+    {
+      "id": "finite_part_data",
+      "requires_one_of": [
+        "operator_blocks.heat_coefficient_table",
+        "operator_blocks.spectrum",
+        "operator_blocks.analytic_or_reidemeister_torsion"
+      ]
+    },
+    {
+      "id": "normalization",
+      "required": [
+        "normalization.trace_normalization",
+        "normalization.gauge_quotient_scheme"
+      ]
+    }
+  ],
+  "forbidden_inputs": [
+    "observed Qa/SU3 residual",
+    "retired explicit HYM matrix entries",
+    "rank-one q64 compact-Nil local-system character",
+    "SU3 scalar-center q64 phase",
+    "visible qutrit/F3^2 source as direct q64/U64 Qa/SU3 source",
+    "local FP/BRST quotient counted a second time"
+  ]
+}

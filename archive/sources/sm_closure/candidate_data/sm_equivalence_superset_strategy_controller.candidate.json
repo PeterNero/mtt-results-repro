@@ -1,0 +1,256 @@
+{
+  "acceptance_gates": {
+    "G0_branch_policy": {
+      "closed": true,
+      "description": "This branch aims for SM-equivalence first, not immediate no-knob closure."
+    },
+    "G1_measured_parameter_policy": {
+      "closed": true,
+      "description": "Measured inputs are typed downstream slots and cannot select sources."
+    },
+    "G2_static_sm_source_structure": {
+      "closed_for_full_packet": false,
+      "closed_for_interface": true,
+      "description": "Gauge, representation, family, Higgs, and anomaly support are interface-ready, but not a full actual selected no-knob packet."
+    },
+    "G3_static_weyl_sector_routing": {
+      "closed": true,
+      "description": "Static sector route Z->u,e and X->d,nuD is selected."
+    },
+    "G4_dynamic_operator_boundary": {
+      "closed": false,
+      "description": "Selected primitive C1 contractions or dynamic overlap tensor remain open.",
+      "next_required_artifact": "MTT_Selected_PrimitiveC1Contractions_or_DynamicOverlapTensor_SourceEmission_v1"
+    },
+    "G5_measured_sm_replay": {
+      "closed": false,
+      "description": "After G4, admit measured SM constants and run equivalence/reproduction replay."
+    }
+  },
+  "branch_goal": {
+    "policy": "Measured constants may be used only after selected source/operator structure is declared.",
+    "primary_goal": "SM-equivalence / SM-parity closure",
+    "secondary_goal": "no-knob derivation as upgrade path"
+  },
+  "candidate": "MTTSMEquivalenceSupersetStrategyController",
+  "closure_claimed": false,
+  "empirical_replay_after_G4": {
+    "inputs_allowed": [
+      {
+        "accepted_reference": "Standard QM Hilbert/observable/Born/record-update practice.",
+        "domain": "QM measurement and records",
+        "measured_inputs_allowed": [
+          "experimental records",
+          "state-preparation/calibration data"
+        ],
+        "mtt_parity_requirement": "Expose state carrier, observable map, and measurement/record rule with declared conventions.",
+        "must_reproduce": [
+          "Born-probability predictions at parity standard",
+          "record/update behavior for compared experiments"
+        ],
+        "no_knob_target": "derive Born weights and record selection from MTT admissibility/coherence",
+        "not_allowed": [
+          "using observed outcome frequencies to select the MTT source"
+        ],
+        "status": "INTERFACE_DECLARED_EMPIRICAL_AUDIT_OPEN"
+      },
+      {
+        "accepted_reference": "Local operator/correlator/S-matrix practice with renormalization scheme and scale.",
+        "domain": "local QFT observables",
+        "measured_inputs_allowed": [
+          "renormalized couplings",
+          "field masses where SM treats them as measured",
+          "experimental cross sections for comparison"
+        ],
+        "mtt_parity_requirement": "Declare local observable functor, gauge action, RG scheme, and parameter slots.",
+        "must_reproduce": [
+          "locality/microcausality interface where relevant",
+          "correlator or scattering predictions after measured inputs"
+        ],
+        "no_knob_target": "derive local QFT functor and threshold kernels from selected modal/operator data",
+        "not_allowed": [
+          "fitting thresholds after residuals",
+          "treating benchmark correlators as selected operator spectra"
+        ],
+        "status": "INTERFACE_DECLARED_EMPIRICAL_AUDIT_OPEN"
+      },
+      {
+        "accepted_reference": "SM gauge group, chiral representations, anomaly cancellation, and three-family structure.",
+        "domain": "SM gauge and representation sector",
+        "measured_inputs_allowed": [
+          "gauge couplings after packet selection",
+          "masses and mixings after representation/basis declaration"
+        ],
+        "mtt_parity_requirement": "Declare selected gauge carrier, representation packet, family index, Higgs carrier, and anomaly checks.",
+        "must_reproduce": [
+          "SU3 x SU2 x U1 sector interface",
+          "SM representation content",
+          "anomaly consistency",
+          "three families"
+        ],
+        "no_knob_target": "derive the actual selected SM packet from MTT source data",
+        "not_allowed": [
+          "using couplings or masses to choose the gauge group, family count, or representations"
+        ],
+        "status": "INTERFACE_DECLARED_ACTUAL_PACKET_OPEN"
+      },
+      {
+        "accepted_reference": "SM uses measured Yukawa matrices, CP phases, Higgs vev/mass/quartic with scheme and scale conventions.",
+        "domain": "Yukawa, CP, and Higgs phenomenology",
+        "measured_inputs_allowed": [
+          "Yukawa matrices",
+          "CKM/PMNS phases and angles",
+          "Higgs potential parameters"
+        ],
+        "mtt_parity_requirement": "Admit numerical values only as typed downstream slots after SM packet declaration.",
+        "must_reproduce": [
+          "mass and mixing calculations from admitted slots",
+          "basis and phase convention consistency"
+        ],
+        "no_knob_target": "derive Yukawa, CP, and Higgs parameters from selected overlap/operator kernels",
+        "not_allowed": [
+          "benchmark matrices as selected source matrices",
+          "target phase fitting as source selection"
+        ],
+        "status": "PARITY_INPUT_ALLOWED_NO_KNOB_OPEN"
+      },
+      {
+        "accepted_reference": "Metric GR with stress-energy coupling, Bianchi consistency, and measured dimensional anchors.",
+        "domain": "GR and stress-energy coupling",
+        "measured_inputs_allowed": [
+          "Newton scale",
+          "cosmological parameters",
+          "boundary/initial data at parity standard"
+        ],
+        "mtt_parity_requirement": "Declare metric/effective metric map, curvature, stress-energy interface, and dimensionful anchor slots.",
+        "must_reproduce": [
+          "GR field-equation interface at parity standard",
+          "stress-energy conservation/Bianchi consistency"
+        ],
+        "no_knob_target": "derive metric dynamics and physical absolute normalization from selected source data",
+        "not_allowed": [
+          "claiming physical Newton scale from internal dimensionless normalization"
+        ],
+        "status": "INTERFACE_DECLARED_EMPIRICAL_AUDIT_OPEN"
+      },
+      {
+        "accepted_reference": "Physics practice separates units, measured dimensional anchors, and dimensionless predictions.",
+        "domain": "units and dimensionful constants",
+        "measured_inputs_allowed": [
+          "unit conventions",
+          "dimensionful measured anchors"
+        ],
+        "mtt_parity_requirement": "Declare unit registry, conversion rules, uncertainty propagation, and physical anchor slots.",
+        "must_reproduce": [
+          "consistent dimensional analysis",
+          "no hidden physical scale in conventions"
+        ],
+        "no_knob_target": "derive physical absolute anchor without measured dimensional input",
+        "not_allowed": [
+          "using unit choice as a hidden fitted constant"
+        ],
+        "status": "PARITY_INPUT_ALLOWED_PHYSICAL_NO_KNOB_OPEN"
+      }
+    ],
+    "must_not_claim": [
+      "no-knob derivation of measured constants",
+      "source selection by empirical residual",
+      "full SM-equivalence before selected dynamic operator boundary is emitted"
+    ],
+    "purpose": "Reproduce SM calculations at the same standard as the SM once measured parity slots are admitted."
+  },
+  "inputs": {
+    "actual_selected_sm_packet_anomaly_audit": "candidate_data/actual_selected_sm_packet_anomaly_audit.candidate.json",
+    "core_axioms_measured_parameter_interface": "candidate_data/core_axioms_measured_parameter_interface.candidate.json",
+    "dynamic_overlap_or_c1primitive_source_emission": "candidate_data/selected_dynamic_overlapkernel_or_c1primitive_source_emission.candidate.json",
+    "empirical_equivalence_ledger": "candidate_data/empirical_equivalence_ledger.candidate.json",
+    "primitive_c1_or_weylpair_sectorrouting": "candidate_data/selected_primitivec1_or_weylpair_sectorrouting_sourceemission.candidate.json"
+  },
+  "next_required_artifact": "MTT_Selected_PrimitiveC1Contractions_or_DynamicOverlapTensor_SourceEmission_v1",
+  "no_knob_closure_claimed": false,
+  "observed_data_used_as_selector": false,
+  "parity_input_slots": {
+    "G_N": {
+      "allowed_use": "SM-parity gravitational normalization",
+      "forbidden_use": "claiming physical no-knob absolute scale",
+      "kind": "dimensionful anchor",
+      "no_knob_target": "modal gap or selected dimensional anchor"
+    },
+    "Y_u, Y_d, Y_e": {
+      "allowed_use": "SM-parity masses and mixings after representation packet declaration",
+      "forbidden_use": "constructing the representation packet or family count",
+      "kind": "Yukawa matrix",
+      "no_knob_target": "selected overlap/operator kernels"
+    },
+    "alpha_i(mu)": {
+      "allowed_use": "SM-parity running and comparison after sector declaration",
+      "forbidden_use": "selecting the gauge packet or threshold kernel",
+      "kind": "gauge coupling",
+      "no_knob_target": "selected threshold/local determinant spectrum"
+    }
+  },
+  "selected_source_before_measurement": {
+    "actual_selected_representation_packet_supplied": false,
+    "actual_selected_sm_packet_closed": false,
+    "dynamic_operator_payload_open": true,
+    "qa_su3_color_operator_packet_supplied": false,
+    "sm_sector_interface_ready": true,
+    "static_sm_slot_functor_routing_closed": true
+  },
+  "sm_equivalence_claimed": false,
+  "status": "MTT_SM_EQUIVALENCE_SUPERSET_STRATEGY_CONTROLLER_BUILT_SOURCE_FIRST_MEASURED_DOWNSTREAM",
+  "superset_program": {
+    "allowed_measured_inputs_after_target": [
+      "gauge couplings with scheme/scale",
+      "Yukawa matrices with basis/phase/RG conventions",
+      "CKM and PMNS parameters with convention",
+      "Higgs parameters with scheme/scale",
+      "dimensionful anchors for GR/units parity"
+    ],
+    "forbidden_uses": [
+      "source selection by measured constants",
+      "branch or quotient selection by target residual",
+      "post-hoc fitting after observing the desired output",
+      "direct q79/S3 import as a Qa/SU3 proof source",
+      "generic existence theorem replacing actual maps",
+      "identity rho_E or diagnostic validator treated as physical data",
+      "benchmark Yukawa, CKM, PMNS, threshold, or mass entries treated as selected matrices",
+      "using measured Yukawa/CKM/PMNS entries to construct A_selected or b_selected",
+      "using measured masses to choose primitive C1 contractions or the dynamic overlap tensor",
+      "claiming no-knob closure from SM-equivalence replay"
+    ],
+    "locked_target": "MTT_Selected_PrimitiveC1Contractions_or_DynamicOverlapTensor_SourceEmission_v1",
+    "mode": "SM_EQUIVALENCE_FIRST_NO_KNOB_LATER",
+    "straight_path": "Declare the selected SM source packet and operator boundary first; after that, admit measured SM constants as typed downstream parity slots.",
+    "superset_paths": {
+      "dynamic_overlap_route": "supply selected primitive C1 contractions or dynamic overlap tensor needed before measured flavor slots enter",
+      "gr_protospinor": "supply theorem-derived alpha1/dotD replay support without selecting flavor data",
+      "q79_theta_route": "supply finite quotient, retarded-overlap, and primitive C1 response scaffolds",
+      "qa_su3_color_operator": "supply color/operator packet discipline and reject unsafe direct imports",
+      "topology_and_terminal_monad": "select static SM slot labels, three-family structure, and anomaly-compatible representation support"
+    }
+  },
+  "target_fitting_used": false,
+  "theorem": {
+    "name": "SMEquivalenceSupersetStrategyControllerTheorem",
+    "proved": true,
+    "statement": "For this branch, the active target is SM-equivalence rather than immediate no-knob closure. Superset paths may contribute topology, terminal-monad, q79, Qa/SU3, GR/protospinor, and dynamic-overlap evidence only toward the locked selected source/operator boundary. Once that boundary is emitted, measured SM constants may enter as downstream parity inputs for SM replay; they may not select source structure, A_selected, b_selected, primitive contractions, or dynamic overlap tensors."
+  },
+  "what_closes_now": {
+    "branch_policy_set_to_SM_equivalence_first": true,
+    "measured_inputs_allowed_only_downstream": true,
+    "no_knob_kept_as_upgrade_not_prerequisite": true,
+    "superset_strategy_scoped_to_locked_dynamic_operator_target": true,
+    "target_fitting_excluded": true
+  },
+  "what_remains_open": {
+    "empirical_equivalence_audit_run": true,
+    "full_SM_equivalence_closure": true,
+    "measured_SM_replay_after_source_boundary": true,
+    "no_knob_constants_derivation": true,
+    "selected_A_selected": true,
+    "selected_b_selected": true,
+    "selected_dynamic_overlap_tensor_or_primitive_C1_contractions": true,
+    "selected_sector_response_matrices": true
+  }
+}

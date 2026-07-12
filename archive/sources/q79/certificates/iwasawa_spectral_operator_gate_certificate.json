@@ -1,0 +1,95 @@
+{
+  "certificate": "IwasawaSpectralOperatorGate",
+  "status": "SPECTRAL_FALLBACK_REDUCED_TO_SELECTED_OPERATOR_AND_BASIS_DATA",
+  "purpose": "After the typed monad section recovery attempt fails, reduce the non-invariant spectral Galerkin fallback to its minimal finite input contract.",
+  "depends_on": [
+    "iwasawa_typed_monad_section_recovery_certificate.json",
+    "iwasawa_spectral_galerkin_data.template.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json"
+  ],
+  "closed_decisions": {
+    "fallback_is_now_active": true,
+    "left_invariant_sparse_A01_route_retired": true,
+    "typed_monad_route_not_closed_from_current_corpus": true,
+    "rank_one_seed_not_enough_for_family_basis": true
+  },
+  "admissible_operator_routes": {
+    "R1_corrected_non_invariant_Dolbeault_operator": {
+      "description": "Supply an explicit non-invariant A^(0,1) or connection data on the selected Iwasawa/Strominger branch.",
+      "required_checks": [
+        "barpartial_E^2 = 0 or Dirac/HYM operator compatibility",
+        "Bianchi/Strominger branch compatibility",
+        "HYM or controlled residual certificate",
+        "not a sparse invariant typo repair"
+      ]
+    },
+    "R2_typed_monad_sections": {
+      "description": "Supply the missing typed monad sections and transition data; this reopens the primary Cech route and also defines a spectral operator.",
+      "required_checks": [
+        "typed f_i and g_i global sections",
+        "g o f = 0",
+        "exactness or controlled sheaf substitute",
+        "metric/HYM connection construction or approximation"
+      ]
+    },
+    "R3_direct_selected_HYM_solve": {
+      "description": "Supply a validated numerical or symbolic HYM/Strominger solution in the fixed topological sector.",
+      "required_checks": [
+        "fixed Chern/gerbe/Bianchi sector",
+        "connection residual bounds",
+        "gauge-fixing/horizontal condition",
+        "operator self-adjointness or complex-elliptic replacement"
+      ]
+    }
+  },
+  "galerkin_contract": {
+    "finite_matrix": "L_N = P_N D_E^* D_E P_N or the corresponding Dolbeault Laplacian on the selected finite basis",
+    "basis_requirements": [
+      "basis respects the compact Iwasawa lattice",
+      "basis includes left-invariant seed forms",
+      "basis includes non-invariant modes",
+      "basis includes bundle fiber data",
+      "basis is L2-orthonormal or supplies a Gram matrix"
+    ],
+    "projector_rule": "Use a Riesz projector onto the isolated low-spectrum cluster after proving a complement gap.",
+    "error_rule": "Supply residual norms and a truncation/complement bound strong enough to certify the kernel dimension and selected representatives.",
+    "success_condition": [
+      "exactly three selected family modes",
+      "anti-family modes absent or separated above the gap",
+      "explicit Psi_1,Psi_2,Psi_3 vectors or functions",
+      "sector projection maps Q,u,d,L,e,N,H",
+      "dotD_alpha1 and reduced Green operator in the same basis"
+    ]
+  },
+  "first_computable_objects": [
+    "basis index set B_N",
+    "Gram matrix G_N",
+    "operator matrix L_N",
+    "low-eigenpair table",
+    "Riesz projector P_fam,N",
+    "residual and complement-gap certificate"
+  ],
+  "currently_missing": {
+    "selected_operator_D_E": true,
+    "non_invariant_basis_B_N": true,
+    "operator_matrix_L_N": true,
+    "Riesz_projector": true,
+    "gap_and_error_bound": true,
+    "Psi_i_representatives": true
+  },
+  "guardrails": {
+    "uses_literal_failed_A01": false,
+    "uses_sparse_invariant_h1_three_unselected_candidate": false,
+    "uses_rank_one_seed_as_full_basis": false,
+    "uses_scalar_central_circle_modes_as_zero_modes": false,
+    "uses_observed_flavor_data_to_select_projector": false,
+    "claims_selected_H1_values": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_spectral_fallback_input_contract": true,
+    "closes_spectral_computation": false,
+    "next_step": "supply or construct one admissible selected operator D_E, then build B_N and L_N",
+    "feeds": "iwasawa_spectral_galerkin_data.template.json"
+  }
+}

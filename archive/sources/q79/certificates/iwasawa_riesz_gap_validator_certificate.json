@@ -1,0 +1,96 @@
+{
+  "certificate": "IwasawaRieszGapValidator",
+  "status": "IWASAWA_RIESZ_GAP_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for finite Riesz projector, low-cluster, and gap/error data after sector-specific D_E action data are supplied.",
+  "depends_on": [
+    "iwasawa_spectral_operator_gate_certificate.json",
+    "iwasawa_non_invariant_galerkin_protocol_certificate.json",
+    "iwasawa_de_action_validator_certificate.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json"
+  ],
+  "supported_format_v1": {
+    "spectral_slots": "Q,u,d,L,e,N,H entries",
+    "slot_fields": "kind, expected_kernel_dimension, dimension, gram_matrix, stiffness_matrix, low_eigenvalues, cluster_eigenvectors, residual_norms, riesz_projector, contour_radius, complement_gap, truncation_error_bound",
+    "family_cluster_dimensions": "Q,u,d,L,e,N must have kind family and expected kernel dimension 3",
+    "higgs_cluster_dimension": "H must have kind single_higgs_carrier and expected kernel dimension 1",
+    "generalized_eigenproblem": "K v_i = lambda_i G v_i with reported residual bounds",
+    "orthonormality": "<v_i,v_j>_G = delta_ij",
+    "projector_equations": "P^2=P, P^*G=GP, rank(P)=cluster dimension, and P=V V^* G for the listed G-orthonormal cluster",
+    "gap_rule": "epsilon_low + eta_total < tau < gamma_gap - eta_total",
+    "source_flags": "selected_source_verified, operator_data_verified, and boundary_conditions_verified must be true"
+  },
+  "implemented_checks": {
+    "all_spectral_slots_present": true,
+    "sector_kind_and_cluster_dimension": true,
+    "dimension_positive": true,
+    "gram_positive_definite_hermitian": true,
+    "stiffness_hermitian": true,
+    "low_eigenvalue_and_residual_lengths": true,
+    "cluster_vectors_G_orthonormal": true,
+    "generalized_eigenpair_residuals_within_reported_bounds": true,
+    "projector_idempotent": true,
+    "projector_Gram_self_adjoint": true,
+    "projector_rank_matches_cluster": true,
+    "projector_matches_G_orthogonal_span": true,
+    "projector_fixes_cluster_vectors": true,
+    "robust_contour_gap_inequality": true,
+    "source_operator_boundary_flags_required": true,
+    "bad_projector_candidate_fails": true,
+    "bad_gap_candidate_fails": true,
+    "bad_eigenpair_residual_candidate_fails": true,
+    "missing_slot_remains_open": true
+  },
+  "not_checked_by_v1": {
+    "proof_D_E_is_selected_by_MTT": true,
+    "proof_operator_comes_from_typed_monad_or_HYM_solve": true,
+    "independent_computation_of_eigenpairs": true,
+    "independent_computation_of_complement_spectrum": true,
+    "sharp_truncation_error_from_basis_limit": true,
+    "dotD_alpha1": true,
+    "reduced_Green_operator": true,
+    "Yukawa_overlap_values": true
+  },
+  "script_exit_codes": {
+    "0": "complete finite Riesz/gap candidate passes implemented checks",
+    "1": "complete candidate fails an implemented spectral/projector/gap check",
+    "2": "candidate is incomplete/open, such as missing spectral_slots or missing sector entries"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "toy_consistent_spectral_slots_pass_schema": true,
+    "toy_candidate_claim_selected": false,
+    "projector_bad_candidate_fails": true,
+    "gap_bad_candidate_fails": true,
+    "eigenpair_bad_candidate_fails": true,
+    "missing_slot_candidate_exit_2": true
+  },
+  "what_this_closes": {
+    "finite_Riesz_projector_validator": true,
+    "low_cluster_eigenpair_gate": true,
+    "Gram_orthogonal_projector_gate": true,
+    "gap_error_pass_rule": true
+  },
+  "still_open": {
+    "actual_selected_D_E_action": true,
+    "actual_selected_spectral_slot_data": true,
+    "proof_D_E_comes_from_selected_MTT_operator_source": true,
+    "actual_complement_gap_from_selected_operator": true,
+    "actual_truncation_error_bound_from_basis_limit": true,
+    "dotD_alpha1_and_Green_operator": true,
+    "Yukawa_overlap_matrices": true
+  },
+  "guardrails": {
+    "claims_selected_D_E_constructed": false,
+    "claims_toy_operator_selected": false,
+    "uses_observed_masses_or_mixings": false,
+    "uses_rank_one_seed_as_full_basis": false,
+    "claims_Green_operator_constructed": false,
+    "claims_yukawa_matrices_computed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_Riesz_gap_validator_for_candidate_data": true,
+    "closes_actual_selected_Riesz_projector": false,
+    "next_step": "Supply selected spectral slot data from a validated selected D_E, then run dotD_alpha1, reduced-Green, and overlap-matrix validators."
+  }
+}

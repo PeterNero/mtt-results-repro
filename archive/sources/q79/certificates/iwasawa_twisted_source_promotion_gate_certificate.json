@@ -1,0 +1,90 @@
+{
+  "certificate": "IwasawaTwistedSourcePromotionGate",
+  "status": "IWASAWA_TWISTED_SOURCE_PROMOTION_GATE_FORMULATED",
+  "purpose": "Make the selected projective-twist proof obligation executable: a projective rho_E table can be promoted only when a selected gerbe/B-field/discrete-torsion source maps to the zeta3 cocycle and passes Bianchi, Freed-Witten, projector, projective mesh, metric, and sector gates.",
+  "depends_on": [
+    "iwasawa_projective_twist_source_hunt_certificate.json",
+    "iwasawa_projective_rhoE_mesh_validator_certificate.json",
+    "iwasawa_rhoE_metric_validator_certificate.json",
+    "iwasawa_sector_projection_validator_certificate.json",
+    "z7_fuyau_mukai_charge_sector_certificate.json"
+  ],
+  "validator_script": "scripts/validate_iwasawa_twisted_source_promotion.py",
+  "promotion_packet_schema": "IwasawaTwistedSourcePromotionPacket.v1",
+  "source_kinds_allowed": [
+    "Deligne_Cech_gerbe",
+    "B_field_period_table",
+    "discrete_torsion_class",
+    "finite_HYM_Strominger_twisted_solve"
+  ],
+  "required_cocycle": {
+    "base_group": "F_3^2",
+    "omega_order": 3,
+    "commutator_rank_over_F3": 2,
+    "finite_heisenberg_extension_order": 27,
+    "center_order": 3,
+    "ordinary_bundle_coboundary_possible": false
+  },
+  "required_gerbe_source_flags": {
+    "selected_by_mtt": true,
+    "fixed_differential_cohomology_class": true,
+    "map_to_central_cocycle_verified": true,
+    "green_schwarz_bianchi_verified": true,
+    "freed_witten_verified": true,
+    "twisted_projector_retains_sector": true,
+    "coherent_spectral_projector_verified": true,
+    "period_denominator": 3
+  },
+  "required_validators": [
+    "validate_iwasawa_projective_rhoE_mesh.py",
+    "validate_iwasawa_rhoE_metric.py",
+    "validate_iwasawa_sector_maps.py"
+  ],
+  "implemented_checks": {
+    "rejects_open_packets_with_exit_2": true,
+    "checks_no_proxy_guardrails": true,
+    "checks_selected_twist_flags_before_paths": true,
+    "checks_gerbe_source_whitelist": true,
+    "requires_cocycle_to_match_nontrivial_H3_arithmetic": true,
+    "requires_period_denominator_three": true,
+    "requires_Bianchi_Freed_Witten_and_projector_flags": true,
+    "runs_projective_rhoE_mesh_validator": true,
+    "requires_nontrivial_central_twist": true,
+    "runs_metric_and_sector_validators": true
+  },
+  "audit_cases": {
+    "open_packet_refused_with_exit_2": true,
+    "unselected_projective_packet_rejected": true,
+    "missing_gerbe_map_packet_incomplete": true,
+    "strict_puregauge_twist_packet_rejected": true,
+    "current_projective_carrier_missing_projectors_incomplete": true
+  },
+  "what_this_closes": {
+    "twisted_source_promotion_contract": true,
+    "selected_gerbe_to_zeta3_cocycle_required": true,
+    "Bianchi_Freed_Witten_projector_required": true,
+    "strict_trivial_projective_case_not_enough": true,
+    "projective_prototype_not_selected_without_source_map": true
+  },
+  "still_open": {
+    "actual_selected_Deligne_or_B_field_period_packet": true,
+    "actual_zeta3_gerbe_holonomy_map": true,
+    "actual_twisted_sector_projectors_for_projective_carrier": true,
+    "selected_twisted_D_E_and_dotD_response": true,
+    "primitive_C1_contractions": true,
+    "Yukawa_matrices_and_full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_projective_twist_is_selected": false,
+    "claims_current_projective_carrier_is_physical": false,
+    "claims_selected_D_E_constructed": false,
+    "uses_observed_flavor_data": false,
+    "claims_yukawa_matrices_computed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "twisted_promotion_gate_ready": true,
+    "current_projective_carrier_remains_unpromoted": true,
+    "next_step": "Fill the IwasawaTwistedSourcePromotionPacket with selected gerbe/B-field period data, the zeta3 holonomy map, Bianchi/Freed-Witten/projector certificates, and selected projective rho_E/metric/sector data."
+  }
+}

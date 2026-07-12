@@ -1,0 +1,273 @@
+{
+  "Galerkin_run_attempt": {
+    "can_promote_honest_galerkin_C1_now": false,
+    "open_dynamic_stages": {
+      "C1_manifest_selected_source_verified": false,
+      "C1_manifest_status": "OPEN_C1_PRIMITIVE_CONTRACTIONS_MISSING",
+      "S5_alpha1_response": {
+        "must_emit": [
+          "deltaTheta_C1",
+          "same-branch dotD_alpha1",
+          "horizontal zero-mode responses"
+        ],
+        "stage": "S5_alpha1_response",
+        "validator": "validate_iwasawa_dotd_response.py"
+      },
+      "S6_c1_contractions": {
+        "must_emit": [
+          "zero-mode bases",
+          "primitive 3x3 contraction terms",
+          "response matrices and C33 tests"
+        ],
+        "stage": "S6_c1_contractions",
+        "validator": "selected_c1_primitive_contractions.template.json fill contract"
+      },
+      "required_outputs": [
+        "zero_mode_bases",
+        "primitive_three_by_three_contraction_terms",
+        "linear_response_matrices",
+        "C33/nonzero-family-rank tests"
+      ]
+    },
+    "required_next_emissions": [
+      "zero-mode bases in the selected transported frame",
+      "primitive three-by-three contraction terms",
+      "linear response matrices",
+      "C33/nonzero-family-rank tests",
+      "coordinate map into the fixed 72-real phase/shift packet basis"
+    ],
+    "source_spec": "candidate_data/selected_routec_strominger_galerkin_solve_spec.candidate.json",
+    "stationary_support_reused": {
+      "S0_selected_source_support": {
+        "must_emit": [
+          "source_selected_by_mtt",
+          "fixed q79/F,m=1 S3/GS branch",
+          "no measured-data selector"
+        ],
+        "stage": "S0_selected_source",
+        "validator": "validate_iwasawa_route_c_residuals.py"
+      },
+      "S4_projector_riesz_green_support": {
+        "must_emit": [
+          "Riesz projectors",
+          "complement gaps",
+          "reduced Green operators",
+          "truncation error bounds"
+        ],
+        "stage": "S4_spectral_projectors",
+        "validators": [
+          "validate_iwasawa_riesz_gap.py",
+          "validate_iwasawa_reduced_green.py"
+        ]
+      },
+      "stationary_support_closed_by_transport_conjugation": true
+    }
+  },
+  "PhiFinC1_identity_attempt": {
+    "attempted_source": "stationary gauge-transported Phi_fin trace plus symbolic transport-conjugation validator replay",
+    "if_future_identity_proved_then_values": {
+      "A_transpose_b": [
+        12.0,
+        12.0
+      ],
+      "Gram_A_transpose_A": [
+        [
+          12.0,
+          0.0
+        ],
+        [
+          0.0,
+          12.0
+        ]
+      ],
+      "b_norm_sq": 24.0,
+      "deltaTheta_C1": [
+        1.0,
+        1.0
+      ],
+      "sector_norm_sq": {
+        "d": 6.0,
+        "e": 6.0,
+        "nuD": 6.0,
+        "u": 6.0
+      }
+    },
+    "missing_dynamic_objects": [
+      "differentiated transport derivative dU/dalpha inside Phi_fin^C1",
+      "selected alpha1 driver or imported same-branch alpha1 theorem attached to Phi_fin^C1",
+      "primitive C1 overlap contractions",
+      "selected Hessian/source vector values",
+      "sector response matrices M_u, M_d, M_e, M_nuD"
+    ],
+    "normal_form_values_not_promoted_now": true,
+    "reason": "The imported theorem proves stationary projectors, ranks, Riesz/Green identities, and rho_s source transport.  The C1 dynamic-transfer identity is a differentiated overlap/Hessian statement.  It needs the selected derivative of Phi_fin through alpha1/dotD and the primitive three-by-three overlap contractions in the fixed 72-real coordinate system.",
+    "selected_identity_proved_now": false,
+    "stationary_trace_sufficient_for_C1_transfer_identity": false,
+    "target_identity": [
+      "Phi_C1_selected(Z) = phase_packet in the fixed 72-real coordinate system",
+      "Phi_C1_selected(X) = shift_packet in the fixed 72-real coordinate system",
+      "A_selected = [Phi_C1_selected(Z), Phi_C1_selected(X)]",
+      "b_selected = Phi_C1_selected(Z) + Phi_C1_selected(X)",
+      "G_selected = A_selected^T A_selected = 12 I_2",
+      "A_selected^T b_selected = (12, 12)",
+      "deltaTheta_C1 = G_selected^{-1} A_selected^T b_selected = (1, 1)"
+    ]
+  },
+  "checks": {
+    "G0_previous_frontier_matches": true,
+    "G1_upstream_theorem_proved": true,
+    "G2_coordinate_system_preserved": true,
+    "G3_stationary_trace_layer_closed": true,
+    "G4_stationary_trace_does_not_overclaim_C1": true,
+    "G5_crossrepo_alpha1_support_not_promotion": true,
+    "G6_identity_attempt_open_with_conditional_values_preserved": true,
+    "G7_galerkin_run_still_open": true,
+    "G8_no_target_or_closure_overclaim": true
+  },
+  "coordinate_system": {
+    "codomain_real_dimension": 72,
+    "columns": [
+      "phase_packet",
+      "shift_packet"
+    ],
+    "complex_entry_encoding": "[real, imag]",
+    "coordinates_per_sector": 18,
+    "matrix_order": "row-major 3x3",
+    "sector_order": [
+      "u",
+      "d",
+      "e",
+      "nuD"
+    ]
+  },
+  "frontier_update": {
+    "current_next": "Selected_U1Y_RouteC_DifferentiatedPhiFinC1_PrimitiveOverlapContractions_or_GalerkinRun_v1",
+    "old_next": "Selected_U1Y_RouteC_PhiFinC1_DynamicTransferIdentity_Proof_or_GalerkinContractions_Run_v1",
+    "why": "Stationary PhiFin source transport is closed, but C1 promotion requires differentiated PhiFinC1 primitive overlap contractions or an honest Galerkin C1 run."
+  },
+  "guardrails": {
+    "full_SM_closure_claimed": false,
+    "honest_Galerkin_C1_contractions_claimed": false,
+    "observed_data_used": false,
+    "selected_A_selected_claimed": false,
+    "selected_PhiFinC1_identity_claimed": false,
+    "selected_b_selected_claimed": false,
+    "selected_deltaTheta_C1_claimed": false,
+    "stationary_source_layer_promoted": true,
+    "target_fitting_used": false
+  },
+  "inputs": {
+    "previous_local_import": "certificates\\samesource_dynamictransferidentity_or_galerkinc1contractions_emission_import_certificate.json",
+    "sm_phifinc1_certificate": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-sm-parity-closure\\certificates\\selected_phifinc1_dynamictransferidentity_proof_or_galerkincontractions_run_certificate.json",
+    "sm_phifinc1_packet": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-sm-parity-closure\\candidate_data\\selected_phifinc1_dynamictransferidentity_proof_or_galerkincontractions_run.candidate.json"
+  },
+  "next_required_artifact": "Selected_U1Y_RouteC_DifferentiatedPhiFinC1_PrimitiveOverlapContractions_or_GalerkinRun_v1",
+  "packet": "PhiFinC1_DynamicTransferIdentity_Proof_or_GalerkinContractions_Run_Import_v1",
+  "partial_promotion_theorem": {
+    "corollary_if_future_differentiated_packet_closes": {
+      "A_selected_b_selected_deltaTheta_follow": true,
+      "condition": "Phi_fin^C1 emits phase/shift columns and b_selected=phase+shift with G=12 I_2",
+      "finite_values": {
+        "A_transpose_b": [
+          12.0,
+          12.0
+        ],
+        "Gram_A_transpose_A": [
+          [
+            12.0,
+            0.0
+          ],
+          [
+            0.0,
+            12.0
+          ]
+        ],
+        "b_norm_sq": 24.0,
+        "deltaTheta_C1": [
+          1.0,
+          1.0
+        ],
+        "sector_norm_sq": {
+          "d": 6.0,
+          "e": 6.0,
+          "nuD": 6.0,
+          "u": 6.0
+        }
+      }
+    },
+    "corollary_now": {
+      "C1_dynamic_layer_closed": false,
+      "selected_A_b_delta_promoted": false,
+      "stationary_source_layer_closed": true
+    },
+    "name": "StationaryPhiFinTraceIsNotC1TransferTheorem",
+    "proved": true,
+    "statement": "The selected stationary Phi_fin trace and transport-conjugation validator prove selected projector, Riesz/Green, and rho_s source identities, but they do not by themselves prove the C1 dynamic-transfer identity.  A future differentiated Phi_fin^C1 packet may promote the normal-form Weyl values only if it emits the same phase/shift columns, selected Hessian/source normalization, and primitive overlap contractions from the same q79/F,m=1 branch.  Otherwise an honest Galerkin C1 run supplies the selected replacement equation."
+  },
+  "phifin_payload_boundary": {
+    "all_selected_values_emitted": false,
+    "all_support_shapes_present": true,
+    "dotD_alpha1_selected_inside_phifin_payload": false,
+    "finite_Hessian_C1_source_selected": false,
+    "primitive_C1_contractions_selected": false,
+    "schema_status": "MTT_FINITE_EMISSION_MORPHISM_PHIFIN_SCHEMA_BUILT_SELECTED_VALUES_OPEN"
+  },
+  "promotion_decision": {
+    "full_SM_no_knob_closure_promoted": false,
+    "honest_Galerkin_C1_contractions_promoted": false,
+    "selected_A_selected_promoted": false,
+    "selected_PhiFinC1_identity_promoted": false,
+    "selected_b_selected_promoted": false,
+    "selected_deltaTheta_C1_promoted": false,
+    "selected_sector_response_matrices_promoted": false,
+    "stationary_source_layer_promoted": true
+  },
+  "stationary_trace_import": {
+    "alpha1_driver_verified_inside_stationary_transport_replay": false,
+    "crossrepo_alpha1_dotD_support": {
+      "A_selected_claimed_by_import": false,
+      "alpha1_driver_verified_imported": true,
+      "b_selected_claimed_by_import": false,
+      "import_available": true,
+      "primitive_C1_contractions_claimed_by_import": false,
+      "selected_dotD_source_verified_imported": true
+    },
+    "finite_raw_truncation_aliasing_bypassed_by_symbolic_transport": true,
+    "functional_gauge_transported_trace_proved": true,
+    "functional_trace_source": "candidate_data/selected_gauge_transported_bn_phifin_trace.candidate.json",
+    "selected_dotD_source_verified_inside_stationary_transport_replay": false,
+    "selected_projector_source_verified": true,
+    "selected_rho_s_validator_ready": true,
+    "selected_riesz_green_source_verified": true,
+    "selected_source_verified": true,
+    "source": "candidate_data/selected_transport_conjugation_validator_replay.candidate.json",
+    "symbolic_transport_conjugation_validator_extended": true,
+    "transport_closed_finite_validator_replay": true
+  },
+  "status": "PHIFINC1_DYNAMIC_TRANSFER_ATTEMPT_IMPORTED_STATIONARY_TRACE_CLOSED_C1_OPEN",
+  "theorem": {
+    "closure_claimed": false,
+    "name": "StationaryPhiFinTraceNotC1TransferImportTheorem",
+    "proved": true,
+    "statement": "The selected stationary PhiFin trace and symbolic transport conjugation close projector/Riesz/Green/rho_s source support, but they do not prove the differentiated PhiFinC1 dynamic transfer identity. The normal-form values remain conditional until differentiated PhiFinC1 primitive overlap contractions or an honest selected Galerkin C1 run emit the selected response."
+  },
+  "what_closes_now": {
+    "PhiFinC1_or_Galerkin_live_target_sharpened": true,
+    "normal_form_values_preserved_as_conditional_only": true,
+    "selected_projector_riesz_green_rho_s_layer_closed": true,
+    "stationary_PhiFin_trace_imported_as_selected_source": true,
+    "stationary_trace_insufficiency_for_C1_transfer_proved": true,
+    "target_fitting_excluded": true
+  },
+  "what_remains_open": {
+    "Yukawa_CKM_PMNS_masses_Higgs_RG_no_knob": true,
+    "full_SM_no_knob_closure": true,
+    "honest_Galerkin_C1_run_or_equivalent_symbolic_contractions": true,
+    "primitive_C1_overlap_contractions": true,
+    "selected_A_selected_deltaTheta_sector_response_matrices": true,
+    "selected_Hessian_source_vector_b_selected": true,
+    "selected_alpha1_driver_attached_to_PhiFinC1": false,
+    "selected_differentiated_PhiFinC1_transfer_identity": true,
+    "selected_dotD_alpha1_attached_to_PhiFinC1": false
+  }
+}

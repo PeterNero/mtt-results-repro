@@ -1,0 +1,123 @@
+{
+  "ad_T3_matrix": [
+    [
+      0,
+      -1,
+      0
+    ],
+    [
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ]
+  ],
+  "candidate": "MTTSelectedPhiFinBNModelActiveEquivalenceOrSelectedMinimizerTrace",
+  "closure_claimed": false,
+  "exact_equivalence_tests": {
+    "ad_T3_nonzero_on_T1_T2": true,
+    "exact_untransported_model_active_equivalence_possible": false,
+    "finite_BN_value_side_clean": true,
+    "selected_connection_has_nonzero_du": true,
+    "selected_diagonal_End0_connection_closed": true,
+    "untransported_constant_BN_zero_cluster_claims_full_triplet_zero_modes": true
+  },
+  "gauge_transport_repair": {
+    "can_promote_after_repair": true,
+    "must_emit_next": [
+      "transported zero-mode basis K_s^sel = U K_s^model for Q,u,d,L,e,N",
+      "transported projector P_s^sel = U P_s^model U^{-1} in the selected L2 metric",
+      "proof that D_selected(U psi)=U d psi on the retained End0 lanes",
+      "gap/Riesz/Green transfer from model-active B_N to transported selected basis",
+      "dotD_alpha1 derivative including derivative of the transport U",
+      "validator replay with theorem-derived selected_source_verified flags"
+    ],
+    "name": "SelectedGaugeTransportedBNPhiFinTrace",
+    "required_transport": "U=exp(-u ad(T3)) on the T1/T2 plane, identity on T3/H singlet lanes",
+    "why_legal": true
+  },
+  "inputs": {
+    "end0_de": "candidate_data/selected_end0_de_payload_from_diagonal_hym.candidate.json",
+    "gaugefixed": "candidate_data/selected_hym_gaugefixed_connection_or_galerkin_solve.candidate.json",
+    "hym_payload": "candidate_data/selected_hym_operator_payload_extraction_from_diagonal_replay.candidate.json",
+    "route_a": "candidate_data/selected_hym_projector_source_promotion_route_a.candidate.json",
+    "t1t2_green": "candidate_data/selected_t1t2_covariant_green_and_transfer_probe.candidate.json",
+    "value_emission": "candidate_data/selected_hym_projector_zeromode_basis_value_emission.candidate.json"
+  },
+  "next_required_artifact": "MTT_Selected_GaugeTransported_BN_PhiFin_Trace_v1",
+  "no_go_theorem": {
+    "name": "UntransportedBNModelActiveEquivalenceNoGo",
+    "proof_steps": [
+      "The finite B_N packet has clean rank-3 constant zero-cluster support.",
+      "The selected HYM diagonal replay emits nonzero gradients of u.",
+      "The selected End0 connection is d+du ad(T3).",
+      "ad(T3) is nonzero on the T1/T2 plane.",
+      "Thus an untransported constant T1/T2 section is not D-flat when du is nonzero.",
+      "The previous T1/T2 covariant Green artifact shows the correct repair: the T1/T2 lane is pure-gauge equivalent after transport, not literally equal before transport."
+    ],
+    "proved": true,
+    "statement": "The selected diagonal End0 operator is D=d+du ad(T3) with nonzero du in the selected HYM replay.  Since ad(T3) acts nontrivially on T1,T2, the literal untransported constant B_N triplet cannot be identified with the full selected End0 covariant zero-mode triplet.  Therefore Phi_fin cannot promote the current model-active B_N packet by exact equality without a gauge-transported basis or a replacement selected minimizer trace."
+  },
+  "nonzero_gradient_dirs": {
+    "x1": {
+      "l2": 0.0071396474122200565,
+      "max": 0.02734665471805993,
+      "min": -0.02734665471805964
+    },
+    "x2": {
+      "l2": 0.00016143886364080524,
+      "max": 0.0007188200315650115,
+      "min": -0.0007188200315652551
+    },
+    "y1": {
+      "l2": 0.13283461057584678,
+      "max": 0.30870755214889184,
+      "min": -0.30870755214889123
+    },
+    "y2": {
+      "l2": 0.18312722865500952,
+      "max": 0.38504395666466223,
+      "min": -0.3850439566646615
+    }
+  },
+  "promotion_decision": {
+    "exact_model_active_equivalence_proved": false,
+    "exact_model_active_equivalence_rejected": true,
+    "next_required_artifact": "MTT_Selected_GaugeTransported_BN_PhiFin_Trace_v1",
+    "reason": [
+      "selected connection has nonzero du ad(T3)",
+      "untransported B_N constants are model-active zero modes, not selected transported End0 zero modes",
+      "gauge transport is required before a Phi_fin trace can promote source flags"
+    ],
+    "selected_minimizer_trace_emitted": false,
+    "selected_source_flags_may_be_flipped_now": false
+  },
+  "status": "MTT_PHIFIN_BN_MODEL_ACTIVE_EQUIVALENCE_REJECTED_GAUGE_TRANSPORT_TRACE_REQUIRED",
+  "superset_strategy": {
+    "BN_result": "finite projectors remain valuable as model-active basis before transport",
+    "HYM_result": "selected HYM replay supplies u and du needed for the transport",
+    "PhiFin_result": "must emit transported trace, not copy the model-active scaffold",
+    "classification": "SUPERSET_ROUTE_A_REPAIRED_BY_GAUGE_TRANSPORT",
+    "straight_End0_result": "selected diagonal End0 connection proves exact untransported equality false",
+    "uses_observed_constants": false
+  },
+  "target_fitting_used": false,
+  "what_closes_now": {
+    "gauge_transport_repair_identified": true,
+    "reason_for_rejection_proved": true,
+    "target_fitting_excluded": true,
+    "untransported_model_active_equivalence_rejected": true
+  },
+  "what_remains_open": {
+    "alpha1_driver_verified": true,
+    "full_SM_or_no_knob_closure": true,
+    "gauge_transported_BN_trace": true,
+    "selected_dotD_source_verified": true,
+    "selected_rho_s_actual_promotion": true,
+    "selected_source_verified": true
+  }
+}

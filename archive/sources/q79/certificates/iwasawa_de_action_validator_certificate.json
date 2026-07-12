@@ -1,0 +1,90 @@
+{
+  "certificate": "IwasawaDEActionValidator",
+  "status": "IWASAWA_DE_ACTION_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for finite sector-specific D_E action data before assembling Galerkin Gram, stiffness, Green, and overlap matrices.",
+  "depends_on": [
+    "iwasawa_spectral_operator_gate_certificate.json",
+    "iwasawa_non_invariant_galerkin_protocol_certificate.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json",
+    "iwasawa_sector_projection_validator_certificate.json"
+  ],
+  "supported_format_v1": {
+    "operator_slots": "Q,u,d,L,e,N,H entries",
+    "slot_fields": "kind, expected_kernel_dimension, domain_dimension, range_dimension, domain_gram, range_gram, D_E_matrix, stiffness_matrix, ordered_zero_mode_basis",
+    "family_kernel_dimensions": "Q,u,d,L,e,N must have kind family and expected kernel dimension 3",
+    "higgs_kernel_dimension": "H must have kind single_higgs_carrier and expected kernel dimension 1",
+    "stiffness_equation": "K = D_E^* G_range D_E",
+    "zero_mode_equation": "D_E psi_i = 0 and <psi_i,psi_j>_G = delta_ij",
+    "source_flags": "selected_source_verified and boundary_conditions_verified must be true"
+  },
+  "implemented_checks": {
+    "all_operator_slots_present": true,
+    "sector_kind_and_kernel_dimension": true,
+    "domain_and_range_dimensions_positive": true,
+    "domain_gram_positive_definite_hermitian": true,
+    "range_gram_positive_definite_hermitian": true,
+    "operator_matrix_shape": true,
+    "stiffness_shape": true,
+    "stiffness_equals_Dstar_Grange_D": true,
+    "kernel_dimension_matches_expected": true,
+    "ordered_zero_mode_basis_count": true,
+    "zero_modes_annihilated_by_D_E": true,
+    "zero_modes_orthonormal_in_domain_gram": true,
+    "selected_source_and_boundary_flags_required": true,
+    "stiffness_bad_candidate_fails": true,
+    "zero_mode_bad_candidate_fails": true,
+    "missing_slot_remains_open": true
+  },
+  "not_checked_by_v1": {
+    "proof_D_E_is_selected_by_MTT": true,
+    "proof_operator_comes_from_typed_monad_or_HYM_solve": true,
+    "elliptic_residual_or_truncation_error": true,
+    "Riesz_projector_and_complement_gap": true,
+    "dotD_alpha1": true,
+    "reduced_Green_operator": true,
+    "Yukawa_overlap_values": true
+  },
+  "script_exit_codes": {
+    "0": "complete finite D_E action candidate passes implemented checks",
+    "1": "complete candidate fails an implemented algebraic/operator check",
+    "2": "candidate is incomplete/open, such as missing operator_slots or missing sector entries"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "toy_consistent_operator_slots_pass_schema": true,
+    "toy_candidate_claim_selected": false,
+    "stiffness_bad_candidate_fails": true,
+    "zero_mode_bad_candidate_fails": true,
+    "missing_slot_candidate_exit_2": true
+  },
+  "what_this_closes": {
+    "finite_D_E_action_validator": true,
+    "stiffness_assembly_gate": true,
+    "kernel_dimension_and_zero_mode_basis_gate": true,
+    "domain_and_range_Gram_consistency_gate": true
+  },
+  "still_open": {
+    "actual_selected_D_E_action": true,
+    "proof_D_E_comes_from_selected_MTT_operator_source": true,
+    "actual_selected_rho_E_values_or_functions": true,
+    "actual_selected_Hermitian_metric": true,
+    "actual_selected_sector_projection_maps": true,
+    "Riesz_projector_gap_error_certificate": true,
+    "dotD_alpha1_and_Green_operator": true,
+    "Yukawa_overlap_matrices": true
+  },
+  "guardrails": {
+    "claims_selected_D_E_constructed": false,
+    "claims_toy_operator_selected": false,
+    "uses_observed_masses_or_mixings": false,
+    "uses_rank_one_seed_as_full_basis": false,
+    "claims_Green_operator_constructed": false,
+    "claims_yukawa_matrices_computed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_D_E_action_validator_for_candidate_data": true,
+    "closes_actual_selected_D_E": false,
+    "next_step": "Supply selected D_E action data from typed monad/Cech/HYM or validated non-invariant spectral source, then run Riesz projector, gap/error, dotD_alpha1, Green-operator, and overlap-matrix validators."
+  }
+}

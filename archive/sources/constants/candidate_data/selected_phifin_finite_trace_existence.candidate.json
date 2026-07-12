@@ -1,0 +1,76 @@
+{
+  "abstract_closure": {
+    "S1_S2_are_selected_if_basis_and_gap_are_selected": true,
+    "S1_transition_or_connection_trace_exists": true,
+    "S2_DE_dotD_matrices_exist": true,
+    "S2_Riesz_Green_exist_given_gap": true
+  },
+  "candidate": "SelectedPhiFinFiniteTraceExistence",
+  "emission_still_required": {
+    "D_E_matrix_entries": true,
+    "Riesz_contour_or_projector_entries": true,
+    "basis_BN_or_Cech_basis_entries": true,
+    "dotD_alpha1_matrix_entries": true,
+    "gap_gamma_N_and_residual_epsilon_N": true,
+    "reduced_Green_entries": true,
+    "selected_connection_or_rhoE_entries": true
+  },
+  "guardrails": {
+    "claims_A_selected_emitted": false,
+    "claims_b_selected_emitted": false,
+    "claims_finite_values_emitted": false,
+    "claims_validators_pass_honestly": false,
+    "uses_observed_or_benchmark_inputs": false
+  },
+  "next_required_artifact": "Selected_PhiFin_S1S2_Value_Emission_v1",
+  "prerequisites": {
+    "S0_selected_source_closed": true,
+    "branch_fixed": true,
+    "not_fixture_or_lifted": true,
+    "target_fitting_excluded": true
+  },
+  "proof_steps": [
+    {
+      "closes_abstract": "S1_transition_or_connection_trace_exists",
+      "statement": "A selected smooth HYM/Strominger source determines a connection A_E and Hermitian metric h_E on the selected bundle/sheaf/gerbe module. On a finite good cover, parallel transport and transition restriction define rho_E or an equivalent connection trace.",
+      "step": "connection_trace"
+    },
+    {
+      "closes_abstract": "S2_DE_dotD_matrices_exist",
+      "statement": "For any declared finite Route-C basis B_N in the selected Hilbert space, the orthogonal projection P_N gives finite matrices P_N D_E P_N and P_N dotD_alpha1 P_N. These matrices are selected because A_E and the basis are selected inputs, not fitted target data.",
+      "step": "galerkin_projection"
+    },
+    {
+      "closes_abstract": "S2_Riesz_Green_exist_given_gap",
+      "statement": "If the zero-mode cluster is separated by a positive selected gap gamma_N, the Riesz projector is the contour integral of the finite resolvent and the reduced Green operator is the inverse on the projected complement.",
+      "step": "riesz_green"
+    },
+    {
+      "closes_abstract": "validator_error_contract_exists",
+      "statement": "If the basis residual epsilon_N is bounded and epsilon_N is smaller than the selected gap margin, standard Galerkin perturbation gives stable projectors and controlled reduced Green error.",
+      "step": "error_gap_control"
+    }
+  ],
+  "status": "SELECTED_PHIFIN_FINITE_TRACE_EXISTENCE_PROVED_VALUES_OPEN",
+  "theorem": {
+    "name": "SelectedPhiFinFiniteTraceExistenceLemma",
+    "proved": true,
+    "statement": "Given the S0 selected smooth source and a declared finite Route-C Galerkin/Cech basis, the Phi_fin finite trace is mathematically defined: it has a selected connection/rho_E trace, finite D_E and dotD matrices, and Riesz/Green operators whenever the selected gap certificate is positive. This proves existence and functoriality of S1-S2, but not the emitted numeric/symbolic entries."
+  },
+  "validator_implication": {
+    "can_set_selected_source_verified_now": false,
+    "reason": "Validators need emitted finite entries and gap/error certificates. The lemma proves those objects are defined from S0, not that the repo has computed them."
+  },
+  "what_closes_now": {
+    "Phi_fin_not_circular_after_S0": true,
+    "S1_S2_existence_theorem": true,
+    "selectedness_transport_principle": true,
+    "value_emission_boundary_identified": true
+  },
+  "what_remains_open": {
+    "A_selected": true,
+    "Selected_PhiFin_S1S2_Value_Emission_v1": true,
+    "b_selected": true,
+    "routec_validators_pass_honestly": true
+  }
+}

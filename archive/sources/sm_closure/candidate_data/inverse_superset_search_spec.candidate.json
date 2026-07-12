@@ -1,0 +1,302 @@
+{
+  "candidate": "MTTInverseSupersetSearchSpec",
+  "gate_results": {
+    "candidate_promoted": false,
+    "first_run_selected": true,
+    "no_knob_closure_claimed": false,
+    "numeric_search_executed": false,
+    "promotion_gates_defined": true,
+    "rejection_rules_defined": true,
+    "scoring_defined": true,
+    "search_space_defined": true,
+    "sm_parity_closure_claimed": false
+  },
+  "input_status": "INVERSE_SUPERSET_RECONSTRUCTION_PROTOCOL_BUILT_DISCOVERY_ONLY",
+  "next_required_artifact": "MTT_Inverse_Qa_SU3_First_Search_Run_v1",
+  "promotion_gates": [
+    {
+      "closes": "search hit, not proof",
+      "id": "G0_inverse_candidate",
+      "requirement": "Candidate found by inverse search and fully labeled as discovery-only."
+    },
+    {
+      "closes": "anti-overfit plausibility gate",
+      "id": "G1_compression",
+      "requirement": "Fitted knobs compress to discrete, algebraic, finite, or independently corpus-selected data."
+    },
+    {
+      "closes": "corpus legitimacy gate",
+      "id": "G2_source_alignment",
+      "requirement": "Candidate has explicit support in the corpus or adjacent proof repos."
+    },
+    {
+      "closes": "superset coherence gate",
+      "id": "G3_cross_sector",
+      "requirement": "Same branch supports the relevant SM packet, Qa/SU3, theta, flavor, and normalization sectors."
+    },
+    {
+      "closes": "candidate can enter forward proof obligations",
+      "id": "G4_forward_replay",
+      "requirement": "Measured targets are removed from selectors and observables are recomputed from candidate source data."
+    }
+  ],
+  "rejection_rules": [
+    "Reject any candidate whose only support is target residual minimization.",
+    "Reject any candidate using separate independent continuous knobs for each measured constant.",
+    "Reject any candidate that changes branch between gauge, flavor, color, and normalization sectors.",
+    "Reject any candidate that uses CKM, PMNS, masses, or couplings to choose the family index or representation packet.",
+    "Reject any candidate with no typed source map for the selected operator or representation data.",
+    "Reject any candidate that cannot be replayed forward without measured constants as selectors."
+  ],
+  "required_first_run": {
+    "domains": [
+      "finite_topology_packet",
+      "qa_su3_operator_packet"
+    ],
+    "expected_output": "ranked candidate packets plus rejection/promotion labels",
+    "reason": "The current forward blocker is the selected Qa/SU3 color/operator packet.",
+    "run_id": "qa_su3_first",
+    "targets_allowed": [
+      "representation_count",
+      "hypercharge_pattern",
+      "anomaly_zero_pattern",
+      "color_embedding",
+      "operator_rank_pattern"
+    ],
+    "targets_forbidden_as_selectors": [
+      "masses",
+      "CKM",
+      "PMNS",
+      "gauge_coupling_values"
+    ]
+  },
+  "scoring_terms": [
+    {
+      "definition": "Dimensionless residual against measured constants after declared conventions are applied.",
+      "id": "target_residual",
+      "role": "RANKING_ONLY",
+      "weight_policy": "May rank candidates inside inverse search; cannot select final proof object alone."
+    },
+    {
+      "definition": "Penalize continuous degrees of freedom, per-target knobs, large arbitrary tables, and unexplained precision.",
+      "id": "complexity_penalty",
+      "role": "ANTI_OVERFIT",
+      "weight_policy": "High penalty for one knob per measured constant."
+    },
+    {
+      "definition": "Reward integer, finite, algebraic, index-theoretic, or section-ring data over continuous free values.",
+      "id": "discreteness_bonus",
+      "role": "PROMOTION_SIGNAL",
+      "weight_policy": "Required for promotion unless an independent source-selection theorem exists."
+    },
+    {
+      "definition": "Reward explicit support from topology-only, theta, string/flux, q79, Qa/SU3, non-SM, or GR artifacts.",
+      "id": "corpus_alignment_score",
+      "role": "PROMOTION_SIGNAL",
+      "weight_policy": "A numerically good candidate with zero source alignment is rejected."
+    },
+    {
+      "definition": "Require the same branch to support SM packet, color/operator data, thresholds, flavor, and normalization where applicable.",
+      "id": "cross_sector_consistency",
+      "role": "REJECTION_AND_RANKING",
+      "weight_policy": "Hard reject for branch mismatch on promoted candidates."
+    },
+    {
+      "definition": "Recompute observables from candidate packet with measured constants removed from selector inputs.",
+      "id": "forward_replay_score",
+      "role": "PROMOTION_GATE",
+      "weight_policy": "Mandatory before any candidate can enter a forward proof ledger."
+    }
+  ],
+  "search_domains": [
+    {
+      "fit_targets": [
+        "representation_count",
+        "hypercharge_pattern",
+        "anomaly_zero_pattern"
+      ],
+      "id": "finite_topology_packet",
+      "non_target_constraints": [
+        "source_map_exists",
+        "three_family_index",
+        "generic_anomaly_formula_matches"
+      ],
+      "promotion_output": "selected representation/anomaly packet candidate",
+      "sector": "selected SM source packet",
+      "variables": [
+        {
+          "domain": "corpus-supported finite quotients and period selectors",
+          "kind": "DISCRETE",
+          "name": "finite_quotient"
+        },
+        {
+          "domain": "index or holonomy values compatible with three families",
+          "kind": "INTEGER",
+          "name": "family_index"
+        },
+        {
+          "domain": "topology-only hypercharge/anomaly-compatible charge lattice",
+          "kind": "INTEGER_VECTOR",
+          "name": "line_bundle_charge_packet"
+        },
+        {
+          "domain": "SM candidate reps with source maps",
+          "kind": "FINITE_TABLE",
+          "name": "representation_table"
+        }
+      ]
+    },
+    {
+      "fit_targets": [
+        "color_embedding",
+        "operator_rank_pattern",
+        "selected_representation_support"
+      ],
+      "id": "qa_su3_operator_packet",
+      "non_target_constraints": [
+        "Bianchi_or_Freed_Witten_pass",
+        "same_branch_selector",
+        "typed_maps_compose"
+      ],
+      "promotion_output": "Qa/SU3 color/operator packet candidate",
+      "sector": "color/operator source gate",
+      "variables": [
+        {
+          "domain": "typed operator candidates from Qa/SU3 and non-SM packet repos",
+          "kind": "ALGEBRAIC_OPERATOR",
+          "name": "D_E_or_rho_E"
+        },
+        {
+          "domain": "Cech-Dolbeault, monad, or section-ring map candidates",
+          "kind": "MATRIX_OR_MAP_PACKET",
+          "name": "typed_monad_maps"
+        },
+        {
+          "domain": "candidate source generators with multiplication rules",
+          "kind": "FINITE_GENERATOR_SET",
+          "name": "section_ring_generators"
+        },
+        {
+          "domain": "mapped-source consistency certificate",
+          "kind": "BOOLEAN_CERTIFICATE",
+          "name": "Freed_Witten_Bianchi_source"
+        }
+      ]
+    },
+    {
+      "fit_targets": [
+        "alpha_em",
+        "sin2_theta_w",
+        "alpha_s"
+      ],
+      "id": "theta_gauge_threshold_packet",
+      "non_target_constraints": [
+        "same_source_branch_as_sm_packet",
+        "scheme_declared",
+        "thresholds_not_free_per_constant"
+      ],
+      "promotion_output": "selected gauge threshold packet candidate",
+      "sector": "gauge coupling thresholds",
+      "variables": [
+        {
+          "domain": "finite/zeta/determinant spectra from theta and non-SM work",
+          "kind": "SPECTRAL_PACKET",
+          "name": "heat_kernel_spectrum"
+        },
+        {
+          "domain": "allowed threshold kernels",
+          "kind": "ALGEBRAIC_PACKET",
+          "name": "threshold_packet"
+        },
+        {
+          "domain": "U1/SU2/SU3 embedding normalization candidates",
+          "kind": "RATIONAL_OR_INTEGER",
+          "name": "normalization_index"
+        },
+        {
+          "domain": "declared convention transforms only",
+          "kind": "CONVENTION_MAP",
+          "name": "renormalization_scheme_map"
+        }
+      ]
+    },
+    {
+      "fit_targets": [
+        "mass_ratios",
+        "CKM",
+        "PMNS",
+        "CP_phase"
+      ],
+      "id": "flavor_overlap_packet",
+      "non_target_constraints": [
+        "same_family_selector",
+        "same_Higgs_carrier",
+        "finite_CP_branch_matches"
+      ],
+      "promotion_output": "selected flavor overlap packet candidate",
+      "sector": "Yukawa, CKM, PMNS, CP",
+      "variables": [
+        {
+          "domain": "theta/string overlap and heavy-link candidates",
+          "kind": "MATRIX_PACKET",
+          "name": "overlap_kernel_blocks"
+        },
+        {
+          "domain": "q79 or compatible finite branch characters",
+          "kind": "FINITE_CHARACTER",
+          "name": "q79_cp_character"
+        },
+        {
+          "domain": "Higgs carrier/source candidates",
+          "kind": "SECTION",
+          "name": "Higgs_carrier_section"
+        },
+        {
+          "domain": "basis maps tied to family index, not CKM targets",
+          "kind": "UNITARY_OR_INTEGER_MAP",
+          "name": "family_basis_map"
+        }
+      ]
+    },
+    {
+      "fit_targets": [
+        "G_N",
+        "Planck_scale",
+        "absolute_unit_scale"
+      ],
+      "id": "absolute_normalization_packet",
+      "non_target_constraints": [
+        "compatible_with_GR_response",
+        "compatible_with_nonSM_status",
+        "single_anchor_not_per_constant"
+      ],
+      "promotion_output": "absolute normalization candidate",
+      "sector": "dimensionful normalization",
+      "variables": [
+        {
+          "domain": "candidate internal gap values",
+          "kind": "POSITIVE_REAL_OR_ALGEBRAIC",
+          "name": "modal_gap"
+        },
+        {
+          "domain": "selected compactification/geometry volume candidates",
+          "kind": "POSITIVE_REAL_OR_ALGEBRAIC",
+          "name": "internal_volume"
+        },
+        {
+          "domain": "shared-circle scale candidates",
+          "kind": "POSITIVE_REAL_OR_ALGEBRAIC",
+          "name": "shared_circle_scale"
+        },
+        {
+          "domain": "unit conversion anchors with provenance",
+          "kind": "CONVENTION_MAP",
+          "name": "unit_dictionary_anchor"
+        }
+      ]
+    }
+  ],
+  "status": "INVERSE_SUPERSET_SEARCH_SPEC_BUILT_NUMERIC_RUN_OPEN",
+  "target_fitting_role": "DISCOVERY_ONLY_SPEC",
+  "target_fitting_used": true
+}

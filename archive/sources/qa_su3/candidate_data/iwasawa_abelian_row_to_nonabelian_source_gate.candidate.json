@@ -1,0 +1,158 @@
+{
+  "abelian_row": {
+    "branch": "complex balanced Iwasawa invariant slice",
+    "data": {
+      "bianchi_equation": "8*(2*pi)^2 - 8*r3^2/R^4 = (16/alpha_prime)*r3^2",
+      "dH": "w1=-4*r3^2, w2=w3=0",
+      "flux_choice": "(1,2,0) plus (-1,-2,0)",
+      "gravitational_trace": "v1=8*r3^2/R^4, v2=v3=0 for r1=r2=R",
+      "u": [
+        315.82734083485946,
+        0.0,
+        0.0
+      ]
+    },
+    "id": "iwasawa_abelian_two_line_flux_row",
+    "meaning": "This is the strongest current Chern/Bianchi row. It may support a future nonabelian source packet, but by itself it is abelian commutant flux, not the selected Qa/SU3 color determinant.",
+    "passes": {
+      "endomorphism_E": false,
+      "finite_part": false,
+      "integer_flux_row": true,
+      "invariant_componentwise_bianchi_shape": true,
+      "selected_su3_color_bundle": false,
+      "selected_transition_rhoE": false
+    },
+    "source_kind": "abelian line embedding in heterotic commutant",
+    "source_selected_for_qa_su3_color_threshold": false,
+    "status": "CHERN_BIANCHI_ROW_SUPPORTED_NOT_QA_SU3_COLOR_SOURCE"
+  },
+  "best_live_route": {
+    "id": "non_split_extension_promotion",
+    "minimal_next_computation": "Compute or certify the selected Ext^1 class and stability/HYM condition for the same Iwasawa branch.",
+    "why": "It preserves the explicit Chern/Bianchi row while giving the only current path from reducible abelian support to a genuine SU3 source."
+  },
+  "candidate": "SelectedQaSU3IwasawaAbelianRowToNonabelianSourceGate",
+  "decision": {
+    "next_move": "Build an Ext/stability source search and, if possible, a finite transition-matrix validator for the non-split extension.",
+    "result": "Promotion is plausible but not closed.",
+    "why": "The abelian row supplies real same-branch topological support; the missing selected object is the non-split/stable SU3 transition or operator packet."
+  },
+  "do_not_use": [
+    "split diagonal SU3 topology as nonabelian SU3 source",
+    "arbitrary extension class eta",
+    "arbitrary invariant su(3) connection matrices",
+    "Qa residual or observed constants to choose the extension"
+  ],
+  "input_statuses": {
+    "chern_bianchi_candidates": "CHERN_BIANCHI_SOURCE_PACKET_CANDIDATES_BUILT_NO_SELECTED_SOURCE"
+  },
+  "next_required_artifact": "Selected_Qa_SU3_Ext_Stability_Source_Search_v1",
+  "promotion_tests": [
+    {
+      "ansatz": "E_split = L_(1,2,0) + L_(-1,-2,0) + O",
+      "decision": "REJECT_AS_CLOSURE_SUPPORT_ONLY",
+      "id": "diagonal_det_one_embedding",
+      "passes": {
+        "chern_bianchi_support": true,
+        "determinant_one_topology": true,
+        "endomorphism_E": false,
+        "finite_part": false,
+        "irreducible_or_stable_hym_source": false,
+        "nonabelian_su3_structure_group": false,
+        "same_branch": true,
+        "selected_transition_matrices": false
+      },
+      "reason": "The split diagonal embedding is reducible abelian data inside SU3 topology, not a selected nonabelian color-threshold operator packet.",
+      "what_it_preserves": [
+        "c1(E)=0",
+        "abelian Chern/Bianchi row",
+        "same Iwasawa branch"
+      ]
+    },
+    {
+      "ansatz": "0 -> L_(1,2,0) -> E -> L_(-1,-2,0) + O -> 0",
+      "decision": "BEST_LIVE_PROMOTION_ROUTE_VALUES_OPEN",
+      "id": "non_split_extension_promotion",
+      "passes": {
+        "endomorphism_E": false,
+        "finite_part": false,
+        "same_branch_possible": true,
+        "selected_extension_class_present": false,
+        "selected_transition_matrices": false,
+        "stability_or_hym_certificate_present": false,
+        "topological_promotion_possible": true
+      },
+      "reason": "A non-split extension could turn the abelian topological row into a genuine SU3 bundle, but the current corpus does not select the extension class or operator.",
+      "required_new_data": [
+        "selected nonzero extension class eta in Ext^1(L_(-1,-2,0)+O, L_(1,2,0))",
+        "same-branch stability or HYM certificate",
+        "explicit transition matrices with det=1",
+        "Chern connection/curvature or rho_E response",
+        "zero-order Weitzenbock block endomorphism_E",
+        "finite heat/spectrum/torsion determinant part"
+      ],
+      "what_it_would_preserve": [
+        "c1(E)=0",
+        "same Chern/Bianchi class as the abelian row"
+      ]
+    },
+    {
+      "ansatz": "Use the 11-space monad/section-ring packet to build E from selected f,g with g*f=0.",
+      "decision": "LIVE_PARALLEL_ROUTE_BLOCKED_BY_SAME_FINITE_SOURCE_GAP",
+      "id": "monad_section_ring_promotion",
+      "passes": {
+        "chern_bianchi_match_proved": false,
+        "endomorphism_E": false,
+        "finite_part": false,
+        "selected_f_g_present": false,
+        "symbolic_charge_products": true
+      },
+      "reason": "This remains principled, but it depends on the finite cochain source solve that was already audited as open.",
+      "required_new_data": [
+        "finite Cech/Dolbeault cochain bases",
+        "selected multiplication constants mu_i",
+        "selected f,g matrices",
+        "proof that the resulting E has the abelian row as Chern/Bianchi shadow"
+      ],
+      "what_it_would_preserve": [
+        "existing symbolic charge closure",
+        "same c/gerbe typing constraints"
+      ]
+    },
+    {
+      "ansatz": "Choose invariant su(3)-valued connection one-forms on the Iwasawa frame and solve HYM/Bianchi.",
+      "decision": "LIVE_BUT_RISKY_WITHOUT_SELECTOR",
+      "id": "direct_invariant_su3_instanton_promotion",
+      "passes": {
+        "endomorphism_E": false,
+        "equation_template_exists": true,
+        "finite_part": false,
+        "hym_solution_present": false,
+        "selected_matrix_rule_present": false
+      },
+      "reason": "Useful for computation, but arbitrary su(3) matrix choices would reintroduce knobs unless selected by the same MTT branch.",
+      "required_new_data": [
+        "source rule selecting the su(3) matrices",
+        "HYM equations solved without target residual",
+        "Bianchi row matched to the explicit abelian row or independent selected class"
+      ],
+      "what_it_would_preserve": [
+        "same branch",
+        "direct operator construction"
+      ]
+    }
+  ],
+  "result": {
+    "abelian_row_embeds_det_one_topology": true,
+    "abelian_row_is_selected_nonabelian_source": false,
+    "determinant_computable_now": false,
+    "full_sm_closure_achieved": false,
+    "promotion_route_identified": true,
+    "qa_su3_closed": false,
+    "selected_endomorphism_E_found": false,
+    "selected_extension_or_transition_data_found": false,
+    "target_fitting_used": false
+  },
+  "status": "IWASAWA_ABELIAN_ROW_TO_NONABELIAN_SOURCE_GATE_BUILT_PROMOTION_OPEN",
+  "target_fitting_used": false
+}

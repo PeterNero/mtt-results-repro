@@ -1,0 +1,93 @@
+{
+  "certificate": "IwasawaRouteCFiniteSelectedConnectionSolveScaffold",
+  "status": "IWASAWA_ROUTE_C_FINITE_SOLVE_SCAFFOLD_FORMULATED_SELECTED_VALUES_OPEN",
+  "purpose": "Turn Route C into an executable finite residual problem whose outputs can feed the existing rho_E, D_E, Riesz, Green, dotD, and C1 validators.",
+  "depends_on": [
+    "selected_de_source_hunt_certificate.json",
+    "iwasawa_bundle_fe_gluing_contract_certificate.json",
+    "iwasawa_rhoE_mesh_validator_certificate.json",
+    "iwasawa_rhoE_metric_validator_certificate.json",
+    "iwasawa_sector_projection_validator_certificate.json",
+    "iwasawa_de_action_validator_certificate.json",
+    "iwasawa_riesz_gap_validator_certificate.json",
+    "iwasawa_reduced_green_validator_certificate.json",
+    "iwasawa_dotd_response_validator_certificate.json",
+    "iwasawa_orientation_de_dotd_bridge_certificate.json"
+  ],
+  "scaffold_script": "scripts/scaffold_iwasawa_route_c_solver.py",
+  "residual_validator": "scripts/validate_iwasawa_route_c_residuals.py",
+  "residual_template": "certificates/iwasawa_route_c_residuals.template.json",
+  "mesh_N1_counts": {
+    "mesh_N": 1,
+    "closed_cell_nodes": 64,
+    "scalar_quotient_dofs_identity_smoke": 1,
+    "rank3_bundle_dofs_identity_smoke": 3,
+    "boundary_face_incidences": 192,
+    "unique_rho_boundary_matrices_table_ansatz": 144,
+    "complex_rho_entries_table_ansatz": 1296,
+    "corner_nodes_with_multiple_boundary_faces": 57,
+    "metric_real_entries_full_node_table": 576
+  },
+  "unknown_blocks": {
+    "branch_packet": "one of the two orientation packets m=1/q=79/F or m=2/q=369/F*",
+    "rho_E": "rank-three transition matrices on boundary targets, or an evaluable symbolic rule",
+    "Hermitian_metric": "positive-definite Hermitian 3x3 metric on nodes or an evaluable rule",
+    "sector_projectors": "Q,u,d,L,e,N,H finite projectors compatible with rho_E",
+    "A01_or_DE_action": "finite non-invariant Dolbeault/HYM operator action on sector bases",
+    "dotD_alpha1": "selected primitive alpha1 derivative of the same finite operator"
+  },
+  "source_residual_gates": [
+    "branch packet m=1/q=79/F or m=2/q=369/F*",
+    "antiunitary conjugate retained for comparison",
+    "dotD required to be same-branch derivative",
+    "rho_E cocycle/path independence",
+    "Hermitian metric compatibility",
+    "integrability F^(0,2)=0",
+    "HYM primitivity J contraction F=0",
+    "alpha1 Bianchi/Strominger residual",
+    "MTT selection gradient residual",
+    "positive selected Hessian/Riesz gap",
+    "no observed flavor or Execution II benchmark inputs"
+  ],
+  "downstream_validator_pipeline": [
+    "validate_iwasawa_route_c_residuals.py",
+    "validate_iwasawa_rhoE_mesh.py",
+    "validate_iwasawa_rhoE_metric.py",
+    "validate_iwasawa_sector_maps.py",
+    "validate_iwasawa_de_action.py",
+    "validate_iwasawa_riesz_gap.py",
+    "validate_iwasawa_reduced_green.py",
+    "validate_iwasawa_dotd_response.py"
+  ],
+  "what_this_closes": {
+    "route_c_problem_layout": true,
+    "finite_mesh_size_accounting": true,
+    "source_residual_gate_format": true,
+    "branch_aware_residual_schema": true,
+    "downstream_validator_order": true
+  },
+  "still_open": {
+    "actual_selected_branch_packet": true,
+    "actual_selected_rho_E_values": true,
+    "actual_selected_Hermitian_metric": true,
+    "actual_selected_A01_or_DE_action": true,
+    "actual_source_residual_certificate": true,
+    "actual_Riesz_Green_dotD_data": true,
+    "primitive_C1_matrices": true,
+    "full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_selected_D_E_constructed": false,
+    "uses_identity_rhoE_as_selected": false,
+    "uses_diagnostic_h1_three_as_selected": false,
+    "uses_execution_ii_benchmarks": false,
+    "uses_observed_masses_or_mixings": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "route_c_scaffold_constructed": true,
+    "route_c_residual_schema_is_branch_aware": true,
+    "selected_values_open": true,
+    "next_step": "Implement the first small-N nonlinear residual search or symbolic ansatz that fills the Route C residual certificate with one branch packet and downstream rho_E/metric/D_E data without observed flavor inputs."
+  }
+}

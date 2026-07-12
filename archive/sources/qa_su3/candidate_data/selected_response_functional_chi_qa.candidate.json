@@ -1,0 +1,116 @@
+{
+  "candidate": "SelectedQaSU3ResponseFunctionalChiQa",
+  "closure_claimed": true,
+  "closure_scope": "selected_finite_Qa_SU3_response_functional_chi_Qa_only",
+  "decision": {
+    "finite_internal_coupling_normalization": "CLOSED",
+    "finite_response_functional": "Delta_Qa_selected_finite = log(2008)",
+    "full_SM_closure_now": false,
+    "measured_electroweak_or_running_coupling_match": "OPEN",
+    "next_required_object": "Selected_Qa_SU3_Electroweak_Matching_or_Absolute_Coupling_Normalization_v1",
+    "selected_chi_Qa": "1"
+  },
+  "derivation": {
+    "formula": "chi_Qa = Tr_finite(tau^2) * <Pi_tw, G_ret Pi_tw>",
+    "inputs": {
+      "G_ret": [
+        [
+          "10/251",
+          "3/251",
+          0
+        ],
+        [
+          "3/251",
+          "26/251",
+          0
+        ],
+        [
+          0,
+          0,
+          "1/8"
+        ]
+      ],
+      "G_ret_Pi_tw_Pi_tw": "1/8",
+      "Pi_tw": [
+        0,
+        0,
+        1
+      ],
+      "finite_trace_tau_squared": 8
+    },
+    "name": "SelectedFiniteQaSU3ResponseNormalization",
+    "result": {
+      "chi_Qa": "1",
+      "chi_Qa_numeric": 1.0,
+      "selected": true
+    },
+    "why_source_selected": [
+      "Pi_tw=+e3 is selected by primitive retarded-energy minimization in the locked finite packet",
+      "G_ret is the exact inverse of the selected Hessian H_sel",
+      "Tr_finite(tau^2)=8 is selected by the ordinary finite trace over the eleven typed module labels",
+      "the product pairs the selected retarded overlap with the selected finite central-character heat trace"
+    ]
+  },
+  "guardrails": [
+    "chi_Qa=1 is a derived finite internal normalization, not a measured coupling",
+    "do not infer alpha_EM, alpha_s, sin^2(theta_W), or a unification scale from this artifact",
+    "do not add QFT beta coefficients or threshold schemes unless selected in a later matching theorem",
+    "do not use observed constants, masses, CKM/PMNS data, or residuals as inputs",
+    "do not count the GR/protospinor surface response inside the Qa/SU3 internal packet"
+  ],
+  "inputs": {
+    "bridge_packet": "candidate_data\\internal_logdet_to_coupling_response_bridge.candidate.json",
+    "orbit_democracy_packet": "candidate_data\\central_twist_orbit_democracy_source_or_determinant_operator.candidate.json",
+    "target_fitting_used": false
+  },
+  "status": "QA_SU3_SELECTED_FINITE_RESPONSE_FUNCTIONAL_CHI_QA_CLOSED_MEASURED_MATCH_OPEN",
+  "target_fitting_used": false,
+  "tested_normalizations": [
+    {
+      "formula": "chi_Qa = Tr_finite(tau^2) * <Pi_tw, G_ret Pi_tw>",
+      "result": "chi_Qa=1",
+      "route": "retarded_trace_pairing",
+      "status": "ACCEPTED_FOR_SELECTED_FINITE_RESPONSE_NORMALIZATION"
+    },
+    {
+      "reason": "chi_Qa=1 is not simply declared; it follows from 8 * (1/8).",
+      "route": "bare_unit_declaration",
+      "status": "REPLACED_BY_DERIVATION"
+    },
+    {
+      "reason": "no observed alpha, alpha_s, electroweak angle, mass, CKM, or residual value is used",
+      "route": "measured_coupling_fit",
+      "status": "REJECTED"
+    },
+    {
+      "reason": "beta/index coefficients are not needed for the selected finite internal normalization; they belong to later RG/threshold matching if used",
+      "route": "external_QFT_beta_import",
+      "status": "REJECTED_AS_PHYSICAL_MATCHING_STEP"
+    }
+  ],
+  "theorem": {
+    "conclusions": {
+      "finite_internal_coupling_normalization": "CLOSED",
+      "finite_response_functional": "Delta_Qa_selected_finite = log(2008)",
+      "full_SM_closure_now": false,
+      "measured_electroweak_or_running_coupling_match": "OPEN",
+      "next_required_object": "Selected_Qa_SU3_Electroweak_Matching_or_Absolute_Coupling_Normalization_v1",
+      "selected_chi_Qa": "1"
+    },
+    "hypotheses": [
+      "the internal logdet bridge gate is accepted",
+      "the locked finite packet supplies H_sel, G_ret, Pi_tw, and tau",
+      "the orbit-democracy finite trace branch supplies Tr_finite(tau^2)=8",
+      "the response normalization is the same-branch retarded trace pairing",
+      "no measured constants or external fitted weights are used"
+    ],
+    "name": "SelectedQaSU3ResponseFunctionalChiQa",
+    "proof_idea": [
+      "the bridge gate reduced the problem to a coefficient chi_Qa multiplying logdet_int",
+      "the selected twist direction is Pi_tw=e3, so the selected retarded overlap is <Pi_tw,G_ret Pi_tw>=1/8",
+      "the finite trace branch selects Tr_finite(tau^2)=8 by ordinary counting of selected typed labels",
+      "multiplying these same-branch data gives chi_Qa=8*(1/8)=1",
+      "this closes the finite internal response normalization but not the later map to a measured running coupling"
+    ]
+  }
+}

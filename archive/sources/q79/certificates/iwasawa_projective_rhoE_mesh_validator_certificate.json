@@ -1,0 +1,78 @@
+{
+  "certificate": "IwasawaProjectiveRhoEMeshValidator",
+  "status": "IWASAWA_PROJECTIVE_RHOE_MESH_VALIDATOR_FORMULATED",
+  "purpose": "Provide an executable validator for projective finite-mesh rho_E data whose corner products agree up to scalar central phases, supporting twisted-bundle, gerbe, B-field, discrete-torsion, and magnetic-translation candidates.",
+  "depends_on": [
+    "iwasawa_projective_magnetic_carrier_certificate.json",
+    "iwasawa_puregauge_nonabelian_mesh_rhoE_prototype_certificate.json",
+    "iwasawa_rhoE_mesh_validator_certificate.json"
+  ],
+  "validator_script": "scripts/validate_iwasawa_projective_rhoE_mesh.py",
+  "supported_format_v1": {
+    "rank": 3,
+    "mesh_N": "positive integer",
+    "generator_data": "same boundary-target table format as validate_iwasawa_rhoE_mesh.py",
+    "projective_law": "for every corner path pair, product(path_2) product(path_1)^-1 = lambda I with |lambda|=1"
+  },
+  "implemented_checks": {
+    "loads_rank3_mesh_generator_data": true,
+    "checks_boundary_targets": true,
+    "checks_transition_invertibility": true,
+    "checks_corner_target_agreement": true,
+    "checks_scalar_central_corner_ratios": true,
+    "checks_unit_modulus_central_phases": true,
+    "counts_strict_vs_projective_mismatches": true,
+    "reports_central_phase_histogram": true,
+    "passes_projective_magnetic_carrier": true,
+    "passes_strict_puregauge_as_trivial_projective_case": true,
+    "rejects_noncentral_corrupted_candidate": true
+  },
+  "audit_cases": {
+    "projective_magnetic_carrier": {
+      "validator_exit": 0,
+      "strict_mismatch_count": 274,
+      "projective_mismatch_count": 0,
+      "nontrivial_central_twist_count": 274,
+      "central_twist_is_nontrivial": true
+    },
+    "pure_gauge_nonabelian_carrier": {
+      "validator_exit": 0,
+      "strict_mismatch_count": 0,
+      "projective_mismatch_count": 0,
+      "nontrivial_central_twist_count": 0,
+      "central_twist_is_nontrivial": false
+    },
+    "noncentral_corrupted_candidate": {
+      "validator_exit": 1,
+      "projective_mismatch_count_above": 0
+    }
+  },
+  "what_this_closes": {
+    "projective_mesh_validator": true,
+    "central_phase_twist_detection": true,
+    "strict_vs_projective_separation": true,
+    "noncentral_corruption_rejection": true
+  },
+  "still_open": {
+    "selected_gerbe_B_field_or_discrete_torsion_source": true,
+    "twisted_Bianchi_or_Freed_Witten_compatibility": true,
+    "twisted_sector_projectors": true,
+    "twisted_D_E_action": true,
+    "de_response_promotion": true,
+    "primitive_C1_contractions": true,
+    "full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_projective_validator_selects_twist": false,
+    "claims_selected_rho_E_constructed": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_yukawa_matrices_computed": false,
+    "uses_observed_flavor_data": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "projective_validator_ready": true,
+    "projective_magnetic_carrier_validated_as_twisted_not_ordinary": true,
+    "next_step": "Search the corpus for selected gerbe/B-field/discrete-torsion/Bianchi data and then formulate a twisted-source promotion gate; otherwise convert the central twist into selected D_E/dotD response data."
+  }
+}

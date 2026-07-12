@@ -1,0 +1,45 @@
+{
+  "status": "PEW_ALPHA1_RESPONSE_INTERFACE_BUILT_VALUES_OPEN",
+  "purpose": "Build the executable interface that computes P_EW(alpha_1) from selected raw electroweak threshold response data.",
+  "calculator": "scripts/compute_electroweak_c1_response.py",
+  "open_template": "certificates/selected_electroweak_c1_response.template.json",
+  "diagnostic_fixture": "certificates/selected_electroweak_c1_response_diagnostic_fixture.json",
+  "selected_values": {
+    "v1_tilde": 0.405623467693425
+  },
+  "formula": {
+    "raw_response": "p=(p1,p2,p3) in (U1,SU2,SU3)",
+    "trace_free_projection": "q=p-mean(p)*(1,1,1)",
+    "basis_coordinates": "m1=q1, m2=-q3",
+    "lambda_12": "2*m1-m2=q1-q2=p1-p2",
+    "c1": "v1_tilde*m1",
+    "c2": "v1_tilde*m2",
+    "Delta_G_12": "v1_tilde*lambda_12/(4*pi)"
+  },
+  "required_terms": [
+    "local_determinant",
+    "torsion_curvature",
+    "bundle_index",
+    "scheme_counterterm",
+    "basis_transport"
+  ],
+  "diagnostic_expected": {
+    "P_EW_alpha1": {
+      "m1": 0.7642555835410925,
+      "m2": -0.6656419598583709
+    },
+    "lambda_12": 2.194153126940556,
+    "c1": 0.31,
+    "c2": -0.27,
+    "Delta_G_12": 0.07082394967589342
+  },
+  "verdict": {
+    "interface_built": true,
+    "open_template_refuses_to_compute": true,
+    "diagnostic_fixture_computes": true,
+    "numeric_electroweak_closure": false,
+    "new_no_knob_prediction_certified": false,
+    "next_required_computation": "Fill selected_electroweak_c1_response.template.json from selected local determinant/torsion/bundle/scheme/basis threshold data."
+  }
+}
+

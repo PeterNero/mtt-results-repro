@@ -1,0 +1,62 @@
+{
+  "certificate": "IwasawaRhoEValidator",
+  "status": "IWASAWA_RHOE_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for future constant-generator rho_E transition data, while keeping the selected rho_E values open.",
+  "depends_on": [
+    "iwasawa_rhoE_source_recovery_certificate.json",
+    "iwasawa_bundle_fe_gluing_contract_certificate.json",
+    "iwasawa_bundle_rhoE_data.template.json"
+  ],
+  "validator_script": "scripts/validate_iwasawa_rhoE.py",
+  "supported_format_v1": {
+    "generator_data": "g1..g6 must each contain a 3x3 matrix",
+    "complex_entry": "either a real number or [real, imag]",
+    "constant_generator_matrices_only": true,
+    "node_or_coordinate_dependent_rhoE": "future extension; not validated by v1"
+  },
+  "implemented_checks": {
+    "all_generators_present": true,
+    "matrix_shape_3_by_3": true,
+    "determinants_nonzero": true,
+    "relation_g1_g2_commute": true,
+    "relation_g3_g4_commute": true,
+    "relation_g1_g3_equals_g5_g3_g1": true,
+    "relation_g1_g4_equals_g6_g4_g1": true,
+    "relation_g2_g3_equals_g6_g3_g2": true,
+    "relation_g5_g2_g4_equals_g4_g2": true,
+    "central_g5_g6_commute_with_generators": true
+  },
+  "script_exit_codes": {
+    "0": "complete candidate passes implemented checks",
+    "1": "complete candidate fails an implemented algebraic check",
+    "2": "candidate is incomplete/open, such as the template with null generator entries"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "identity_constant_matrices_pass_schema": true,
+    "identity_constant_matrices_claim_selected": false,
+    "noncommuting_bad_candidate_fails": true
+  },
+  "still_open": {
+    "actual_selected_rho_E_values_or_functions": true,
+    "coordinate_dependent_rhoE_validator": true,
+    "proof_rho_E_comes_from_selected_bundle_E": true,
+    "Hermitian_metric_compatibility_values": true,
+    "sector_projection_maps_Q_u_d_L_e_N_H": true,
+    "selected_D_E_action_on_validated_basis": true,
+    "Gram_and_stiffness_matrices": true
+  },
+  "guardrails": {
+    "claims_rho_E_constructed": false,
+    "claims_identity_rhoE_selected": false,
+    "claims_constant_matrix_format_suffices_for_all_bundles": false,
+    "uses_benchmark_or_observed_data": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_validator_for_constant_rhoE_candidates": true,
+    "closes_actual_selected_rhoE": false,
+    "next_step": "Fill iwasawa_bundle_rhoE_data.template.json or a derived data file with selected transition matrices/functions, then run the validator before assembling the bundle FE basis."
+  }
+}

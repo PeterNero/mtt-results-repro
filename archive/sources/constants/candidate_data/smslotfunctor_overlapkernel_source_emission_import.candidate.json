@@ -1,0 +1,99 @@
+{
+  "checks": {
+    "G0_previous_frontier_matches": true,
+    "G1_upstream_certificate_proves_source_packet": true,
+    "G2_all_six_source_arrows_closed": true,
+    "G3_overlap_kernel_selected": true,
+    "G4_same_source_consistency_selected": true,
+    "G5_no_downstream_operator_or_flavor_closure": true,
+    "G6_no_target_fitting_or_observed_data": true,
+    "G7_boundary_preserves_full_closure_open": true
+  },
+  "closed_source_fields": {
+    "same_source_consistency_map": true,
+    "selected_10M_clock_readout": true,
+    "selected_1M_Dirac_shift_readout": true,
+    "selected_U10_Ubar5_source_outputs": true,
+    "selected_bar5M_shift_readout": true,
+    "selected_overlap_transfer_normalization": true,
+    "selected_terminal_to_SU5_E6_slot_packet": true
+  },
+  "downstream_open_fields": {
+    "Yukawa_CKM_PMNS_masses": true,
+    "full_SM_or_no_knob_closure": true,
+    "operator_layer_Pic0_recheck": true,
+    "physical_alpha1_driver": true,
+    "primitive_C1_overlap_contractions": true,
+    "same_source_D_E_Riesz_Green_dotD": true
+  },
+  "frontier_update": {
+    "current_next": "Selected_U1Y_RouteC_Downstream_OperatorPayload_Ledger_v1",
+    "old_next": "Selected_U1Y_RouteC_Hybrid_Galerkin_Overlap_Source_Packet_v1",
+    "why": "Matter-slot routing and selected overlap normalization no longer need to be treated as open source-side blockers. The next ledger must replay downstream operator payloads against the emitted SM-slot functor and decide which fields are computable rather than structurally selected."
+  },
+  "guardrails": {
+    "does_not_claim_A_selected_or_b_selected": true,
+    "does_not_claim_C1_response_or_full_response_matrix": true,
+    "does_not_claim_Yukawa_CKM_PMNS_masses_or_full_SM": true,
+    "does_not_claim_downstream_operator_payloads": true,
+    "does_not_claim_physical_alpha1": true,
+    "observed_data_used": false,
+    "target_fitting_used": false
+  },
+  "imported_overlap_kernel": {
+    "definition": "For each selected matter triplet K_s, use the transported projector trace Gram <a,b>_s = Tr(P_s^sel a^* b P_s^sel)/3, with End0 generators normalized by ||rho_s(T_i)||_F=sqrt(2). The transfer representative is rho_s(T_i)/sqrt(2).",
+    "normalization_values": {
+      "eta_00_unit_L2_norm": 1,
+      "eta_00_unit_rescale_factor": 2.378414230005442,
+      "matter_triplet_rank": 3,
+      "raw_Ti_frobenius_norm": 1.4142135623730951,
+      "theta_unrescaled_norm_square": 0.17677669529663687,
+      "unit_trace_transfer": "rho_s(T_i)/sqrt(2) per selected matter triplet after G_s=I_3"
+    },
+    "preconditions": {
+      "all_matter_projectors_selected": true,
+      "conditional_gram_theorem_proved": true,
+      "first_four_arrows_closed": true,
+      "gram_condition_satisfied_by_selected_rho_s": true,
+      "selected_ext_unit_row_closed": true,
+      "selected_hodge_projector_row_closed": true,
+      "theta_quadrature_norm_available": true,
+      "transported_projector_source_promoted": true
+    },
+    "source": "transported projector trace kernel plus selected unit Ext row"
+  },
+  "imported_same_source_consistency": {
+    "arrow": "A6 same-source consistency map",
+    "closed_parts": {
+      "A1_A3_slot_arrows": true,
+      "A4_q79_polarization": true,
+      "A5_overlap_kernel": true,
+      "terminal_sectionring_source": true,
+      "transported_projector_source": true
+    },
+    "consistency_map": "Map the axiom-backed terminal Ext source to SM slots (A1-A3), compose with q79 polarization (A4), and evaluate overlaps using the transported projector trace Gram kernel (A5). All maps are source-side and precede measured constants.",
+    "downstream_not_included": [
+      "operator-layer Pic0 recheck",
+      "same-source D_E/Riesz/Green/dotD payloads",
+      "physical alpha1 driver",
+      "primitive C1 overlap contractions",
+      "Yukawa magnitudes, CKM/PMNS, masses, or full SM no-knob closure"
+    ],
+    "selected_same_source_consistency_map": true,
+    "status": "EMITTED_SOURCE_ARROW"
+  },
+  "inputs": {
+    "previous_local_frontier": "certificates\\operatorlevel_rhoe_bn_fill_cutset_matter_overlap_import_certificate.json",
+    "sm_slot_functor_certificate": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-sm-parity-closure\\certificates\\selected_smslotfunctor_overlapkernel_source_emission_certificate.json",
+    "sm_slot_functor_packet": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-sm-parity-closure\\candidate_data\\selected_smslotfunctor_overlapkernel_source_emission.candidate.json"
+  },
+  "next_required_artifact": "Selected_U1Y_RouteC_Downstream_OperatorPayload_Ledger_v1",
+  "packet": "SMSlotFunctor_OverlapKernel_SourceEmission_Import_v1",
+  "status": "SMSLOTFUNCTOR_OVERLAPKERNEL_SOURCE_PACKET_IMPORTED_DOWNSTREAM_OPERATOR_PAYLOADS_OPEN",
+  "theorem": {
+    "closure_claimed": false,
+    "name": "SMSlotFunctorOverlapKernelSourceEmissionImportTheorem",
+    "proved": true,
+    "statement": "The upstream SM parity repo now emits the complete selected SM-slot functor source packet: A1-A3 terminal section-ring slot arrows, A4 q79 polarization outputs, A5 selected overlap/transfer kernel, and A6 same-source consistency. Therefore the earlier local matter-slot overlap source gap is closed at the source-functor level. The remaining non-SM/SM-closure gate is downstream operator payload emission: same-source D_E/Riesz/Green/dotD, primitive C1 overlap contractions, physical alpha1 driver, and flavor/mass data."
+  }
+}

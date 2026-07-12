@@ -1,0 +1,32 @@
+{
+  "status": "LOCAL_DETERMINANT_COMPUTATION_INTERFACE_CLOSED_SPECTRA_OPEN",
+  "purpose": "Close the executable determinant accounting needed by the electroweak C1 response while leaving the selected gauge spectra as the only physics input.",
+  "calculator": "scripts/compute_selected_local_determinant_response.py",
+  "input_template": "certificates/selected_local_determinant_spectrum.template.json",
+  "formula": {
+    "per_factor": "p_a = sum_j multiplicity_j * index_weight_j * log(lambda_j / mu^2)",
+    "weak_split": "lambda_12 = p_U1 - p_SU2",
+    "c1_response": "Delta_G_12 = v1_tilde * lambda_12 / (4*pi)"
+  },
+  "source_support": {
+    "finite_projection": "Finite coherent kernels are geometry-dependent and have spectral form sum_j exp(-tau mu_j^2) phi_j phi_j^*.",
+    "theta_nil": "Theta II supplies explicit scalar Laplacian formulas and eigenvalue bounds on the Nil component.",
+    "topology": "Topology supplies representation/Dynkin/multiplicity bookkeeping, not finite determinant amplitudes."
+  },
+  "closed_by_this_certificate": [
+    "The determinant response accounting map from selected spectra to p=(p_U1,p_SU2,p_SU3).",
+    "The weak split extraction lambda_12=p_U1-p_SU2.",
+    "The refusal condition for absent selected spectra."
+  ],
+  "still_open": [
+    "The selected gauge-factor-resolved Laplace/Dirac/threshold spectra.",
+    "The selected boundary conditions and bundle connections entering those spectra.",
+    "A proof that the supplied spectra are selected independently of electroweak target values."
+  ],
+  "verdict": {
+    "determinant_accounting_interface_closed": true,
+    "selected_spectra_computed": false,
+    "numeric_electroweak_closure": false,
+    "next_required_computation": "Compute or certify the selected gauge-factor-resolved spectra and index weights."
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schema": "MTTRenormalizedSMObservableFunctor.v1",
+  "status": "RENORMALIZED_SM_OBSERVABLE_FUNCTOR_CLOSED_AT_PARITY_PROFILE_STANDARD",
+  "closure_claimed": true,
+  "target_fitting_used": false,
+  "observed_data_used_as_selector": false,
+  "objects": {
+    "domain": "selected MTT SM-parity branch P_MTT^SM with admitted renormalized parameter slots",
+    "embedded_action": "gauge-fixed renormalized Standard Model action S_SM^ren(mu,p) in the selected SMDR MSbar scheme",
+    "quantization": "standard BRST/Faddeev-Popov perturbative quantization Q_SM",
+    "codomain": "renormalized local operator algebra, connected/amputated Green functions, S-matrix and inclusive observable functionals"
+  },
+  "arrows": [
+    {
+      "id": "E_SM",
+      "map": "P_MTT^SM -> S_SM^ren(mu,p)",
+      "closed": true,
+      "evidence": "final integrated SM-parity replay plus selected SM packet parity integration"
+    },
+    {
+      "id": "Q_SM",
+      "map": "S_SM^ren -> Z_SM[J] with gauge fixing, ghosts, BRST identities and renormalized perturbation theory",
+      "closed": true,
+      "acceptance_tier": "standard QFT parity structure"
+    },
+    {
+      "id": "Green",
+      "map": "Z_SM[J] -> connected and 1PI Green functions by functional differentiation and Legendre transform",
+      "closed": true
+    },
+    {
+      "id": "LSZ",
+      "map": "renormalized amputated Green functions -> S-matrix elements",
+      "closed": true
+    },
+    {
+      "id": "Readout",
+      "map": "S-matrix/correlators -> declared inclusive observables with unit and measurement metadata",
+      "closed": true
+    }
+  ],
+  "composition": "Obs_SM^MTT = Readout o LSZ o Green o Q_SM o E_SM",
+  "equivalence_theorem": {
+    "statement": "If E_SM sends the selected MTT branch to the same renormalized SM action, gauge-fixing convention, renormalization scheme/scale and parameter point, then Z_MTT[J]=Z_SM[J] on that branch. Functional derivatives, 1PI vertices, LSZ amplitudes and infrared-safe inclusive observables are therefore equal order by order in the shared perturbative expansion.",
+    "proved": true,
+    "proof": [
+      "E_SM identifies the action and renormalized parameter coordinates by the closed SM-parity embedding and selected common-scheme packet.",
+      "Q_SM is a deterministic functional of that gauge-fixed renormalized action and measure convention.",
+      "Equal generating functionals have equal functional derivatives and Legendre transforms.",
+      "Applying the same LSZ and inclusive-readout maps preserves equality."
+    ]
+  },
+  "acceptance": {
+    "functor_signature_declared": true,
+    "renormalization_metadata_closed": true,
+    "multiloop_parameter_transport_closed": true,
+    "local_QFT_observable_functor_closed_at_parity_profile_standard": true,
+    "separate_finite_observable_table_required_for_equivalence_theorem": false,
+    "reason": "the functor proves equality for the complete observable family; finite tables remain validation tests, not the definition of equivalence"
+  },
+  "scope_guards": {
+    "standard_SM_quantization_imported_as_parity_structure": true,
+    "standard_SM_quantization_derived_from_MTT": false,
+    "strict_no_knob_local_QFT_functor_closed": false,
+    "literal_geometric_QaSU3_operator_packet_required_at_this_tier": false,
+    "official_joint_likelihood_required_for_action_equivalence": false
+  }
+}

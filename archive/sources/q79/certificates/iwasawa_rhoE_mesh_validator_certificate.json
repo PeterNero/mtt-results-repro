@@ -1,0 +1,74 @@
+{
+  "certificate": "IwasawaRhoEMeshValidator",
+  "status": "IWASAWA_RHOE_MESH_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for finite-mesh boundary-target rho_E transition tables on the candidate Iwasawa finite-element cell.",
+  "depends_on": [
+    "iwasawa_bundle_fe_gluing_contract_certificate.json",
+    "iwasawa_scalar_fe_gluing_certificate.json",
+    "iwasawa_rhoE_validator_certificate.json"
+  ],
+  "supported_format_v1": {
+    "rank": "rank must be 3",
+    "mesh_N": "positive integer subdivision parameter for the closed cell {0,...,N}^6",
+    "generator_data": "g1..g6 must each contain either a constant 3x3 matrix or a values table keyed by x1,x2,y1,y2,t1,t2",
+    "complex_entry": "matrix entries are either real numbers or [real, imag]",
+    "constant_fallback": "a generator may supply matrix plus values overrides; values at a boundary target override the constant fallback",
+    "absorbed_word_convention": "central wraps or deck-word choices must already be absorbed into the supplied face-transition value"
+  },
+  "implemented_checks": {
+    "rank_three_declared": true,
+    "mesh_N_positive_integer": true,
+    "all_generators_present": true,
+    "boundary_target_matrix_lookup": true,
+    "matrix_shape_3_by_3": true,
+    "determinants_nonzero_on_visited_boundary_targets": true,
+    "finite_corner_path_independence": true,
+    "identity_schema_smoke_test": true,
+    "coordinate_override_bad_candidate_fails": true
+  },
+  "not_checked_by_v1": {
+    "symbolic_coordinate_dependent_cocycle_away_from_the_sample_mesh": true,
+    "Hermitian_metric_compatibility": true,
+    "proof_rho_E_is_selected_by_MTT": true,
+    "sector_projection_maps_Q_u_d_L_e_N_H": true,
+    "selected_D_E_action": true
+  },
+  "script_exit_codes": {
+    "0": "complete finite-mesh candidate passes implemented checks",
+    "1": "complete finite-mesh candidate fails an implemented algebraic or schema check",
+    "2": "candidate is incomplete/open, such as the template with null generator entries or missing mesh_N"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "identity_mesh_N2_passes_schema": true,
+    "identity_mesh_candidate_claim_selected": false,
+    "coordinate_override_bad_candidate_fails": true
+  },
+  "what_this_closes": {
+    "finite_mesh_rhoE_table_validator": true,
+    "corner_path_independence_test_for_supplied_face_values": true,
+    "coordinate_table_extension_beyond_constant_rhoE_validator": true
+  },
+  "still_open": {
+    "actual_selected_rho_E_values_or_functions": true,
+    "proof_rho_E_comes_from_selected_bundle_E": true,
+    "symbolic_or_all_mesh_cocycle_for_nontrivial_data": true,
+    "Hermitian_metric_compatibility_values": true,
+    "sector_projection_maps_Q_u_d_L_e_N_H": true,
+    "selected_D_E_action_on_validated_basis": true,
+    "Gram_and_stiffness_matrices": true
+  },
+  "guardrails": {
+    "claims_rho_E_constructed": false,
+    "claims_identity_rhoE_selected": false,
+    "claims_mesh_table_suffices_for_symbolic_bundle_proof": false,
+    "uses_benchmark_or_observed_data": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_finite_mesh_validator_for_rhoE_candidates": true,
+    "closes_actual_selected_rhoE": false,
+    "next_step": "Fill a selected finite-mesh or symbolic rho_E candidate, run both constant and mesh validators as applicable, then add Hermitian metric and sector-projection validators before assembling D_E."
+  }
+}

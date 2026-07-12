@@ -1,0 +1,84 @@
+{
+  "certificate": "IwasawaMonadMapDataGateCertificate",
+  "status": "IWASAWA_MONAD_MAP_DATA_GATE_BLOCKED_TYPED_MAP_SECTIONS_MISSING",
+  "purpose": "Identify the finite monad-map data required before the Iwasawa three-family zero-mode slots and SM matrices can be computed.",
+  "depends_on": [
+    "iwasawa_dolbeault_complex_extraction_certificate.json",
+    "iwasawa_galerkin_zero_mode_slot_attempt_certificate.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json"
+  ],
+  "source_monad": {
+    "sequence": "0 -> K1 -> direct_sum_{i=1}^5 L_i -> K2 -> 0, E = ker(g)/im(f)",
+    "line_bundle_c1_vectors_abc": {
+      "L1": [-2, 0, 1],
+      "L2": [-1, 1, -1],
+      "L3": [1, -1, 0],
+      "L4": [1, 0, -1],
+      "L5": [2, 1, 1],
+      "K1": [1, 0, 0],
+      "K2": [0, 1, 0]
+    },
+    "source_says_generic_maps_constant_matrices": true,
+    "source_gives_explicit_f_entries": false,
+    "source_gives_explicit_g_entries": false
+  },
+  "topological_cern_check": {
+    "c1_zero": true,
+    "ch2_zero": true,
+    "integral_c3": 6,
+    "supports_net_chirality_three": true,
+    "constructs_zero_mode_basis": false
+  },
+  "typed_map_check": {
+    "f_entry_types": {
+      "f1_L1_tensor_K1_inverse": [-3, 0, 1],
+      "f2_L2_tensor_K1_inverse": [-2, 1, -1],
+      "f3_L3_tensor_K1_inverse": [0, -1, 0],
+      "f4_L4_tensor_K1_inverse": [0, 0, -1],
+      "f5_L5_tensor_K1_inverse": [1, 1, 1]
+    },
+    "g_entry_types": {
+      "g1_K2_tensor_L1_inverse": [2, 1, -1],
+      "g2_K2_tensor_L2_inverse": [1, 0, 1],
+      "g3_K2_tensor_L3_inverse": [-1, 2, 0],
+      "g4_K2_tensor_L4_inverse": [-1, 1, 1],
+      "g5_K2_tensor_L5_inverse": [-2, 0, -1]
+    },
+    "nonzero_scalar_constant_f_entries_type_valid": false,
+    "nonzero_scalar_constant_g_entries_type_valid": false,
+    "requires_global_holomorphic_sections_or_transition_data": true,
+    "can_verify_g_after_f_zero": false,
+    "can_verify_monad_exactness": false
+  },
+  "consequence_for_sm_closure": {
+    "can_compute_H1_X_E_from_current_monad_data": false,
+    "can_extract_three_selected_harmonic_representatives": false,
+    "can_project_E6_to_SM_slots": false,
+    "can_compute_primitive_C1_response_blocks": false,
+    "can_claim_no_proxy_yukawa_matrices": false
+  },
+  "required_next_inputs": [
+    "explicit typed f_i sections of L_i tensor K1^{-1}",
+    "explicit typed g_i sections of K2 tensor L_i^{-1}",
+    "transition data or invariant-section representatives for each nonzero map entry",
+    "verification that g o f = 0",
+    "exactness/local-freeness check for E = ker(g)/im(f)",
+    "Dolbeault or Cech cohomology basis for H^1(X,E)",
+    "E6-to-SM projection maps for Q,u,d,L,e,N,H",
+    "L2 metric, projectors, Green operators, and dotD along selected C1 alpha_1"
+  ],
+  "guardrails": {
+    "uses_scalar_constant_maps_without_type_check": false,
+    "uses_c3_index_as_explicit_zero_mode_basis": false,
+    "uses_diagnostic_A01_repair_as_selected": false,
+    "uses_execution_ii_benchmark_entries": false,
+    "uses_observed_masses_or_mixings": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "topological_three_net_family_data_supported": true,
+    "literal_A01_route_closed_for_now": true,
+    "typed_monad_route_open_but_data_missing": true,
+    "next_step": "Supply typed monad sections f,g or a corrected selected A^(0,1), then recompute H^1(X,E), sector projections, and C1 primitive response matrices."
+  }
+}

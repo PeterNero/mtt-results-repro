@@ -1,0 +1,58 @@
+{
+  "active_label": "CONST-EW-02 / WEAK-MIXING / B9-ONE-UNIVERSAL-PARAMETER-GATE",
+  "anchor_import": {
+    "guardrail": "L0 or E0 must be source-selected before target comparison; observed constants cannot choose it.",
+    "minimal_extension": "one independently selected physical length L0 or energy E0",
+    "source": "candidate_data/const_em_01_alpha1_dimensional_anchor_fill_attempt/one_anchor_metrology.packet.json"
+  },
+  "closure_claimed": false,
+  "forbidden": [
+    "choose y from observed sin2thetaW",
+    "choose x from alpha_EM while claiming no-knob weak-angle prediction",
+    "choose mu_Theta from the weak-angle target",
+    "retune the primitive per constant"
+  ],
+  "observed_data_used_as_selector": false,
+  "policy_import": {
+    "acceptance_policy": {
+      "allowed_if": [
+        "declared exactly once as a universal primitive",
+        "selected before comparison to measured constants",
+        "not adjusted per sector, per constant, or per observable",
+        "all downstream predictions report dependence on the primitive unless it is independently measured"
+      ],
+      "forbidden_if": [
+        "chosen from alpha_EM, Newton/Planck, masses, cosmology, TeV, or electroweak data",
+        "renamed as no-knob closure",
+        "varied between sectors"
+      ]
+    },
+    "source": "candidate_data/const_em_01_alpha1_universal_primitive_or_nogo/one_universal_primitive.packet.json",
+    "status_relative_to_no_knob": "NOT_STRICT_NO_KNOB_CLOSURE"
+  },
+  "schema": "MTTConstEW02B9OneUniversalParameterGate.v1",
+  "status": "ONE_UNIVERSAL_PARAMETER_GATE_READY_NOT_SELECTED",
+  "target_fitting_used": false,
+  "weak_mixing_role": {
+    "one_universal_parameter_extension": {
+      "allowed": true,
+      "candidate_effective_symbols": [
+        "P_univ",
+        "E0 or L0 from the metrology packet",
+        "y_univ = x(P_univ)*log(mu_Theta(P_univ)/MZ)/(8*pi^2)"
+      ],
+      "closed_now": false,
+      "requires": [
+        "primitive selected once upstream",
+        "primitive shared across alpha1/weak/cosmology or other constants",
+        "weak angle not used to choose it",
+        "predictions state dependence on the primitive until it is independently measured or derived"
+      ]
+    },
+    "strict_no_knob": {
+      "allowed": true,
+      "closed_now": false,
+      "requires": "source theorem emits u1,u2 or y with no upstream free primitive"
+    }
+  }
+}

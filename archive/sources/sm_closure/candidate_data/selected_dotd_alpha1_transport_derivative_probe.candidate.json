@@ -1,0 +1,109 @@
+{
+  "candidate": "MTTSelectedDotDAlpha1TransportDerivativeProbe",
+  "closure_claimed": false,
+  "driver_audit": {
+    "alpha1_driver_verified_now": false,
+    "dotD_frechet_replay_closed": true,
+    "evaluated_alpha1_values_present": false,
+    "h_ext_residual_l2": 6.751979459438445e-13,
+    "h_ext_zero_mean": true,
+    "naive_scale_to_alpha1_still_rejected": true,
+    "operator_level_alpha1_driver_row_present": true,
+    "selected_ext_density_tangent_available": true,
+    "source_normalization_route_reopened_by_transport_source": true,
+    "why_not_verified": "The transport derivative proves what the dotD response must be for a selected h=du/dalpha. The repo still lacks a same-branch source-strength normalization theorem identifying the computed Ext-density tangent h_ext with the physical alpha1 derivative."
+  },
+  "inputs": {
+    "alpha1_theorem": "candidate_data/selected_alpha1_tangent_promotion_or_sector_routing_theorem.candidate.json",
+    "alpha1_value_fill": "candidate_data/selected_alpha1_source_normalization_or_end0_sector_routing_value_fill.candidate.json",
+    "dotd_honest": "candidate_data/selected_routec_sector_projectors_dotd_on_smooth_bn/sector_projectors_dotd_on_smooth_bn.honest.json",
+    "physical_dotd": "candidate_data/selected_physical_dotd_alpha1_or_end0_sector_routing.candidate.json",
+    "source_driver": "candidate_data/selected_source_origin_and_alpha1_driver.candidate.json",
+    "transport_replay": "candidate_data/selected_transport_conjugation_validator_replay.candidate.json"
+  },
+  "next_required_artifact": "MTT_Selected_Alpha1_SourceStrength_Normalization_or_Driver_Theorem_v1",
+  "promotion_decision": {
+    "alpha1_driver_verified": false,
+    "dotD_validator_full_replay_closed": false,
+    "reason": "The validator replay is mathematically ready, but the alpha1 driver flag still needs a theorem-derived source-strength normalization.",
+    "selected_dotD_source_formula_closed": true,
+    "selected_dotD_source_verified_by_transport_derivative": true
+  },
+  "status": "MTT_SELECTED_DOTD_ALPHA1_TRANSPORT_DERIVATIVE_CLOSED_DRIVER_NORMALIZATION_OPEN",
+  "superset_strategy": {
+    "classification": "STRAIGHT_TRANSPORT_DERIVATIVE_PLUS_SUPERSET_DRIVER_AUDIT",
+    "locked_target": "honest dotD validator replay with selected_dotD_source_verified and alpha1_driver_verified true by theorem",
+    "straight_path": "derive dU/dalpha and dotD_h response from End0/HYM pure gauge transport",
+    "support_path": "reuse Ext-density tangent, C1 alpha1 driver row, and Phi_fin source packet as support without promoting the driver",
+    "uses_observed_constants": false
+  },
+  "target_fitting_used": false,
+  "theorem": {
+    "name": "SelectedDotDAlpha1TransportDerivativeFormula",
+    "proof_steps": [
+      "On the T1/T2 lane U=exp(-uJ), so dU/dalpha=-(du/dalpha)J U.",
+      "For h=du/dalpha and model zero mode psi0, delta psi=-(hJ)U psi0.",
+      "The Frechet derivative of D=d+du J is dotD_h=(dh)J.",
+      "Using D U=U d and [J,U]=0, D(delta psi)=-U(dh)J psi0=-dotD_h(U psi0).",
+      "Thus the transported dotD source and response are fixed once h is selected.",
+      "The remaining non-algebraic question is whether h is the selected physical alpha1 driver."
+    ],
+    "proved": true,
+    "statement": "For selected transported zero modes psi_sel=U psi_model with U=exp(-uJ), an alpha-tangent h=du/dalpha gives delta_U psi_sel=-(hJ) psi_sel and dotD_h psi_sel=(dh)J psi_sel.  Since D_sel(delta_U psi_sel)=-dotD_h psi_sel, the transport derivative supplies the exact finite horizontal response source formula by conjugation.  This proves the dotD source algebra, but not the physical alpha1 driver normalization."
+  },
+  "transport_derivative_formula": {
+    "U": "exp(-u ad(T3))",
+    "dU_dalpha": "-(du/dalpha) ad(T3) U",
+    "dotD_h": "dotD_h=(dh) ad(T3)",
+    "h_ext_mean_abs": 2.355797313054923e-19,
+    "h_symbol": "h=du/dalpha",
+    "horizontal_gauge_requires": "mean(h)=0 or selected Gram-Schmidt removal of the kernel component",
+    "identity": "D_sel(delta psi)+dotD_h psi_sel=0",
+    "response": "delta psi=-(h ad(T3)) psi_sel"
+  },
+  "validator_boundary": {
+    "full_flag_probe_path": "candidate_data/selected_dotd_alpha1_transport_derivative_probe/dotd_full_flag_probe.json",
+    "full_flag_validation": {
+      "exit_code": 0,
+      "output": [
+        "loaded sector-specific finite dotD response slots",
+        "dotD response validation PASS",
+        "finite dotD sources and horizontal zero-mode responses are consistent",
+        "primitive overlap contractions and Yukawa matrices remain separate checks"
+      ]
+    },
+    "honest_payload_path": "candidate_data/selected_routec_sector_projectors_dotd_on_smooth_bn/sector_projectors_dotd_on_smooth_bn.honest.json",
+    "mathematical_dotd_matrices_pass_if_flags_are_theorem_derived": true,
+    "promote_full_flags_now": false,
+    "source_only_fails_only_by_alpha1_driver": true,
+    "source_only_probe_path": "candidate_data/selected_dotd_alpha1_transport_derivative_probe/dotd_source_verified_alpha1_open_probe.json",
+    "source_only_validation": {
+      "exit_code": 1,
+      "output": [
+        "loaded sector-specific finite dotD response slots",
+        "dotD response validation FAIL",
+        "- Q alpha1_driver_verified is not true",
+        "- u alpha1_driver_verified is not true",
+        "- d alpha1_driver_verified is not true",
+        "- L alpha1_driver_verified is not true",
+        "- e alpha1_driver_verified is not true",
+        "- N alpha1_driver_verified is not true",
+        "- H alpha1_driver_verified is not true"
+      ]
+    }
+  },
+  "what_closes_now": {
+    "alpha1_driver_remaining_gap_is_single_normalization_theorem": true,
+    "selected_dotD_source_algebra": true,
+    "target_fitting_excluded": true,
+    "transport_derivative_formula": true,
+    "validator_math_passes_if_driver_is_theorem_derived": true
+  },
+  "what_remains_open": {
+    "alpha1_driver_source_strength_normalization": true,
+    "full_SM_or_no_knob_closure": true,
+    "honest_dotD_validator_replay_without_alpha1_lift": true,
+    "primitive_C1_overlap_contractions": true,
+    "selected_matter_slot_routing": true
+  }
+}

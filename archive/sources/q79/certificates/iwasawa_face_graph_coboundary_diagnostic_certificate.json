@@ -1,0 +1,66 @@
+{
+  "certificate": "IwasawaFaceGraphCoboundaryDiagnostic",
+  "status": "IWASAWA_FACE_GRAPH_COBOUNDARY_DIAGNOSTIC_FORMULATED",
+  "purpose": "Detect when finite-mesh rho_E transition tables are gauge-trivial coboundaries on the validator face graph, preventing pure-gauge noncommuting prototypes from being mistaken for selected nontrivial bundle data.",
+  "depends_on": [
+    "iwasawa_puregauge_nonabelian_mesh_rhoE_prototype_certificate.json",
+    "iwasawa_rotated_phase_mesh_rhoE_sector_prototype_certificate.json",
+    "iwasawa_rhoE_mesh_validator_certificate.json"
+  ],
+  "diagnostic_script": "scripts/detect_iwasawa_face_graph_coboundary.py",
+  "implemented_checks": {
+    "loads_mesh_N_and_generator_data": true,
+    "builds_boundary_face_graph": true,
+    "solves_node_gauge_trivialization": true,
+    "checks_edge_reconstruction": true,
+    "reports_unitarity_error": true,
+    "rejects_corrupted_cycle_data": true
+  },
+  "expected_N1_graph_counts": {
+    "closed_nodes": 64,
+    "face_incidences": 192,
+    "unique_face_keys": 144,
+    "graph_connected_components": 1
+  },
+  "prototype_diagnostics": {
+    "puregauge_nonabelian_prototype": {
+      "face_graph_coboundary": true,
+      "max_consistency_error_below": 1e-8,
+      "mesh_validator_exit": 0
+    },
+    "rotated_phase_sector_prototype": {
+      "face_graph_coboundary": true,
+      "max_consistency_error_below": 1e-8,
+      "mesh_validator_exit": 0
+    },
+    "corrupted_cycle_candidate": {
+      "face_graph_coboundary": false,
+      "max_consistency_error_above": 1e-3
+    }
+  },
+  "what_this_closes": {
+    "pure_gauge_false_positive_detector": true,
+    "finite_face_graph_coboundary_gate": true,
+    "noncommuting_alone_not_enough_guardrail": true
+  },
+  "still_open": {
+    "selected_non_puregauge_rho_E_source": true,
+    "typed_Cech_or_monad_transition_data": true,
+    "HYM_or_Strominger_residual_solution": true,
+    "selected_D_E_action_on_validated_basis": true,
+    "primitive_C1_matrices": true,
+    "full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_selected_rho_E_constructed": false,
+    "claims_pure_gauge_nonabelian_data_are_physical_mixing": false,
+    "uses_benchmark_or_observed_flavor_data": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "diagnostic_ready": true,
+    "finite_noncommuting_prototype_is_pure_gauge": true,
+    "next_step": "Use this diagnostic as a rejection/guardrail before promoting any finite rho_E table; the real source must come from selected Cech/monad or HYM/Strominger data with nontrivial D_E response."
+  }
+}

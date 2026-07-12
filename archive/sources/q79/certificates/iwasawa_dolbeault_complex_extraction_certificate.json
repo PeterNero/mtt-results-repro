@@ -1,0 +1,105 @@
+{
+  "certificate": "IwasawaDolbeaultComplexExtractionCertificate",
+  "status": "IWASAWA_DOLBEAULT_EXTRACTION_LITERAL_A01_FAILS_INTEGRABILITY_REPAIR_CANDIDATE_OPEN",
+  "purpose": "Extract and test the finite left-invariant Dolbeault complex printed in the Iwasawa flux source.",
+  "depends_on": [
+    "iwasawa_galerkin_zero_mode_slot_attempt_certificate.json",
+    "iwasawa_rank_one_yukawa_seed_certificate.json",
+    "c1_iwasawa_rplus_support_certificate.json"
+  ],
+  "source_complex": {
+    "anti_holomorphic_basis": [
+      "e1 = bar(omega^1)",
+      "e2 = bar(omega^2)",
+      "e3 = bar(omega^3)"
+    ],
+    "barpartial_rules": {
+      "barpartial_e1": 0,
+      "barpartial_e2": 0,
+      "barpartial_e3": "e1 wedge e2"
+    },
+    "literal_A01": {
+      "normalization": "mu=1 for finite rank tests; any nonzero mu has the same integrability status after rescaling",
+      "nonzero_entries": [
+        {
+          "entry": "A_12",
+          "value": "e3"
+        },
+        {
+          "entry": "A_13",
+          "value": "e1"
+        },
+        {
+          "entry": "A_31",
+          "value": "-e2"
+        }
+      ]
+    }
+  },
+  "literal_integrability_result": {
+    "integrable": false,
+    "curvature_defect": "(barpartial A + A wedge A)_12 = e1 wedge e2",
+    "map_ranks": {
+      "d0": 3,
+      "d1": 6,
+      "d2": 2
+    },
+    "composition_nonzero_counts": {
+      "d1_after_d0": 4,
+      "d2_after_d1": 4
+    },
+    "cohomology_dimensions_valid": false
+  },
+  "minimal_repair_candidate": {
+    "selected": false,
+    "description": "Move the lower-left -e2 entry from A_31 to A_32 so that A_13 wedge A_32 cancels barpartial A_12.",
+    "nonzero_entries": [
+      {
+        "entry": "A_12",
+        "value": "e3"
+      },
+      {
+        "entry": "A_13",
+        "value": "e1"
+      },
+      {
+        "entry": "A_32",
+        "value": "-e2"
+      }
+    ],
+    "integrable": true,
+    "map_ranks": {
+      "d0": 2,
+      "d1": 5,
+      "d2": 2
+    },
+    "cohomology_dimensions": {
+      "h0": 1,
+      "h1": 2,
+      "h2": 2,
+      "h3": 1
+    },
+    "three_family_slot_fill": false
+  },
+  "consequence_for_sm_closure": {
+    "literal_A01_can_fill_zero_mode_slots": false,
+    "repair_candidate_can_fill_three_family_slots": false,
+    "primitive_C1_blocks_computable_from_this_extraction": false,
+    "requires_corrected_A01_or_full_monad_maps": true
+  },
+  "guardrails": {
+    "silently_corrects_source_A01": false,
+    "uses_repair_candidate_as_selected": false,
+    "uses_execution_ii_entries": false,
+    "uses_observed_masses_or_mixings": false,
+    "claims_c1_primitive_blocks": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "pushed_extraction_to_integrability_gate": true,
+    "literal_source_passes_integrability": false,
+    "diagnostic_repair_exists": true,
+    "diagnostic_repair_h1": 2,
+    "next_step": "Correct or confirm the printed A^(0,1) matrix, or extract the full monad maps f and g and compute H^1(X,E) from the actual monad/cohomology sequence."
+  }
+}

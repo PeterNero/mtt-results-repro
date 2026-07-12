@@ -1,0 +1,54 @@
+{
+  "active_label": "CONST-EW-02 / WEAK-MIXING / B9-PROFILE-REDUCTION",
+  "closure_claimed": false,
+  "inputs": {
+    "B5_theta_ratio": "candidate_data/const_ew_02_weak_mixing_b5_a0_or_ratio_kernel_import/theta_ratio_high_scale_packet.packet.json",
+    "B6_K_EW_contract": "candidate_data/const_ew_02_weak_mixing_b6_kew_kernel_gate/kew_kernel_contract.packet.json",
+    "B8_flat_FP_boundary": "candidate_data/const_ew_02_weak_mixing_b8_flat_fp_policy_import/weak_mixing_boundary_after_fp.packet.json"
+  },
+  "observed_data_used_as_selector": false,
+  "reduction": {
+    "definitions": {
+      "L": "log(mu_Theta/MZ)",
+      "r12": "g1(mu_Theta)^2/g2(mu_Theta)^2",
+      "u1": "x*(b1*L/(8*pi^2) + T1)",
+      "u2": "x*(b2*L/(8*pi^2) + T2)",
+      "x": "g2(mu_Theta)^2 or equivalent selected normalization"
+    },
+    "general_threshold_lane": {
+      "required_source_output": "source-selected pair (u1,u2), or a rule tying them to one selected primitive",
+      "why_difference_only_is_not_enough": "The weak angle depends on A1*x and A2*x separately.  A Delta_G12 or lambda_12 difference cannot determine the ratio unless a source theorem supplies the common/profile part."
+    },
+    "high_scale_check": {
+      "computed": 0.2515877565744274,
+      "matches_B5_value": true,
+      "u1": 0.0,
+      "u2": 0.0
+    },
+    "no_threshold_one_profile_lane": {
+      "b1": 4.1,
+      "b2": -3.1666666666666665,
+      "definition": "y=x*L/(8*pi^2), T1=T2=0",
+      "derivative_at_y0": -1.0287813598242046,
+      "formula": "sin2(y)=3*(1+b2*y)/(3*(1+b2*y)+5*(1/r12+b1*y))",
+      "interpretation": "At one-loop with no selected threshold vector, the physical profile collapses to one dimensionless composite y.  This does not select y; it reduces what a source theorem must emit.",
+      "samples_not_targets": {
+        "y=0": 0.2515877565744274,
+        "y=0.0025": 0.2490217210203565,
+        "y=0.005": 0.24646746681617643,
+        "y=0.01": 0.24139397939294888,
+        "y=0.02": 0.23138486800266914
+      },
+      "valid_positive_A2_interval": "0 <= y < 0.31578947368421056"
+    },
+    "reduced_formula": "sin2 = 3*(1+u2)/(3*(1+u2)+5*(1/r12+u1))"
+  },
+  "schema": "MTTConstEW02B9OneLoopProfileReduction.v1",
+  "starting_formula": {
+    "inv_g1_MZ": "1/(r_12*x) + b1/(8*pi^2)*log(mu_Theta/MZ) + T1",
+    "inv_g2_MZ": "1/x + b2/(8*pi^2)*log(mu_Theta/MZ) + T2",
+    "sin2_MZ": "(3/5*g1_MZ^2)/(3/5*g1_MZ^2+g2_MZ^2)"
+  },
+  "status": "ONE_LOOP_PROFILE_REDUCTION_CLOSED_VALUES_OPEN",
+  "target_fitting_used": false
+}

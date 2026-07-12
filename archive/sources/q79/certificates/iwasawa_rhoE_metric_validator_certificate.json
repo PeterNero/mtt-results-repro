@@ -1,0 +1,79 @@
+{
+  "certificate": "IwasawaRhoEMetricValidator",
+  "status": "IWASAWA_RHOE_METRIC_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for Hermitian metric compatibility of finite-mesh rho_E transition data on the candidate Iwasawa finite-element cell.",
+  "depends_on": [
+    "iwasawa_bundle_fe_gluing_contract_certificate.json",
+    "iwasawa_rhoE_mesh_validator_certificate.json",
+    "iwasawa_rhoE_validator_certificate.json"
+  ],
+  "supported_format_v1": {
+    "rank": "rank must be 3",
+    "mesh_N": "positive integer subdivision parameter for the closed cell {0,...,N}^6",
+    "generator_data": "same constant or table-valued g1..g6 format accepted by the mesh rho_E validator",
+    "metric_data": "Hermitian metric matrix H(z), supplied as a constant matrix or a values table keyed by x1,x2,y1,y2,t1,t2",
+    "complex_entry": "matrix entries are either real numbers or [real, imag]",
+    "compatibility_equation": "rho_E(gamma,z)^* H(gamma*z) rho_E(gamma,z) = H(z)"
+  },
+  "implemented_checks": {
+    "rank_three_declared": true,
+    "mesh_N_positive_integer": true,
+    "all_generators_present": true,
+    "metric_data_present": true,
+    "matrix_shape_3_by_3": true,
+    "metric_hermitian_on_visited_nodes": true,
+    "metric_positive_definite_on_visited_nodes": true,
+    "boundary_face_metric_compatibility": true,
+    "identity_schema_smoke_test": true,
+    "scaled_nonunitary_transition_fails": true,
+    "missing_metric_remains_open": true
+  },
+  "not_checked_by_v1": {
+    "proof_rho_E_is_selected_by_MTT": true,
+    "proof_metric_is_selected_HYM_metric": true,
+    "metric_compatibility_away_from_sample_mesh": true,
+    "sector_projection_maps_Q_u_d_L_e_N_H": true,
+    "selected_D_E_action": true,
+    "quadrature_volume_form": true
+  },
+  "script_exit_codes": {
+    "0": "complete finite-mesh rho_E plus metric candidate passes implemented checks",
+    "1": "complete candidate fails an implemented algebraic or metric check",
+    "2": "candidate is incomplete/open, such as null generators, missing mesh_N, or missing metric_data"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "identity_rho_identity_metric_mesh_N2_passes_schema": true,
+    "identity_metric_candidate_claim_selected": false,
+    "scaled_nonunitary_transition_fails": true,
+    "missing_metric_candidate_exit_2": true
+  },
+  "what_this_closes": {
+    "finite_mesh_metric_compatibility_validator": true,
+    "positive_definite_hermitian_metric_gate": true,
+    "unitary_transition_gate_for_supplied_metric": true
+  },
+  "still_open": {
+    "actual_selected_rho_E_values_or_functions": true,
+    "proof_rho_E_comes_from_selected_bundle_E": true,
+    "actual_selected_Hermitian_metric": true,
+    "proof_metric_solves_HYM_or_selected_Strominger_system": true,
+    "sector_projection_maps_Q_u_d_L_e_N_H": true,
+    "selected_D_E_action_on_validated_basis": true,
+    "Gram_and_stiffness_matrices": true
+  },
+  "guardrails": {
+    "claims_rho_E_constructed": false,
+    "claims_metric_constructed": false,
+    "claims_identity_metric_selected": false,
+    "uses_benchmark_or_observed_data": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_metric_validator_for_rhoE_candidates": true,
+    "closes_actual_selected_metric": false,
+    "closes_actual_selected_rhoE": false,
+    "next_step": "Fill a selected rho_E plus Hermitian metric candidate, run cocycle and metric validators, then validate sector projection maps before assembling D_E, Gram, and stiffness matrices."
+  }
+}

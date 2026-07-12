@@ -1,0 +1,77 @@
+{
+  "program": "MTT protospinor GR response proof",
+  "certificate": "gr_tt_aint_interface_conversion_requirements",
+  "status": "AINT_INTERFACE_CONVERSION_FACTORS_COMPUTED_BRIDGE_SOURCE_OPEN",
+  "input_certificates": {
+    "gr_tt_stiffness_modal_gap_interface": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-protospinor-gr-response-proof\\certificates\\gr_tt_stiffness_modal_gap_interface_certificate.json"
+  },
+  "interface_ansatz_under_test": {
+    "formula": "lambda_GR_TT = c_interface * kappa_STF_int",
+    "meaning": "If the selected GR TT spectral complement is a scalar rescaling of the TT response block in internal units, then the missing spectral-interface theorem must derive c_interface.",
+    "not_assumed_true": true
+  },
+  "required_conversion_tables": {
+    "to_theta_nil_floor_lambda_0p25": [
+      {
+        "N": 64,
+        "kappa_STF_int": 0.04618016151525098,
+        "target_lambda_star": 0.25,
+        "required_conversion_c_if_lambda_equals_c_kappa": 5.413580026510683
+      },
+      {
+        "N": 79,
+        "kappa_STF_int": 0.04973134686087317,
+        "target_lambda_star": 0.25,
+        "required_conversion_c_if_lambda_equals_c_kappa": 5.027010442717187
+      },
+      {
+        "N": 448,
+        "kappa_STF_int": 0.08212905373241541,
+        "target_lambda_star": 0.25,
+        "required_conversion_c_if_lambda_equals_c_kappa": 3.0439897775338403
+      }
+    ],
+    "to_z64_lambda_15": [
+      {
+        "N": 64,
+        "kappa_STF_int": 0.04618016151525098,
+        "target_lambda_star": 15.0,
+        "required_conversion_c_if_lambda_equals_c_kappa": 324.81480159064097
+      },
+      {
+        "N": 79,
+        "kappa_STF_int": 0.04973134686087317,
+        "target_lambda_star": 15.0,
+        "required_conversion_c_if_lambda_equals_c_kappa": 301.62062656303124
+      },
+      {
+        "N": 448,
+        "kappa_STF_int": 0.08212905373241541,
+        "target_lambda_star": 15.0,
+        "required_conversion_c_if_lambda_equals_c_kappa": 182.6393866520304
+      }
+    ]
+  },
+  "interpretation": {
+    "nil_floor": "Identifying the GR TT spectral gap with the nil floor would require a branch-dependent conversion factor of order 3 to 6 across the tested internal-volume rows unless the selected N row is fixed first.",
+    "z64_branch": "Identifying the GR TT spectral gap with the Z64 value would require a much larger conversion factor of order 180 to 325 across the tested rows. This is possible only if the spectral-interface theorem derives that normalization from selected operator data.",
+    "row_dependence": "The conversion factor depends on the selected internal volume row. Therefore the bridge must select the row/branch before importing a numerical modal gap."
+  },
+  "next_required_artifact": {
+    "name": "Selected_GR_TT_Aint_Interface_Data",
+    "required_fields": [
+      "selected N or selected internal volume row",
+      "operator relation between A_GR_TT and H_TT",
+      "derived c_interface or proof c_interface=1",
+      "quotient/projector/window used for the TT spectral complement",
+      "lowest positive eigenvalue after quotienting"
+    ]
+  },
+  "guardrails": {
+    "assumes_scalar_interface_ansatz_as_fact": false,
+    "claims_nil_conversion_derived": false,
+    "claims_z64_conversion_derived": false,
+    "claims_GR_TT_modal_gap_closed": false,
+    "claims_physical_units_closed": false
+  }
+}

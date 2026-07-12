@@ -1,0 +1,97 @@
+{
+  "certificate": "IwasawaDotDResponseValidator",
+  "status": "IWASAWA_DOTD_RESPONSE_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for finite dotD_alpha1 source vectors and L2-horizontal zero-mode responses after projectors and reduced Green operators are supplied.",
+  "depends_on": [
+    "iwasawa_reduced_green_validator_certificate.json",
+    "iwasawa_riesz_gap_validator_certificate.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json",
+    "c1_finite_response_matrix_reduction_certificate.json"
+  ],
+  "supported_format_v1": {
+    "dotd_response_slots": "Q,u,d,L,e,N,H entries",
+    "slot_fields": "kind, expected_kernel_dimension, dimension, gram_matrix, stiffness_matrix, riesz_projector, complement_projector, reduced_green_operator, dotD_alpha1_matrix, ordered_zero_mode_basis, source_vectors, horizontal_response_vectors",
+    "operator_definition": "A = G^{-1} K, where G is the finite Gram matrix and K is the stiffness matrix",
+    "source_equation": "source_i = Q dotD_alpha1 psi_i",
+    "response_equation": "dotPsi_i = - R source_i = - R Q dotD_alpha1 psi_i",
+    "horizontal_gauge": "P dotPsi_i = 0 and <psi_j,dotPsi_i>_G = 0",
+    "linearized_zero_mode_equation": "A dotPsi_i + source_i = 0",
+    "source_flags": "selected_dotD_source_verified, alpha1_driver_verified, green_operator_verified, and horizontal_gauge_verified must be true"
+  },
+  "implemented_checks": {
+    "all_dotd_response_slots_present": true,
+    "sector_kind_and_cluster_dimension": true,
+    "dimension_positive": true,
+    "gram_positive_definite_hermitian": true,
+    "stiffness_hermitian": true,
+    "projector_and_complement_idempotent": true,
+    "P_Q_and_Q_P_zero": true,
+    "zero_modes_G_orthonormal": true,
+    "projector_fixes_zero_modes": true,
+    "complement_annihilates_zero_modes": true,
+    "source_vectors_equal_Q_dotD_psi": true,
+    "source_vectors_lie_in_complement": true,
+    "response_vectors_equal_minus_R_source": true,
+    "response_vectors_horizontal": true,
+    "response_vectors_lie_in_complement": true,
+    "linearized_zero_mode_equation": true,
+    "horizontal_inner_products_zero": true,
+    "source_alpha1_green_horizontal_flags_required": true,
+    "bad_source_candidate_fails": true,
+    "bad_response_candidate_fails": true,
+    "bad_horizontal_candidate_fails": true,
+    "missing_slot_remains_open": true
+  },
+  "not_checked_by_v1": {
+    "proof_D_E_is_selected_by_MTT": true,
+    "proof_dotD_alpha1_comes_from_selected_Hessian_solution": true,
+    "independent_computation_of_dotD_alpha1": true,
+    "primitive_overlap_contractions": true,
+    "explicit_C1_vertex_absence_or_value": true,
+    "basis_connection_terms": true,
+    "Yukawa_overlap_values": true,
+    "full_SM_closure": true
+  },
+  "script_exit_codes": {
+    "0": "complete finite dotD/response candidate passes implemented checks",
+    "1": "complete candidate fails an implemented dotD/source/response check",
+    "2": "candidate is incomplete/open, such as missing dotd_response_slots or missing sector entries"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "toy_consistent_dotd_response_slots_pass_schema": true,
+    "toy_candidate_claim_selected": false,
+    "source_bad_candidate_fails": true,
+    "response_bad_candidate_fails": true,
+    "horizontal_bad_candidate_fails": true,
+    "missing_slot_candidate_exit_2": true
+  },
+  "what_this_closes": {
+    "finite_dotD_response_validator": true,
+    "source_vector_gate": true,
+    "horizontal_response_gate": true,
+    "linearized_zero_mode_response_gate": true
+  },
+  "still_open": {
+    "actual_selected_D_E_action": true,
+    "actual_selected_reduced_Green_operator": true,
+    "actual_selected_dotD_alpha1_operator": true,
+    "primitive_C1_overlap_contractions": true,
+    "Yukawa_overlap_matrices": true,
+    "full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_selected_D_E_constructed": false,
+    "claims_selected_dotD_alpha1_constructed": false,
+    "claims_toy_response_selected": false,
+    "uses_observed_masses_or_mixings": false,
+    "allows_free_dotD_knobs": false,
+    "claims_yukawa_matrices_computed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_dotD_response_validator_for_candidate_data": true,
+    "closes_actual_selected_dotD_response": false,
+    "next_step": "Supply selected dotD_alpha1 matrices from the selected Hessian/C1 alpha1 source, then compute primitive overlap contractions for u,d,e,nuD."
+  }
+}

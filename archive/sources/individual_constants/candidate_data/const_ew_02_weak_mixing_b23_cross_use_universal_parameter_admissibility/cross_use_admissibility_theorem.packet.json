@@ -1,0 +1,52 @@
+{
+  "active_label": "CONST-EW-02 / WEAK-MIXING / B23-CROSS-USE-UNIVERSAL-PARAMETER-ADMISSIBILITY",
+  "admissibility_conditions": [
+    "parameter declared once with a stable name and domain",
+    "parameter is global, not sector-specific",
+    "source branch is selected before target comparison or fixed by an explicitly declared calibration sector",
+    "at most one independent empirical calibration per parameter",
+    "all other sectors receive the identical value unchanged",
+    "calibration sector and prediction sectors are logged before evaluating success",
+    "no no-knob claim until the parameter is derived from selected source data"
+  ],
+  "closure_claimed": false,
+  "forbidden_shortcuts": [
+    "choose u_dyn from weak angle and then also call the weak angle predicted",
+    "choose u_phys from alpha and then call alpha no-knob",
+    "retune u_dyn for CKM, PMNS, Yukawa, weak angle, or alpha separately",
+    "use the same symbol for different numerical values in different encodings",
+    "drop failed cross-use sectors after seeing results"
+  ],
+  "inputs": {
+    "B21_parameter_bridge": "candidate_data/const_ew_02_weak_mixing_b21_dynamic_c1_or_free_parameter_bridge/provisional_universal_parameter_bridge.packet.json",
+    "B22_candidate": "candidate_data/const_ew_02_weak_mixing_b22_parameterized_bridge_replay.candidate.json",
+    "B22_parameter_pressure_test": "candidate_data/const_ew_02_weak_mixing_b22_parameterized_bridge_replay/universal_parameter_pressure_test.packet.json",
+    "B22_strict_gate": "candidate_data/const_ew_02_weak_mixing_b22_parameterized_bridge_replay/strict_source_promotion_gate.packet.json",
+    "B22_symbolic_replay": "candidate_data/const_ew_02_weak_mixing_b22_parameterized_bridge_replay/symbolic_weak_angle_replay.packet.json",
+    "alpha1_frontier_certificate": "certificates/const_em_01_alpha1_frontier_closure_ledger_certificate.json",
+    "alpha1_frontier_ledger": "candidate_data/const_em_01_alpha1_frontier_closure_ledger.candidate.json",
+    "global_universal_parameter_policy": "candidate_data/constant_frontier_ledger/universal_parameter_policy_import.packet.json"
+  },
+  "observed_data_used_as_selector": false,
+  "schema": "MTTConstEW02B23CrossUseUniversalParameterAdmissibilityTheorem.v1",
+  "status": "CROSS_USE_UNIVERSAL_PARAMETER_TIER_FORMALIZED",
+  "target_fitting_used": false,
+  "tier_definitions": {
+    "bad_fitting": {
+      "allowed": false,
+      "claim_allowed": "none",
+      "definition": "Parameter is retuned per observable, sector, constant, branch, or residual."
+    },
+    "cross_use_universal_parameter": {
+      "claim_allowed": "reduced-parameter or universal-parameter closure, not no-knob closure",
+      "definition": "Parameter is declared once globally, fixed by at most one independent sector or measurement, and then reused unchanged in other sectors as predictions/checks.",
+      "may_use_one_independent_measurement_to_set_parameter": true,
+      "minimum_independent_uses": 2
+    },
+    "strict_no_knob": {
+      "claim_allowed": "strict no-knob closure if all other source gates close",
+      "definition": "Parameter is derived from selected MTT source data before empirical comparison.",
+      "may_use_observed_constant_to_set_parameter": false
+    }
+  }
+}

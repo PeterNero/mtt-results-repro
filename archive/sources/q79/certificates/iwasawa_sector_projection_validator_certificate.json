@@ -1,0 +1,84 @@
+{
+  "certificate": "IwasawaSectorProjectionValidator",
+  "status": "IWASAWA_SECTOR_PROJECTION_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for finite-rank Q,u,d,L,e,N,H sector projection maps once rho_E transition data are supplied.",
+  "depends_on": [
+    "iwasawa_bundle_fe_gluing_contract_certificate.json",
+    "iwasawa_rhoE_mesh_validator_certificate.json",
+    "iwasawa_rhoE_metric_validator_certificate.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json"
+  ],
+  "supported_format_v1": {
+    "rank": "rank must be 3",
+    "mesh_N": "positive integer subdivision parameter for the closed cell {0,...,N}^6",
+    "generator_data": "same constant or table-valued g1..g6 format accepted by the rho_E mesh validator",
+    "sector_projection_maps": "Q,u,d,L,e,N,H entries, each with kind, dimension, and a 3x3 projector",
+    "family_sector_dimensions": "Q,u,d,L,e,N must have kind family and dimension 3",
+    "higgs_sector_dimension": "H must have kind single_higgs_carrier and dimension 1",
+    "rho_invariance_equation": "rho_E(gamma,z) P_sector = P_sector rho_E(gamma,z) on visited boundary targets"
+  },
+  "implemented_checks": {
+    "rank_three_declared": true,
+    "mesh_N_positive_integer": true,
+    "all_generators_present": true,
+    "all_sector_entries_present": true,
+    "sector_kind_and_dimension": true,
+    "projector_shape_3_by_3": true,
+    "projector_hermitian": true,
+    "projector_idempotent": true,
+    "projector_rank_matches_declared_dimension": true,
+    "rho_E_invariance_on_boundary_faces": true,
+    "identity_schema_smoke_test": true,
+    "rank_mismatch_bad_candidate_fails": true,
+    "noncommuting_transition_bad_candidate_fails": true,
+    "missing_sector_remains_open": true
+  },
+  "not_checked_by_v1": {
+    "proof_sector_maps_are_selected_by_MTT": true,
+    "SM_gauge_representation_embedding": true,
+    "hypercharge_or_E6_branching_consistency": true,
+    "Higgs_doublet_triplet_decoupling": true,
+    "sector_specific_D_E_operators": true,
+    "Yukawa_overlap_values": true
+  },
+  "script_exit_codes": {
+    "0": "complete rho_E plus sector-projector candidate passes implemented checks",
+    "1": "complete candidate fails an implemented algebraic or invariance check",
+    "2": "candidate is incomplete/open, such as null generators, missing mesh_N, or missing sector_projection_maps entries"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "identity_family_projectors_pass_schema": true,
+    "identity_sector_candidate_claim_selected": false,
+    "rank_mismatch_bad_candidate_fails": true,
+    "noncommuting_transition_bad_candidate_fails": true,
+    "missing_sector_candidate_exit_2": true
+  },
+  "what_this_closes": {
+    "finite_projector_sector_map_validator": true,
+    "family_vs_higgs_dimension_gate": true,
+    "rhoE_invariant_sector_projector_gate": true
+  },
+  "still_open": {
+    "actual_selected_sector_projection_maps": true,
+    "proof_sector_maps_come_from_selected_E6_SM_branch": true,
+    "actual_selected_rho_E_values_or_functions": true,
+    "actual_selected_Hermitian_metric": true,
+    "selected_D_E_action_on_each_sector": true,
+    "Gram_and_stiffness_matrices": true,
+    "Yukawa_overlap_matrices": true
+  },
+  "guardrails": {
+    "claims_sector_maps_constructed": false,
+    "claims_identity_family_projection_selected": false,
+    "uses_benchmark_or_observed_data": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_yukawa_matrices_computed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_sector_projection_validator_for_candidate_data": true,
+    "closes_actual_selected_sector_maps": false,
+    "next_step": "Fill selected rho_E, metric, and sector map data from a typed monad/Cech/HYM source, then validate sector-specific D_E actions and assemble Gram, stiffness, and overlap matrices."
+  }
+}

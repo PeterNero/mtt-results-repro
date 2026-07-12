@@ -1,0 +1,50 @@
+{
+  "certificate": "C1HeavyLinkDeltaTReduction",
+  "status": "C1_HEAVY_LINK_DELTA_T_REDUCED_TO_24_SCALARS_VALUES_OPEN",
+  "purpose": "Reduce the character-trivial CKM leading heavy-link calculation to the 24 selected C1 primitive scalar entries that determine t_u,t_d and Delta_t.",
+  "depends_on": [
+    "c1_finite_response_matrix_reduction_certificate.json",
+    "ckm_leading_noncommutation_criterion_certificate.json",
+    "qutrit_c6_pure_heavy_link_support_certificate.json"
+  ],
+  "calculation_script": "scripts/compute_c1_heavy_link_delta_t.py",
+  "packet_template": "certificates/selected_c1_heavy_link_primitives.template.json",
+  "required_scalar_entries": 24,
+  "calculation_results": {
+    "formula": "Delta_t = t_d - t_u",
+    "t_s_formula": "t_s = sum over six selected C1 primitive heavy-link vectors in sector s",
+    "template_refuses_incomplete_data": true,
+    "missing_template_entries": 24,
+    "replaces_full_3x3_requirement_for_leading_ckm": true,
+    "full_primitive_matrix_entries_avoided_for_this_gate": 192,
+    "fixture_calculator_passes": true,
+    "fixture_is_not_selected_data": true
+  },
+  "what_this_closes": {
+    "reduced_C1_heavy_link_packet_schema": true,
+    "Delta_t_calculator": true,
+    "missing_entry_refusal": true,
+    "full_3x3_matrices_not_required_for_leading_CKM_gate": true
+  },
+  "still_open": {
+    "selected_C1_heavy_link_24_scalars": true,
+    "selected_Delta_t_value": true,
+    "selected_Delta_v_value": true,
+    "leading_CKM_noncommutation_pass_fail": true,
+    "Jarlskog_value": true,
+    "Yukawa_magnitudes": true,
+    "full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_selected_C1_heavy_link_values_computed": false,
+    "claims_selected_Delta_t_computed": false,
+    "claims_selected_Delta_v_computed": false,
+    "claims_Jarlskog_nonzero": false,
+    "claims_full_SM_closure": false
+  },
+  "verdict": {
+    "reduction_closed": true,
+    "selected_values_open": true,
+    "next_step": "Fill selected_c1_heavy_link_primitives.template.json with the 24 selected scalar heavy-link primitive entries, then compute Delta_t."
+  }
+}

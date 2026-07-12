@@ -1,0 +1,223 @@
+# Selected Heterotic BismutWeitzenbock TensorPayload Fill v1
+
+## Result
+
+```text
+status = HETEROTIC_BISMUT_WEITZENBOCK_TENSOR_PAYLOAD_PARTIAL_GEOMETRY_FILLED_BUNDLE_OPERATOR_OPEN
+geometric_tensor_payload_filled = true
+bundle_tensor_payload_filled = false
+E_Qa_computed = false
+next_required_artifact = Selected_Heterotic_BundleCurvature_RepresentationTrace_or_DirectFiniteOperator_Fill_v1
+```
+
+## Filled Payload
+
+```json
+{
+  "bundle_tensors": {
+    "ad_bundle_representation": null,
+    "connection_A_components": null,
+    "curvature_F_A_components": null,
+    "trace_normalization": null
+  },
+  "geometric_tensors": {
+    "Bismut_connection_coefficients": {
+      "GammaPlus_135": -0.11258655943503883,
+      "GammaPlus_136": 0.11258655943503883,
+      "GammaPlus_145": -0.11258655943503883,
+      "GammaPlus_146": -0.11258655943503883,
+      "GammaPlus_153": 0.11258655943503883,
+      "GammaPlus_154": 0.11258655943503883,
+      "GammaPlus_163": -0.11258655943503883,
+      "GammaPlus_164": 0.11258655943503883,
+      "GammaPlus_235": -0.11258655943503883,
+      "GammaPlus_236": -0.11258655943503883,
+      "GammaPlus_245": 0.11258655943503883,
+      "GammaPlus_246": -0.11258655943503883,
+      "GammaPlus_253": 0.11258655943503883,
+      "GammaPlus_254": -0.11258655943503883,
+      "GammaPlus_263": 0.11258655943503883,
+      "GammaPlus_264": 0.11258655943503883,
+      "GammaPlus_315": 0.11258655943503883,
+      "GammaPlus_316": -0.11258655943503883,
+      "GammaPlus_325": 0.11258655943503883,
+      "GammaPlus_326": 0.11258655943503883,
+      "GammaPlus_351": -0.11258655943503883,
+      "GammaPlus_352": -0.11258655943503883,
+      "GammaPlus_361": 0.11258655943503883,
+      "GammaPlus_362": -0.11258655943503883,
+      "GammaPlus_415": 0.11258655943503883,
+      "GammaPlus_416": 0.11258655943503883,
+      "GammaPlus_425": -0.11258655943503883,
+      "GammaPlus_426": 0.11258655943503883,
+      "GammaPlus_451": -0.11258655943503883,
+      "GammaPlus_452": 0.11258655943503883,
+      "GammaPlus_461": -0.11258655943503883,
+      "GammaPlus_462": -0.11258655943503883,
+      "GammaPlus_513": 0.11258655943503883,
+      "GammaPlus_514": -0.11258655943503883,
+      "GammaPlus_523": -0.11258655943503883,
+      "GammaPlus_524": -0.11258655943503883,
+      "GammaPlus_531": -0.11258655943503883,
+      "GammaPlus_532": 0.11258655943503883,
+      "GammaPlus_541": 0.11258655943503883,
+      "GammaPlus_542": 0.11258655943503883,
+      "GammaPlus_613": 0.11258655943503883,
+      "GammaPlus_614": 0.11258655943503883,
+      "GammaPlus_623": 0.11258655943503883,
+      "GammaPlus_624": -0.11258655943503883,
+      "GammaPlus_631": -0.11258655943503883,
+      "GammaPlus_632": -0.11258655943503883,
+      "GammaPlus_641": -0.11258655943503883,
+      "GammaPlus_642": 0.11258655943503883
+    },
+    "Hermitian_form_omega": {
+      "12": 1.0,
+      "34": 1.0,
+      "56": 1.0
+    },
+    "R_plus_curvature_components": null,
+    "complex_coframe": {
+      "omega1": "(e1+i e2)/r1",
+      "omega2": "(e3+i e4)/r2",
+      "omega3": "(e5+i e6)/r3"
+    },
+    "complex_structure_J": {
+      "J e1": "e2",
+      "J e2": "-e1",
+      "J e3": "e4",
+      "J e4": "-e3",
+      "J e5": "e6",
+      "J e6": "-e5"
+    },
+    "orthonormal_coframe": [
+      "e1",
+      "e2",
+      "e3",
+      "e4",
+      "e5",
+      "e6"
+    ],
+    "structure_constants_c_ij_k": {
+      "c^5_13": -0.22517311887007765,
+      "c^5_24": 0.22517311887007765,
+      "c^5_31": 0.22517311887007765,
+      "c^5_42": -0.22517311887007765,
+      "c^6_14": -0.22517311887007765,
+      "c^6_23": -0.22517311887007765,
+      "c^6_32": 0.22517311887007765,
+      "c^6_41": 0.22517311887007765
+    },
+    "supporting_structure_equations": {
+      "de1": {},
+      "de2": {},
+      "de3": {},
+      "de4": {},
+      "de5": {
+        "13": 0.22517311887007765,
+        "24": -0.22517311887007765
+      },
+      "de6": {
+        "14": 0.22517311887007765,
+        "23": 0.22517311887007765
+      }
+    },
+    "torsion_H_or_d_c_omega_components": {
+      "136": 0.22517311887007765,
+      "145": -0.22517311887007765,
+      "154": 0.22517311887007765,
+      "163": -0.22517311887007765,
+      "235": -0.22517311887007765,
+      "246": -0.22517311887007765,
+      "253": 0.22517311887007765,
+      "264": 0.22517311887007765,
+      "316": -0.22517311887007765,
+      "325": 0.22517311887007765,
+      "352": -0.22517311887007765,
+      "361": 0.22517311887007765,
+      "415": 0.22517311887007765,
+      "426": 0.22517311887007765,
+      "451": -0.22517311887007765,
+      "462": -0.22517311887007765,
+      "514": -0.22517311887007765,
+      "523": -0.22517311887007765,
+      "532": 0.22517311887007765,
+      "541": 0.22517311887007765,
+      "613": 0.22517311887007765,
+      "624": -0.22517311887007765,
+      "631": -0.22517311887007765,
+      "642": 0.22517311887007765
+    }
+  },
+  "operator_contract": {
+    "E_Qa_matrix": null,
+    "kernel_and_quotient_policy": null,
+    "principal_symbol": "nabla_plus_A^* nabla_plus_A",
+    "zero_order_terms": [
+      "curvature action on u(E)-valued one-forms",
+      "torsion contraction terms",
+      "gauge-fixing curvature/torsion correction",
+      "possible dilaton/Strominger lower-order correction if selected"
+    ]
+  },
+  "ou_derivation_alternative": {
+    "OU_generator": null,
+    "gamma_nk_inverse_table": null,
+    "proof_weights_are_source_derived": null,
+    "selected_mode_basis": null
+  },
+  "source_identity": {
+    "fixed_frame_and_gauge": "partial: selected invariant real frame filled; bundle gauge still open",
+    "same_branch_selected_HYM_or_Strominger_source": false,
+    "selected_domain": "partial: invariant compact Iwasawa frame; full BRST/gauge quotient operator domain open"
+  }
+}
+```
+
+## Computed Summary
+
+```json
+{
+  "A": 0.22517311887007765,
+  "all_bismut_coefficients_are_half_A_magnitude": true,
+  "nonzero_bismut_connection_coefficients": 48,
+  "nonzero_de_count": 4,
+  "nonzero_structure_constant_count": 8,
+  "nonzero_torsion_component_count_antisymmetric": 24
+}
+```
+
+## Missing Fields
+
+```json
+[
+  "R_plus_curvature_components",
+  "connection_A_components",
+  "curvature_F_A_components",
+  "ad_bundle_representation",
+  "trace_normalization",
+  "E_Qa_matrix",
+  "kernel_and_quotient_policy",
+  "gamma_nk_inverse_table"
+]
+```
+
+## Theorem
+
+The selected Iwasawa structure equations and radii determine the invariant real coframe, structure constants, complex structure, Hermitian form, real torsion three-form, and Bismut connection coefficients in the stated frame. This still does not compute E_Qa: R_plus curvature components, selected bundle connection/curvature, representation action, trace normalization, and quotient policy remain open.
+
+## Certificate
+
+```json
+{
+  "E_Qa_computed": false,
+  "bundle_tensor_payload_filled": false,
+  "candidate_path": "candidate_data\\selected_heterotic_bismut_weitzenbock_tensor_payload_fill.candidate.json",
+  "certificate": "SelectedHeteroticBismutWeitzenbockTensorPayloadFill",
+  "geometric_tensor_payload_filled": true,
+  "next_required_artifact": "Selected_Heterotic_BundleCurvature_RepresentationTrace_or_DirectFiniteOperator_Fill_v1",
+  "note_path": "proof_corpus\\Selected_Heterotic_BismutWeitzenbock_TensorPayload_Fill_v1.md",
+  "status": "HETEROTIC_BISMUT_WEITZENBOCK_TENSOR_PAYLOAD_PARTIAL_GEOMETRY_FILLED_BUNDLE_OPERATOR_OPEN",
+  "target_fitting_used": false
+}
+```

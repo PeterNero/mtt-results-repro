@@ -1,0 +1,165 @@
+{
+  "candidate": "MTTSMEquivalenceCommonRGAndEmpiricalAudit",
+  "closure_claimed": false,
+  "closure_level": {
+    "native_replay_layer": "SUBSTANTIALLY_CLOSED",
+    "no_knob_SM_derivation": "OPEN",
+    "true_common_scale_SM_equivalence": "OPEN"
+  },
+  "common_RG_true_equivalence_gate": {
+    "closed_rows": {
+      "native_replay_values_available": true,
+      "source_nonselection_guardrail": true,
+      "typed_measured_slots_declared": true
+    },
+    "meaning": "All replay quantities are transported into one declared renormalization scheme, scale, loop order, threshold prescription, and covariance/profile convention before the empirical audit is allowed to claim SM equivalence.",
+    "open_rows": {
+      "Higgs_lambda_running_at_common_scale": true,
+      "Yukawa_running_matrices_at_common_scale": true,
+      "absolute_neutrino_mass_or_declared_minimal_parity_policy": true,
+      "full_CKM_PMNS_covariance_or_profile_likelihood": true,
+      "loop_order_beta_functions_and_thresholds": true,
+      "mass_scheme_unification": true,
+      "observable_suite_with_tolerances": true,
+      "single_common_scale_transport": true
+    },
+    "selected_policy": {
+      "covariance_policy": "open; must encode or explicitly justify omission of PDG/NuFIT/electroweak-fit correlations",
+      "minimum_loop_policy": "open; must be specified before closure",
+      "neutrino_policy": "open; PMNS oscillation replay is closed, absolute mass and Dirac/Majorana convention are not",
+      "preferred_reference_scale": "M_Z",
+      "preferred_scheme": "MSbar for running gauge/Yukawa/Higgs parameters, with explicitly declared pole-to-running conversions where needed",
+      "threshold_policy": "open; must specify heavy-quark, W/Z/H/top, and neutrino-sector treatment"
+    },
+    "standard": "true common-scale SM equivalence",
+    "status": "TRUE_COMMON_SCALE_EQUIVALENCE_OPEN"
+  },
+  "empirical_audit": {
+    "audit_standard": "sector-by-sector SM equivalence audit",
+    "can_claim_native_replay_closure": true,
+    "can_claim_no_knob_closure": false,
+    "can_claim_true_SM_equivalence": false,
+    "ledger_interfaces_ready": true,
+    "required_rows": {
+      "CKM_and_complex_quark_Yukawa": {
+        "blocks_true_equivalence": true,
+        "evidence": "candidate_data/sm_equivalence_mixing_and_gauge_replay.candidate.json",
+        "reason": "Complex matrix replay is closed in a declared convention; covariance/profile and common-scale running remain open.",
+        "status": "NATIVE_REPLAY_CLOSED_COVARIANCE_RG_OPEN"
+      },
+      "PMNS_and_neutrino_splittings": {
+        "blocks_true_equivalence": true,
+        "evidence": "candidate_data/sm_equivalence_mixing_and_gauge_replay.candidate.json",
+        "reason": "Oscillation splittings replay, but absolute mass and Dirac/Majorana policy must be declared for full equivalence.",
+        "status": "OSCILLATION_REPLAY_CLOSED_ABSOLUTE_NEUTRINO_OPEN"
+      },
+      "QFT_observable_functor": {
+        "blocks_true_equivalence": true,
+        "evidence": "candidate_data/empirical_equivalence_ledger.candidate.json",
+        "reason": "Need a declared observable suite and tolerance policy beyond parameter replay.",
+        "status": "INTERFACE_DECLARED_OBSERVABLE_SUITE_OPEN"
+      },
+      "SM_source_interface": {
+        "blocks_true_equivalence": true,
+        "evidence": "candidate_data/actual_selected_sm_packet_anomaly_audit.candidate.json",
+        "reason": "True equivalence needs one consolidated selected SM gauge/representation/family/Higgs packet and anomaly/observable certificate.",
+        "status": "PARTIAL_SOURCE_PACKET_BUILT_ANOMALY_INTERFACE_OPEN"
+      },
+      "gauge_triplet": {
+        "blocks_true_equivalence": true,
+        "evidence": "candidate_data/sm_equivalence_mixing_and_gauge_replay.candidate.json",
+        "reason": "alpha_1, alpha_2, alpha_3 are emitted at M_Z; threshold/loop policy and covariance remain open.",
+        "status": "MZ_TRIPLET_CLOSED_RG_THRESHOLD_POLICY_OPEN"
+      },
+      "masses_and_tree_yukawas": {
+        "blocks_true_equivalence": true,
+        "evidence": "candidate_data/sm_equivalence_tree_level_replay_seed.candidate.json",
+        "reason": "Tree replay is executable, but mixed pole/MSbar/native scales still need common RG transport.",
+        "status": "NATIVE_REPLAY_CLOSED_COMMON_RG_OPEN"
+      }
+    }
+  },
+  "inputs": {
+    "actual_selected_sm_packet_anomaly_audit": "candidate_data/actual_selected_sm_packet_anomaly_audit.candidate.json",
+    "empirical_equivalence_ledger": "candidate_data/empirical_equivalence_ledger.candidate.json",
+    "measured_parameter_replay_manifest": "candidate_data/sm_equivalence_measured_parameter_replay_manifest.candidate.json",
+    "mixing_and_gauge_replay": "candidate_data/sm_equivalence_mixing_and_gauge_replay.candidate.json",
+    "tree_level_replay_seed": "candidate_data/sm_equivalence_tree_level_replay_seed.candidate.json"
+  },
+  "minimum_closure_cutset": [
+    {
+      "id": "C1_common_RG_policy",
+      "task": "Choose and implement one RG scheme/scale/loop/threshold policy, preferably MSbar at M_Z for the first closure certificate.",
+      "why_minimal": "It turns mixed reference values into one comparable SM parameter packet."
+    },
+    {
+      "id": "C2_covariance_profile_policy",
+      "task": "Encode covariance/profile policy for CKM, PMNS, electroweak, and mass inputs, or declare a central-value parity standard with explicit precision limits.",
+      "why_minimal": "It defines what counts as matching the measured SM data."
+    },
+    {
+      "id": "C3_neutrino_absolute_policy",
+      "task": "Declare minimal-mass oscillation-only parity, or add absolute neutrino mass and Dirac/Majorana policy.",
+      "why_minimal": "PMNS alone is not a full neutrino sector."
+    },
+    {
+      "id": "C4_observable_suite",
+      "task": "Build a sector-by-sector empirical replay suite with tolerances: masses, mixings, gauge values, Higgs parameters, anomaly/interface checks, and selected low-energy observables.",
+      "why_minimal": "True equivalence is an audit statement, not only a data table."
+    },
+    {
+      "id": "C5_selected_SM_packet_certificate",
+      "task": "Bundle the selected SM gauge/representation/family/Higgs/anomaly interface into one final packet certificate.",
+      "why_minimal": "Measured replay is downstream and cannot itself certify the SM source packet."
+    }
+  ],
+  "native_published_parameter_replay": {
+    "closed_rows": {
+      "CKM_complex_down_yukawa_replay": true,
+      "MZ_gauge_alpha_triplet": true,
+      "PMNS_oscillation_mass_squared_replay": true,
+      "charged_fermion_and_quark_mass_to_tree_yukawa_loop": true,
+      "electroweak_tree_seed": true,
+      "higgs_tree_lambda_seed": true
+    },
+    "meaning": "Each measured slot is replayed in its declared source convention: pole/on-shell where the reference packet says pole/on-shell, MSbar at M_Z for gauge couplings, NuFIT oscillation convention for PMNS, and PDG CKM convention for CKM.",
+    "standard": "native published-parameter replay",
+    "status": "NATIVE_CONVENTION_REPLAY_EXECUTABLE"
+  },
+  "native_replay_closure_claimed": true,
+  "next_required_artifact": "MTT_SM_Equivalence_RGPolicy_Covariance_and_ObservableSuite_v1",
+  "no_knob_closure_claimed": false,
+  "observed_data_used_as_selector": false,
+  "source_boundary_preserved": true,
+  "status": "MTT_SM_EQUIVALENCE_COMMON_RG_AND_EMPIRICAL_AUDIT_BUILT_TRUE_EQUIVALENCE_OPEN",
+  "superset_strategy_use": {
+    "measured_replay_side": "common-RG and empirical audit use measured SM inputs only after source/interface declaration",
+    "measured_targets_used_to_lock_source": false,
+    "mode": "SUPERSET_TO_LOCKED_SOURCE_THEN_STRAIGHT_MEASURED_REPLAY",
+    "source_side": "superset paths may support the selected SM packet and no-knob upgrades"
+  },
+  "target_fitting_used": false,
+  "theorem": {
+    "name": "CommonRGAndEmpiricalAuditCutsetTheorem",
+    "proved": true,
+    "statement": "The current measured SM-parity replay is executable at native published conventions for masses/tree Yukawas, CKM, PMNS oscillation splittings, and the M_Z gauge triplet.  True SM equivalence is not yet proved because it requires a common RG scheme/scale/loop/threshold policy, covariance/profile handling, neutrino-sector completion or minimal policy, an observable suite with tolerances, and a bundled selected SM packet certificate.  None of these open gates may be filled by using measured values as source selectors."
+  },
+  "true_SM_equivalence_claimed": false,
+  "what_closes_now": {
+    "common_RG_cutset_identified": true,
+    "empirical_audit_rows_identified": true,
+    "native_published_parameter_replay_audit": true,
+    "source_selection_guardrails_preserved": true,
+    "true_SM_equivalence_standard_declared": true
+  },
+  "what_remains_open": {
+    "absolute_neutrino_mass_or_minimal_policy": true,
+    "common_RG_transport_values": true,
+    "covariance_or_profile_policy": true,
+    "full_no_knob_closure": true,
+    "loop_order_and_threshold_policy": true,
+    "observable_suite_with_tolerances": true,
+    "selected_SM_packet_final_certificate": true,
+    "true_SM_equivalence_closure": true
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "certificate": "IwasawaSelectedDEConstructionAttempt",
+  "status": "SELECTED_D_E_CONSTRUCTION_BLOCKED_BY_MISSING_CONNECTION_DATA_DIAGNOSTIC_PIPELINE_READY",
+  "purpose": "Attempt to construct the selected Iwasawa spectral operator D_E from the current corpus, after activating the spectral fallback.",
+  "depends_on": [
+    "iwasawa_spectral_operator_gate_certificate.json",
+    "iwasawa_typed_monad_section_recovery_certificate.json",
+    "iwasawa_dolbeault_complex_extraction_certificate.json",
+    "corrected_a01_candidate_scan_certificate.json",
+    "iwasawa_invariant_a01_repair_obstruction_certificate.json",
+    "iwasawa_diagnostic_h1_three_spectral_pipeline_certificate.json"
+  ],
+  "route_evaluation": {
+    "R1_corrected_non_invariant_Dolbeault_operator": {
+      "status": "BLOCKED",
+      "reason": "The corpus supplies the literal invariant A01, which fails integrability. The invariant repair route is now retired as a proof source: preserving the literal entries admits no signed invariant completion through four added terms, and signed torsion-support candidates through five entries never give h1=3. Sparse h1=3 diagnostic candidates are explicitly unselected. No corrected non-invariant A01 or connection coefficients are supplied."
+    },
+    "R2_typed_monad_sections": {
+      "status": "BLOCKED",
+      "reason": "The current corpus does not recover typed f_i,g_i sections, transition data, Cech maps, or g o f = 0."
+    },
+    "R3_direct_selected_HYM_solve": {
+      "status": "ABSTRACT_EXISTENCE_ONLY",
+      "reason": "The corpus supports Li-Yau/HYM existence at the theorem level for stable holomorphic data, but does not supply a computable selected connection, residual certificate, gauge fixing, or finite matrix data."
+    }
+  },
+  "abstract_operator_package": {
+    "formal_symbol": "D_E = barpartial_{A_HYM} + barpartial_{A_HYM}^*",
+    "mathematically_admissible_if_selected_HYM_connection_supplied": true,
+    "computable_from_current_corpus": false,
+    "missing_for_computation": [
+      "selected holomorphic structure or HYM connection coefficients",
+      "Hermitian metric or numerical HYM solve",
+      "operator domain and gauge fixing",
+      "basis action of D_E on B_N",
+      "residual and gap certificate"
+    ]
+  },
+  "diagnostic_progress": {
+    "unselected_h1_three_pipeline_executed": true,
+    "extracted_representatives": [
+      "fiber1_baromega2",
+      "-fiber1_baromega3 + fiber2_baromega2",
+      "fiber3_baromega1"
+    ],
+    "meaning": "The finite Hodge extraction works when a valid finite D is supplied; the selected D_E is still absent."
+  },
+  "minimal_new_data_to_close": {
+    "one_of": [
+      "corrected selected non-invariant A^(0,1) with integrability and HYM/Strominger residuals",
+      "typed monad sections and transition/Cech data",
+      "direct HYM numerical/symbolic connection with residual bounds"
+    ],
+    "then_compute": [
+      "basis B_N",
+      "Gram matrix G_N",
+      "operator matrix L_N",
+      "Riesz projector",
+      "gap/error certificate",
+      "selected Psi_i"
+    ]
+  },
+  "guardrails": {
+    "claims_selected_D_E_constructed": false,
+    "promotes_abstract_Li_Yau_existence_to_matrix": false,
+    "uses_diagnostic_candidate_as_selected": false,
+    "uses_observed_flavor_data": false,
+    "claims_selected_H1_E_values": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "selected_D_E_constructed": false,
+    "diagnostic_pipeline_ready": true,
+    "next_step": "Supply one concrete selected connection/operator source, then rerun the diagnostic Hodge pipeline on that D_E."
+  }
+}

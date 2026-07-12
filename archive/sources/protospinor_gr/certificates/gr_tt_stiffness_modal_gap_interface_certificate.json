@@ -1,0 +1,81 @@
+{
+  "program": "MTT protospinor GR response proof",
+  "certificate": "gr_tt_stiffness_modal_gap_interface",
+  "status": "TT_STIFFNESS_INTERNAL_COMPUTED_MODAL_GAP_IDENTIFICATION_OPEN",
+  "input_certificates": {
+    "absolute_normalization_bridge": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-protospinor-gr-response-proof\\certificates\\absolute_normalization_bridge_from_nonsm_certificate.json",
+    "dimensionless_modal_gap_operator_reduction": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-protospinor-gr-response-proof\\certificates\\dimensionless_modal_gap_operator_reduction_certificate.json",
+    "selected_aint_packet_branch_bridge": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-protospinor-gr-response-proof\\certificates\\selected_aint_packet_branch_bridge_audit_certificate.json",
+    "gr_tt_aint_z64_identity_source_hunt": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-protospinor-gr-response-proof\\certificates\\gr_tt_aint_z64_identity_source_hunt_certificate.json"
+  },
+  "computed_internal_tt_stiffness": {
+    "formula": "kappa_STF_int = Vol_int / (32*pi*G10_int), with G10_int=1",
+    "rows": [
+      {
+        "N": 64,
+        "Vol_int": 4.642536197052882,
+        "G_eff_int": 0.21539950526068224,
+        "kappa_STF_int": 0.04618016151525098,
+        "ratio_kappa_STF_to_nil_lambda_floor_0p25": 0.1847206460610039,
+        "ratio_kappa_STF_to_z64_lambda15": 0.003078677434350065
+      },
+      {
+        "N": 79,
+        "Vol_int": 4.999540286439839,
+        "G_eff_int": 0.20001839023325438,
+        "kappa_STF_int": 0.04973134686087317,
+        "ratio_kappa_STF_to_nil_lambda_floor_0p25": 0.19892538744349267,
+        "ratio_kappa_STF_to_z64_lambda15": 0.0033154231240582113
+      },
+      {
+        "N": 448,
+        "Vol_int": 8.256513019265205,
+        "G_eff_int": 0.12111650495392737,
+        "kappa_STF_int": 0.08212905373241541,
+        "ratio_kappa_STF_to_nil_lambda_floor_0p25": 0.32851621492966165,
+        "ratio_kappa_STF_to_z64_lambda15": 0.0054752702488276945
+      }
+    ],
+    "all_positive": true
+  },
+  "modal_gap_candidates_in_same_audit_context": {
+    "theta_nil_floor_benchmark": {
+      "lambda_star": 0.25,
+      "status": "INTERNAL_FLOOR_SATURATED_IN_THETA_BENCHMARK_NOT_SELECTED_GLOBAL_AINT_PACKET",
+      "can_replace_GR_gap": false
+    },
+    "z64_central_circle_exact_branch": {
+      "lambda_star": 15.0,
+      "status": "INTERNAL_EXACT_BRANCH_DAMPING_VALUE_GR_MODAL_GAP_BRIDGE_OPEN",
+      "can_replace_GR_gap": false
+    },
+    "selected_global_Aint_packet_closed": false,
+    "dimensionless_operator_shape_closed": true
+  },
+  "interface_decision": {
+    "tt_response_stiffness_computed_in_internal_units": true,
+    "tt_response_stiffness_is_positive": true,
+    "tt_response_stiffness_identified_with_modal_gap": false,
+    "gr_tt_Aint_identified_with_z64_tower": false,
+    "can_use_kappa_STF_as_Aint_lowest_eigenvalue": false,
+    "reason": "kappa_STF is the coefficient of the projected TT quadratic response block. lambda_* is the spectral bottom of a selected internal A_int complement after quotient/projector/window choices. They can coincide only after a source theorem identifies the TT response operator convention with the selected A_int complement."
+  },
+  "next_required_theorem": {
+    "name": "GR_TT_Response_to_Aint_Spectral_Interface_Theorem",
+    "must_show": [
+      "the exact domain and inner product for the GR TT closure-strain operator",
+      "the quotient/projector removing diffeomorphism, scalar, and coherence zero modes",
+      "whether the resulting spectral operator is H_TT, a rescaling of H_TT, or a distinct A_int block",
+      "the lowest positive eigenvalue in the same normalization as the branch gap table",
+      "only then whether nil 0.25, Z64 15, kappa_STF_int, or a new number is the GR modal gap"
+    ],
+    "fallback_if_identity_fails": "compute the distinct GR TT complement directly rather than importing the Z64 central-circle value"
+  },
+  "guardrails": {
+    "claims_kappa_STF_is_lambda_star": false,
+    "claims_z64_lambda15_is_GR_gap": false,
+    "claims_nil_floor_saturates_GR_gap": false,
+    "claims_physical_modal_gap": false,
+    "claims_physical_Newton_constant": false
+  }
+}

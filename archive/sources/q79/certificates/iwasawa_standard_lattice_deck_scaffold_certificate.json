@@ -1,0 +1,80 @@
+{
+  "certificate": "IwasawaStandardLatticeDeckScaffold",
+  "status": "STANDARD_IWASAWA_DECK_SCAFFOLD_FORMULATED_SELECTION_OPEN",
+  "purpose": "Provide an explicit standard Gaussian-lattice deck scaffold compatible with the Iwasawa coframe, while keeping MTT selection and bundle transitions open.",
+  "depends_on": [
+    "iwasawa_galerkin_basis_skeleton_certificate.json",
+    "iwasawa_non_invariant_galerkin_protocol_certificate.json"
+  ],
+  "corpus_recovery": {
+    "quotient_symbol_Gamma_backslash_H3C": true,
+    "left_invariant_coframe": true,
+    "structure_equation_domega3_equals_omega1_wedge_omega2": true,
+    "explicit_Gamma_generators_supplied_by_corpus": false,
+    "scalar_mode_basis_supplied_by_corpus": false,
+    "bundle_transition_matrices_supplied_by_corpus": false
+  },
+  "candidate_standard_gaussian_lattice": {
+    "coordinates": "z1,z2,z3 in C",
+    "group_law": "(z1,z2,z3)*(w1,w2,w3)=(z1+w1,z2+w2,z3+w3+z1*w2)",
+    "coframe": {
+      "omega1": "dz1",
+      "omega2": "dz2",
+      "omega3": "z1*dz2 - dz3",
+      "domega1": "0",
+      "domega2": "0",
+      "domega3": "omega1 wedge omega2"
+    },
+    "lattice": "Gamma0 = Z[i]^3 under the group law",
+    "deck_action": "L_(a,b,c)(z1,z2,z3)=(a+z1,b+z2,c+z3+a*z2), with a,b,c in Z[i]",
+    "generators": [
+      {"id": "g1", "a": "1", "b": "0", "c": "0", "action": "(z1+1,z2,z3+z2)"},
+      {"id": "g2", "a": "i", "b": "0", "c": "0", "action": "(z1+i,z2,z3+i*z2)"},
+      {"id": "g3", "a": "0", "b": "1", "c": "0", "action": "(z1,z2+1,z3)"},
+      {"id": "g4", "a": "0", "b": "i", "c": "0", "action": "(z1,z2+i,z3)"},
+      {"id": "g5", "a": "0", "b": "0", "c": "1", "action": "(z1,z2,z3+1)"},
+      {"id": "g6", "a": "0", "b": "0", "c": "i", "action": "(z1,z2,z3+i)"}
+    ]
+  },
+  "verified_algebra": {
+    "generator_count": 6,
+    "gaussian_integer_closure_under_group_law": true,
+    "coframe_invariant_under_left_deck_action": true,
+    "domega3_matches_corpus_sign_convention": true,
+    "compact_quotient_if_candidate_Gamma0_selected": true
+  },
+  "galerkin_gluing_rules": {
+    "scalar_rule": "phi(gamma*z)=phi(z) for every gamma in Gamma0",
+    "bundle_section_rule": "s(gamma*z)=rho_E(gamma,z) s(z), where rho_E is the selected bundle transition/equivariance datum",
+    "finite_element_route": "Use a unit real six-cell with boundary identifications induced by g1..g6, then impose scalar and bundle gluing constraints.",
+    "spectral_route": "Use scalar functions satisfying the same deck equivariance; ordinary torus Fourier modes are admissible only after passing these nonabelian deck constraints."
+  },
+  "what_this_closes": {
+    "explicit_candidate_deck_generators": true,
+    "coframe_compatible_deck_action": true,
+    "fundamental_gluing_laws_formulated": true
+  },
+  "still_open": {
+    "MTT_selection_or_source_confirmation_of_Gamma0": true,
+    "scalar_basis_functions_phi_m": true,
+    "bundle_transition_matrices_rho_E": true,
+    "selected_D_E_action_on_this_basis": true,
+    "Gram_matrix_entries": true,
+    "stiffness_matrix_entries": true,
+    "gap_error_certificate": true
+  },
+  "guardrails": {
+    "claims_Gamma0_is_MTT_selected": false,
+    "claims_actual_scalar_basis_constructed": false,
+    "claims_bundle_transitions_constructed": false,
+    "uses_torus_fourier_modes_without_nonabelian_deck_check": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_kernel_dimension_three_now": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_candidate_deck_scaffold": true,
+    "closes_selected_galerkin_basis": false,
+    "next_step": "Either confirm/select Gamma0 and build scalar modes or instantiate the finite-element route with g1..g6 gluing and selected bundle transitions."
+  }
+}

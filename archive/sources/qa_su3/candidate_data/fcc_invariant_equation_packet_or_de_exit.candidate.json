@@ -1,0 +1,117 @@
+{
+  "candidate": "SelectedQaSU3FCCInvariantEquationPacketOrDEExit",
+  "decision": {
+    "correct_next_step": "Use this packet as a validator for any amended source. Otherwise proceed through selected D_E/rho_E matrices.",
+    "result": "FCC packet built, but it does not close the period.",
+    "why": "The finite invariant equations are now explicit; the missing datum is exactly the selector that makes A=1 source-selected or replaces it with a finite central quotient."
+  },
+  "fcc_tests": [
+    {
+      "closes": "The invariant Bianchi row and c-twist amplitude can be placed in one finite algebraic packet.",
+      "does_not_close": "The packet still has free s=R^4/alpha_prime until A=1 or a finite quotient is selected.",
+      "passes": true,
+      "test_id": "bianchi_plus_ctwist_equations"
+    },
+    {
+      "closes": "Adding A=1 produces the exact scalar s=((2*pi)^2-1)/2.",
+      "does_not_close": "This is a promotion condition, not a source-selected integer/flux equation.",
+      "passes": true,
+      "test_id": "A_unit_as_equation_not_selector"
+    },
+    {
+      "closes": "No closure.",
+      "does_not_close": "The available integer flux row fixes support on alpha1 but does not select s or a finite central quotient.",
+      "passes": false,
+      "test_id": "integer_data_selection"
+    },
+    {
+      "closes": "No closure.",
+      "does_not_close": "The operator gate remains built but selected matrices/finite response are open.",
+      "passes": false,
+      "test_id": "DE_exit_availability"
+    }
+  ],
+  "finite_equation_packet": {
+    "derived_if_A_unit_imposed": {
+      "numeric_s": 19.239208802178716,
+      "s": "((2*pi)^2 - 1)/2",
+      "two_pi_squared": 39.47841760435743
+    },
+    "equations": [
+      {
+        "equation": "8*(2*pi)^2 - 8*r3^2/R^4 = (16/alpha_prime)*r3^2",
+        "free_variables_after_equation": [
+          "R^4/alpha_prime"
+        ],
+        "id": "bianchi_invariant_alpha1",
+        "role": "componentwise Green-Schwarz/Bianchi support in the invariant Iwasawa slice",
+        "selected_values": {
+          "flux_choice": "(1,2,0) plus (-1,-2,0)",
+          "u1": 315.82734083485946
+        },
+        "source": "iwasawa_abelian_two_line_flux_row"
+      },
+      {
+        "equation": "A^2 = (2*pi)^2 / (1 + 2*s), where s=R^4/alpha_prime",
+        "free_variables_after_equation": [
+          "A",
+          "s"
+        ],
+        "id": "ctwist_amplitude",
+        "role": "central c-twist transgression amplitude in the isotropic Iwasawa slice",
+        "source": "ctwist_period_normalization_or_a01_exit"
+      },
+      {
+        "equation": "A=1",
+        "id": "primitive_c_unit",
+        "implied_solution": {
+          "numeric": 19.239208802178716,
+          "s": "((2*pi)^2 - 1)/2"
+        },
+        "role": "promotion condition for the scaled primitive central slants to absolute c=+/-1 twists",
+        "selected_by_current_source": false,
+        "source": "complex_rotated_ctwist_normalization plus period gate"
+      }
+    ],
+    "unknown_slots": {
+      "integer_flux_holonomy_variables": [
+        "which integer flux/holonomy entries beyond (1,2,0)+(-1,-2,0) are selected for Qa/SU3",
+        "whether those integer entries constrain s=R^4/alpha_prime"
+      ],
+      "operator_exit": [
+        "same-source D_E/rho_E matrices",
+        "endomorphism_E or zero-order Weitzenbock block",
+        "heat/spectrum/zeta/torsion finite part"
+      ],
+      "primitivity_constraints": [
+        "primitive period unit for the central gerbe/transgression class",
+        "finite central quotient if the period unit is torsion rather than real-scaled"
+      ]
+    },
+    "variables": [
+      "s=R^4/alpha_prime",
+      "A",
+      "r3^2/R^4",
+      "integer flux/holonomy data"
+    ]
+  },
+  "gate_results": {
+    "A_unit_condition_solves_s": true,
+    "A_unit_condition_source_selected": false,
+    "closure_claimed": false,
+    "componentwise_bianchi_row_included": true,
+    "ctwist_amplitude_included": true,
+    "finite_invariant_equation_packet_written": true,
+    "integer_data_selects_s_or_finite_quotient": false,
+    "qa_su3_packet_closed": false,
+    "same_source_DE_or_rhoE_exit_available": false
+  },
+  "input_statuses": {
+    "central_period_selector": "CENTRAL_PERIOD_SELECTOR_SEARCH_COMPLETE_SELECTOR_NOT_FOUND",
+    "chern_bianchi": "CHERN_BIANCHI_SOURCE_PACKET_CANDIDATES_BUILT_NO_SELECTED_SOURCE",
+    "operator_exit": "A01_DE_OPERATOR_EXIT_ACCEPTANCE_GATE_BUILT_SELECTED_MATRICES_OPEN",
+    "period_gate": "CTWIST_PERIOD_NORMALIZATION_SCALAR_GATE_DERIVED_SELECTOR_OPEN_A01_EXIT_REQUIRED"
+  },
+  "status": "FCC_INVARIANT_EQUATION_PACKET_BUILT_PERIOD_AND_OPERATOR_VALUES_OPEN",
+  "target_fitting_used": false
+}

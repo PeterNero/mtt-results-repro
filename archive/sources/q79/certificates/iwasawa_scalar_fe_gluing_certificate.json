@@ -1,0 +1,88 @@
+{
+  "certificate": "IwasawaScalarFiniteElementGluingSkeleton",
+  "status": "IWASAWA_SCALAR_FE_GLUING_SKELETON_FORMULATED_BUNDLE_DE_OPEN",
+  "purpose": "Instantiate the scalar finite-element gluing route on the candidate standard Iwasawa six-cell, producing explicit nodal boundary identifications while keeping bundle transitions, selected D_E, and matrices open.",
+  "depends_on": [
+    "iwasawa_scalar_deck_mode_filter_certificate.json",
+    "iwasawa_standard_lattice_deck_scaffold_certificate.json",
+    "iwasawa_galerkin_basis_skeleton_certificate.json",
+    "iwasawa_non_invariant_galerkin_protocol_certificate.json"
+  ],
+  "grid_model": {
+    "subdivision_parameter": "N >= 1",
+    "closed_cell_nodes": "{0,...,N}^6 with coordinates (x1,x2,y1,y2,t1,t2)",
+    "half_open_representatives": "{0,...,N-1}^6",
+    "closed_node_count": "(N+1)^6",
+    "scalar_quotient_dof_count": "N^6 after deck boundary gluing"
+  },
+  "boundary_identifications": {
+    "x1_face": "(N,x2,y1,y2,t1,t2) ~ (0,x2,y1,y2,(t1-y1) mod N,(t2-y2) mod N)",
+    "x2_face": "(x1,N,y1,y2,t1,t2) ~ (x1,0,y1,y2,(t1+y2) mod N,(t2-y1) mod N)",
+    "y1_face": "(x1,x2,N,y2,t1,t2) ~ (x1,x2,0,y2,t1,t2)",
+    "y2_face": "(x1,x2,y1,N,t1,t2) ~ (x1,x2,y1,0,t1,t2)",
+    "t1_face": "(x1,x2,y1,y2,N,t2) ~ (x1,x2,y1,y2,0,t2)",
+    "t2_face": "(x1,x2,y1,y2,t1,N) ~ (x1,x2,y1,y2,t1,0)"
+  },
+  "constraint_rule": {
+    "nodal_constraint": "u[source_node]-u[target_node]=0 for every listed boundary identification",
+    "quotient_basis": "one scalar nodal degree of freedom per equivalence class",
+    "prolongation": "a closed-cell nodal vector is obtained by assigning each boundary-equivalent node the value of its quotient class representative"
+  },
+  "sample_audit_targets": {
+    "N_values": [1, 2, 3, 4],
+    "expected_closed_node_counts": {
+      "1": 64,
+      "2": 729,
+      "3": 4096,
+      "4": 15625
+    },
+    "expected_quotient_dof_counts": {
+      "1": 1,
+      "2": 64,
+      "3": 729,
+      "4": 4096
+    },
+    "expected_half_open_representative_count_per_class": 1
+  },
+  "finite_basis_implication": {
+    "scalar_FE_space": "continuous or spectral-element functions on the closed six-cell with nodal values constrained by the deck equivalence relation",
+    "nested_spaces": "increase N and/or local polynomial order after this nodal gluing is imposed",
+    "basis_skeleton_dimension_rule": "after scalar quotient dof count s_N is chosen, form/fiber dimensions remain s_N*3*binomial(3,p)",
+    "bundle_extension": "for E-valued sections, replace scalar equality by s(source)=rho_E(gamma,source) s(target) before building Gram and stiffness matrices"
+  },
+  "what_this_closes": {
+    "finite_element_boundary_maps": true,
+    "scalar_nodal_constraint_rule": true,
+    "sample_quotient_dof_counts": true,
+    "half_open_representative_check": true,
+    "finite_element_route_made_executable_at_scalar_level": true
+  },
+  "still_open": {
+    "MTT_selection_or_source_confirmation_of_Gamma0": true,
+    "selected_mesh_subdivision_sequence": true,
+    "finite_element_shape_functions_and_polynomial_order": true,
+    "quadrature_for_selected_metric_volume": true,
+    "bundle_transition_matrices_rho_E": true,
+    "selected_D_E_action_on_FE_basis": true,
+    "Gram_matrix_entries": true,
+    "stiffness_matrix_entries": true,
+    "Riesz_projector_gap_error_certificate": true,
+    "selected_zero_mode_representatives": true
+  },
+  "guardrails": {
+    "claims_Gamma0_is_MTT_selected": false,
+    "claims_selected_scalar_FE_space_constructed": false,
+    "uses_naive_periodic_torus_gluing": false,
+    "claims_bundle_transitions_constructed": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_Galerkin_matrices_constructed": false,
+    "claims_kernel_dimension_three_now": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_scalar_FE_gluing_skeleton": true,
+    "closes_bundle_FE_gluing": false,
+    "closes_selected_Galerkin_space": false,
+    "next_step": "Combine this scalar nodal gluing with rho_E bundle transition data, shape functions, quadrature, and the selected D_E action."
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "basis_map_closed": true,
+  "bct_source": "candidate_data/selected_allbctexternalrows_or_fullsmconventionreconciliation/all_bct_external_rows_assembly.packet.json",
+  "closure_claimed": true,
+  "deduplicated_interim_basis": [
+    "lambda_Mt",
+    "y_t_Mt",
+    "g_2_Mt",
+    "g_Y_Mt",
+    "g_3_Mt",
+    "v_from_G_F_tree_reference",
+    "bottom_MSbar_native_scale_transport",
+    "charm_MSbar_native_scale_transport",
+    "tau_pole_rest_to_running_lepton",
+    "H_to_bb",
+    "H_to_cc",
+    "H_to_tau_tau",
+    "H_to_mu_mu",
+    "H_to_WW_star",
+    "H_to_ZZ_star",
+    "H_to_gg",
+    "H_to_gamma_gamma",
+    "H_to_Z_gamma",
+    "H_to_ss"
+  ],
+  "deduplication_rules": [
+    {
+      "closed": true,
+      "id": "remove_g1GUT_alias",
+      "rule": "g_1_GUT_Mt = sqrt(5/3) * g_Y_Mt, so it is metadata/alias, not an independent covariance row."
+    },
+    {
+      "closed": true,
+      "id": "merge_WZH_weak_overlap",
+      "overlap_rows": [
+        "g_2_Mt",
+        "g_Y_Mt",
+        "lambda_Mt"
+      ],
+      "rule": "lambda_Mt, g_2_Mt, and g_Y_Mt occur in both W/Z/H and weak-scale blocks; retain only the weak-scale row and attach W/Z/H sidecars as validation metadata."
+    },
+    {
+      "closed": true,
+      "id": "retain_v_extension",
+      "rule": "v_from_G_F_tree_reference is the only independent W/Z/H coordinate extension after overlap removal."
+    }
+  ],
+  "higgs_covariance_source": "candidate_data/selected_higgshomogeneousprofile_or_routeaformulacovariance/source_derived_correlated_covariance_model.packet.json",
+  "input_block_rows": {
+    "BCT_mass_scheme_profile": [
+      "bottom_MSbar_native_scale_transport",
+      "charm_MSbar_native_scale_transport",
+      "tau_pole_rest_to_running_lepton"
+    ],
+    "Higgs_decay_covariance_model": [
+      "H_to_bb",
+      "H_to_cc",
+      "H_to_tau_tau",
+      "H_to_mu_mu",
+      "H_to_WW_star",
+      "H_to_ZZ_star",
+      "H_to_gg",
+      "H_to_gamma_gamma",
+      "H_to_Z_gamma",
+      "H_to_ss"
+    ],
+    "weak_scale_buttazzo_boundary": [
+      "lambda_Mt",
+      "y_t_Mt",
+      "g_2_Mt",
+      "g_Y_Mt",
+      "g_3_Mt"
+    ],
+    "wzh_electroweak_coordinates": [
+      "v_from_G_F_tree_reference",
+      "g_Y_Mt",
+      "g_2_Mt",
+      "lambda_Mt",
+      "g_1_GUT_Mt_alias"
+    ]
+  },
+  "numeric_cross_block_covariance_values_filled": false,
+  "observed_data_used_as_selector": false,
+  "row_counts": {
+    "BCT_rows": 3,
+    "Higgs_decay_rows": 10,
+    "deduplicated_interim_total": 19,
+    "weak_rows": 5,
+    "wzh_unique_extension_rows": 1
+  },
+  "schema": "MTTDeduplicatedCrossBlockCovarianceBasis.v1",
+  "status": "DEDUPLICATED_CROSS_BLOCK_BASIS_BUILT_VALUES_OPEN",
+  "target_fitting_used": false,
+  "weak_basis_source": "candidate_data/selected_correlatedprofilevalues_or_localqftobservablevalues/correlation_robust_profile_envelope.packet.json",
+  "wzh_sidecar_source": "candidate_data/selected_covariancesidecarfill_or_rthetasourcerowderivation/wzh_gauge_and_lambda_covariance_sidecars.packet.json"
+}

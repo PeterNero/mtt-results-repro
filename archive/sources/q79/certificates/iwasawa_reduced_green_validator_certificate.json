@@ -1,0 +1,98 @@
+{
+  "certificate": "IwasawaReducedGreenValidator",
+  "status": "IWASAWA_REDUCED_GREEN_VALIDATOR_FORMULATED_DATA_OPEN",
+  "purpose": "Provide an executable validator for finite reduced Green operators on the complement of the sector Riesz projectors.",
+  "depends_on": [
+    "iwasawa_riesz_gap_validator_certificate.json",
+    "iwasawa_de_action_validator_certificate.json",
+    "iwasawa_non_invariant_galerkin_protocol_certificate.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json"
+  ],
+  "supported_format_v1": {
+    "green_slots": "Q,u,d,L,e,N,H entries",
+    "slot_fields": "kind, expected_kernel_dimension, dimension, gram_matrix, stiffness_matrix, riesz_projector, complement_projector, reduced_green_operator, complement_gap, truncation_error_bound, green_norm_bound",
+    "operator_definition": "A = G^{-1} K, where G is the finite Gram matrix and K is the stiffness matrix",
+    "complement_definition": "Q = I - P, with P the supplied Riesz projector",
+    "green_equations": "A R = Q, R A = Q, R P = P R = 0, Q R = R Q = R",
+    "self_adjointness": "P, Q, and R are self-adjoint in the supplied Gram metric",
+    "gap_norm_rule": "green_norm_bound must be no smaller than 1/(complement_gap - truncation_error_bound)",
+    "source_flags": "selected_source_verified, riesz_gap_verified, operator_data_verified, and boundary_conditions_verified must be true"
+  },
+  "implemented_checks": {
+    "all_green_slots_present": true,
+    "sector_kind_and_cluster_dimension": true,
+    "dimension_positive": true,
+    "gram_positive_definite_hermitian": true,
+    "stiffness_hermitian": true,
+    "riesz_projector_idempotent": true,
+    "riesz_projector_Gram_self_adjoint": true,
+    "riesz_projector_rank_matches_cluster": true,
+    "complement_equals_I_minus_P": true,
+    "complement_idempotent_and_Gram_self_adjoint": true,
+    "P_Q_and_Q_P_zero": true,
+    "green_Gram_self_adjoint": true,
+    "green_annihilates_projector": true,
+    "green_lives_on_complement": true,
+    "A_R_equals_Q": true,
+    "R_A_equals_Q": true,
+    "gap_positive_after_error": true,
+    "green_norm_bound_consistent_with_gap": true,
+    "source_gap_operator_boundary_flags_required": true,
+    "bad_green_candidate_fails": true,
+    "bad_complement_candidate_fails": true,
+    "bad_norm_bound_candidate_fails": true,
+    "missing_slot_remains_open": true
+  },
+  "not_checked_by_v1": {
+    "proof_D_E_is_selected_by_MTT": true,
+    "proof_operator_comes_from_typed_monad_or_HYM_solve": true,
+    "independent_eigenbasis_construction": true,
+    "sharp_operator_norm_in_G_metric": true,
+    "dotD_alpha1": true,
+    "horizontal_zero_mode_response": true,
+    "primitive_C1_contractions": true,
+    "Yukawa_overlap_values": true
+  },
+  "script_exit_codes": {
+    "0": "complete finite reduced-Green candidate passes implemented checks",
+    "1": "complete candidate fails an implemented complement/Green/gap check",
+    "2": "candidate is incomplete/open, such as missing green_slots or missing sector entries"
+  },
+  "smoke_tests": {
+    "open_template_refused_with_exit_2": true,
+    "toy_consistent_green_slots_pass_schema": true,
+    "toy_candidate_claim_selected": false,
+    "green_bad_candidate_fails": true,
+    "complement_bad_candidate_fails": true,
+    "norm_bound_bad_candidate_fails": true,
+    "missing_slot_candidate_exit_2": true
+  },
+  "what_this_closes": {
+    "finite_reduced_Green_validator": true,
+    "complement_projector_gate": true,
+    "inverse_on_complement_gate": true,
+    "Green_norm_gap_bound_gate": true
+  },
+  "still_open": {
+    "actual_selected_D_E_action": true,
+    "actual_selected_spectral_slot_data": true,
+    "actual_selected_reduced_Green_operator": true,
+    "dotD_alpha1_operator": true,
+    "horizontal_zero_mode_responses": true,
+    "Yukawa_overlap_matrices": true
+  },
+  "guardrails": {
+    "claims_selected_D_E_constructed": false,
+    "claims_selected_Green_operator_constructed": false,
+    "claims_toy_operator_selected": false,
+    "uses_observed_masses_or_mixings": false,
+    "uses_rank_one_seed_as_full_basis": false,
+    "claims_yukawa_matrices_computed": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_reduced_Green_validator_for_candidate_data": true,
+    "closes_actual_selected_reduced_Green_operator": false,
+    "next_step": "Supply selected reduced-Green data from validated selected spectral slots, then run dotD_alpha1 and horizontal zero-mode response validators."
+  }
+}

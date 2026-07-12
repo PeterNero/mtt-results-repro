@@ -1,0 +1,81 @@
+{
+  "certificate": "PostInvariantObstructionWayForwardCertificate",
+  "status": "WAY_FORWARD_SELECTED_MONAD_CECH_PRIMARY_SPECTRAL_FALLBACK",
+  "purpose": "Select the next rigorous route after the sparse invariant Iwasawa A01 branch failed to produce selected three-family zero modes.",
+  "depends_on": [
+    "iwasawa_dolbeault_complex_extraction_certificate.json",
+    "corrected_a01_candidate_scan_certificate.json",
+    "invariant_mc_torsion_branch_gate_certificate.json",
+    "iwasawa_monad_map_data_gate_certificate.json",
+    "index_to_three_family_upgrade_gate_certificate.json",
+    "selected_zero_mode_basis_dotd_interface_certificate.json"
+  ],
+  "blocked_shortcuts": {
+    "literal_A01": "fails integrability",
+    "one_index_A01_repair": "integrable but h1=2",
+    "three_entry_torsion_support_A01": "integrable branches all have h1=2",
+    "closed_form_sparse_h1_three_A01": "not selected and drops e3",
+    "c3_index_as_basis": "index gives net chirality, not representatives"
+  },
+  "selected_primary_route": {
+    "id": "typed_monad_cech_cohomology",
+    "required_inputs": [
+      "typed f_i sections of L_i tensor K1^{-1}",
+      "typed g_i sections of K2 tensor L_i^{-1}",
+      "transition data or invariant section representatives",
+      "verification that g o f = 0",
+      "exactness/local-freeness or controlled sheaf substitute"
+    ],
+    "construction_steps": [
+      "set B = direct_sum_i L_i and K = ker(g)",
+      "compute the long exact cohomology sequence of 0 -> K -> B -> K2 -> 0",
+      "compute the long exact cohomology sequence of 0 -> K1 -> K -> E -> 0",
+      "extract H^1(X,E), anti-family middle cohomology, and representatives",
+      "compute cup/Yoneda products for the E6 cubic",
+      "derive sector projections into Q,u,d,L,e,N,H"
+    ],
+    "why_primary": "It directly upgrades the supported net c3 index into actual selected cohomology representatives."
+  },
+  "selected_fallback_route": {
+    "id": "non_invariant_spectral_galerkin",
+    "trigger": "Use only if typed monad sections or corrected selected A01 cannot be supplied.",
+    "required_inputs": [
+      "selected HYM/Strominger operator D_E",
+      "finite basis beyond left-invariant forms",
+      "low-spectrum computation and Riesz projector",
+      "complement gap and truncation error",
+      "dotD_alpha1 and reduced Green operators"
+    ],
+    "why_fallback": "It can include non-invariant family modes and matches the existing C1 response interface, but is more numerical."
+  },
+  "next_artifact_schema": {
+    "name": "Iwasawa_Selected_Cohomology_Data_Certificate",
+    "allowed_modes": [
+      "typed_monad_cech",
+      "non_invariant_spectral_galerkin"
+    ],
+    "required_success_fields": [
+      "selected_integrable_bundle_or_sheaf_data",
+      "h1_E_equals_three",
+      "anti_family_middle_cohomology_vanishes",
+      "explicit_Psi_i_representatives",
+      "L2_metric_and_projector_data",
+      "sector_projection_maps_Q_u_d_L_e_N_H",
+      "dotD_alpha1_and_reduced_Green_operators"
+    ]
+  },
+  "guardrails": {
+    "uses_benchmark_yukawa_entries": false,
+    "uses_observed_masses_or_mixings": false,
+    "silently_repairs_A01": false,
+    "uses_index_as_zero_mode_basis": false,
+    "allows_free_dotD": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "strategy_question_answered": true,
+    "primary_next_move": "Build the typed monad/Cech cohomology certificate.",
+    "fallback_next_move": "If monad maps cannot be supplied, build the non-invariant spectral Galerkin certificate.",
+    "values_computed": false
+  }
+}

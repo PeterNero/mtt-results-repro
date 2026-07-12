@@ -1,0 +1,86 @@
+{
+  "certificate": "IwasawaC6SupportNoncommutationGate",
+  "status": "IWASAWA_C6_SUPPORT_NONCOMMUTATION_GATE_CLOSED_VALUES_OPEN",
+  "purpose": "Close the finite leading support criterion that selected C6 matrices must satisfy before the q79 phase can feed CKM noncommutation.",
+  "depends_on": [
+    "iwasawa_c6_global_phase_block_certificate.json",
+    "ckm_leading_noncommutation_criterion_certificate.json",
+    "jarlskog_closure_criterion_certificate.json",
+    "selected_channel_weight_extraction_protocol_certificate.json",
+    "forced_channel_weight_blocks_certificate.json"
+  ],
+  "calculation_script": "scripts/analyze_iwasawa_c6_support_noncommutation_gate.py",
+  "calculation_results": {
+    "selected_label": 79,
+    "conjugate_label": 369,
+    "chi_79": {
+      "real": 0.4464767119915629,
+      "imag": 0.8947952534793661,
+      "angle_deg": 63.48214285714286
+    },
+    "all_c6_channels_share_one_phase_per_branch": true,
+    "selected_c6_support_data_found": false,
+    "selected_c6_support_values_computed": false,
+    "heavy_link_decomposition": "Delta_v = Delta_t + chi_q Delta_c",
+    "leading_noncommutation_condition": "Delta_v != (0,0)",
+    "expanded_condition": "Delta_t + chi_q Delta_c != (0,0)",
+    "c6_affects_leading_heavy_link_if": "Delta_c != (0,0)",
+    "full_cp_requires": "Delta_CP != 0 with nondegenerate spectra"
+  },
+  "case_table": [
+    {
+      "case": "no selected C6 heavy-link support",
+      "condition": "Delta_c = (0,0)",
+      "leading_noncommutation": "controlled only by Delta_t",
+      "q79_drives_leading_gate": false
+    },
+    {
+      "case": "C6 heavy-link support identical in up and down sectors",
+      "condition": "c_d = c_u",
+      "leading_noncommutation": "C6 cancels from Delta_v at order epsilon",
+      "q79_drives_leading_gate": false
+    },
+    {
+      "case": "C6 heavy-link support mismatch",
+      "condition": "Delta_c != (0,0)",
+      "leading_noncommutation": "passes unless the character-trivial part exactly cancels Delta_t = -chi_q Delta_c",
+      "q79_drives_leading_gate": true
+    },
+    {
+      "case": "full CKM CP closure",
+      "condition": "nondegenerate spectra and Im det([H_u,H_d]) != 0",
+      "leading_noncommutation": "necessary orientation input, not sufficient",
+      "q79_drives_leading_gate": "requires selected non-rephasable support"
+    }
+  ],
+  "what_this_closes": {
+    "c6_support_entry_target": true,
+    "leading_c6_heavy_link_gate": true,
+    "c6_global_phase_overclaim_blocked": true,
+    "numeric_support_absence_confirmed": true
+  },
+  "still_open": {
+    "selected_C6_amplitudes_A_gamma": true,
+    "selected_C6_support_matrices": true,
+    "Delta_t_from_character_trivial_channels": true,
+    "Delta_c_from_C6_support": true,
+    "selected_Y_u_Y_d": true,
+    "Jarlskog_value": true,
+    "Yukawa_magnitudes": true,
+    "full_SM_closure": true
+  },
+  "guardrails": {
+    "claims_selected_C6_support_values_computed": false,
+    "claims_Delta_v_computed": false,
+    "claims_leading_noncommutation_passes": false,
+    "claims_jarlskog_nonzero": false,
+    "claims_yukawa_magnitudes": false,
+    "claims_full_SM_closure": false
+  },
+  "verdict": {
+    "criterion_closed": true,
+    "selected_c6_support_values_open": true,
+    "numeric_ckm_noncommutation_open": true,
+    "next_packet": "Supply selected C6 amplitude-support matrices C_u and C_d, plus character-trivial heavy-link vectors t_u and t_d, then evaluate Delta_t + chi_q Delta_c."
+  }
+}

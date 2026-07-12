@@ -1,0 +1,331 @@
+{
+  "basis_protocol": {
+    "basis_source_options": {
+      "deck_equivariant_spectral": {
+        "available_from_current_corpus": false,
+        "requires": [
+          "explicit Gamma lattice/deck generators",
+          "scalar mode functions phi_m satisfying quotient equivariance",
+          "derivative/action matrices for left-invariant vector fields",
+          "bundle transition/equivariant matrices for E"
+        ]
+      },
+      "finite_element_fundamental_domain": {
+        "available_from_current_corpus": false,
+        "requires": [
+          "fundamental-domain cell decomposition or mesh",
+          "periodic/deck gluing constraints",
+          "quadrature rule for the selected metric/volume",
+          "bundle transition/equivariant matrices for E"
+        ]
+      }
+    },
+    "closed_skeleton": {
+      "anti_holomorphic_form_counts_by_degree": {
+        "0": 1,
+        "1": 3,
+        "2": 3,
+        "3": 1
+      },
+      "basis_element_shape": "phi_m tensor fiber_a tensor baromega_I",
+      "degree_dimension_formula": "dim V_N^(0,p) = scalar_count_N * rank_E * binomial(3,p)",
+      "first_noninvariant_extension_dimensions_by_degree": {
+        "0": 6,
+        "1": 18,
+        "2": 18,
+        "3": 6
+      },
+      "first_noninvariant_extension_scalar_count": 2,
+      "invariant_dimensions_by_degree": {
+        "0": 3,
+        "1": 9,
+        "2": 9,
+        "3": 3
+      },
+      "invariant_scalar_count": 1,
+      "rank_E": 3
+    },
+    "non_invariant_protocol_values_open": {
+      "G_N": true,
+      "K_N": true,
+      "Psi_i": true,
+      "basis_B_N": true,
+      "dotD_alpha1": true,
+      "eigenpairs": true,
+      "eta_total": true,
+      "sector_maps": true,
+      "selected_D_E": true
+    },
+    "spectral_template_success_gates": {
+      "anti_family_modes_absent_or_controlled": false,
+      "basis_extends_beyond_left_invariant_forms": false,
+      "complement_gap_positive": false,
+      "dotD_alpha1_and_Green_operator_constructed": false,
+      "explicit_Psi_i_representatives": false,
+      "kernel_dimension_is_three": false,
+      "sector_projection_maps_constructed": false,
+      "selected_operator_constructed": false,
+      "truncation_error_certified": false
+    },
+    "still_missing_for_actual_basis": {
+      "Gram_matrix_entries": true,
+      "bundle_transition_or_equivariance_matrices": true,
+      "deck_or_periodic_constraints": true,
+      "metric_volume_quadrature": true,
+      "scalar_basis_functions_phi_m": true,
+      "selected_D_E_action_on_basis": true,
+      "stiffness_matrix_entries": true
+    }
+  },
+  "candidate": "MTTSelectedRouteCStromingerGalerkinSolveSpec",
+  "currently_blocked_by": {
+    "C1_primitives": true,
+    "actual_selected_values": true,
+    "basis_B_N_values": true,
+    "route_c_honest_operator_pipeline_pass": true,
+    "selected_hym_operator_source_verified": true
+  },
+  "execution_stages": [
+    {
+      "must_emit": [
+        "source_selected_by_mtt",
+        "fixed q79/F,m=1 S3/GS branch",
+        "no measured-data selector"
+      ],
+      "stage": "S0_selected_source",
+      "validator": "validate_iwasawa_route_c_residuals.py"
+    },
+    {
+      "must_emit": [
+        "basis_B_N",
+        "deck/periodic constraints",
+        "bundle transition/equivariance matrices",
+        "metric quadrature"
+      ],
+      "stage": "S1_basis_and_domain",
+      "validator": "iwasawa_spectral_galerkin_data.template.json success_gates"
+    },
+    {
+      "must_emit": [
+        "A*",
+        "h*",
+        "projective/twisted rho_E induced by selected source"
+      ],
+      "stage": "S2_connection_metric_rhoE",
+      "validators": [
+        "validate_iwasawa_rhoE_mesh.py",
+        "validate_iwasawa_rhoE_metric.py"
+      ]
+    },
+    {
+      "must_emit": [
+        "sector projectors",
+        "D_E action for Q,u,d,L,e,N,H"
+      ],
+      "stage": "S3_sector_operators",
+      "validators": [
+        "validate_iwasawa_sector_maps.py",
+        "validate_iwasawa_de_action.py"
+      ]
+    },
+    {
+      "must_emit": [
+        "Riesz projectors",
+        "complement gaps",
+        "reduced Green operators",
+        "truncation error bounds"
+      ],
+      "stage": "S4_spectral_projectors",
+      "validators": [
+        "validate_iwasawa_riesz_gap.py",
+        "validate_iwasawa_reduced_green.py"
+      ]
+    },
+    {
+      "must_emit": [
+        "deltaTheta_C1",
+        "same-branch dotD_alpha1",
+        "horizontal zero-mode responses"
+      ],
+      "stage": "S5_alpha1_response",
+      "validator": "validate_iwasawa_dotd_response.py"
+    },
+    {
+      "must_emit": [
+        "zero-mode bases",
+        "primitive 3x3 contraction terms",
+        "response matrices and C33 tests"
+      ],
+      "stage": "S6_c1_contractions",
+      "validator": "selected_c1_primitive_contractions.template.json fill contract"
+    }
+  ],
+  "mesh_scaffold": {
+    "counts": {
+      "boundary_face_incidences": 192,
+      "closed_cell_nodes": 64,
+      "complex_rho_entries_table_ansatz": 1296,
+      "corner_nodes_with_multiple_boundary_faces": 57,
+      "mesh_N": 1,
+      "metric_real_entries_full_node_table": 576,
+      "rank3_bundle_dofs_identity_smoke": 3,
+      "scalar_quotient_dofs_identity_smoke": 1,
+      "unique_rho_boundary_matrices_table_ansatz": 144
+    },
+    "matches_certificate_counts": true,
+    "mesh_N": 1,
+    "next_mesh_policy": "N=1 is a scaffold smoke size; actual solve may increase N, but must report error budget and convergence."
+  },
+  "next_required_artifact": "MTT_Selected_RouteC_Strominger_Galerkin_First_Run_v1",
+  "output_manifest": {
+    "c1_primitive_contractions": "candidate_data/selected_routec_strominger_galerkin_solve/c1_primitive_contractions.candidate.json",
+    "de_action": "candidate_data/selected_routec_strominger_galerkin_solve/de_action.candidate.json",
+    "dotd_response": "candidate_data/selected_routec_strominger_galerkin_solve/dotd_response.candidate.json",
+    "reduced_green": "candidate_data/selected_routec_strominger_galerkin_solve/reduced_green.candidate.json",
+    "rhoE_mesh": "candidate_data/selected_routec_strominger_galerkin_solve/rhoE_mesh.candidate.json",
+    "rhoE_metric": "candidate_data/selected_routec_strominger_galerkin_solve/rhoE_metric.candidate.json",
+    "riesz_gap": "candidate_data/selected_routec_strominger_galerkin_solve/riesz_gap.candidate.json",
+    "route_c_residual": "candidate_data/selected_routec_strominger_galerkin_solve/route_c_residual.candidate.json",
+    "sector_maps": "candidate_data/selected_routec_strominger_galerkin_solve/sector_maps.candidate.json",
+    "spectral_galerkin_data": "candidate_data/selected_routec_strominger_galerkin_solve/spectral_galerkin_data.candidate.json"
+  },
+  "previous_frontier": "MTT_Selected_RouteC_Strominger_Galerkin_Solve_Spec_v1",
+  "promotion_gate": {
+    "must_pass_after_outputs_exist": true,
+    "reason": "This guardrail prevents identity rhoE, pure-gauge, smoke D_E, or lifted selected flags from becoming proof data.",
+    "script": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\scripts\\validate_iwasawa_selected_source_promotion.py",
+    "target_levels": [
+      "rhoE_source",
+      "de_response"
+    ]
+  },
+  "residual_acceptance": {
+    "pass_rule": "Every residual value must be present and <= its tolerance; all positive gates must exceed strict lower bounds.",
+    "positive_gates": {
+      "mtt_hessian_min_eigenvalue": null,
+      "riesz_gap_min": null
+    },
+    "residual_slots": {
+      "bianchi_alpha1": null,
+      "hym_primitive": null,
+      "integrability_F02": null,
+      "metric_compatibility": null,
+      "mtt_gradient": null,
+      "rho_cocycle": null,
+      "strominger_residual": null
+    },
+    "selected_source_rule": "selected_source_verified must be true because the residual solve, not the target data, selects the branch."
+  },
+  "source_status": {
+    "galerkin_protocol": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\iwasawa_non_invariant_galerkin_protocol_certificate.json",
+      "present": true,
+      "status": "NONINVARIANT_GALERKIN_EXECUTION_PROTOCOL_FORMULATED_VALUES_OPEN"
+    },
+    "galerkin_skeleton": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\iwasawa_galerkin_basis_skeleton_certificate.json",
+      "present": true,
+      "status": "GALERKIN_BASIS_SKELETON_FORMULATED_SCALAR_DECK_DATA_OPEN"
+    },
+    "previous": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-sm-parity-closure\\candidate_data\\selected_spectral_galerkin_projector_retention_data.candidate.json",
+      "present": true,
+      "status": "MTT_SELECTED_SPECTRAL_GALERKIN_PROJECTOR_RETENTION_DATA_REDUCED_TO_SELECTED_ROUTEC_GALERKIN_SOLVE"
+    },
+    "routec_residual_template": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\iwasawa_route_c_residuals.template.json",
+      "present": true,
+      "status": "OPEN"
+    },
+    "routec_scaffold": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\iwasawa_route_c_finite_solve_scaffold_certificate.json",
+      "present": true,
+      "status": "IWASAWA_ROUTE_C_FINITE_SOLVE_SCAFFOLD_FORMULATED_SELECTED_VALUES_OPEN"
+    },
+    "selected_hym_attempt": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\selected_hym_operator_source_attempt_certificate.json",
+      "present": true,
+      "status": "SELECTED_HYM_OPERATOR_SOURCE_ATTEMPT_BLOCKED_OPERATOR_SOURCE_MISSING"
+    },
+    "selected_source_promotion_validator": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\scripts\\validate_iwasawa_selected_source_promotion.py",
+      "present": true,
+      "status": "SCRIPT_PRESENT"
+    },
+    "spectral_galerkin_template": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\iwasawa_spectral_galerkin_data.template.json",
+      "present": true,
+      "status": "OPEN"
+    }
+  },
+  "spectral_acceptance": {
+    "basis_minimum": "The solve must use a quotient-valid basis beyond the left-invariant scalar_count=1 smoke sector.",
+    "cluster_rule": "lambda_1 <= lambda_2 <= lambda_3 <= epsilon_low",
+    "consequence": "the Riesz projector below tau has rank three and is stable under the certified errors",
+    "error_budget": "eta_total = eta_basis + eta_operator_residual + eta_quadrature + eta_HYM",
+    "gap_rule": "lambda_4 >= gamma_gap",
+    "pass_rule": "epsilon_low + eta_total < tau < gamma_gap - eta_total for some tau > 0"
+  },
+  "status": "MTT_SELECTED_ROUTEC_STROMINGER_GALERKIN_SOLVE_SPEC_BUILT_VALUES_OPEN",
+  "superset_mode": {
+    "classification": "SUPERSET_REPAIR_EXECUTABLE_SPEC",
+    "diagnostic_backfit_only": {
+      "reason": "The spec forbids observed masses, mixings, benchmark matrices, and target residuals as selectors.",
+      "used": false
+    },
+    "straight_path": {
+      "classification": "SCAFFOLD_ONLY_VALUES_OPEN",
+      "reason": "The finite scaffold and Galerkin protocol are available, but selected values are not yet computed."
+    },
+    "superset_convergence": {
+      "classification": "ROUTEC_STROMINGER_GALERKIN_EXECUTION_SPEC",
+      "converging_inputs": [
+        "Route-C residual scaffold",
+        "non-invariant Galerkin protocol",
+        "selected S3 twisted source support",
+        "rho_E/D_E/Riesz/Green/dotD validators",
+        "C1 alpha1 response contract"
+      ],
+      "locked_target": "one selected q79/F,m=1 S3/GS finite operator payload"
+    },
+    "superset_repair": {
+      "reason": "The remaining unknown is numerical/symbolic selected data, not another high-level proof interface.",
+      "repair_object": "first selected small-N nonlinear residual solve or symbolic selected ansatz"
+    }
+  },
+  "target_fitting_used": false,
+  "theorem": {
+    "name": "SelectedRouteCStromingerGalerkinSolveSpecification",
+    "proved": true,
+    "statement": "The selected Route-C/Strominger Galerkin solve is now specified as an executable finite contract. It reuses the q79 finite residual scaffold, non-invariant Galerkin matrix protocol, downstream validators, Riesz gap/error rule, and C1 response contract. It does not compute selected values; the next step is to run or symbolically fill the first honest selected small-N solve."
+  },
+  "validator_pipeline": [
+    "validate_iwasawa_route_c_residuals.py",
+    "validate_iwasawa_rhoE_mesh.py",
+    "validate_iwasawa_rhoE_metric.py",
+    "validate_iwasawa_sector_maps.py",
+    "validate_iwasawa_de_action.py",
+    "validate_iwasawa_riesz_gap.py",
+    "validate_iwasawa_reduced_green.py",
+    "validate_iwasawa_dotd_response.py"
+  ],
+  "what_closes_now": {
+    "mesh_N1_accounting_reproduced": true,
+    "output_manifest_built": true,
+    "promotion_guardrail_linked": true,
+    "residual_acceptance_contract_built": true,
+    "selected_solve_executable_spec_built": true,
+    "spectral_gap_error_contract_built": true,
+    "target_fitting_excluded": true,
+    "validator_order_locked": true
+  },
+  "what_remains_open": {
+    "actual_basis_B_N_and_quadrature": true,
+    "actual_selected_small_N_solve_or_symbolic_ansatz": true,
+    "full_SM_or_no_knob_closure": true,
+    "selected_DE_Riesz_Green_dotD_outputs": true,
+    "selected_rhoE_metric_connection_values": true,
+    "spectral_gap_error_numbers": true,
+    "zero_mode_bases_and_C1_primitives": true
+  }
+}

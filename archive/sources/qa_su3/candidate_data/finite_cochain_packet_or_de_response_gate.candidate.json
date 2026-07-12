@@ -1,0 +1,178 @@
+{
+  "acceptance_algorithm": [
+    "Load selected source certificate for the Qa/SU3 branch.",
+    "Load finite bases for F1..F5, G1..G5, and P, or an explicit cochain complex whose cohomology bases select them.",
+    "Compute product tables m_i: F_i x G_i -> P and extract mu_i in the selected bases.",
+    "Read f and g map entries in those same bases and verify g*f=0.",
+    "Independently load D_E/dotD/rho_E, projectors, and Green/Riesz data from the same source.",
+    "Verify source vectors s_i=Q dotD psi_i, responses dotPsi_i=-R s_i, and A dotPsi_i+s_i=0.",
+    "Run Freed-Witten, Green-Schwarz/Bianchi, stability/local-freeness, and projector-retention checks."
+  ],
+  "bridge_checks": [
+    {
+      "formula_or_check": "source_id(cochain)=source_id(operator)",
+      "lane": "bridge",
+      "name": "same_source_identifier",
+      "present_now": false,
+      "reason": "The product tables and D_E/dotD response must be from the same branch."
+    },
+    {
+      "formula_or_check": "B^{-1} m_i B and B^{-1} D_E B agree",
+      "lane": "bridge",
+      "name": "same_selected_bases_or_explicit_change_of_basis",
+      "present_now": false,
+      "reason": "Cochain and operator coordinates must be comparable."
+    },
+    {
+      "formula_or_check": "mu_1*a_1*b_1 + mu_2*a_2*b_2 + mu_3*a_3*b_3 + mu_4*a_4*b_4 + mu_5*a_5*b_5 = 0",
+      "lane": "bridge",
+      "name": "same_gf_zero_packet",
+      "present_now": false,
+      "reason": "The selected entries must satisfy the already-derived monad equation."
+    },
+    {
+      "formula_or_check": "Freed-Witten, GS/Bianchi, stability/local-freeness, projector retention",
+      "lane": "bridge",
+      "name": "admissibility_retention",
+      "present_now": false,
+      "reason": "A finite packet must remain admissible after selection."
+    }
+  ],
+  "candidate": "SelectedQaSU3FiniteCochainPacketOrDEResponseGate",
+  "decision": {
+    "next_move": "Attempt an actual selected finite source solve: either construct the cochain product tables first, or derive D_E/dotD and back out the same packet entries.",
+    "result": "Two-lane acceptance gate built; selected source data remain open.",
+    "why": "The finite cochain lane can select mu_i and f,g, while the operator lane can independently select D_E/dotD response. Closure requires both to agree or one to imply the other with an explicit bridge."
+  },
+  "finite_cochain_lane": [
+    {
+      "formula_or_check": "basis(S) for S in F1..F5,G1..G5,P",
+      "lane": "finite_cochain",
+      "name": "selected_finite_basis_for_each_space",
+      "present_now": false,
+      "reason": "Without selected bases, product coefficients are coordinate choices."
+    },
+    {
+      "formula_or_check": "d1*d0 = 0",
+      "lane": "finite_cochain",
+      "name": "selected_differentials",
+      "present_now": false,
+      "reason": "Cech/Dolbeault matrices must form an actual finite complex."
+    },
+    {
+      "formula_or_check": "m_i: F_i x G_i -> P",
+      "lane": "finite_cochain",
+      "name": "selected_product_tables",
+      "present_now": false,
+      "reason": "The coefficients mu_i must be read from product tables, not assigned."
+    },
+    {
+      "formula_or_check": "f_i=a_i, g_i=b_i in selected bases",
+      "lane": "finite_cochain",
+      "name": "selected_map_entries",
+      "present_now": false,
+      "reason": "The monad maps must be entries in the same selected bases."
+    },
+    {
+      "formula_or_check": "mu_1*a_1*b_1 + mu_2*a_2*b_2 + mu_3*a_3*b_3 + mu_4*a_4*b_4 + mu_5*a_5*b_5 = 0",
+      "lane": "finite_cochain",
+      "name": "post_selection_monad_check",
+      "present_now": false,
+      "reason": "Only after selection may g*f=0 be tested as a proof condition."
+    }
+  ],
+  "gate_results": {
+    "closure_claimed": false,
+    "cochain_acceptance_contract_built": true,
+    "eleven_spaces_carried_forward": true,
+    "five_product_pairs_carried_forward": true,
+    "operator_response_contract_built": true,
+    "same_source_bridge_contract_built": true,
+    "selected_DE_dotD_response_supplied": false,
+    "selected_finite_cochain_packet_supplied": false,
+    "selected_source_promoted": false
+  },
+  "gf_zero_equation": "mu_1*a_1*b_1 + mu_2*a_2*b_2 + mu_3*a_3*b_3 + mu_4*a_4*b_4 + mu_5*a_5*b_5 = 0",
+  "input_statuses": {
+    "a01_de_operator_gate": "A01_DE_OPERATOR_EXIT_ACCEPTANCE_GATE_BUILT_SELECTED_MATRICES_OPEN",
+    "cech_dolbeault_scaffold": "CECH_DOLBEAULT_MATRIX_PACKET_SCAFFOLD_BUILT_SELECTED_VALUES_OPEN",
+    "selected_values_gate": "SELECTED_MULTIPLICATION_CONSTANTS_OR_DE_SOURCE_GATE_BUILT_VALUES_OPEN"
+  },
+  "next_required_artifact": "Selected_Qa_SU3_Selected_Finite_Source_Solve_v1",
+  "operator_response_lane": [
+    {
+      "formula_or_check": "A = G^{-1} K",
+      "lane": "operator_response",
+      "name": "selected_DE_or_stiffness_operator",
+      "present_now": false,
+      "reason": "A nontrivial operator must replace identity rho_E or diagonal phase fixtures."
+    },
+    {
+      "formula_or_check": "P^2=P, Q=I-P, A R Q = Q",
+      "lane": "operator_response",
+      "name": "selected_projectors_and_green_operator",
+      "present_now": false,
+      "reason": "The response must live on the horizontal complement."
+    },
+    {
+      "formula_or_check": "s_i = Q dotD psi_i",
+      "lane": "operator_response",
+      "name": "selected_dotD",
+      "present_now": false,
+      "reason": "The source vectors cannot be texture knobs."
+    },
+    {
+      "formula_or_check": "dotPsi_i = -R Q dotD psi_i",
+      "lane": "operator_response",
+      "name": "horizontal_response",
+      "present_now": false,
+      "reason": "The linearized zero-mode response must be derived."
+    },
+    {
+      "formula_or_check": "A dotPsi_i + s_i = 0 and P dotPsi_i = 0",
+      "lane": "operator_response",
+      "name": "first_order_equation",
+      "present_now": false,
+      "reason": "The operator response must satisfy the finite equations."
+    }
+  ],
+  "required_space_count": 11,
+  "spaces": [
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "G1",
+    "G2",
+    "G3",
+    "G4",
+    "G5",
+    "P"
+  ],
+  "status": "FINITE_COCHAIN_PACKET_OR_DE_RESPONSE_GATE_BUILT_SELECTED_SOURCE_OPEN",
+  "target_fitting_used": false,
+  "typed_product_pair_count": 5,
+  "typed_product_pairs": [
+    [
+      "F1",
+      "G1"
+    ],
+    [
+      "F2",
+      "G2"
+    ],
+    [
+      "F3",
+      "G3"
+    ],
+    [
+      "F4",
+      "G4"
+    ],
+    [
+      "F5",
+      "G5"
+    ]
+  ]
+}

@@ -1,0 +1,286 @@
+{
+  "acceptance_interface": [
+    {
+      "name": "selected_source_certificate",
+      "present_now": false,
+      "reason": "Must be selected by MTT for this Qa/SU3 branch.",
+      "source": "Qa/SU3 same-branch source"
+    },
+    {
+      "name": "typed_section_or_cochain_bases_for_11_spaces",
+      "present_now": false,
+      "reason": "The 11 spaces F1..F5, G1..G5, P need explicit bases or finite cochain blocks.",
+      "source": "Cech/Dolbeault or twisted section packet"
+    },
+    {
+      "name": "selected_f_and_g_matrices",
+      "present_now": false,
+      "reason": "Symbolic charge matching must be promoted to actual f and g matrices with g*f=0.",
+      "source": "typed monad map packet"
+    },
+    {
+      "name": "selected_DE_or_rhoE_matrix",
+      "present_now": false,
+      "reason": "A selected D_E, rho_E, Riesz, Green, heat, zeta, or torsion finite-part operator must be supplied.",
+      "source": "operator packet"
+    },
+    {
+      "name": "spectral_or_heat_exit",
+      "present_now": false,
+      "reason": "The operator must have reproducible spectral/heat/rho_E/Riesz output.",
+      "source": "operator packet"
+    },
+    {
+      "name": "admissibility_checks",
+      "present_now": false,
+      "reason": "Freed-Witten, Green-Schwarz/Bianchi, stability/local-freeness, and projector retention must pass when applicable.",
+      "source": "source and operator packet"
+    }
+  ],
+  "candidate": "SelectedQaSU3A01DEOperatorExitGate",
+  "decision": {
+    "next_move": "Construct the selected 11-space finite Cech/Dolbeault cochain packet and same-source f,g,D_E/dotD matrices, then run this acceptance gate.",
+    "result": "Gate built; selected operator exit not yet supplied.",
+    "why": "The corpus contains validator shapes and same-source acceptance patterns, but not the Qa/SU3 selected f,g matrices or D_E/rho_E operator packet."
+  },
+  "gate_results": {
+    "A01_DE_exit_required_by_period_gate": true,
+    "all_required_operator_exit_inputs_present": false,
+    "closure_claimed": false,
+    "operator_exit_promoted": false,
+    "selected_operator_matrix_supplied": false,
+    "selected_typed_matrices_supplied": false,
+    "spectral_or_heat_exit_supplied": false,
+    "validator_shapes_available": true
+  },
+  "input_statuses": {
+    "full_corpus_dependency_audit": "FULL_CORPUS_DEPENDENCY_AUDIT_BUILT_PERIOD_SELECTOR_AND_OPERATOR_SOURCE_OPEN",
+    "period_gate": "CTWIST_PERIOD_NORMALIZATION_SCALAR_GATE_DERIVED_SELECTOR_OPEN_A01_EXIT_REQUIRED",
+    "source_packet": "SOURCE_AUGMENTATION_PACKET_BUILT_SYMBOLIC_CHARGE_PRODUCTS_PASS_VALUES_OPEN"
+  },
+  "next_required_artifact": "Selected_Qa_SU3_Cech_Dolbeault_Matrix_Packet_v1",
+  "parallel_search_artifact": "Selected_Qa_SU3_Central_Period_Selector_Search_v1",
+  "rejected_shortcuts": [
+    "identity rho_E",
+    "simultaneously diagonal scalar phase table as physical mixing",
+    "generic existence of f,g without matrices",
+    "direct q79/S3 finite torsion import",
+    "Chern/Bianchi row without same-source operator data",
+    "observed residual or measured constants as inputs"
+  ],
+  "required_section_space_count": 11,
+  "required_section_spaces": [
+    {
+      "charge": [
+        -3,
+        0,
+        1
+      ],
+      "id": "F1",
+      "role": "f_1"
+    },
+    {
+      "charge": [
+        -2,
+        1,
+        -1
+      ],
+      "id": "F2",
+      "role": "f_2"
+    },
+    {
+      "charge": [
+        0,
+        -1,
+        0
+      ],
+      "id": "F3",
+      "role": "f_3"
+    },
+    {
+      "charge": [
+        0,
+        0,
+        -1
+      ],
+      "id": "F4",
+      "role": "f_4"
+    },
+    {
+      "charge": [
+        1,
+        1,
+        1
+      ],
+      "id": "F5",
+      "role": "f_5"
+    },
+    {
+      "charge": [
+        2,
+        1,
+        -1
+      ],
+      "id": "G1",
+      "role": "g_1"
+    },
+    {
+      "charge": [
+        1,
+        0,
+        1
+      ],
+      "id": "G2",
+      "role": "g_2"
+    },
+    {
+      "charge": [
+        -1,
+        2,
+        0
+      ],
+      "id": "G3",
+      "role": "g_3"
+    },
+    {
+      "charge": [
+        -1,
+        1,
+        1
+      ],
+      "id": "G4",
+      "role": "g_4"
+    },
+    {
+      "charge": [
+        -2,
+        0,
+        -1
+      ],
+      "id": "G5",
+      "role": "g_5"
+    },
+    {
+      "charge": [
+        -1,
+        1,
+        0
+      ],
+      "id": "P",
+      "role": "product_target"
+    }
+  ],
+  "route_tests": [
+    {
+      "missing_for_promotion": [
+        "No selected Qa/SU3 f,g matrix entries are present.",
+        "No selected D_E/rho_E operator matrix is supplied."
+      ],
+      "route_id": "nonsm_typed_monad_interface",
+      "verdict": "VALIDATOR_SHAPE_AVAILABLE_VALUES_OPEN",
+      "what_it_closes": [
+        "Gives the right interface shape for D_E/rho_E acceptance.",
+        "Confirms closure requires selected matrices."
+      ]
+    },
+    {
+      "missing_for_promotion": [
+        "These are q79 validators/prototypes, not selected Qa/SU3 operator data."
+      ],
+      "route_id": "q79_rhoe_and_riesz_validators",
+      "verdict": "PORT_VALIDATOR_SHAPE_ONLY",
+      "what_it_closes": [
+        "Provides reusable validation concepts: nontrivial operator, spectral/Riesz checks, no identity rho_E."
+      ]
+    },
+    {
+      "missing_for_promotion": [
+        "The same-source packet is visible-sector/q79 context, not the selected Qa/SU3 matrix packet."
+      ],
+      "route_id": "visible_valpha_same_source_pattern",
+      "verdict": "USE_AS_ACCEPTANCE_PATTERN_ONLY",
+      "what_it_closes": [
+        "Names the required source kind: finite Cech/Dolbeault packet plus same-source D_E/dotD."
+      ]
+    },
+    {
+      "missing_for_promotion": [
+        "Does not provide selected Qa/SU3 finite matrices."
+      ],
+      "route_id": "quantum_gravity_harmonic_projector",
+      "verdict": "STRUCTURAL_SUPPORT_ONLY",
+      "what_it_closes": [
+        "Supports operator/harmonic-projector exits in the wider MTT corpus."
+      ]
+    }
+  ],
+  "source_scans": {
+    "nonsm_color_operator": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-nonsm-constants-no-knob\\proof_corpus\\Selected_Qa_SU3_Color_Bundle_Connection_or_Global_Section_Determinant_v1.md",
+      "present": true,
+      "terms": {
+        "local_system_torsion": true,
+        "operator_data_missing": true,
+        "selected_connection_route": true
+      }
+    },
+    "nonsm_typed_monad_fill": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-nonsm-constants-no-knob\\proof_corpus\\Selected_Qa_SU3_Typed_Monad_Data_Fill_Attempt_v1.md",
+      "present": true,
+      "terms": {
+        "generic_not_enough": true,
+        "maps_open": true,
+        "operator_open": true,
+        "topology_filled": true
+      }
+    },
+    "nonsm_typed_monad_interface": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-nonsm-constants-no-knob\\proof_corpus\\Selected_Qa_SU3_Typed_Monad_DE_or_RhoE_Data_Interface_v1.md",
+      "present": true,
+      "terms": {
+        "closed_no": false,
+        "de_required": true,
+        "rhoe_required": true,
+        "validator_built": true
+      }
+    },
+    "q79_rhoe_mesh": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\proof_corpus\\Iwasawa_Rotated_Phase_Mesh_RhoE_Sector_Prototype_v1.md",
+      "present": true,
+      "terms": {
+        "noncommuting_needed": true,
+        "not_selected": false,
+        "validator_stack": true
+      }
+    },
+    "q79_riesz_gap": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\proof_corpus\\Iwasawa_Riesz_Gap_Validator_v1.md",
+      "present": true,
+      "terms": {
+        "selected_operator_not_proved": false,
+        "selected_spectral_needed": false,
+        "validator_gate": true
+      }
+    },
+    "q79_visible_valpha_candidates": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\proof_corpus\\Visible_VAlpha_Chern_Bianchi_Source_Packet_Candidates_v1.md",
+      "present": true,
+      "terms": {
+        "dotD_response": true,
+        "finite_cochain_packet": true,
+        "same_source_DE": true
+      }
+    },
+    "quantum_gravity": {
+      "path": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\12 Quantum Gravity\\_work\\Modal_Triplet_Theory__From_MTT_to_a_UV_Finite__Unitary_Quantum_Gravity_v4\\main.tex",
+      "present": true,
+      "terms": {
+        "harmonic_projector": true,
+        "operator_context": true,
+        "ward_bianchi": true
+      }
+    }
+  },
+  "status": "A01_DE_OPERATOR_EXIT_ACCEPTANCE_GATE_BUILT_SELECTED_MATRICES_OPEN",
+  "target_fitting_used": false
+}

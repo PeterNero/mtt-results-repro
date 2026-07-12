@@ -1,0 +1,59 @@
+{
+  "lane_A_same_source_dynamic_transfer": {
+    "acceptance_outputs": [
+      "A_selected_72_real_columns",
+      "b_selected_72_real_source_vector",
+      "deltaTheta_C1",
+      "sector_response_matrices"
+    ],
+    "currently_closed": false,
+    "description": "Promote selected Phi_fin^C1 differentiated transfer from the same source spine.",
+    "required_inputs": [
+      "selected differentiated Phi_fin^C1 source-to-C1 transfer tensor",
+      "selected primitive C1 overlap contractions or equivalent Hessian blocks",
+      "selected Hessian/source-vector normalization emitting b_selected",
+      "same-source proof tying the emitted tensor to the static Weyl route"
+    ]
+  },
+  "lane_B_honest_galerkin_c1_run": {
+    "acceptance_checks": [
+      "canonical transport-only zero lane remains separated",
+      "A_selected columns map into the fixed 72-real coordinate system",
+      "rank(A_selected)=2 or emitted replacement rank theorem",
+      "A_selected^T A_selected and A_selected^T b_selected reported",
+      "sector response matrices M_u, M_d, M_e, M_nuD emitted",
+      "C33/nonzero-family-rank tests",
+      "mass-split traceless norm tests",
+      "CKM/PMNS commutator tests",
+      "CP-odd invariant test"
+    ],
+    "currently_closed": false,
+    "description": "Replace the conditional Weyl packet with selected Galerkin C1 contractions.",
+    "required_inputs": {
+      "selected_Hessian_counterterms": null,
+      "selected_L2_Gram_Schmidt_rule": null,
+      "selected_basis_transport_corrections": null,
+      "selected_primitive_vertex_operator_phase_Z": null,
+      "selected_primitive_vertex_operator_shift_X": null,
+      "selected_transported_zero_mode_bases": null
+    },
+    "required_outputs": [
+      "zero_mode_bases",
+      "primitive_three_by_three_contraction_terms",
+      "linear_response_matrices",
+      "C33/nonzero-family-rank tests"
+    ]
+  },
+  "schema": "MTTDualPathDynamicC1ValueFillContract.v1",
+  "status": "DUAL_PATH_CONTRACT_READY_VALUES_OPEN",
+  "superset_strategy": {
+    "locked_target": "Both lanes must emit the same typed 72-real C1 objects before any SM-parity dynamic closure claim.",
+    "straight_path": "Lane A: selected same-source dynamic transfer theorem.",
+    "superset_path": "Lane B: independent honest Galerkin C1 execution may replace the conditional Weyl packet."
+  },
+  "template_alignment": {
+    "primitive_overlap_template": "candidate_data/selected_differentiated_phifinc1_primitiveoverlap_or_galerkinrun/primitive_overlap_contractions.template.json",
+    "template_requires_A_columns": true,
+    "template_requires_b_vector": true
+  }
+}

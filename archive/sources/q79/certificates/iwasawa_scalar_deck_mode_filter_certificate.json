@@ -1,0 +1,86 @@
+{
+  "certificate": "IwasawaScalarDeckModeFilter",
+  "status": "IWASAWA_SCALAR_DECK_MODE_FILTER_FORMULATED_SELECTED_MODES_OPEN",
+  "purpose": "Convert the candidate standard Iwasawa deck generators into explicit scalar mode admissibility equations for the Galerkin basis, while keeping MTT lattice selection, bundle transitions, and selected modes open.",
+  "depends_on": [
+    "iwasawa_standard_lattice_deck_scaffold_certificate.json",
+    "iwasawa_galerkin_basis_skeleton_certificate.json",
+    "iwasawa_non_invariant_galerkin_protocol_certificate.json"
+  ],
+  "coordinate_realization": {
+    "z1": "x1 + i*x2",
+    "z2": "y1 + i*y2",
+    "z3": "t1 + i*t2",
+    "real_cell": "[0,1)^6 in (x1,x2,y1,y2,t1,t2) before deck gluing"
+  },
+  "scalar_gluing_equations": {
+    "g1": "phi(x1+1,x2,y1,y2,t1+y1,t2+y2)=phi(x1,x2,y1,y2,t1,t2)",
+    "g2": "phi(x1,x2+1,y1,y2,t1-y2,t2+y1)=phi(x1,x2,y1,y2,t1,t2)",
+    "g3": "phi(x1,x2,y1+1,y2,t1,t2)=phi(x1,x2,y1,y2,t1,t2)",
+    "g4": "phi(x1,x2,y1,y2+1,t1,t2)=phi(x1,x2,y1,y2,t1,t2)",
+    "g5": "phi(x1,x2,y1,y2,t1+1,t2)=phi(x1,x2,y1,y2,t1,t2)",
+    "g6": "phi(x1,x2,y1,y2,t1,t2+1)=phi(x1,x2,y1,y2,t1,t2)"
+  },
+  "central_character_decomposition": {
+    "central_labels": "k=(k1,k2) in Z^2",
+    "ansatz": "phi=exp(2*pi*i*(k1*t1+k2*t2))*F_k(x1,x2,y1,y2)",
+    "central_lattice_condition": "g5 and g6 force k1,k2 to be integers",
+    "twisted_base_conditions": {
+      "x1_shift": "F_k(x1+1,x2,y1,y2)=exp(2*pi*i*(-k1*y1-k2*y2))*F_k(x1,x2,y1,y2)",
+      "x2_shift": "F_k(x1,x2+1,y1,y2)=exp(2*pi*i*(k1*y2-k2*y1))*F_k(x1,x2,y1,y2)",
+      "y1_shift": "F_k(x1,x2,y1+1,y2)=F_k(x1,x2,y1,y2)",
+      "y2_shift": "F_k(x1,x2,y1,y2+1)=F_k(x1,x2,y1,y2)"
+    }
+  },
+  "mode_sector_conclusions": {
+    "central_zero_sector": {
+      "label": "k=(0,0)",
+      "ordinary_torus_fourier_modes_on_x1_x2_y1_y2": true,
+      "reason": "all twist multipliers become one"
+    },
+    "nonzero_central_sectors": {
+      "label": "k != (0,0)",
+      "ordinary_torus_fourier_modes_on_x1_x2_y1_y2": false,
+      "required_basis_type": "theta/magnetic or finite-element functions satisfying the twisted base conditions",
+      "reason": "x1 and x2 shifts carry y-dependent phase multipliers"
+    }
+  },
+  "finite_basis_implication": {
+    "spectral_route": "Choose finite central labels k and, for each k, functions F_k,n satisfying the twisted base conditions; only k=(0,0) admits ordinary T4 Fourier modes.",
+    "finite_element_route": "On the unit six-cell, impose g1..g6 boundary identifications directly; after central decomposition, impose the above twisted four-dimensional boundary constraints for each k.",
+    "bundle_route": "A bundle-valued basis must combine these scalar constraints with s(gamma*z)=rho_E(gamma,z)s(z)."
+  },
+  "what_this_closes": {
+    "six_scalar_deck_equations": true,
+    "central_character_integer_labels": true,
+    "twisted_base_conditions": true,
+    "torus_fourier_guardrail": true,
+    "spectral_and_finite_element_filter": true
+  },
+  "still_open": {
+    "MTT_selection_or_source_confirmation_of_Gamma0": true,
+    "finite_selected_scalar_label_set": true,
+    "explicit_theta_or_magnetic_basis_functions_for_nonzero_k": true,
+    "finite_element_mesh_and_constraints": true,
+    "bundle_transition_matrices_rho_E": true,
+    "selected_D_E_action_on_filtered_basis": true,
+    "Gram_matrix_entries": true,
+    "stiffness_matrix_entries": true,
+    "three_family_gap_error_certificate": true
+  },
+  "guardrails": {
+    "claims_Gamma0_is_MTT_selected": false,
+    "claims_selected_scalar_basis_constructed": false,
+    "uses_ordinary_torus_fourier_modes_for_nonzero_central_character": false,
+    "claims_bundle_transitions_constructed": false,
+    "claims_selected_D_E_constructed": false,
+    "claims_Galerkin_matrices_constructed": false,
+    "claims_kernel_dimension_three_now": false,
+    "claims_full_sm_closure": false
+  },
+  "verdict": {
+    "closes_scalar_mode_admissibility_filter": true,
+    "closes_selected_scalar_modes": false,
+    "next_step": "Either select a finite central-label/basis family satisfying the filter, or instantiate finite-element constraints on the six-cell, then combine with rho_E and selected D_E."
+  }
+}

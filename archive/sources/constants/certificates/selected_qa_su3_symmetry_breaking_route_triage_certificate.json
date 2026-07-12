@@ -1,0 +1,133 @@
+{
+  "certificate": "SelectedQaSU3SymmetryBreakingRouteTriage",
+  "closed_now": {
+    "equal_radius_constants_import_rejected_as_target_wall": true,
+    "finite_dotD_response_validator_ready": true,
+    "m_label_to_q_label_conditional_map_formulated": true,
+    "orientation_dependencies_compared": true,
+    "source_vector_and_horizontal_response_gates_ready": true,
+    "target_wall_dictionary_imported": true,
+    "target_wall_requires_r1_over_r2_sqrt2": true
+  },
+  "de_dotd_route": {
+    "branch_packets": [
+      {
+        "branch": "current_q79_orientation",
+        "conditional_su5_transport_orientation": "F",
+        "global_cp_label": 79,
+        "sector_orientations": {
+          "H": 0,
+          "L": 1,
+          "N": 2,
+          "Q": 1,
+          "d": 2,
+          "e": 2,
+          "u": 2
+        },
+        "torsion_label_m": 1
+      },
+      {
+        "branch": "conjugate_q369_orientation",
+        "conditional_su5_transport_orientation": "F*",
+        "global_cp_label": 369,
+        "sector_orientations": {
+          "H": 0,
+          "L": 2,
+          "N": 1,
+          "Q": 2,
+          "d": 1,
+          "e": 1,
+          "u": 1
+        },
+        "torsion_label_m": 2
+      }
+    ],
+    "dotd_supported_format": {
+      "dotd_response_slots": "Q,u,d,L,e,N,H entries",
+      "horizontal_gauge": "P dotPsi_i = 0 and <psi_j,dotPsi_i>_G = 0",
+      "linearized_zero_mode_equation": "A dotPsi_i + source_i = 0",
+      "operator_definition": "A = G^{-1} K, where G is the finite Gram matrix and K is the stiffness matrix",
+      "response_equation": "dotPsi_i = - R source_i = - R Q dotD_alpha1 psi_i",
+      "slot_fields": "kind, expected_kernel_dimension, dimension, gram_matrix, stiffness_matrix, riesz_projector, complement_projector, reduced_green_operator, dotD_alpha1_matrix, ordered_zero_mode_basis, source_vectors, horizontal_response_vectors",
+      "source_equation": "source_i = Q dotD_alpha1 psi_i",
+      "source_flags": "selected_dotD_source_verified, alpha1_driver_verified, green_operator_verified, and horizontal_gauge_verified must be true"
+    },
+    "dotd_validator_status": "IWASAWA_DOTD_RESPONSE_VALIDATOR_FORMULATED_DATA_OPEN",
+    "first_missing_data": "selected orientation-carrying D_E/dotD operator package",
+    "selection_contract": {
+      "must_bind_m_to_global_cp_label": {
+        "m=1": 79,
+        "m=2": 369
+      },
+      "must_bind_sector_orientations_to_D_E_domains": true,
+      "must_feed_existing_D_E_dotD_validators": true,
+      "must_select_exactly_one_torsion_label_m": [
+        1,
+        2
+      ],
+      "must_verify_dotD_is_same_branch_derivative": true
+    }
+  },
+  "guardrails": {
+    "claims_equal_radius_selects_target": false,
+    "claims_full_SM_closure": false,
+    "claims_pic0_resolved": false,
+    "claims_selected_DE_or_dotD_constructed": false,
+    "claims_target_wall_selected": false,
+    "claims_unique_m_label_now": false,
+    "uses_observed_cp_sign_or_masses": false
+  },
+  "honest_answer": "The cleanest next route is not another finite quotient search. The equal-radius wall import is ruled out as the target selector, while the D_E/dotD route has an executable validator and a precise source packet to fill.",
+  "inputs": {
+    "previous_integral_lift_gap": "certificates\\selected_qa_su3_valpha_s3_integral_lift_gap_import_certificate.json",
+    "q79_dotd_response_validator": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\iwasawa_dotd_response_validator_certificate.json",
+    "q79_gauduchon_wall_gate": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\selected_gauduchon_wall_radius_gate_certificate.json",
+    "q79_orientation_de_dotd_bridge": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\iwasawa_orientation_de_dotd_bridge_certificate.json",
+    "q79_selected_radius_import_nogo": "C:\\Users\\nero_\\Downloads\\TEXPAPERS\\mtt-q79-proof-repro\\certificates\\visible_rank2_l2_selected_radius_import_nogo_certificate.json"
+  },
+  "not_closed": {
+    "actual_selected_dotD_response": true,
+    "full_SM_closure": true,
+    "selected_dotD_same_branch_derivative": true,
+    "selected_or_quotiented_Pic0_character": true,
+    "selected_orientation_carrying_D_E": true,
+    "source_certified_r1_over_r2_sqrt2_wall": true,
+    "unique_m1_vs_m2_selection": true
+  },
+  "route_ranking": [
+    {
+      "next_template": "certificates\\selected_qa_su3_orientation_carrying_de_dotd_source.template.json",
+      "rank": 1,
+      "reason": "It can in principle break both the m=1/m=2 conjugate fork and the visible target-vs-swapped source ambiguity, and the finite dotD response validator is already formulated.",
+      "route": "selected_orientation_carrying_D_E_dotD",
+      "status": "PRIMARY_LIVE_ROUTE_SOURCE_OPEN"
+    },
+    {
+      "rank": 2,
+      "reason": "The target wall requires r1:r2=sqrt(2):1, while current selected radius imports are equal-horizontal and leave target and swapped degenerate.",
+      "route": "non_equal_radius_gauduchon_wall",
+      "status": "LIVE_BUT_CURRENT_CORPUS_BLOCKED"
+    },
+    {
+      "rank": 3,
+      "reason": "The ordinary integral V_alpha L^2 automorphy model and h1=8 packet exist. The remaining failure is not cohomology existence; it is a source-selector theorem that must break target-vs-swapped and Pic0 degeneracy.",
+      "route": "ordered_integral_cech_automorphy_source",
+      "status": "LIVE_AS_SOURCE_CERTIFICATE_GAP"
+    },
+    {
+      "rank": 4,
+      "reason": "A Pic0 rule is required, but by itself it does not select the target branch or provide D_E/dotD operator data.",
+      "route": "holonomy_sensitive_pic0_rule_only",
+      "status": "NECESSARY_BUT_NOT_SUFFICIENT_ALONE"
+    }
+  ],
+  "status": "QA_SU3_SYMMETRY_BREAKING_TRIAGE_DE_DOTD_PRIMARY_WALL_OPEN",
+  "wall_route": {
+    "constants_import_condition": "p1:p2=1:1, equivalently r1=r2",
+    "constants_matches_target_wall": false,
+    "constants_no_go_theorem": "The closed constants selected radius cannot be the visible L2 target-wall selector.",
+    "target_p_ratio": "1:2",
+    "target_radius_condition": "r1:r2 = sqrt(2):1",
+    "target_selects_unique_negative": true
+  }
+}
