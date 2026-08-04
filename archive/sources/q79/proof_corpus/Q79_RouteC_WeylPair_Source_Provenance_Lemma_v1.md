@@ -15,8 +15,8 @@ as source selection.
 ## Repo Snapshot
 
 - `q79`: `omitted-current-repo-head-for-reproducibility` dirty=`False`
-- `gr`: `1dc67ca Reanchor long PhiFin source cutsets` dirty=`False`
-- `sm_parity`: `34810e5 Refresh verification report after kernel rows` dirty=`False`
+- `gr`: `bb2de60 Refresh proto-spinor quantum gravity proof chain` dirty=`False`
+- `sm_parity`: `a0c2bf2c Certify q79 all-76 hub and A-handle frontier` dirty=`True`
 
 ## Support Reductions
 

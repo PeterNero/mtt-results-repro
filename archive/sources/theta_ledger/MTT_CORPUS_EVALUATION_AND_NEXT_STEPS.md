@@ -1,5 +1,15 @@
 # MTT Corpus Evaluation and Next Steps
 
+> **Superseded status note (2026-07-15).** This May 17 dependency-spine
+> evaluation predates the A01-A135 repository results and the full revision
+> ledger. Use `MTT_CORPUS_REVISION_UPDATE_LEDGER_2026-07-11.md` for paper-level
+> correction status and
+> `MTT_FOUNDATIONAL_GEOMETRY_RECONCILIATION_2026-07-15.md` for the current
+> world-in-world, `3 x 3`, `4+6`, shared-circle, Lens-Nil, and q79/Fu-Yau
+> geometry decision. In particular, the statements below that call CLN or ten
+> dimensions uniquely forced are no longer current without their additional
+> hypotheses.
+
 Date: 2026-05-17
 
 Scope: I indexed the larger MTT vault at
@@ -307,4 +317,3 @@ The big opportunity is also the big risk:
 If you can do that, the program becomes dramatically stronger. If you cannot,
 the corpus still has value as a structural/projection framework, but the claim
 of closed Standard Model derivation should be withdrawn.
-

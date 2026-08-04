@@ -21,6 +21,62 @@ Run:
 python scripts\verify.py
 ```
 
+For the current GR/QG frontier replay, run:
+
+```powershell
+python scripts\verify_qg_actual_dg_frontier.py
+```
+
+The primary compatible UV route is now selected as q79/Fu-Yau heterotic string
+inheritance. Fixed-genus ultraviolet finiteness is a closed conditional
+theorem. The finite worldsheet layer is exact: all 81 `F_3^2` torsion sectors
+pass modular phase covariance, reduce to seven modular orbits, have selected
+twisted algebra `Mat_3(C)` with one dimension-three projective module and
+topological torus index one, and satisfy the seven-seed stabilizer/induction
+theorem. The target-space row is now partial rather than empty: an explicit
+smooth degree-two K3 has an exact `U(1)^2` incidence GLSM whose divisor ring
+emits `delta=H-L`, `delta^2=-4`, the rank-one Fu-Yau pair `(delta,0)`, and the
+reference allocation `9+11+4=24`, while preserving the untwisted shared circle.
+The local torsion anomaly is now exact:
+`A=2(1,-1)(1,-1)^T`, cancelled by integral rows `M=(1,-1)`,
+`N=(4,-4)` at `k^2=2`, with the shared second circle unshifted. An
+anomaly-equivalent rank-12 Fermi monad with `c1=0,c2=20` exists. Two exact
+no-gos isolate the physical remainder: the incidence Picard lattice cannot
+split this into line-monad sectors with odd `c2=9,11`, and a standard pullback
+TLSM bundle has `c3=0`, so it cannot realize the topological three-family
+target `c3=+/-6`. A new Gysin/Postnikov clutching theorem closes the apparent
+topological compatibility gap: `H.delta=0` defines a primitive mixed class
+`u=Hhat cup t`, and smooth non-pullback `SU(3)` mapping-torus bundles realize
+`c2=9u,c3=+/-6` simultaneously. On the selected rank-one Fu-Yau complex
+structure, `u=(i/2)Theta wedge conjugate(Theta) wedge H` is a closed integral
+`(2,2)` representative and the orientation class is `(3,3)`. Thus the target
+also passes the necessary Hodge-type test. This is not yet a selected
+holomorphic/HYM bundle. The same-carrier twisted spectral or non-Abelian
+current-algebra route is now sharply resolved. On the twisted-spectral route,
+all 90 continuous root tubes and local Picard-Lefschetz monodromies, both
+handle transports, the global integral surface relation, and the exact
+92-column integral `H2` presentation are closed. The floating `8 x 92` period
+table and exact effective `Z^90` quotient are also closed. A177-A206 certify all
+71 weighted `E32` thimble intervals with L1 weight 123. A207 applies the frozen
+A130/A131 canonical orientations, closes the integer-weighted interval, and
+proves an E32 residual lower bound `0.0016980843713102275`. Thus the frozen
+height-four carrier is rejected; the interval queue must not be restarted.
+Another selected carrier, the inverse-gerbe sheaf, physical non-pullback bundle, differential
+Bianchi representative, exact IR `(0,2)` SCFT, seven tau-dependent seed
+characters, GSO/factorization, q79 BV vertices, all-genus control, and a
+nonperturbative definition remain open.
+
+Controlling UV artifacts:
+
+- `proof_corpus/q79_Heterotic_String_UV_Inheritance_Theorem_and_Worldsheet_Cutset_v1.md`
+- `proof_corpus/q79_F3x2_Discrete_Torsion_Modular_Orbit_Theorem_v1.md`
+- `proof_corpus/q79_Twisted_Group_Algebra_and_Finite_Topological_Character_Theorem_v1.md`
+- `proof_corpus/q79_Seven_Seed_Modular_Induction_and_Stabilizer_Theorem_v1.md`
+- `proof_corpus/q79_Degree2_K3_FuYau_Torsion_GLSM_Base_Theorem_v1.md`
+- `proof_corpus/q79_Aggregate_TLSM_Anomaly_and_Odd_Bundle_Monad_NoGo_v1.md`
+- `proof_corpus/q79_Shared_Circle_Clutching_C2_C3_Independence_and_Holomorphic_Cutset_v1.md`
+- `proof_corpus/q79_Standard_TLSM_Pullback_Chirality_NoGo_and_Twisted_Exit_v1.md`
+
 The verifier builds:
 
 - `certificates/protospinor_gr_response_dependency_certificate.json`
@@ -230,15 +286,19 @@ Closed now:
 - The corrected closure-strain route now has its algebraic tensor backbone:
   a local `3 x 3` strain decomposes into gauge rotations, scalar trace, and STF
   tensor directions; transversality leaves the two TT plus/cross modes.
-- The selected TT Hessian form is closed up to one positive scale:
-  `H_TT = kappa_STF I_2`, with `kappa_STF > 0`, by transverse covariance and the
-  positive anchored quadratic normal form.
-- That positive scale is tied to the Einstein-Hilbert normalization, not a new
-  independent parameter: `kappa_STF = (32*pi*G_eff)^(-1) = V_int/(32*pi*G_10)`
-  in the repository's TT quadratic-action convention.
+- Under the stated covariance and nondegenerate-stability hypotheses, the TT
+  Hessian form is scalar and patches globally on the helicity bundle:
+  `H_e = kappa_e Id_E`, with `kappa_e > 0`. This closes the form, not the MTT
+  source of those hypotheses or its numerical scale.
+- The explicit metric source distinguishes two coefficients. Since
+  `e=(1/2)log G` and `h=delta G=2e`, Hessian transport gives
+  `H_h=(kappa_e/4)Id_E`. Define `kappa_h=kappa_e/4`; the repository's
+  Einstein-Hilbert convention is `kappa_h=(32*pi*G_eff)^(-1)`, while
+  `kappa_e=(8*pi*G_eff)^(-1)`. Older `kappa_STF` rows using `1/(32*pi*G_eff)`
+  are metric-coordinate rows.
 - The non-SM constants repo supplies a bridge for canonical internal action
   units: `alpha_int=1`, `G10_int=1`, `G_eff,int=1/Vol_int`, and
-  `kappa_STF,int=Vol_int/(32*pi)`. This carries the GR normalization home in
+  `kappa_h,int=Vol_int/(32*pi)`. This carries the metric-coordinate GR normalization home in
   internal units while preserving the physical absolute-normalization block.
 - The selected internal scale lift is imported from the non-SM constants repo:
   `R_star=4.440528182269818`, `rho_UV=0.164530397543639`, and
@@ -2455,4 +2515,637 @@ Next:
 
 ```text
 Selected_U1Y_RouteC_HYM_Projector_Source_Payload_Fill_v1
+```
+
+## July 2026 Actual Metric-Source Reconciliation
+
+The earlier `SelectedCoreB0TTSourceTheorem.v1` is superseded as an
+unconditional source proof. Its canonical packet correctly verified the finite
+support algebra, but the packet itself remained `SOURCE_ACCEPTANCE_OPEN`; a
+later Boolean acceptance did not independently compute `DG(Psi_*)`.
+
+The current frontier now uses displayed nonlinear maps. First, an exact
+`S3`-equivariant opposite-edge isometry sends the q79
+`(O direct-sum A0) direct-sum A` carrier to `Sym(3,R)` without globally ordering
+the sheets. On the orientation-fixed polar slice it defines
+
+```text
+Q(f)=exp(Jf),
+G(f)=Q(f)^T Q(f)=exp(2Jf),
+DG(0)=2J.
+```
+
+Second, on the exact `Z64` helicity-2 realization,
+
+```text
+S(psi)=<c2,psi>e_plus+<s2,psi>e_cross,
+G(psi)=exp(2S(psi)).
+```
+
+Direct differentiation gives
+
+```text
+DG(0)^*e_plus=2c2,
+DG(0)^*e_cross=2s2,
+Pi_exact64 DG(0)^*P_TT=DG(0)^*P_TT.
+```
+
+Thus exact support is closed for this explicit zero-fit realization. The
+literal metric derivative has `C=2I2`; `C=I2` belongs to the half-log
+metric/closure-strain coordinate. The internal selected pole remains at `15`;
+the factor changes residue rather than support or pole location.
+
+This historical frontier is superseded by the later global bundle and
+full-monodromy results. A literal internal/external line identity is impossible,
+and the correct physical target is the covariant associated helicity bundle.
+On the unique minimal full-monodromy q79 root stack, the exact source is
+
+```text
+Phi_q79(psi)=<c2,psi>(1/sqrt(2),-1/sqrt(2),0;0,0,0)
+             +<s2,psi>(0,0,0;0,0,1),
+S=J Phi_q79,
+Q_WW=exp(S),
+G=exp(2S),
+DG(0)=2J Phi_q79.
+```
+
+The plus row is the rank-two diagonal-shape lane and the cross row is the
+rank-three shear lane. This closes the selected-branch q79/`Z64`-to-`Q_WW`
+source realization uniquely up to polarization, frame, and diffeomorphism
+gauge, with zero fitted physical parameters. The later primitive-selection
+cutset proves that the current abstract axioms do not choose this branch; the
+single discrete axiom `A_QG` does so with zero continuous knobs. The finite
+projected `2x2` TT Hessian and the two-derivative TEGR/Einstein action are now
+closed at their declared tier. The actual inverse-Fourier-Mukai/balanced-HYM
+bundle is an optional stronger continuum completion. One effective
+Newton/Planck normalization remains necessary. Stress has no independent
+gravitational coefficient after shared-action selection.
+
+Controlling artifacts:
+
+```text
+q79_S3_Strain_Intertwiner_and_Local_Q_Source_v1
+World_in_World_Z64_Metric_Source_Map_v1
+q79_Cubic_Norm_and_Full_Monodromy_RootStack_Strain_Bridge_v1
+Selected_q79_Z64_to_QWW_Source_Factorization_v1
+q79_Spectral_HYM_to_RootStack_Strain_Symbol_Bridge_v1
+QG_Actual_DG_Source_Frontier_Synthesis_2026-07-15
+scripts/verify_qg_actual_dg_frontier.py
+```
+
+## July 2026 Same-Circle Z2 Reduction
+
+The first remaining metric-source compatibility clause is now an exact bundle
+and finite-character problem. After pulling the internal q79 shared line and
+the physical transverse weight-one line to a common correspondence base,
+
+```text
+L_sh^2 ~= L_perp^2
+```
+
+holds precisely when their mismatch
+
+```text
+D=L_sh tensor L_perp^(-1)
+```
+
+is an order-two flat line. The exact `Z64` calculation gives
+
+```text
+ker(chi_2)={0,32},
+chi_1^2=chi_33^2=chi_2,
+chi_33/chi_1=chi_32.
+```
+
+Thus TT/helicity two cannot choose a root. Every even-weight representation is
+blind to `chi_32`, while every odd-weight representation detects it. The local
+q79 `Dic_3` center, terminal spinorial return, and ambient Majorana two-torsion
+have the same abstract `Z2` representation type, but the corpus does not yet
+identify them as one geometric line or holonomy.
+
+This reduces the next source task to one explicit cutset: construct the common
+pullback base, compute the q79 global relator signs/`w2`, emit the shared-circle
+differential character, identify the central kernels, and select an odd source
+or a valid SpinC determinant line. The selected action and branch/HYM
+globalization clauses remain open.
+
+Controlling artifacts:
+
+```text
+Same_Circle_Weight2_Bundle_Obstruction_and_Z2_Lift_Theorem_v1
+ProtoSpinor_OddWeight_Lift_Selector_or_SpinC_Dichotomy_v1
+certificates/same_circle_weight2_bundle_obstruction_certificate.json
+certificates/protospinor_odd_weight_lift_selector_dichotomy_certificate.json
+```
+
+The q79 signed-sheet obstruction has also been computed. If `a` is the
+sign/discriminant class of the sheet monodromy, restriction to a transposition
+shows
+
+```text
+w2(E_rho_plus)=a cup a.
+```
+
+Equivalently, strict Spin exists on the branch complement exactly when the
+sign character lifts from `Z2` to `Z4`. The spectral branch divisor has class
+`6H`; the result follows both from the dual sextic of the plane cubic and from
+the independent ramification intersection `R.pi^*H=12`.
+
+For the exact identity-alignment q79 test carrier, the K3 sextic pulled to the
+normalization of the dual cubic has an irreducible square-free degree-36 norm.
+This proves that its branch divisor is reduced and irreducible, its complement
+has `H1=Z6`, and strict Spin is obstructed. The source packet marks identity
+alignment as unselected, but that formerly open membership test has now also
+been executed on the A125/A126 selected-side alignment interval. An Arb/ACB
+resultant enclosure excludes zero throughout the interval, with absolute lower
+bound about `5.37e364`. Therefore its branch remains reduced and irreducible,
+its complement has `H1=Z6`, and strict Spin is obstructed on the current
+executed selected-side carrier.
+
+The signed-sheet representation nevertheless has an exact representation-level
+`SpinC(3)` lift. The generators `[q1,i]` and `[q2,i]` satisfy the `S3` relations,
+generate order six, and have determinant character equal to sheet sign. The
+finite shared-circle determinant bridge is also exact and root-independent:
+`Hom(Z6,Z64)` has only the generator images `0,32`, and on the unique nontrivial
+map both `chi_1` and `chi_33` restrict to sheet sign, while `chi_2` and their
+ratio restrict trivially. Thus either admissible shared-circle root gives the
+same SpinC determinant flat line, with no root choice or fitted parameter.
+
+The remaining physical task is to establish the connection-level
+transverse-line comparison on a selected common base and select a compatible
+ramification/HYM carrier and action. The input packet still has
+`integral_branch_selected=false`; no final integral/gerbe source selection is
+claimed.
+
+The finite same-source map and a concrete ramification carrier are now also
+available. The only homomorphisms `S3->Z64` are the trivial map and the map
+sending every transposition to `32`; the nontrivial SpinC determinant forces the
+latter. Its determinant connection is flat and therefore HYM on the branch
+complement. Ordinary smooth extension across the branch is impossible because
+the meridian holonomy is `-1`.
+
+An interval resultant against the elliptic three-division polynomial proves
+that the selected branch avoids all nine flexes. Together with the square-free
+degree-36 norm, Riemann--Hurwitz gives normalization genus `19`; `[B]=6H` gives
+arithmetic genus `37`, so the full delta budget `18` is exhausted by exactly
+eighteen lifted ordinary cusps. Resolving each cusp and taking the order-two
+root stack along the odd-multiplicity components produces an explicit smooth
+resolved flat-HYM determinant carrier.
+
+The order-two carrier is not the complete `S3` sheet carrier. The intrinsic
+cubic-algebra map is
+
+```text
+J(a,b)(x,y)=Tr_A(a*x*y)+D^2 N_A|_b(x,y)/sqrt(2),
+det(J_flat)=(-Disc)^3.
+```
+
+It is naturally unique on the unbranched locus, but the simple branch model
+has rank three and Smith valuations `(0,0,0,1,1,1)`. Thus a coarse rank-six
+extension is closed no-go. Newton-Puiseux analysis on the resolved cusp gives
+full monodromy root orders `(2,3,2,1)` on the strict transform, `E1`, `E2`, and
+`E3`. The order-two construction is exactly the sign/determinant substack; the
+full carrier additionally needs the order-three root on `E1`. On this unique
+minimal full-monodromy root stack, `J` is a rank-six isometric parallel bundle
+isomorphism and the finite orthogonal connection is flat orbifold HYM. The
+strict same-source rank-preserving continuation is therefore closed. Primitive
+MTT selection of this Lorentzian branch and its selected action remain open.
+
+The Fourier-Mukai relation is now corrected rather than left as a vague
+connection identity. On the unramified spectral locus, three eigenlines give
+
+```text
+Herm(V)=D direct-sum S direct-sum K,
+dim_R(D,S,K)=(3,3,3).
+```
+
+`D` contains the three diagonal sheet modes, `S` the three real symmetric
+unordered-edge modes, and `K` the three imaginary orientation modes. Thus
+`D direct-sum S` is exactly the q79 six-lane strain symbol and has normalized
+fiber overlap `I6`. The shared central circle cancels in conjugation; relative
+phases rotate each edge strain into its orientation partner.
+
+This is a sheet/Weyl-symbol bridge, not an equality of full connections. A
+flat finite-monodromy root-stack connection cannot equal a visible `SU(3)` HYM
+connection with nonzero Chern data. In particular, the conditional q79 value
+`c2(V)=9` gives `p1(V_R)=-2c2(V)=-18`. The literal full-connection identity is
+therefore closed no-go on such a realization. The honest remaining calculation
+comes after gerbe selection, inverse Fourier-Mukai local freeness, and balanced
+HYM: compute the standard-isotypic symmetric block
+
+```text
+H_std=[[h_DD,h_DE],[h_DE,h_EE]]
+```
+
+and prove `h_DE=0`, `h_DD=h_EE>0`. This is the dynamic operator target; the
+algebraic overlap metric is already closed.
+
+The algebraic symmetry route to those equalities is now also closed. The
+unique positive `S3`-equivariant sheet-to-opposite-edge complement map defines
+
+```text
+J_DE(d,e)=(-e,d),
+J_DE^2=-I6.
+```
+
+For a real self-adjoint `S3`-equivariant Hessian, adding commutation with
+`J_DE` reduces the commutant from six coefficients to two and forces
+
+```text
+H_std=kappa_standard I2.
+```
+
+Thus `h_DE=0` and `h_DD=h_EE>0` follow once this quarter-turn is selected as a
+symmetry of the actual HYM functional. The same abstract order-four matrix
+occurs on the Fu-Yau Chern-pair plane. A single rank-one Chern branch has an
+exact order-four no-go; the minimal parent is the four-branch orbit
+`(delta,0),(0,delta),(-delta,0),(0,-delta)`. The shared `Z64` supplies this
+parent action exactly: its unique order-four subgroup is
+`C4=<16>={0,16,32,48}`, and both odd roots restrict as
+`chi_1(16m)=chi_33(16m)=i^m`.
+
+That parent action does not by itself scalarize a chosen branch. The exact
+covariant family `H_m=J_DE^m H_0 J_DE^-m`, with
+`H_0=diag(I3,2I3)`, retains all six Hessian coefficients and has
+`[H_0,J_DE]` nonzero. Thus free-orbit covariance is not one-branch invariance.
+If the four orientations are instead autonomous Lens redundancy and the HYM
+operator descends branch-independently, scalarization follows conditionally.
+
+The direct square-theta shortcut is also closed no-go. On the trial square
+cubic, `U_theta=diag(-1,i,1)` is exact, but its adjoint on `Herm(3)` has
+eigenspace inventory `3+2+4`; the `J^2=-1` sector is four-dimensional, not six,
+and `D direct-sum S` mixes into `K` with rank two. No basis change can make it
+the required `J_DE`.
+
+The nontrivial common-source functor is now constructed on the flat symbol.
+For the sheet bundle `E_D`, `Lambda^2 E_D=sign tensor E_D`; twisting by the
+shared SpinC determinant sign gives the unordered-edge bundle
+`E_S=det(E_D) tensor Lambda^2 E_D`. Tensoring `E_D` with the realified odd-root
+`C4` plane and using the unique positive opposite-edge map induces exactly
+`J_DE=[[0,-I3],[I3,0]]`. It commutes with all sheet holonomy and is global and
+parallel on the minimal root-stack strain symbol, with no parameter or root
+choice. No direct unital `Herm(3)` adjoint can realize full `J_DE`, since such
+an adjoint fixes the identity while `J_DE` sends trace to edge-sum.
+
+The ordinary bundle-functor extension is now closed no-go. Dual and
+exterior-square transport preserve the trace-free `SU(3)` HYM equations, but
+their exact `Herm(3)` action preserves `D`, `S`, and `K` separately rather than
+exchanging `D` with `S`; it cannot equal `J_DE`. Duality also sends `c3` to
+`-c3`, so a nonzero-`c3` chiral branch cannot be complex-linearly self-dual.
+
+The remaining constructive routes are therefore: construct a genuinely
+nonlocal same-branch Fourier-Mukai autoequivalence and pass the emitted 11-row
+kernel/`Ext1`/Hessian contract (currently `2/11` rows available), or compute the
+projected HYM block directly.
+
+The shared circle closes the Lens shortcut in the current realization. For
+`X=P_delta x S1_shared`, the quarter-turn exchanges the twisted circle with the
+marked shared untwisted circle. The marked stabilizer has no order-four
+element, and the existing `c3=+/-6` bundle clutches specifically along
+`S1_shared`. Autonomous `C4`/Lens descent is therefore closed no-go for the
+marked setup. An unmarked modular reformulation remains possible only as a new
+construction with a `0/5` marking/clutching/HYM/Hessian descent contract.
+
+The surviving central `C2` closes a different question exactly. The unique
+q79 sheet-sign map sends a transposition to `32 in Z64`, so either odd shared
+root executes `+1,-1,+1`, while the weight-two metric executes `+1,+1,+1`.
+On the minimal odd-plus-even carrier, the canonical operators `D=1-g` and
+`N=1+g` fold into an acyclic square-zero differential. This is a zero-parameter
+Circle-Lens-Nil complex at the finite operator tier, not a literal CLN product.
+
+At the displayed zero source, `Q_WW=I` and the canonical inertial coframe is
+exactly Minkowski with zero torsion, TEGR scalar, Riemann curvature, and
+Einstein tensor. Double return does not select this point: the nonidentity TT
+metric `diag(4,1/4,1)` is also fixed by the half-turn. Dynamic zero-defect
+selection and `Lambda_eff=0` remain open, and flat spacetime is not absence of
+time or space.
+
+Setting `Lambda_eff=0` still does not select Minkowski. The exact metric
+`ds^2=(x^2-y^2)du^2-2du dv+dx^2+dy^2` has zero Ricci and Einstein tensors but
+nonzero plus-polarized Riemann components `R_uxux=-1`, `R_uyuy=+1`; its null
+coframe also has nonzero anholonomy. Vacuum Einstein/TEGR dynamics therefore
+leave curved gravitational waves. The flat-vacuum frontier is a strict `0/5`
+state/boundary contract or a selected positive defect functional with a unique
+zero-source ground state.
+
+A literal global identity between the internal flat line and the physical
+helicity line is now ruled out: restricting to the momentum sphere gives Chern
+numbers `0` and `-4`. The correct replacement is an associated-bundle source.
+The real `k=2/k=62` Fourier plane is exactly the restriction of the continuous
+`SO(2)` weight-two representation, so associating it to the oriented transverse
+frame bundle produces the nontrivial helicity bundle. The global projector
+
+```text
+T_n(S)=P_n S P_n-(1/2)tr(P_n S P_n)P_n
+```
+
+is rank two, transverse, trace-free, and `SO(3)`-equivariant. It recovers the
+local plus/cross rows and globalizes the constructed `DG` while preserving exact
+finite support and internal `lambda=15` fiberwise for the gapped `d_*`
+component.
+
+The global TT Hessian and pole classification are now sharper. The symmetric
+weight-two commutant is one-dimensional, and the exact Fierz-Pauli coefficient
+system has rank four with null vector `(1,-1,1,1,-1)` under the four declared
+action hypotheses. But the computed `lambda=15` propagator values are
+
+```text
+Delta_metric(0)=4/15 I,
+Delta_strain(0)=1/15 I.
+```
+
+They are finite, so the pure `d_*` carrier is closed no-go as the physical
+massless graviton pole. A positive spectral massless channel requires a
+coherent internal zero-mode atom. The external associated bundle carries
+helicity two, so this zero-mode factor is topologically consistent; the
+`lambda=15` mode remains a gapped correction/suppression channel.
+
+That atom is now constructed geometrically on the active q79 Fu-Yau branch.
+Since `X6_q79=P_delta x S1_shared`, with `P_delta` a circle bundle over
+connected K3, the internal space is connected. Its scalar harmonic kernel is
+therefore exactly the normalized constant line
+
+```text
+phi_0=Vol(X6_q79)^(-1/2).
+```
+
+Tensoring `phi_0` with the global `E_TT` bundle gives an isometric source row
+whose compressed resolvent is exactly `E^(-1)Id_E_TT`. Thus the internal pole
+residue is one without a fit. The physical metric residue remains
+`kappa_h^(-1)Id_E_TT`; selecting `kappa_h` and proving that one action fuses
+this row with the `lambda=15` correction remain open.
+
+There is also a controlling ultraviolet no-go. Positive Stieltjes spectral
+density with massless residue `r0>0` implies `Delta(E)>=r0/E`, which is
+incompatible with permanent Gaussian suppression `C exp(-tau E)/E` at large
+`E`. The positive-spectrum massless route therefore reopens the all-loop UV
+claim and treats proper-time damping as removable coarse graining unless a
+different, fully proved nonlocal unitarity framework is supplied. Selection by
+a Lorentzian action, zero/gap channel fusion, one effective `kappa_h` scale,
+`Lambda_eff`, and a consistent UV completion remain open.
+
+The classical action reduction is now one step tighter. The declared real
+`C^3` closure functional makes its finite Hessian self-adjoint by symmetry of
+second derivatives. If MTT promotes the computed metric response through one
+real local diffeomorphism-natural spacetime action with at most second-order
+infrared metric equations, the existing Fierz-Pauli result and the
+four-dimensional Lovelock classification uniquely fix the nonlinear
+Einstein-Hilbert dynamics, up to `Lambda`, boundary terms, and topological
+densities. Shared-metric variation then gives
+
+```text
+G_mn+Lambda g_mn=(4 kappa_h)^(-1)T_mn=8 pi G4 T_mn,
+kappa_h=1/(32 pi G4).
+```
+
+Thus stress has no independent gravitational normalization beyond `kappa_h`.
+There is also an exact scale obstruction: the closed q79 topology, normalized
+rank-one zero mode, and unit internal residue survive
+`g_X -> r^2 g_X`, while `V6` and `kappa_h` scale as `r^6`. These data alone
+cannot predict numerical Newton coupling. One effective normalization
+`V6/G10`, or an equivalent dimensionful primitive after selecting the
+dimensionless ratio, is necessary. This retains Theta IV's one-normalization
+insight and retires its obsolete `31.8 R1^3` product-volume formula.
+
+The direct classical-action exit now has an exact closure-anholonomy
+construction. An algebraic `J(S)` cannot supply the massless spin-two kinetic
+term because its coframe Hessian has order-zero principal symbol, whereas the
+Fierz-Pauli block has symbol `kappa_h p^2 P_TT`. Literal non-closure is instead
+the coframe torsion `T^a=d theta^a+omega^a_b wedge theta^b`. In the independent
+quadratic torsion basis, the unique Einstein-equivalent vector is
+
+```text
+T_TEGR=(1/4)I1+(1/2)I2-I3,
+e R(LC)=-e T_TEGR+2 partial_mu(e T^mu).
+```
+
+Thus the TEGR bulk action is exactly Einstein-Hilbert and gives all classical
+Einstein equations with no new dimensionless numerical parameter. The local
+`Q_WW` source supplies a spatial-triad candidate. The constitutive vector is
+now selected directly by pure-frame neutrality: the general coefficients obey
+
+```text
+2c1+c2+c3=0,
+-4c1+2c2=0,
+(c1,c2,c3)=lambda(1/4,1/2,-1).
+```
+
+The constraint matrix has exact rank two, the TEGR pure-frame symbol vanishes,
+and the boundary identity proves nonlinear metric descent.
+
+The strict same-source theorem now closes the neutrality clause on the current
+candidate branch. The selected map is
+
+```text
+psi -> S(psi) -> Q=exp(S) -> G=Q^T Q.
+```
+
+The exact differential of `r(Q)=Q^T Q` has rank six and a three-dimensional
+skew kernel, while the selected source has zero orientation coordinates.
+The metric observable itself is canonical once `Q_WW` is given: the declared
+Euclidean metric on `TI` induces the unique pullback
+
+```text
+G_Q(v,w)=delta_I(Q_WW v,Q_WW w),
+G_Q=Q_WW^T Q_WW.
+```
+
+It is positive on the invertible branch, obeys the metric cocycle, and adds no
+parameter. Thus the old choice among possible metric observables is closed;
+the selected-branch q79/`Z64`-to-`Q_WW` source realization is now also closed
+by the explicit `Phi_q79` factorization above, uniquely up to gauge and with no
+fitted physical parameter. The direct finite projected operator exit
+is now computed: on `W_fin=R3_D direct-sum R3_E`, normalized `S3` Haar
+averaging gives
+
+```text
+P_Haar=(1/6) sum_g rho(g),
+H_fin=kappa_e(I-P_Haar),
+spec(H_fin/kappa_e)=0^2+1^4,
+H_std=kappa_e I2.
+```
+
+Thus `h_DE=0` and `h_DD=h_EE>0` hold exactly at the selected finite-source
+tier, with zero dimensionless fits and one overall normalization. The existing
+rank-2 nonlinear HYM row solution is not relabeled as the rank-3 q79 spectral
+bundle. Construction of the actual spectral HYM bundle, autonomous Lens
+descent, or a nontrivial inverse-Fourier-Mukai extension of the closed
+root-plane/twisted-exterior `J_DE` functor remain optional stronger continuum
+completions; the continuum Fourier-Mukai contract remains honestly `2/11`.
+Free-orbit covariance and direct unital algebra adjoints remain exact no-gos.
+Literal equality of the full HYM and flat root-stack connections has been
+ruled out for nonzero Chern data.
+Primitive branch selection is now sharply settled rather than merely labelled
+open. Two isomorphic real branch fibers with the same strict closure cost and
+flow are exchanged by an automorphism preserving every branch-internal datum;
+each has its own unique fixed point. Therefore fixed-point uniqueness inside a
+declared coherent sector cannot select one physical realization from the
+current abstract corpus. This is an exact non-derivability result, not a failed
+search. The minimal completion is one discrete, non-numerical realization
+axiom:
+
+```text
+A_QG: select the gauge class of the canonical q79/Z64/Q_WW
+      minimal-full-monodromy-rootstack Lorentzian realization
+      carrying the normalized finite Reynolds action.
+```
+
+After `A_QG`, the root orders `(2,3,2,1)`, rank-six bridge,
+q79/`Z64`/`Q_WW` source map, and finite TT operator are unique up to the
+already declared gauge freedom. The axiom adds one discrete theory choice and
+zero continuous parameters. It is adopted physical completion data; it has not
+been derived from upper MTT dynamics. An axiom-free completion would instead
+need a target-independent realization functional with a strict q79 gap.
+Foundation v7's iff descent criterion makes that kernel neutral for an
+autonomous strict completion. A non-TEGR bulk frame mode would therefore add
+an unsourced coordinate and define a larger modified-teleparallel theory.
+Consequently the leading two-derivative action form on this branch is fully
+fixed to TEGR/Einstein-Hilbert.
+
+Composing the finite block with the strict same-source TEGR theorem closes the
+declared two-derivative classical GR tier. Its complete gravitational law has
+zero dimensionless shape/constitutive/stress knobs and exactly two continuous
+effective coordinates:
+
+```text
+kappa_h=kappa_e/4=(32 pi G_eff)^(-1),
+Lambda_eff.
+```
+
+Initial or asymptotic state data are not coupling constants. The exact
+Ricci-flat pp-wave therefore remains a valid warning that the equations do not
+select Minkowski, without reopening classical GR equivalence. Without `A_QG`,
+primitive physical-tier selection remains non-derivable from the current
+axioms. With it adopted, the remaining inputs are the values of `kappa_h` and
+`Lambda_eff`, state data when a unique vacuum is claimed, a selected quantum
+measure, and higher-derivative/UV control.
+
+The free quantum sector is now closed at the same declared tier. The connected
+q79 scalar zero mode tensored with the global helicity-two bundle gives exactly
+two physical polarizations. After `q_lambda=sqrt(kappa_h) h_lambda`, the
+Hamiltonian is two positive massless oscillators and the propagator is
+
+```text
+<h_lambda h_lambda'>
+  =i delta_lambda,lambda'/[kappa_h(p^2+i0)],
+```
+
+with exact internal residue `I2` and no new continuous parameter. A finite
+internal trace obeys
+`Tr_internal[p^n I_N]=N p^n`; it cannot alter four-dimensional loop power
+counting.
+
+The interacting low-energy tier is now closed at the same imported-parity
+standard used by the renormalized-SM observable functor. Composing the q79
+Einstein/TEGR action with standard background-field BRST/BV quantum-GR EFT
+gives equality of gauge-invariant observables through every declared fixed
+order once the same Wilson data, state, scale, and scheme are supplied. The
+exact connected-graph identity is
+
+```text
+D=4L+2V-2I,  L=I-V+1,  hence D=2L+2.
+```
+
+This proves finite-order EFT predictivity. It also fixes the honest boundary:
+the nonzero two-loop Goroff-Sagnotti `Riemann^3` counterterm proves that
+`kappa_h` and `Lambda_eff` alone are not an all-scale interacting quantum
+theory. Standard EFT quantization is imported rather than derived from MTT;
+selected higher-derivative Wilson values, a primitive MTT measure/BV theorem,
+and a nonperturbative UV completion remain open.
+
+Under the corrected v4 action's declared globally hyperbolic oriented spacetime
+input, global coframe existence itself is closed conditionally: smooth splitting
+gives `Y4=R x Sigma3`, orientable `Sigma3` is parallelizable, and a global
+coframe canonically defines a flat metric-compatible Weitzenbock connection.
+Lapse and shift are constraint/gauge fields, not fit parameters. Selection of
+this realization is impossible from the current branch-internal axioms alone
+and is closed after adopting `A_QG`; it is not a missing support map, local
+coframe construction, or continuous fit.
+
+The local same-source formula is explicit after selecting an oriented Cauchy
+embedding `i:B->Y4` and typing `TP=TB`:
+
+```text
+theta^0=N dt,
+theta^a=Q_WW^a_i(dx^i+N^i dt),
+h=Q_WW^T Q_WW,
+det(g)=-N^2 det(Q_WW)^2.
+```
+
+The symbolic metric and determinant residuals vanish exactly. The remaining
+world-in-world transition law is already exactly the spatial tetrad cocycle.
+On the invertible branch, `Q_WW:TB->TI` identifies `TI` automatically with the
+internal spatial frame bundle, and the metric patches globally. At strict
+same-source tier, using `Q_WW` locally without an additional support map places
+`B` on a Cauchy support and types `TP=TB`. The remaining gate is primitive
+selection of this realization, not a missing support map, `TI` choice, local
+tetrad, or transition construction.
+
+The quadratic-to-nonlinear action question is now closed no-go. For every
+dimensionless `alpha`, the local diffeomorphism-invariant deformation
+
+```text
+S_alpha=S_EH+(alpha/kappa_h) integral sqrt(-g) C^3
+```
+
+starts at cubic order around flat space. It has the same background, first
+variation, and Fierz-Pauli Hessian but different nonlinear vertices. Therefore
+the existing TT data cannot select the nonlinear theory. The action frontier
+has exactly two honest exits: select a direct two-derivative closure action, or
+select the A51-A53 product spectral action and prove a controlled Einstein
+infrared limit. The latter can host the SM and gravity in one operator
+architecture, but it also contains Weyl curvature and still lacks selected
+base geometry, moments, Lorentzian reconstruction, and absolute normalization.
+
+The retained spectral gravity block is now explicit. A49's active `96x96`
+finite Dirac operator has only Dirac Yukawa channels, so its Majorana gravity
+invariants obey `c_R=d_R=0`. Under A53's named one-atom premise,
+
+```text
+beta^2/Lambda^2 = 20/(3 tau_int) = 16.3805711664441,
+epsilon_W(p) <= (3 tau_int/20)(p/Lambda)^2.
+```
+
+Thus the Weyl correction inside the retained `a4` action is at most
+`0.0610479323 eta^2` for `p<=eta Lambda`, independently of profile `f0`.
+The same moments give a bare curvature-equivalent vacuum magnitude
+`6 Lambda^2/tau_int = 14.7425140498 Lambda^2`; they do not solve
+`Lambda_eff`. The point measure, Lorentzian product lift, and full heat-kernel
+remainder remain open, so this is a conditional Einstein-IR ratio theorem,
+not selection of the full spectral action.
+
+Additional controlling artifacts:
+
+```text
+q79_Signed_Sheet_w2_and_Branch_Divisor_Reduction_v1
+q79_Trial_Branch_Irreducibility_and_Strict_Spin_Decision_v1
+q79_Selected_Side_Strict_Spin_NoGo_and_SpinC_Lift_v1
+q79_Shared_Circle_SpinC_Determinant_Bridge_v1
+q79_Shared_Z64_Same_Source_Monodromy_Map_v1
+q79_Shared_Circle_Double_Return_CLN_Nil_Complex_and_Flat_Zero_Defect_Endpoint_v1
+q79_Zero_Defect_Vacuum_Selection_NoGo_and_State_Boundary_Cutset_v1
+q79_SpinC_Flat_HYM_and_Ramification_Extension_Dichotomy_v1
+q79_Branch_Cusp_Resolution_and_RootStack_HYM_v1
+q79_Cubic_Norm_and_Full_Monodromy_RootStack_Strain_Bridge_v1
+q79_Spectral_HYM_to_RootStack_Strain_Symbol_Bridge_v1
+q79_Complement_QuarterTurn_Hessian_Scalarization_Theorem_v1
+q79_Shared_Z64_FuYau_Parent_QuarterTurn_and_Descent_Dichotomy_v1
+q79_Square_Theta_QuarterTurn_to_Strain_DirectFunctor_NoGo_v1
+q79_Shared_RootPlane_Twisted_Exterior_JDE_Functor_v1
+q79_Finite_RootStack_Reynolds_TT_Hessian_and_Direct_Operator_Exit_v1
+q79_Finite_Source_TEGR_Classical_Closure_and_Parameter_Ledger_v1
+q79_Free_Graviton_Quantization_and_Finite_Internal_UV_NoGo_v1
+q79_Interacting_Low_Energy_Quantum_Gravity_EFT_Closure_and_UV_Boundary_v1
+q79_Primitive_Physical_Branch_NonDerivability_and_OneAxiom_Completion_v1
+Selected_q79_Z64_to_QWW_Source_Factorization_v1
+Global_Helicity_Bundle_Same_Circle_NoGo_and_Covariant_Source_Replacement_v1
+Global_Covariant_Helicity2_DG_Bundle_Construction_v1
+Global_TT_Hessian_and_Action_Uniqueness_Reduction_v1
+Massless_TT_Pole_vs_Positive_Internal_Gap_NoGo_v1
+q79_Coherent_Zero_Mode_TT_Source_and_Unit_Internal_Residue_v1
+Closure_to_Einstein_Action_Reduction_and_One_Scale_NoGo_v1
+Closure_Anholonomy_Teleparallel_Einstein_Bridge_v1
+Quadratic_TT_Data_Nonlinear_Action_NoGo_and_Spectral_Exit_v1
+Spectral_Action_Einstein_IR_Limit_and_Vacuum_Obstruction_v1
+Stieltjes_Massless_Pole_Gaussian_Damping_NoGo_v1
 ```

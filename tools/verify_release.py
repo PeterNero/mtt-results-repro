@@ -12,6 +12,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / "release"
+CURRENT_RESULT_CONFIG = ROOT / "config" / "current_results.json"
 
 
 def io_path(path: Path) -> str:
@@ -31,6 +32,11 @@ def sha256(path: Path) -> str:
 
 def load(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    with path.open("r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
 
 
 def close(left: float, right: float, tolerance: float = 1e-12) -> bool:
@@ -125,9 +131,13 @@ def main() -> int:
 
     inventory_summary = load(ROOT / "inventory" / "summary.json")
     archive_manifest = load(ROOT / "archive" / "manifest.json")
+    hash_only_rows = load_jsonl(ROOT / "archive" / "hash_only_artifacts.jsonl")
     authority = load(RELEASE / "authority_manifest.json")
     results = load(RELEASE / "result_manifest.json")
     parameters = load(RELEASE / "parameter_ledger.json")
+    current_snapshot = load(RELEASE / "current_snapshot.json")
+    paper_lock = load(RELEASE / "paper_corpus_lock.json")
+    current_selection = load(CURRENT_RESULT_CONFIG)
 
     record(
         "inventory_completeness",
@@ -138,13 +148,19 @@ def main() -> int:
     )
     record(
         "archive_manifest_count",
-        archive_manifest["artifact_count"] == inventory_summary["artifact_count"],
+        archive_manifest["inventory_artifact_count"] == inventory_summary["artifact_count"]
+        and archive_manifest["artifact_count"] + archive_manifest["hash_only_artifact_count"] == inventory_summary["artifact_count"]
+        and archive_manifest["hash_only_artifact_count"] == len(hash_only_rows),
         archived=archive_manifest["artifact_count"],
+        hash_only=archive_manifest["hash_only_artifact_count"],
     )
     record(
-        "authority_chain_A01_A62",
-        authority["authority_entry_count"] == 62
-        and [row["authority_id"] for row in authority["entries"]] == [f"A{i:02d}" for i in range(1, 63)],
+        "authority_chain_A01_A99",
+        authority["schema"] == "MTTCurrentAuthorityRelease.v2"
+        and authority["authority_entry_count"] == 99
+        and authority["baseline_authority_entry_count"] == 62
+        and authority["current_authority_extension_count"] == 37
+        and [row["authority_id"] for row in authority["entries"]] == [f"A{i:02d}" for i in range(1, 100)],
         bundle_artifacts=authority["bundle_artifact_count"],
     )
 
@@ -164,6 +180,76 @@ def main() -> int:
         if not path.is_file() or sha256(path) != result["sha256"]:
             result_hash_failures.append(result["id"])
     record("key_result_hashes", not result_hash_failures, result_count=results["result_count"], failures=result_hash_failures)
+    current_result_ids = current_snapshot["current_layer"]["result_ids"]
+    selected_result_ids = [row["id"] for row in current_selection["results"]]
+    record(
+        "current_promoted_layer",
+        results["schema"] == "MTTKeyResultManifest.v2"
+        and current_snapshot["snapshot_date"] == current_selection["snapshot_date"]
+        and results["baseline_result_count"] == 28
+        and results["current_promoted_result_count"] == len(selected_result_ids)
+        and current_snapshot["current_layer"]["authority_extension"] == "A63-A99"
+        and current_snapshot["current_layer"]["authority_extension_count"] == 37
+        and current_result_ids == selected_result_ids
+        and set(current_result_ids).issubset(result_paths),
+        baseline_results=results.get("baseline_result_count"),
+        current_results=results.get("current_promoted_result_count"),
+    )
+    hypothesis = current_snapshot["current_layer"]["unified_source_hypothesis"]
+    record(
+        "unified_source_nonpromotion_guard",
+        hypothesis["state"] == "HYPOTHESIS"
+        and hypothesis["physical_promotion"] is False
+        and "zero-input" in hypothesis["continuous_parameter_claim"],
+        hypothesis=hypothesis["id"],
+    )
+    record(
+        "paper_corpus_lock",
+        paper_lock["commit"] == "caf55313b90ababc43f83650cc72a325129e1252"
+        and paper_lock["canonical_papers"] == 139
+        and paper_lock["latest_zenodo_records"] == 138
+        and paper_lock["latest_zenodo_pdf_exact_matches"] == 138
+        and paper_lock["zenodo_latest_id_differences"] == 0
+        and paper_lock["commercial_book_artifacts"] == 0
+        and paper_lock["commercial_book_zenodo_records"] == 0,
+        paper_commit=paper_lock["commit"],
+        papers=paper_lock["canonical_papers"],
+        zenodo_latest=paper_lock["latest_zenodo_records"],
+    )
+    forbidden_tokens = {
+        "bad-memory-book",
+        "badmemorybook",
+        "humanvoicepass",
+        "the-universe-has-a-bad-memory",
+        "the-universe-had-a-bad-memory",
+    }
+    forbidden_paths = [
+        path.relative_to(ROOT).as_posix()
+        for path in ROOT.rglob("*")
+        if path.is_file()
+        and ".git" not in path.parts
+        and any(token in path.as_posix().casefold() for token in forbidden_tokens)
+    ]
+    record(
+        "commercial_book_excluded",
+        not forbidden_paths,
+        failures=forbidden_paths,
+    )
+    provenance_files = [
+        ROOT / "inventory" / "source_repositories.json",
+        ROOT / "archive" / "manifest.json",
+        RELEASE / "current_snapshot.json",
+    ]
+    forbidden_provenance = [
+        path.relative_to(ROOT).as_posix()
+        for path in provenance_files
+        if any(token in path.read_text(encoding="utf-8").casefold() for token in forbidden_tokens)
+    ]
+    record(
+        "commercial_book_absent_from_provenance",
+        not forbidden_provenance,
+        failures=forbidden_provenance,
+    )
 
     final_audit = load(result_paths["final_12_of_12_audit"])
     record(
@@ -342,25 +428,41 @@ def main() -> int:
     guards = parameters["interpretation_guards"]
     record(
         "parameter_scope_guards",
-        parameters["construction_side_continuous_primitives"]["count"] == 1
+        parameters["schema"] == "MTTCurrentParameterLedger.v2"
+        and parameters["construction_side_continuous_primitives"]["count"] == 1
         and parameters["measured_sm_profile_coordinates"]["count"] == 15
         and parameters["neutral_extension_profile_coordinates"]["count"] == 2
+        and parameters["current_effective_model_coordinate_accounting"]["non_neutrino_count_excluding_qcd_theta"] == 13
+        and parameters["current_effective_model_coordinate_accounting"]["count_with_minimal_pmns_policy"] == 19
         and all(value is False for value in guards.values()),
     )
 
     archive_hash_failures = []
     if args.full_archive:
+        hash_only_index = {
+            (row["repo_id"], row["path"]): row for row in hash_only_rows
+        }
         with (ROOT / "inventory" / "artifacts.jsonl").open("r", encoding="utf-8") as handle:
             for line in handle:
                 artifact = json.loads(line)
                 path = ROOT / "archive" / "sources" / artifact["repo_id"] / artifact["path"]
-                if not os.path.isfile(io_path(path)) or sha256(path) != artifact["sha256"]:
+                key = (artifact["repo_id"], artifact["path"])
+                hash_only = hash_only_index.get(key)
+                if hash_only is not None:
+                    valid = (
+                        hash_only["sha256"] == artifact["sha256"]
+                        and hash_only["size_bytes"] == artifact["size_bytes"]
+                        and not os.path.isfile(io_path(path))
+                    )
+                else:
+                    valid = os.path.isfile(io_path(path)) and sha256(path) == artifact["sha256"]
+                if not valid:
                     archive_hash_failures.append(f"{artifact['repo_id']}:{artifact['path']}")
         record("full_archive_hashes", not archive_hash_failures, failures=archive_hash_failures)
 
     failed = [check for check in checks if not check["passed"]]
     report = {
-        "schema": "MTTResultsReproductionVerification.v1",
+        "schema": "MTTResultsReproductionVerification.v2",
         "passed": not failed,
         "check_count": len(checks),
         "failed_check_count": len(failed),

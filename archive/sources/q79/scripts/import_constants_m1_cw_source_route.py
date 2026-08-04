@@ -21,6 +21,9 @@ Q79_H1_GAP = CERTS / "visible_rank2_l2_integral_lift_source_gap_certificate.json
 Q79_PULLBACK = CERTS / "visible_rank2_l2_pullback_cech_attempt_certificate.json"
 Q79_H1_TEMPLATE = CERTS / "visible_rank2_l2_cohomology_data.template.json"
 Q79_PARITY = CERTS / "orientation_observable_parity_certificate.json"
+Q79_H1_PACKET = (
+    CANDIDATES / "visible_rank2_l2_pullback_cech_attempt.cohomology.json"
+)
 
 OUT_CANDIDATE = CANDIDATES / "constants_m1_cw_source_route_import.candidate.json"
 OUT_CERT = CERTS / "constants_m1_cw_source_route_import_certificate.json"
@@ -39,6 +42,16 @@ def status_of(path: Path) -> str:
     return load(path).get("status", "UNKNOWN") if path.exists() else "MISSING"
 
 
+def canonical_local_artifact(path_text: str, expected: Path) -> str:
+    canonical = expected.relative_to(ROOT).as_posix()
+    normalized = path_text.replace("\\", "/")
+    if normalized != canonical and not normalized.endswith("/" + canonical):
+        raise ValueError(f"unexpected local artifact: {path_text}")
+    if not expected.is_file():
+        raise FileNotFoundError(expected)
+    return canonical
+
+
 def analyze() -> dict[str, Any]:
     const_cw = load(CONST_CW)
     const_cutset = load(CONST_CUTSET)
@@ -52,6 +65,7 @@ def analyze() -> dict[str, Any]:
     constants_target = const_cw["source_route_ranking"][0]["next_required_data"]
     q79_target = q79_h1_template["target"]
     h1_packet = q79_h1_gap["existing_h1_packet"]
+    existing_h1_packet = canonical_local_artifact(h1_packet["path"], Q79_H1_PACKET)
     promoted = h1_packet["conditional_promoted_validation"]["parsed_report"]
     original = h1_packet["original_validation"]["parsed_report"]
 
@@ -116,7 +130,7 @@ def analyze() -> dict[str, Any]:
             "targets_match": target_matches,
         },
         "h1_bridge": {
-            "existing_packet": h1_packet["path"],
+            "existing_packet": existing_h1_packet,
             "original_candidate_role": h1_packet["candidate_role"],
             "original_h1": original["h1"],
             "original_nonzero_ext_class": original["nonzero_ext_class"],

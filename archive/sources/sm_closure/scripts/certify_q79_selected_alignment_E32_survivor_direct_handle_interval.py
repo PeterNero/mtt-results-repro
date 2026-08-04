@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+from flint import acb, ctx
+
+import certify_q79_selected_alignment_E32_handle_combination_interval as handle
+import certify_q79_selected_alignment_E32_primitive_handle_basis_intervals as basis
+import certify_q79_selected_side_beta_defect_transport as validated
+
+
+ROOT = basis.ROOT
+PERIOD_DIRECTORY = basis.PERIOD_DIRECTORY
+
+
+def output_path(rank: int, handle_name: str, candidate_id: str) -> Path:
+    return (
+        PERIOD_DIRECTORY
+        / f"height4_rank{rank}_{candidate_id}.{handle_name}_handle_direct.E32.interval.packet.json"
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rank", type=int, required=True)
+    parser.add_argument("--handle", choices=["A", "B"], required=True)
+    parser.add_argument("--output", type=Path)
+    arguments = parser.parse_args()
+    a208 = basis.load(basis.A208)
+    rows = [
+        row
+        for row in a208["height_four_candidates"]
+        if int(row["A132_objective_rank"]) == arguments.rank
+    ]
+    if len(rows) != 1:
+        raise AssertionError("requested A208 survivor rank is not unique")
+    candidate = rows[0]
+    offset = 0 if arguments.handle == "A" else 4
+    coordinates = [
+        int(value)
+        for value in candidate["primitive_handle_coordinates"][offset : offset + 4]
+    ]
+    if not any(coordinates):
+        raise ValueError("requested direct handle component is identically zero")
+
+    ctx.dps = 90
+    system = validated.SelectedQ79IntervalSystem(dps=90)
+    base_cycles, base_diagnostics = basis.oriented_base_cycles(
+        system,
+        cut_segments=8,
+        cut_tolerance=1.0e-22,
+    )
+    initial = [acb(0) for _ in range(5)]
+    for coefficient, cycle in zip(coordinates, base_cycles):
+        for index, value in enumerate(cycle):
+            initial[index] += acb(coefficient) * value
+    endpoint = -1j if arguments.handle == "A" else 1 + 0j
+    label = f"rank{arguments.rank}:{arguments.handle}:{coordinates}"
+    center, radius, execution = basis.validated_handle_transport(
+        system,
+        initial,
+        endpoint=endpoint,
+        label=label,
+        order=32,
+        initial_step=0.01,
+        minimum_step=1.0e-8,
+    )
+    value = handle.midpoint(center[5 + basis.E32_INDEX])
+    radius_float = validated.upper(radius)
+    ball = basis.interval_ball(value, radius_float)
+    floating_packet = basis.load(basis.FLOATING_HANDLES)
+    floating_matrix = np.asarray(
+        [
+            [handle.complex_value(item) for item in row]
+            for row in floating_packet["primitive_handle_period_matrix"]
+        ],
+        dtype=np.complex128,
+    )
+    expected = floating_matrix[basis.E32_INDEX, offset : offset + 4] @ np.asarray(
+        coordinates, dtype=np.float64
+    )
+    center_difference = float(abs(value - expected))
+    if center_difference >= 2.0e-6:
+        raise AssertionError("direct survivor handle interval disagrees with A131 center")
+
+    output = arguments.output or output_path(
+        arguments.rank, arguments.handle, candidate["candidate_id"]
+    )
+    if not output.is_absolute():
+        output = ROOT / output
+    packet = {
+        "schema": "MTTQ79SelectedAlignmentE32SurvivorDirectHandleInterval.v1",
+        "status": "SURVIVOR_DIRECT_HANDLE_E32_INTERVAL_CERTIFIED",
+        "candidate_id": candidate["candidate_id"],
+        "A132_objective_rank": arguments.rank,
+        "handle": arguments.handle,
+        "authority": {
+            "A208_survivor_queue": basis.relative(basis.A208),
+            "A208_survivor_queue_sha256": basis.sha256(basis.A208),
+            "A131_floating_handle_packet": basis.relative(basis.FLOATING_HANDLES),
+            "A131_floating_handle_packet_sha256": basis.sha256(basis.FLOATING_HANDLES),
+            "A131_orientation_packet": basis.relative(basis.ORIENTATION),
+            "A131_orientation_packet_sha256": basis.sha256(basis.ORIENTATION),
+            "basis_certifier_source": basis.relative(Path(basis.__file__).resolve()),
+            "basis_certifier_source_sha256": basis.sha256(Path(basis.__file__).resolve()),
+            "direct_certifier_source": basis.relative(Path(__file__)),
+            "direct_certifier_source_sha256": basis.sha256(Path(__file__)),
+        },
+        "rigorous_base_cut_basis": base_diagnostics,
+        "direct_handle_interval": {
+            "primitive_coordinates": coordinates,
+            "parameter_endpoint": handle.complex_pair(endpoint),
+            "E32_interval": handle.complex_interval(ball),
+            "E32_interval_center": handle.complex_pair(value),
+            "E32_uniform_component_radius_upper": radius_float,
+            "A131_floating_center": handle.complex_pair(expected),
+            "A131_center_difference": center_difference,
+            "transport": execution,
+        },
+        "scope": {
+            "observed_SM_values_used": False,
+            "candidate_specific_direct_handle_E32_interval_closed": True,
+            "floating_center_accepted_as_exact_interval": False,
+            "carrier_selected": False,
+        },
+    }
+    basis.dump(output, packet)
+    print(f"wrote {basis.relative(output)}")
+    print(
+        json.dumps(
+            {
+                "rank": arguments.rank,
+                "handle": arguments.handle,
+                "coordinates": coordinates,
+                "radius": radius_float,
+                "A131_center_difference": center_difference,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

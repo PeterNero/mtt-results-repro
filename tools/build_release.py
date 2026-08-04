@@ -1,4 +1,4 @@
-"""Build the current A01-A62 authority release from the exhaustive archive."""
+"""Build the frozen A01-A62 baseline plus the current promoted result layer."""
 from __future__ import annotations
 
 import json
@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "inventory"
 ARCHIVE = ROOT / "archive" / "sources"
 RELEASE = ROOT / "release"
+CURRENT_RESULT_CONFIG = ROOT / "config" / "current_results.json"
+PAPER_CORPUS_LOCK = ROOT / "config" / "paper_corpus_lock.json"
 
 DOMAIN_BY_ID = {
     **{f"A{i:02d}": "global_sm_equivalence" for i in range(1, 7)},
@@ -33,6 +35,11 @@ DOMAIN_BY_ID = {
     "A22": "strong_cp_anomaly",
     **{f"A{i:02d}": "generative_sm_finite_geometry" for i in range(44, 54)},
     **{f"A{i:02d}": "gauge_spectral_threshold" for i in range(54, 63)},
+    **{f"A{i:02d}": "gauge_spectral_threshold" for i in range(63, 90)},
+    "A90": "parameter_accounting",
+    **{f"A{i:02d}": "neutral_neutrino" for i in range(91, 95)},
+    "A95": "branch_selection",
+    **{f"A{i:02d}": "strong_cp_axion" for i in range(96, 100)},
 }
 
 STATUS_TAGS = {
@@ -98,6 +105,43 @@ STATUS_TAGS = {
     "A60": ["DERIVED_EXACT", "INTERMEDIATE"],
     "A61": ["DERIVED_EXACT", "INTERMEDIATE", "RETIRED_ROUTE"],
     "A62": ["DERIVED_EXACT", "NO_GO", "OPEN_STRICT_GAUGE_PREDICTION"],
+    "A63": ["DERIVED_EXACT", "NO_GO_FAMILY_SPLITTING", "OPEN_GAUGE_HESSIAN_VALUES"],
+    "A64": ["NO_GO", "OPEN_NATIVE_GAUGE_FUNCTIONAL"],
+    "A65": ["DERIVED_EXACT", "OPEN_W_KIN_SOURCE"],
+    "A66": ["NUMERIC_DIAGNOSTIC", "OPEN_SOURCE"],
+    "A67": ["CONDITIONAL", "NO_GO_POSITIVE_DENSITY_CLASS", "OPEN_STRICT_VALUES"],
+    "A68": ["DERIVED_EXACT_INVERSE", "PROFILE_DIAGNOSTIC", "OPEN_SOURCE"],
+    "A69": ["DERIVED_EXACT_CANDIDATE", "CONDITIONAL", "PROFILE_INFERRED", "OPEN"],
+    "A70": ["NUMERIC_DIAGNOSTIC", "TARGET_AWARE", "NOT_PROMOTED"],
+    "A71": ["DERIVED_EXACT", "NO_GO_A70_PROMOTION", "OPEN_PHYSICAL_EMBEDDING"],
+    "A72": ["DERIVED_EXACT_CANDIDATE", "TARGET_RANKED", "NOT_PREDICTION"],
+    "A73": ["DERIVED_EXACT_SAME_ACTION_EXISTENCE", "OPEN_PHYSICAL_SELECTION"],
+    "A74": ["DERIVED_EXACT_NORMALIZATION", "PROFILE_COMPATIBILITY", "OPEN_PHYSICAL_GATE"],
+    "A75": ["DERIVED_EXACT_CONDITIONAL_HESSIAN", "NO_GO_RELABELLING", "OPEN"],
+    "A76": ["DERIVED_EXACT_DOMAIN", "NO_GO_SHORTCUT", "OPEN_FLUCTUATION_COMPLEX"],
+    "A77": ["DERIVED_EXACT_STRUCTURAL", "OPEN_PHYSICAL_PLACEMENT"],
+    "A78": ["CONDITIONAL", "BINARY_SIGN_OPEN"],
+    "A79": ["DERIVED_EXACT_NO_GO", "OPEN_INSERTION_LAW"],
+    "A80": ["DERIVED_EXACT_POSITIVE_REPRESENTATIVE", "OPEN_ACTION_MAP"],
+    "A81": ["DERIVED_EXACT_BRIDGE", "OPEN_COMPLETENESS"],
+    "A82": ["DERIVED_EXACT_LATER_AUTHORITY_CONSTRUCTION", "OPEN_CLOSURE_HESSIAN"],
+    "A83": ["DERIVED_EXACT_EXECUTION", "CONDITIONAL_AXIOM", "OPEN_DERIVATION"],
+    "A84": ["DERIVED_EXACT_ACTION_TIER", "OPEN_FINITE_MATCHING"],
+    "A85": ["DERIVED_EXACT_CORPUS_ACTION_TIER", "PROFILE_SCHEME", "OPEN_PRIMITIVE_CORE"],
+    "A86": ["DERIVED_EXACT_CORPUS_ACTION_SOURCE", "OPEN_PRIMITIVE_CORE"],
+    "A87": ["DERIVED_EXACT_CONVENTION_MAP", "PROFILE_COMPATIBILITY", "PROSPECTIVE_FROZEN"],
+    "A88": ["DERIVED_EXACT_SCALE_NO_GO", "OPEN_COMMON_NORMALIZATION"],
+    "A89": ["DERIVED_EXACT_FACTORIZATION", "NO_GO_CANDIDATE", "CLOSED_ADOPTED_TIER"],
+    "A90": ["AUDIT", "PARAMETER_LEDGER", "OPEN_STRICT_UPGRADES"],
+    "A91": ["DERIVED_EXACT_AMBIGUITY", "NO_GO_UNIQUE_PHASE", "OPEN_NEUTRAL_SOURCE"],
+    "A92": ["DERIVED_EXACT_DOMAIN", "OPEN_PHYSICAL_SELECTION"],
+    "A93": ["DERIVED_EXACT_NECESSITY_SUFFICIENCY", "NO_GO_EXISTING_SELECTION", "OPEN"],
+    "A94": ["PROFILE_CLOSURE_ADOPTED_TIER", "CONDITIONAL", "OPEN_STRICT"],
+    "A95": ["DERIVED_EXACT_CONDITIONAL_MEASURE", "CLOSED_ADOPTED_TIER", "OPEN_GLOBAL_UNIQUENESS"],
+    "A96": ["DERIVED_EXACT_ANOMALY_MATCHING", "NO_GO_THRESHOLD_SHORTCUT", "OPEN_U6"],
+    "A97": ["DERIVED_EXACT_REDUCTION", "OPEN_ABSOLUTE_SCALE", "OPEN_QUALITY"],
+    "A98": ["DERIVED_EXACT_BOUND", "OPEN_SOURCE_PAYLOAD"],
+    "A99": ["DERIVED_EXACT_CONDITIONAL_COUPLING", "OPEN_SAME_SOURCE_LATTICE", "U6_9_OF_10"],
 }
 
 EXTRA_AUTHORITY_PATHS = {
@@ -287,14 +331,18 @@ def main() -> int:
         tag_counts.update(tags)
 
     manifest = {
-        "schema": "MTTCurrentAuthorityRelease.v1",
+        "schema": "MTTCurrentAuthorityRelease.v2",
         "authority_entry_count": len(entries),
+        "baseline_authority_entry_count": 62,
+        "current_authority_extension_count": len(entries) - 62,
         "bundle_artifact_count": sum(len(row["bundle_artifacts"]) for row in entries),
         "domain_counts": dict(sorted(domain_counts.items())),
         "status_tag_counts": dict(sorted(tag_counts.items())),
         "entries": entries,
         "policy": {
-            "authority_order": "MTT_CORPUS_REVISION_UPDATE_LEDGER_2026-07-11 A01-A62",
+            "authority_order": "MTT_CORPUS_REVISION_UPDATE_LEDGER A01-A99",
+            "frozen_baseline": "A01-A62 at 2026-07-12",
+            "current_extension": "A63-A99 indexed and bundled at 2026-08-05",
             "historical_packet_status_is_authority": False,
             "profile_replay_promoted_to_no_knob_prediction": False,
             "open_and_no_go_results_retained": True,
@@ -303,14 +351,18 @@ def main() -> int:
     dump(RELEASE / "authority_manifest.json", manifest)
 
     machine_rows = []
+    hash_only_rows = load_jsonl(ROOT / "archive" / "hash_only_artifacts.jsonl")
+    hash_only_keys = {(row["repo_id"], row["path"]) for row in hash_only_rows}
     for artifact in artifacts:
         if artifact["kind"] not in {"certificate", "result_packet", "calculation", "audit", "report", "data"}:
             continue
+        archive_available = (artifact["repo_id"], artifact["path"]) not in hash_only_keys
         machine_rows.append(
             {
                 "repo_id": artifact["repo_id"],
                 "source_path": artifact["path"],
-                "archive_path": f"archive/sources/{artifact['repo_id']}/{artifact['path']}",
+                "archive_available": archive_available,
+                "archive_path": f"archive/sources/{artifact['repo_id']}/{artifact['path']}" if archive_available else None,
                 "kind": artifact["kind"],
                 "sha256": artifact["sha256"],
                 "schema": artifact.get("schema"),
@@ -328,11 +380,18 @@ def main() -> int:
         raise RuntimeError(f"unsafe generated results path: {results_root}")
     if results_root.exists():
         shutil.rmtree(results_root)
+    current_selection = json.loads(CURRENT_RESULT_CONFIG.read_text(encoding="utf-8"))
+    current_results = current_selection["results"]
+    all_results = KEY_RESULTS + current_results
+    if len({row["id"] for row in all_results}) != len(all_results):
+        raise RuntimeError("duplicate result id in baseline/current selection")
     result_entries = []
-    for key_result in KEY_RESULTS:
+    for key_result in all_results:
         artifact = artifact_index.get((key_result["repo_id"], key_result["path"].lower()))
         if artifact is None:
             raise RuntimeError(f"missing key result: {key_result['repo_id']} {key_result['path']}")
+        if (artifact["repo_id"], artifact["path"]) in hash_only_keys:
+            raise RuntimeError(f"selected result cannot be hash-only: {key_result['id']}")
         source = ARCHIVE / artifact["repo_id"] / Path(artifact["path"])
         destination = RELEASE / "results" / key_result["id"] / Path(artifact["path"]).name
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -347,11 +406,48 @@ def main() -> int:
             }
         )
     dump(RELEASE / "result_manifest.json", {
-        "schema": "MTTKeyResultManifest.v1",
+        "schema": "MTTKeyResultManifest.v2",
         "result_count": len(result_entries),
+        "baseline_result_count": len(KEY_RESULTS),
+        "current_promoted_result_count": len(current_results),
         "results": result_entries,
-        "selection_policy": "Current authority objects plus adjacent strict-upgrade evidence; full evidence remains in archive/sources.",
+        "selection_policy": "The July-12 A01-A62 baseline is retained, A63-A99 form the later authority extension, and hash-addressed current results retain their declared tiers.",
     })
+
+    paper_lock = json.loads(PAPER_CORPUS_LOCK.read_text(encoding="utf-8"))
+    dump(RELEASE / "paper_corpus_lock.json", paper_lock)
+    source_snapshot = json.loads(
+        (INVENTORY / "source_repositories.json").read_text(encoding="utf-8")
+    )
+    unified_frontier = json.loads(
+        (ARCHIVE / "unified_source" / "state/frontier.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    dump(
+        RELEASE / "current_snapshot.json",
+        {
+            "schema": "MTTCurrentCuratedSnapshot.v2",
+            "snapshot_date": current_selection["snapshot_date"],
+            "baseline": {
+                "snapshot_date": "2026-07-12",
+                "authority_chain": "A01-A62",
+                "authority_entries": 62,
+                "preserved_as_immutable_history": True,
+            },
+            "current_layer": {
+                "authority_extension": "A63-A99",
+                "authority_extension_count": len(entries) - 62,
+                "promoted_result_count": len(current_results),
+                "result_ids": [row["id"] for row in current_results],
+                "unified_source_hypothesis": unified_frontier["hypothesis"],
+                "unified_source_next_action": unified_frontier["next_action"],
+            },
+            "paper_corpus": paper_lock,
+            "source_repositories": source_snapshot["repositories"],
+            "claim_guard": "Archive inclusion preserves evidence and declared tier; it does not prove physical source selection.",
+        },
+    )
 
     precision_source = json.loads(
         (
@@ -376,7 +472,7 @@ def main() -> int:
     )
     neutral_values = neutral_profile["calibrated_shape_and_scale"]
     dump(RELEASE / "parameter_ledger.json", {
-        "schema": "MTTCurrentParameterLedger.v1",
+        "schema": "MTTCurrentParameterLedger.v2",
         "declared_closure_scope": "embedded renormalized-SM equivalence at the one-shared-physical-primitive/profile standard",
         "construction_side_continuous_primitives": {
             "count": 1,
@@ -407,6 +503,25 @@ def main() -> int:
             "authority": "A40",
             "strict_mtt_source_selected": False,
         },
+        "current_effective_model_coordinate_accounting": {
+            "authority": "A90",
+            "non_neutrino_count_excluding_qcd_theta": 13,
+            "rows": {
+                "common_gauge_kinetic_anchor": 1,
+                "charged_yukawa_magnitudes": 9,
+                "ckm_phase": 1,
+                "electroweak_scale": 1,
+                "separately_typed_shared_P_EW": 1
+            },
+            "minimal_pmns_policy_count": 6,
+            "count_with_minimal_pmns_policy": 19,
+            "guards": {
+                "is_transport_input_count": False,
+                "is_strict_zero_knob_count": False,
+                "is_independent_prospective_evidence_count": False,
+                "qcd_theta_included": False
+            }
+        },
         "transported_or_reconstructed_outputs_not_counted_as_new_independent_inputs": {
             "SMDR_output_rows": 8,
             "charged_yukawa_magnitude_rows": 9,
@@ -419,6 +534,7 @@ def main() -> int:
             "strict_zero_primitive_global_closure": False,
             "parameter_reduction_relative_to_the_SM_claimed_at_strict_prediction_tier": False,
             "same_profile_outputs_can_be_double_counted_as_independent_inputs": False,
+            "transport_input_count_equals_effective_model_coordinate_count": False,
         },
     })
 
@@ -427,6 +543,8 @@ def main() -> int:
         "authority_bundle_artifacts": manifest["bundle_artifact_count"],
         "machine_evidence_rows": len(machine_rows),
         "key_results": len(result_entries),
+        "baseline_results": len(KEY_RESULTS),
+        "current_promoted_results": len(current_results),
     }, indent=2, sort_keys=True))
     return 0
 

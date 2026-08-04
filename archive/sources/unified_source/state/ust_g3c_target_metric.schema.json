@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mtt.unified-source.target-metric-certificate.v1",
+  "title": "UST.G3C exact target-metric selection certificate",
+  "type": "object",
+  "required": [
+    "schema",
+    "candidate_id",
+    "source_orbit_id",
+    "source_hash",
+    "scope",
+    "evidence_grade",
+    "field_representation",
+    "dimension",
+    "complete_physical_target",
+    "continuum_completeness_certificate",
+    "constraints",
+    "positive_witness",
+    "claimed_solution_space_dimension",
+    "empirical_inputs",
+    "physical_promotion_requested"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mtt.unified-source.target-metric-certificate.v1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_orbit_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "enum": [
+        "finite_exact_reference",
+        "finite_exact_readout",
+        "finite_truncation_only",
+        "continuum_complete"
+      ]
+    },
+    "evidence_grade": {
+      "enum": ["PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_SOURCE"]
+    },
+    "field_representation": {
+      "enum": ["rational_real_symmetric", "rational_complex_realification"]
+    },
+    "dimension": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "complete_physical_target": {
+      "type": "boolean"
+    },
+    "continuum_completeness_certificate": {
+      "type": "object",
+      "required": ["state", "source_hash", "artifact", "locator"],
+      "properties": {
+        "state": {
+          "enum": ["PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_REQUIRED"]
+        },
+        "source_hash": {"type": "string"},
+        "artifact": {"type": "string"},
+        "locator": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "constraints": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/constraint"}
+    },
+    "positive_witness": {
+      "$ref": "#/$defs/matrix"
+    },
+    "claimed_solution_space_dimension": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "empirical_inputs": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "physical_promotion_requested": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "matrix": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "oneOf": [
+            {"type": "string", "pattern": "^-?[0-9]+(?:/[1-9][0-9]*)?$"},
+            {"type": "integer"}
+          ]
+        }
+      }
+    },
+    "term": {
+      "type": "object",
+      "required": ["coefficient", "left", "right"],
+      "properties": {
+        "coefficient": {
+          "oneOf": [
+            {"type": "string", "pattern": "^-?[0-9]+(?:/[1-9][0-9]*)?$"},
+            {"type": "integer"}
+          ]
+        },
+        "left": {"$ref": "#/$defs/matrix"},
+        "right": {"$ref": "#/$defs/matrix"}
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source_hash", "artifact", "locator"],
+      "properties": {
+        "source_hash": {"type": "string", "minLength": 1},
+        "artifact": {"type": "string", "minLength": 1},
+        "locator": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["id", "kind", "evidence_grade", "provenance", "terms"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {
+          "enum": [
+            "finite_symmetry_invariance",
+            "infinitesimal_invariance",
+            "self_adjointness",
+            "skew_adjointness",
+            "complex_structure_compatibility",
+            "metric_binding_intertwiner",
+            "general_homogeneous_source_constraint"
+          ]
+        },
+        "evidence_grade": {
+          "enum": ["PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_SOURCE"]
+        },
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "terms": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/term"}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

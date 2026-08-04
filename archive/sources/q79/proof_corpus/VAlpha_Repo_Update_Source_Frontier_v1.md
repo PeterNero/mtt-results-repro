@@ -3,13 +3,13 @@
 ## Repo Inventory
 
 - q79: `omitted-current-repo-head-for-reproducibility` dirty=False
-- constants: `c40eec8 Import routec sector projectors dotd` dirty=False
-- gr: `1dc67ca Reanchor long PhiFin source cutsets` dirty=False
-- qa_su3_packet: `1f5bbde Build HYM full quotient spectrum source packet` dirty=False
-- sm_parity: `34810e5 Refresh verification report after kernel rows` dirty=False
+- constants: `ef3c7e0 Import routec tracemap basis values` dirty=False
+- gr: `bb2de60 Refresh proto-spinor quantum gravity proof chain` dirty=False
+- qa_su3_packet: `1b067bf Rank BN27 source emission route` dirty=False
+- sm_parity: `a0c2bf2c Certify q79 all-76 hub and A-handle frontier` dirty=True
 
 Any dirty adjacent repo is deliberately treated as provisional.  In the current
-run this includes: none.  These packets are useful for frontier triage,
+run this includes: `sm_parity`.  These packets are useful for frontier triage,
 not for q79 proof promotion.
 
 ## Imported Frontier Chain
@@ -48,7 +48,7 @@ The following are not imported as proof data:
 
 ```json
 {
-  "sm_parity_uncommitted_packets": false,
+  "sm_parity_uncommitted_packets": true,
   "sm_parity_frontier_status_not_imported_as_proof": true,
   "constants_uncommitted_packets": false,
   "gr_uncommitted_packets": false,
@@ -83,7 +83,7 @@ adjacent packets, or SM-parity frontier statuses as final proof.
   "qa_su3_packet_head_checked": true,
   "qa_su3_internal_logdet_bridge_status_found": true,
   "qa_su3_packet_dirty_provisional_only": false,
-  "sm_parity_repo_dirty_provisional_only": false,
+  "sm_parity_repo_dirty_provisional_only": true,
   "q79_central_neutral_lane_obstructed_reduced_model": true,
   "q79_yoneda_promoted_to_AH_conditional": true,
   "direct_pic0_shortcut_not_available": true,

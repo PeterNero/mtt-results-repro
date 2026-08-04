@@ -1,10 +1,10 @@
 
 ---
 title: "MTT Master Corrigendum and Revision Plan"
-subtitle: "All corpus-wide and paper-specific corrections identified in the full audit, Fixed-Points presentation pass, and Foundation reconstruction"
+subtitle: "Authoritative corpus corrections including the Fixed-Points, Foundation, and foundational-geometry reconciliation passes"
 document_type: "Codex implementation specification"
-version: "1.0"
-date: "2026-07-11"
+version: "1.1"
+date: "2026-07-15"
 intended_use: "Authoritative migration guide for revising the MTT Markdown corpus"
 status: "Revision specification; not itself a replacement for the source papers"
 ---
@@ -96,6 +96,24 @@ Every abstract, theorem summary, index entry, and conclusion must use one of the
 
 Do not use “derived,” “forced,” “inevitable,” “exact prediction,” “closed,” or “proved” unless the paper meets the corresponding standard.
 
+## Current-version delta requirement
+
+Every revised paper must place a section titled `Revision note for this
+edition` immediately after its abstract. The note records only the delta from
+the directly superseded edition and must contain:
+
+1. **Supersedes:** the preceding title and version or `first edition`;
+2. **Reason:** the concrete mathematical, numerical, provenance, or scope
+   defect requiring revision;
+3. **Resolution:** what this edition changed to repair that defect;
+4. **Retained result:** the theorem or construction that survives; and
+5. **Remaining boundary:** the strongest related claim not established by the
+   revision.
+
+Do not invent a retrospective history for editions whose source delta is not
+available. Detailed evidence belongs in the external revision audit; the
+in-paper note is the concise reader-facing contract for the current edition.
+
 ---
 
 # Part II — Authoritative dependency order
@@ -127,6 +145,40 @@ The Fixed Points series is authoritative for:
 - the meaning of an admissibility barrier.
 
 The structural A0–B5 papers may classify these objects. They may not redefine them in a way that conflicts with the FP spine.
+
+---
+
+## Foundational-geometry reconciliation authority
+
+The 2026-07-15 reconciliation adds a second dependency constraint. The local
+world-in-world carrier and the selected q79 global carrier must be distinguished
+until an explicit intertwiner is proved:
+
+\[
+Q_{\mathrm{WW}}\in\Gamma\!\left(\operatorname{Hom}(TP,TI)\right),
+\qquad
+\mathcal H_{\mathrm{CLN}}
+=L_{\mathrm{shared}}\otimes
+(\mathcal O\oplus\mathcal A_0\oplus\mathcal A).
+\]
+
+The first object is locally a `3 x 3` comparison matrix. The second is the
+selected q79 trace-split carrier of rank `1+2+3=6`. Equality of component
+counts is not an identification of bundles, metrics, connections, or source
+operators.
+
+The following status statements control all revisions:
+
+- `1 + 3 x 3 = (1+3) + (1+2+3) = 4+6` is a component identity, not a proof of a ten-dimensional manifold or Lorentzian spacetime.
+- A three-dimensional base with a rank-three fiber has six-dimensional total space; dimensions are added, not multiplied.
+- The q79 degree-three cover proves the trace split `A = O + A0` and the common rank-six carrier `O + A0 + A`.
+- The signed q79 sheet action has a local `Dic_3` lift. Strict global Spin closure remains conditional on all branch-complement relator signs, or equivalently the relevant obstruction class.
+- The shared circle is common `U(1)` phase/holonomy data and is counted once. It is not physical time.
+- The q79 Fu--Yau branch is the current selected global compactification candidate. `L(3,1) x Nil3` is auxiliary/effective. Literal `S1 x Lens x Nil`, literal manifold nesting, and equality of these topologies are retired as proof sources.
+
+The common open theorem is the same-source world-in-world/strain-to-q79
+bundle-and-connection intertwiner. No paper may silently replace this theorem
+with rank matching.
 
 ---
 
@@ -222,27 +274,54 @@ X_6=S^1_{\mathrm{cen}}\times T_1^2\times T_2^2\times T_3^2,
 
 because the right-hand side is seven-dimensional.
 
-### Three-spatial-leg realization
+### World-in-world comparison carrier
 
-When using the alternative \(1+9\) representation:
-
-\[
-M_{10}\simeq\mathbb R_t\times W_1^3\times W_2^3\times W_3^3.
-\]
-
-Choose one observed leg:
+The lawful `3 x 3` construction is a field between two rank-three tangent
+spaces,
 
 \[
-Y_4=\mathbb R_t\times W_o^3,
+Q_{\mathrm{WW}}\in\Gamma\!\left(\operatorname{Hom}(TP,TI)\right).
 \]
 
-and define:
+In local orthonormal frames it has nine components. At a nonsingular
+background, polar decomposition gives
 
 \[
-X_6=W_j^3\times W_k^3.
+\operatorname{Mat}(3,\mathbb R)
+=\mathfrak{so}(3)\oplus\operatorname{Sym}(3,\mathbb R),
+\qquad 9=3+6,
 \]
 
-Do not multiply \(Y_4\) by all three \(W_i^3\), which double-counts the observed leg.
+and a selected flag gives
+
+\[
+\operatorname{Sym}(3,\mathbb R)
+=\mathbb RI_3\oplus\mathcal D_0\oplus\mathcal O,
+\qquad 6=1+2+3.
+\]
+
+Thus
+
+\[
+1+3\times3=(1+3)+(1+2+3)=4+6=10
+\]
+
+is a component count after an ordering scalar is supplied. Do not rewrite it
+as three independent three-manifolds, and do not use it to derive `M10`, `Y4`,
+Lorentzian signature, or the selected q79 global geometry.
+
+The q79 carrier has the matching rank profile
+
+\[
+\mathcal H_{\mathrm{CLN}}
+=L_{\mathrm{shared}}\otimes
+(\mathcal O\oplus\mathcal A_0\oplus\mathcal A),
+\qquad \operatorname{rank}=1+2+3,
+\]
+
+but the local and global objects may be identified only after constructing an
+intertwiner that respects transition functions, metrics, covariant
+derivatives, and the selected vertical operators.
 
 ## 2. Symbol conventions
 
@@ -258,6 +337,9 @@ Reserve:
 | \(P_i,\Pi_i\) | vertical spectral projector |
 | \(P\) | coherent projector or explicitly named reduction map; never both in one section |
 | \(Q_{\mathrm{inc}}=I-P\) | noncoherent projector |
+| \(Q_{\mathrm{WW}}\) | world-in-world comparison field in \(\operatorname{Hom}(TP,TI)\); never a projector |
+| \(\mathcal A_0\) | trace-zero rank-two summand of the selected q79 degree-three carrier |
+| \(L_{\mathrm{shared}}\) | common phase/holonomy line bundle; not physical time |
 | \(Q_\xi=BB^\ast\) | stochastic noise covariance |
 | \(\mathcal R\) | reduction channel |
 | \(\mathcal J\) | lifting/preparation channel |
@@ -1481,6 +1563,12 @@ Suggested abstract sentence:
 - Replace the positive Gram metric as a Lorentzian candidate with a principal-symbol construction.
 - Separate internal gap, coherent contraction, and external cutoff scales.
 - Add the complete admissibility-margin ledger.
+- Add the typed world-in-world comparison field and prove the local
+  `Mat(3,R) = so(3) + Sym(3,R)` decomposition.
+- State that `1+3 x 3=4+6` is a component identity, not dimension or signature
+  selection.
+- Record the selected q79 `1+2+3` trace-split carrier and leave its
+  bundle-and-connection intertwiner as an explicit downstream theorem.
 
 ## `The_Projection__Admissibility_Principle__Structural_Constraints_on_Effective_Physical_Description (1).md`
 
@@ -1534,6 +1622,8 @@ Suggested abstract sentence:
 - Use the principal symbol of the local physical field equations.
 - State that \(3+1\) base dimension is assumed in the canonical FP realization unless a separate dimension-selection theorem is proved.
 - Recast exclusions of Euclidean, \(2+2\), and higher-time signatures as conditional hyperbolicity/stability arguments, not universal no-go theorems.
+- State explicitly that neither the `3 x 3` comparison-field count nor the
+  rank-six q79 carrier determines principal-symbol inertia.
 
 ## `Modal_Triplet_Theory__MTT_as_a_Superset_v2.md`
 
@@ -2121,6 +2211,12 @@ Suggested abstract sentence:
 - Do not infer one Higgs mode from a positive Hessian without proving the anchored quotient is one-dimensional.
 - Add compact-resolvent or isolated-minimum hypotheses for discrete spectra.
 - Place family indices on internal geometry and state all topology inputs.
+- Replace universal internal-dimension-three and forced-Spin claims by a
+  conditional double-cover theorem with a declared oriented rank-three bundle.
+- Distinguish the q79 local `Dic_3` lift from the still-open strict global Spin
+  obstruction calculation.
+- Treat circle--lens--nil as carrier/operator roles. Do not use literal
+  `S1 x Lens x Nil` or manifold nesting as a proof source.
 
 ## `Closure_Strain_Geometry_and_the_Structure_of_the_Standard_Model_v5.md`
 
@@ -2134,6 +2230,12 @@ Suggested abstract sentence:
 - Do not claim unique Higgs or family number without dimensional/index classification.
 - Derive curvature from an explicit connection/distribution, not from \(\nabla s\neq0\) alone.
 - Classify the result as a matter-encoding realization.
+- Retain the exact local strain normal form
+  `Sym(3,R) = R I + D0 + O` with dimensions `1+2+3`.
+- Do not identify that local split with the q79 trace-split carrier by rank
+  alone; require an explicit same-source intertwiner.
+- Treat family, Higgs, charge, confinement, mixing, and CP statements as
+  conditional encodings until their source operators are proved.
 
 ## `Proto_Spinor_Closure_and_Worldsheet_Encoding_in_Modal_Triplet_Theory_v3.md`
 
@@ -2146,6 +2248,10 @@ Suggested abstract sentence:
 - State the domain of validity and truncation error.
 - Do not infer worldsheet consistency or target-space physics from analogy alone.
 - Keep Weyl/Dirac/twistor regimes as conditional encodings.
+- State that the bridge is local/quadratic unless worldsheet beta functions,
+  Weyl and modular consistency, ghosts, and truncation errors are controlled.
+- Use the q79 carrier as a target of a typed bridge, not as evidence that the
+  bridge is already global.
 
 ## `World_in_World_Genesis__A_Proto_Geometric_Origin_of_Time__Gravity__Matter__and_Quantization_in_Modal_Triplet_Theory_v4.md`
 
@@ -2158,6 +2264,12 @@ Suggested abstract sentence:
 - Do not claim time, gravity, matter, and quantization follow from one closure premise without explicit constructions.
 - Use the canonical physical-time/stabilization-time split.
 - Label the proto-geometric origin proposal as a research program.
+- Replace ordinary base/fiber dimension multiplication by
+  `Q_WW in Gamma(Hom(TP,TI))`.
+- Retain `9=3+6` and `6=1+2+3` only as local representation decompositions.
+- Separate a compact shared phase circle from noncompact physical time.
+- State the missing globalization, q79 intertwiner, and strict Spin-obstruction
+  theorems explicitly.
 
 ## `Closure_Geometry_and_Unified_Dynamics__A_Ten_Dimensional_Action_for_Mass__Scalar_Relaxation__Quantization__and_Curvature_v3.md`
 
@@ -2178,6 +2290,13 @@ Suggested abstract sentence:
 - The action imports the Einstein–Hilbert term; the reduction is not a projection-only derivation of GR.
 - Add a genuine consistent-truncation condition for discarded equations.
 - Remove direct claims of deriving the full Standard Model.
+- State that `M10 -> Y4` and its Lorentzian metric are realization inputs, not
+  consequences of the `1+3 x 3` component count.
+- Use q79 Fu--Yau geometry as the current selected compactification candidate
+  and Lens--Nil only as an auxiliary/effective model.
+- Require the discarded-mode equations, source-normalized pole observables,
+  and the same-source local-to-q79 intertwiner before claiming a physical
+  reduction.
 
 # Group 11 — General relativity, geometry, and inflation
 
@@ -3153,6 +3272,17 @@ time-energy
 - No coordinate factor is counted twice.
 - Every first Chern representative is closed and integral.
 - Every central phase circle is clearly a coordinate, quotient, or bundle—not ambiguous.
+- Every `3 x 3` count is typed as components of
+  `Hom(TP,TI)`, never as multiplication of manifold dimensions.
+- Every use of `1+3 x 3=4+6` says whether it is a component identity or a
+  separately proved tangent-bundle decomposition.
+- Every identification of the local `1+2+3` strain split with the q79
+  `1+2+3` trace split supplies transition, metric, connection, and operator
+  intertwining data.
+- Every q79 spin claim distinguishes the local `Dic_3` lift, strict global
+  Spin closure, and any conditional SpinC cancellation.
+- Physical time is never identified with the compact shared phase circle
+  without a noncompact lift and a physical-evolution theorem.
 
 ## 2. Map-typing tests
 
@@ -3222,7 +3352,10 @@ For every theorem, record:
 | UV-Finite, Unitary Quantum Gravity | SPT-Filtered Euclidean TT Model |
 | Indivisible Stochastic Processes | Title naming the exact divisibility criterion |
 | Dark Sector as Missing Encodings | A Projection-First Dark-Sector Hypothesis |
-| Most General Ten-Dimensional Action | Minimal Regime-Local Ten-Dimensional Action Ansatz |
+| The Proto-Spinor: Triadic Closure from Pointwise Internal Embedding | The Proto-Spinor: Conditional Spinorial Closure and the q79 Interface |
+| World-in-World Genesis: A Proto-Geometric Origin of Time, Gravity, Matter, and Quantization | World-in-World Genesis: Local Comparison Geometry and a Globalization Program |
+| Closure-Strain Geometry and the Structure of the Standard Model | Closure-Strain Geometry: Local Normal Forms and Conditional Matter Encodings |
+| Most General Ten-Dimensional Action | Closure Geometry and a Regime-Local Ten-Dimensional Action Ansatz |
 
 ---
 
@@ -3236,6 +3369,12 @@ After these changes, the strongest defensible MTT core is:
 }
 \]
 
+In addition, successor calculation packets close embedded renormalized-SM
+equivalence at the explicitly adopted one-shared-physical-primitive/profile
+standard.  This is a stronger status than the original audit recorded, but it
+is not strict no-knob selection and does not derive standard BRST quantization
+from MTT.  Paper revisions must preserve both halves of that statement.
+
 The following remain open research programs rather than completed consequences:
 
 - unique circle–lens–nil exhaustiveness;
@@ -3243,7 +3382,10 @@ The following remain open research programs rather than completed consequences:
 - unique Lorentzian \(3+1\) selection;
 - the basin–trace Born theorem;
 - projection-only derivation of Einstein gravity;
-- unique Standard Model and family selection;
+- strict no-knob Standard Model, family, and observed-branch selection;
+- the same-source world-in-world/strain-to-q79 bundle-and-connection
+  intertwiner;
+- the strict global q79 Spin obstruction calculation;
 - a constructive interacting unitary quantum gravity;
 - a canonical microscopic realization;
 - a genuinely held-out quantitative prediction.
@@ -3258,6 +3400,10 @@ A revision is complete only when:
 
 - [ ] the old right-inverse theorem has no remaining downstream citation;
 - [ ] all physical geometry uses the canonical \(4+6\) convention;
+- [ ] every `3 x 3` world-in-world claim is a typed comparison field, not
+  manifold-dimension multiplication;
+- [ ] q79 profile equivalence and strict no-knob selection are reported as
+  different tiers;
 - [ ] all FP source corrections are applied;
 - [ ] locality descent is a named theorem;
 - [ ] every probability statement has a measure/state;
@@ -3269,4 +3415,3 @@ A revision is complete only when:
 - [ ] the index reflects actual theorem status;
 - [ ] the corpus builds without broken references to withdrawn theorems;
 - [ ] all renamed papers and theorem labels are propagated through citations and the index.
-

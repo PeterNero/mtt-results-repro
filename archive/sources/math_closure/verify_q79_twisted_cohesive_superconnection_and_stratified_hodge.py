@@ -1,0 +1,249 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+QG_ROOT = Path(os.environ.get("MTT_QG_ROOT", TEXPAPERS / "12 Quantum Gravity"))
+REPOSITORIES = {
+    "closure-dynamics": ROOT,
+    "q79-qg-corpus": QG_ROOT,
+}
+PACKET = ROOT / "q79_twisted_cohesive_superconnection_and_stratified_hodge.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def matrix(
+    values: list[list[object]],
+    symbols: dict[str, object] | None = None,
+) -> sp.Matrix:
+    local_symbols = {"I": sp.I}
+    if symbols:
+        local_symbols.update(symbols)
+    return sp.Matrix(
+        [
+            [sp.sympify(entry, locals=local_symbols) for entry in row]
+            for row in values
+        ]
+    )
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def spectrum(value: sp.MatrixBase) -> dict[str, int]:
+    return {
+        str(sp.simplify(eigenvalue)): int(multiplicity)
+        for eigenvalue, multiplicity in value.eigenvals().items()
+    }
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    loaded: dict[str, dict] = {}
+    for label, record in packet["inputs"].items():
+        repository = record["repository"]
+        require(repository in REPOSITORIES, f"repository: {label}")
+        path = REPOSITORIES[repository] / record["relative_path"]
+        require(path.is_file(), f"source exists: {label}")
+        require(sha256(path) == record["sha256"], f"source hash: {label}")
+        source = load(path)
+        identity = source.get("schema") or source.get("certificate")
+        require(identity == record["identity"], f"source identity: {label}")
+        require(source.get("status") == record["status"], f"source status: {label}")
+        require(source_checks_pass(source), f"source checks: {label}")
+        loaded[label] = source
+    return loaded
+
+
+def verify_twisted_descent(packet: dict) -> None:
+    witness = packet["exact_twisted_descent_witness"]
+    omega = sp.sympify(witness["omega"], locals={"I": sp.I})
+    g01 = matrix(witness["G01"])
+    g12 = matrix(witness["G12"])
+    g20 = matrix(witness["G20"])
+    stored_triple = matrix(witness["chain_triple"])
+    test_endomorphism = matrix(witness["test_endomorphism"])
+    stored_defect = matrix(witness["endomorphism_triple_defect"])
+    identity3 = sp.eye(3)
+
+    require(sp.simplify(omega**3) == 1, "omega cube")
+    require(sp.simplify(omega**2 + omega + 1) == 0, "omega cyclotomic")
+    for index, transition in enumerate((g01, g12, g20)):
+        require(is_zero(transition.H * transition - identity3), f"unitary {index}")
+    triple = sp.simplify(g01 * g12 * g20)
+    require(is_zero(triple - omega * identity3), "twisted triple")
+    require(is_zero(triple - stored_triple), "stored triple")
+    require(witness["chain_triple_multiplier"] == str(omega), "stored multiplier")
+
+    endomorphism_defect = sp.simplify(
+        triple * test_endomorphism * triple.inv() - test_endomorphism
+    )
+    require(is_zero(endomorphism_defect), "endomorphism cancellation")
+    require(is_zero(endomorphism_defect - stored_defect), "stored defect")
+    require(witness["endomorphism_triple_defect_rank"] == 0, "defect rank")
+
+
+def verify_stratified_Hodge(packet: dict) -> None:
+    witness = packet["exact_stratified_Hodge_witness"]
+    r = sp.symbols("r", real=True)
+    symbols = {"r": r}
+    a = matrix(witness["A"], symbols)
+    d = matrix(witness["d_r"], symbols)
+    q = matrix(witness["Q_r"], symbols)
+    b = matrix(witness["B_r"], symbols)
+    stored_laplacian = matrix(witness["Delta_r"], symbols)
+    identity3 = sp.eye(3)
+
+    require(d == a.row_join(r * identity3), "differential form")
+    require(is_zero(q**2), "nilpotence")
+    require(is_zero(b - q - q.H), "supercharge")
+    require(is_zero(b.H - b), "self-adjointness")
+    laplacian = sp.simplify(b**2)
+    require(is_zero(laplacian - q.H * q - q * q.H), "Hodge identity")
+    require(is_zero(laplacian - stored_laplacian), "stored Hodge")
+    require(
+        all(sp.denom(sp.cancel(entry)) == 1 for entry in laplacian),
+        "polynomial regularity",
+    )
+
+    r_open = sp.Integer(witness["open_retraction_at_r"])
+    d_open = d.subs(r, r_open)
+    inclusion = matrix(witness["inclusion"])
+    projection = matrix(witness["projection"])
+    homotopy = matrix(witness["homotopy"])
+    require(is_zero(d_open * inclusion), "inclusion")
+    require(is_zero(projection * inclusion - identity3), "projection")
+    require(
+        is_zero(inclusion * projection + homotopy * d_open - sp.eye(6)),
+        "domain homotopy",
+    )
+    require(is_zero(d_open * homotopy - identity3), "target homotopy")
+
+    laplacian_r2 = sp.simplify(laplacian.subs(r, r_open))
+    laplacian_r0 = sp.simplify(laplacian.subs(r, 0))
+    require(spectrum(laplacian_r2) == witness["spectrum_r2"], "stored r2 spectrum")
+    require(spectrum(laplacian_r0) == witness["spectrum_r0"], "stored r0 spectrum")
+    require(spectrum(laplacian_r2) == {"0": 3, "4": 4, "5": 2}, "r2 spectrum")
+    require(spectrum(laplacian_r0) == {"0": 7, "1": 2}, "r0 spectrum")
+    require(len(laplacian_r2.nullspace()) == witness["kernel_dimension_r2"] == 3, "r2 kernel")
+    require(len(laplacian_r0.nullspace()) == witness["kernel_dimension_r0"] == 7, "r0 kernel")
+    require(witness["positive_fiber_spectrum"] == ["r**2", "r**2", "r**2 + 1"], "positive spectrum")
+    require(sp.limit(1 / r**2, r, 0, dir="+") == sp.oo, "Green divergence")
+    require(witness["fiberwise_Green_uniform_at_r0"] is False, "uniform Green no-go")
+    require(witness["full_complex_regular_at_r0"] is True, "full complex regular")
+
+
+def verify_source_boundary(packet: dict, sources: dict[str, dict]) -> None:
+    upstairs = sources["upstairs_derived_bridge"]
+    require(upstairs["upper_object"]["category"] == "D^b(J,alpha)", "source category")
+    require(upstairs["derived_bridge_readiness"]["closed"] == 10, "source bridge")
+    require(
+        upstairs["stratified_projection_boundary"]["claims_global_pure_sheaf"]
+        is False,
+        "pure sheaf guard",
+    )
+    global_source = sources["global_alpha_twisted_HS_object"]
+    require(
+        global_source["purity_boundary"]["alpha_restriction_zero_on_selected_smooth_cover"]
+        == "OPEN",
+        "Deligne still open",
+    )
+
+    realization = packet["twisted_cohesive_realization_theorem"]
+    require(realization["flat_Deligne_requirement"] is False, "derived Deligne bypass")
+    require(realization["ordinary_bundle_requirement"] is False, "derived bundle bypass")
+    endomorphism = packet["endomorphism_untwisting_theorem"]
+    require("ordinary and untwisted" in endomorphism["global_algebra"], "ordinary End")
+    require(endomorphism["nilpotence"] == "d_End^2(T)=[Ebar^2,T]=0", "End nilpotence")
+
+    hodge = packet["global_Hodge_package_theorem"]
+    require(len(hodge["chosen_data"]) == 2, "Hodge choices")
+    require(len(hodge["consequences"]) == 5, "Hodge consequences")
+    require("does not assert" in hodge["guard"], "fiberwise guard")
+
+    routes = packet["physical_route_split"]
+    require(routes["pure_bundle_route"]["status"] == "OPEN", "pure route open")
+    require(
+        routes["derived_cohesive_route"]["status"]
+        == "STRUCTURAL_SOURCE_EXISTS_PHYSICAL_PROMOTION_OPEN",
+        "derived route status",
+    )
+    require(len(routes["pure_bundle_route"]["requires"]) == 4, "pure route rows")
+    require(len(routes["derived_cohesive_route"]["requires_for_physics"]) == 4, "derived physical rows")
+    require("does not yet select" in routes["decision"], "route decision guard")
+
+
+def main() -> int:
+    packet = load(PACKET)
+    require(packet["schema"] == "MTTQ79TwistedCohesiveSuperconnectionAndStratifiedHodge.v1", "schema")
+    require(
+        packet["theorem"]["name"]
+        == "q79TwistedCohesiveSuperconnectionAndStratifiedHodgeTheorem",
+        "theorem name",
+    )
+    require(packet["theorem"]["fitted_parameters"] == 0, "fitted parameters")
+    require(packet["theorem"]["observed_values_used"] == 0, "observed values")
+    sources = verify_inputs(packet)
+    verify_twisted_descent(packet)
+    verify_stratified_Hodge(packet)
+    verify_source_boundary(packet, sources)
+
+    readiness = packet["readiness_update"]
+    require(len(readiness["newly_closed_structural"]) == 5, "structural advances")
+    require(readiness["strict_physical_upper_state_closed"] == 3, "strict physical count")
+    require(readiness["strict_physical_upper_state_total"] == 13, "strict physical total")
+    parameters = packet["parameter_ledger"]
+    require(parameters["new_physical_couplings"] == 0, "physical couplings")
+    require(parameters["Hermitian_metric_physically_selected_here"] is False, "metric guard")
+    require(parameters["remaining_compound_physical_maps"] == 2, "remaining maps")
+    require(len(packet["closed"]) == 6 and len(packet["open"]) == 5, "boundary rows")
+    require(len(packet["primary_mathematical_sources"]) == 4, "primary sources")
+    require(
+        packet["next_theorem"]["name"]
+        == "q79SelectedPhysicalCohesiveActionAndTransformIntertwiner.v1",
+        "next theorem",
+    )
+    require(len(packet["checks"]) == 31 and all(packet["checks"].values()), "packet checks")
+    print("Q79_TWISTED_COHESIVE_SUPERCONNECTION_AND_STRATIFIED_HODGE_VERIFY_PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import math
@@ -24,6 +25,13 @@ IMPORTANT_KEY_PATTERN = re.compile(
     r"logdet|determinant|residual|error|value|row",
     re.IGNORECASE,
 )
+FORBIDDEN_PATH_TOKENS = {
+    "bad-memory-book",
+    "badmemorybook",
+    "humanvoicepass",
+    "the-universe-has-a-bad-memory",
+    "the-universe-had-a-bad-memory",
+}
 
 
 def sha256(path: Path) -> str:
@@ -212,6 +220,32 @@ def iter_artifacts(repo_path: Path, source_type: str = "repository") -> Iterable
             yield path
 
 
+def artifact_allowed(relative: Path, source: dict[str, Any]) -> bool:
+    value = relative.as_posix()
+    folded = value.casefold()
+    if any(token in folded for token in FORBIDDEN_PATH_TOKENS):
+        return False
+    include_paths = {
+        str(path).replace("\\", "/").casefold()
+        for path in source.get("include_paths") or []
+    }
+    if include_paths and folded not in include_paths:
+        return False
+    include_globs = [
+        str(pattern).replace("\\", "/").casefold()
+        for pattern in source.get("include_globs") or []
+    ]
+    if include_globs and not any(
+        fnmatch.fnmatchcase(folded, pattern) for pattern in include_globs
+    ):
+        return False
+    exclude_globs = [
+        str(pattern).replace("\\", "/").casefold()
+        for pattern in source.get("exclude_globs") or []
+    ]
+    return not any(fnmatch.fnmatchcase(folded, pattern) for pattern in exclude_globs)
+
+
 def extract_authority_entries(
     source_root: Path,
     repo_lookup: dict[str, str],
@@ -274,7 +308,13 @@ def main() -> int:
         upstream = git(repo_path, "rev-parse", "@{upstream}") if git_source else None
         remote = git(repo_path, "remote", "get-url", "origin") if git_source else None
         status_porcelain = git(repo_path, "status", "--porcelain") if git_source else None
-        dirty = bool(status_porcelain) if git_source else None
+        status_lines = status_porcelain.splitlines() if status_porcelain else []
+        status_lines = [
+            line
+            for line in status_lines
+            if not any(token in line.casefold() for token in FORBIDDEN_PATH_TOKENS)
+        ]
+        dirty = bool(status_lines) if git_source else None
         repository_rows.append(
             {
                 **repo,
@@ -284,7 +324,7 @@ def main() -> int:
                 "git_upstream": upstream,
                 "git_synced": bool(head and upstream and head == upstream),
                 "git_dirty": dirty,
-                "git_status_porcelain": status_porcelain.splitlines() if status_porcelain else [],
+                "git_status_porcelain": status_lines,
                 "remote": remote,
             }
         )
@@ -293,6 +333,8 @@ def main() -> int:
 
         for path in iter_artifacts(repo_path, repo.get("source_type", "repository")):
             relative = Path(path.name) if repo_path.is_file() else path.relative_to(repo_path)
+            if not artifact_allowed(relative, repo):
+                continue
             kind = artifact_kind(relative, repo.get("source_type", "repository"))
             row: dict[str, Any] = {
                 "repo_id": repo["id"],

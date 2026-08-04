@@ -1,6 +1,6 @@
 # MTT True SM Closure Cross-Repo Part Status Audit v1
 
-Generated: 2026-07-04T19:39:33.173200+00:00
+Generated: 2026-07-13T06:34:18.038801+00:00
 
 ## Executive correction
 
@@ -8,7 +8,7 @@ The latest cross-repo status is not the older broad statement that alpha1/dotD r
 
 ## Repository coverage
 
-- mtt-sm-parity-closure: candidates=709, certificates=705, proof_md=710; Verification result: PASS
+- mtt-sm-parity-closure: candidates=1051, certificates=1046, proof_md=1050; Verification result: PASS
 - mtt-sm-parity-repro: candidates=0, certificates=0, proof_md=0; Verification result: PASS; SM-parity closure: TRUE; true SM equivalence: FALSE; no-knob closure: FALSE
 - mtt-q79-proof-repro: candidates=139, certificates=262, proof_md=322; Verification result: PASS
 - mtt-qa-su3-packet-proof: candidates=438, certificates=300, proof_md=288; Verification result: PASS; SM-parity closure: TRUE; true SM equivalence: FALSE; no-knob closure: FALSE; Verification result: PASS

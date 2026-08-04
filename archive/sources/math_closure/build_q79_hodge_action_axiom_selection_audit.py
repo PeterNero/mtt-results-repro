@@ -1,0 +1,1254 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+RESEARCH_DATE = "2026-07-30"
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+SM_ROOT = Path(
+    os.environ.get(
+        "MTT_SM_CLOSURE_ROOT",
+        TEXPAPERS / "mtt-sm-parity-closure",
+    )
+)
+GR_ROOT = Path(
+    os.environ.get(
+        "MTT_PROTOSPINOR_GR_ROOT",
+        TEXPAPERS / "mtt-protospinor-gr-response-proof",
+    )
+)
+QM_ROOT = Path(
+    os.environ.get(
+        "MTT_QM_SOURCE_ROOT",
+        TEXPAPERS / "mtt-qm-source-proof",
+    )
+)
+
+PRIOR_HODGE = ROOT / "q79_minimal_hodge_closure_action_composition.packet.json"
+PHYSICAL_SEED = (
+    ROOT / "q79_physical_gauge_pair_deformation_seed_contract.packet.json"
+)
+UPSTAIRS_AUTOMORPHISM = (
+    ROOT / "upstairs_automorphism_projection_reference.packet.json"
+)
+SHARED_CIRCLE = ROOT / "shared_circle_sm_gauge_stack_reference.packet.json"
+ACTION_INDEPENDENCE = (
+    SM_ROOT
+    / "candidate_data"
+    / "selected_sharedcircleclosurehessiantogaugezeromoderestrictionandcountertermcompleteness"
+    / "closure_cost_vs_physical_action_logical_independence.packet.json"
+)
+FIXED_POINT_GRADIENT = (
+    SM_ROOT
+    / "candidate_data"
+    / "selected_closureshadowgaugeactionaxiomderivation_or_explicitadoptionandheldoutvalidation"
+    / "fixed_point_semigroup_to_damped_overlap_derivation.packet.json"
+)
+ACTION_UNIT = (
+    GR_ROOT
+    / "certificates"
+    / "selected_physical_alpha_or_action_unit_theorem_certificate.json"
+)
+NONLINEAR_NOGO = (
+    GR_ROOT
+    / "certificates"
+    / "quadratic_tt_nonlinear_action_nogo_certificate.json"
+)
+FINITE_BV_HODGE = (
+    QM_ROOT
+    / "certificates"
+    / "q79_sm_finite_shell_bv_pushforward_regulator_comparison.certificate.json"
+)
+MIXED_ORDER_NOGO = (
+    QM_ROOT
+    / "certificates"
+    / "q79_costello_gaugefixing_laplace_and_interior_heat_kernel.certificate.json"
+)
+
+OUT_PACKET = ROOT / "q79_hodge_action_axiom_selection_audit.packet.json"
+OUT_NOTE = ROOT / "Q79_HODGE_ACTION_AXIOM_SELECTION_AND_SCALE_RIGIDITY_v1.md"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_record(
+    repository: str,
+    repository_root: Path,
+    path: Path,
+    payload: dict,
+) -> dict[str, object]:
+    record: dict[str, object] = {
+        "repository": repository,
+        "relative_path": path.relative_to(repository_root).as_posix(),
+        "sha256": sha256(path),
+    }
+    if payload.get("schema"):
+        record["schema"] = payload["schema"]
+    if payload.get("status"):
+        record["status"] = payload["status"]
+    return record
+
+
+def matrix_json(value: sp.MatrixBase) -> list[list[str]]:
+    return [[str(sp.simplify(entry)) for entry in row] for row in value.tolist()]
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def block_diag_twice(value: sp.MatrixBase) -> sp.Matrix:
+    zero = sp.zeros(value.rows)
+    return sp.Matrix.vstack(
+        sp.Matrix.hstack(value, zero),
+        sp.Matrix.hstack(zero, value),
+    )
+
+
+def build_note(packet: dict) -> str:
+    blockers = packet["blocker_assessment"]
+    return f"""# q79 Hodge Action Axiom Selection and Scale Rigidity v1
+
+**Date:** {packet["date"]}
+
+**Executable packet:** `q79_hodge_action_axiom_selection_audit.packet.json`
+
+**Builder:** `build_q79_hodge_action_axiom_selection_audit.py`
+
+**Independent verifier:** `verify_q79_hodge_action_axiom_selection_audit.py`
+
+## 1. Question
+
+The preceding minimal-action theorem proved that
+
+```text
+C(psi)=1/2 (||D psi||^2+||D* psi||^2)
+```
+
+is the unique member of a three-coefficient quadratic class after imposing
+equal exact/coexact weights, harmonic zero cost and unit normalization. It did
+not show why MTT should select those requirements.
+
+This audit separates four logically different questions:
+
+1. Does a shared complex circle force equal exact/coexact weights?
+2. Can one upstream first-order closure object force them?
+3. Which coefficient is a convention and which is a physical scale?
+4. Does the resulting quadratic repair generator equal the full physical
+   action?
+
+## 2. General Hodge-sector classification
+
+For a Hilbert complex with `D^2=0`, write
+
+```text
+P_ex = D*D,
+P_co = DD*,
+P_h  = harmonic projector
+```
+
+in the normalized finite witness. The most general sector-diagonal
+nonnegative Hessian is
+
+```text
+A_(x,y,z)=x P_ex+y P_co+z P_h.
+```
+
+Pointwise preservation of harmonic cohomology by the repair flow is equivalent
+to
+
+```text
+A P_h=0,
+```
+
+and hence to `z=0`. An isometric adjoint-reversal `S` satisfying
+
+```text
+S D S^(-1)=D*,
+S P_ex S^(-1)=P_co
+```
+
+forces `x=y`. Positivity and nondegeneracy off cohomology then leave exactly
+one positive ray:
+
+```text
+(x,y,z)=(kappa,kappa,0),  kappa>0.
+```
+
+This recovers the preceding coefficient notation through
+
+```text
+x=a+c,  y=b+c,  z=c.
+```
+
+Thus `z=0` gives `c=0`, and `x=y` gives `a=b`.
+
+The cohomology statement concerns the closure-repair generator. It does not
+assert that all physical cohomology states are massless after interactions,
+symmetry breaking or transferred products.
+
+## 3. Exact shared-circle no-go
+
+The shared circle alone does not force `x=y`.
+
+The verifier realifies the three-dimensional Hodge witness to six dimensions
+and equips it with
+
+```text
+J^2=-I,
+J^4=I.
+```
+
+Both
+
+```text
+A_sym  = P_ex+P_co,
+A_asym = 2 P_ex+P_co
+```
+
+commute with `J`, preserve the same harmonic kernel and admit the same
+twofold-sign/fourfold-return circle structure. Yet only `A_sym` has equal
+exact/coexact weights.
+
+Therefore:
+
+```text
+shared U(1) phase + double return does not by itself select the Hodge ratio.
+```
+
+This is useful rather than negative: it tells us exactly what extra structure
+the circle must act on.
+
+## 4. Closure-supercharge square theorem
+
+Let the nilpotent closure differential be `Q=D`, with selected Hilbert adjoint
+`Q*=D*`. Define the two self-adjoint first-order closure charges
+
+```text
+B1 = D+D*,
+B2 = i(D-D*).
+```
+
+Nilpotence gives the exact algebra
+
+```text
+B1^2=B2^2=Delta_D,
+{{B1,B2}}=0,
+Delta_D={{D,D*}}=D*D+DD*.
+```
+
+More generally, for real `p,q`,
+
+```text
+B_(p,q)=p B1+q B2,
+B_(p,q)^2=(p^2+q^2) Delta_D.
+```
+
+Equivalently, for `u=rho exp(i theta)`,
+
+```text
+B_u=uD+conj(u)D*,
+B_u^2=rho^2 Delta_D.
+```
+
+This is the decisive reduction. If MTT selects one self-adjoint first-order
+closure charge in the single-shared-coefficient class and defines linear
+repair by its square, then:
+
+- harmonic zero cost is automatic;
+- exact and coexact weights are automatically equal;
+- the shared-circle phase `theta` changes the first-order polarization but
+  disappears from the repair Hessian;
+- only the positive scale `kappa=rho^2` remains.
+
+At quarter turns the charge sequence is
+
+```text
+B1 -> B2 -> -B1 -> -B2 -> B1,
+```
+
+while every square is `Delta_D`. This gives a precise mathematical role for
+the `+i/-i` circle choice: it can mark a closure-charge polarization without
+creating a new quadratic action. It does not yet prove that Lens selects one
+physical polarization or one arrow of time.
+
+The algebra is standard Hodge/supersymmetric-quantum-mechanics mathematics.
+The new MTT result is the source reduction: the former three action-shape
+requirements can be replaced by one upstream closure-supercharge
+factorization premise.
+
+## 5. Nonlinear repair-to-operator theorem
+
+The generic fixed-point statement
+
+```text
+gradient repair linearizes to minus the Hessian
+```
+
+is already present in the current SM corpus. It is not being reproved here as
+a new MTT result.
+
+The missing upstream link is what makes that Hessian a Hodge operator. Let
+`Phi(C)` be a nonlinear closure-defect map into a Hilbert defect space, with
+
+```text
+Phi(C_*)=0.
+```
+
+Define the closure cost and repair flow by
+
+```text
+E(C)=1/2 ||Phi(C)||^2,
+partial_tau C=-grad E(C).
+```
+
+If `L=D Phi(C_*)`, then exact differentiation at the zero-defect fixed point
+gives
+
+```text
+Hess E(C_*)=L*L,
+D(-grad E)(C_*)=-L*L.
+```
+
+The terms involving the second derivative of `Phi` vanish because
+`Phi(C_*)=0`. Therefore, if the selected defect Jacobian is the closure charge
+
+```text
+L=B_u=uD+conj(u)D*,
+```
+
+then
+
+```text
+Hess E(C_*)=|u|^2 Delta_D.
+```
+
+This is the exact realization of the proposed hierarchy:
+
+```text
+nonlinear closure defect
+  -> squared-defect repair functional
+  -> first derivative B_u
+  -> Hessian B_u^2
+  -> heat repair and unitary boundary.
+```
+
+The executable witness uses a genuinely nonlinear polynomial defect map. Its
+zero-point Jacobian is the stacked pair `(D,D*)`, its cost Hessian is exactly
+`Delta_D`, and the Jacobian of its negative-gradient flow is exactly
+`-Delta_D`.
+
+## 6. Scale rigidity
+
+For
+
+```text
+A_kappa=kappa Delta_D,  kappa>0,
+```
+
+the kernel, harmonic projector, positive spectral projector and commutant are
+independent of `kappa`. The real and imaginary families obey
+
+```text
+exp(-tau A_kappa)=exp(-(kappa tau) Delta_D),
+exp(-it A_kappa)=exp(-i(kappa t) Delta_D).
+```
+
+Therefore all dimensionless action-shape data determine only a positive ray.
+Choosing `kappa_int=1` is a valid internal unit convention. It is not a
+prediction of an SI action, time, length, Planck or Newton scale. This agrees
+with the existing physical-action-unit certificate, which leaves one absolute
+dimensionful anchor open.
+
+The parameter count is consequently:
+
+```text
+three sector weights before structure,
+two after harmonic preservation,
+one positive overall scale after closure-charge factorization,
+zero remaining dimensionless Hodge-shape ratios.
+```
+
+No observed value or fitted parameter is used.
+
+## 7. Why this is not yet the full physical action
+
+Two independent obstructions remain.
+
+First, the SM closure/action independence certificate proves that a closure
+cost cannot be renamed a physical Lagrangian without a selected
+shadow/restriction theorem. Second, a quadratic Hessian never selects its
+nonlinear completion. The exact scalar family
+
+```text
+f_lambda(s)=kappa s^2/2+lambda s^4/4
+```
+
+has the same value, gradient and Hessian at `s=0` for every `lambda`, while its
+fourth derivative is `6 lambda`.
+
+There is also a domain restriction. The theorem applies to a genuine
+first-order Hilbert differential such as the conditional q79 Dolbeault
+deformation operator. It does not override the existing mixed-order Maxwell
+detour no-go: for that BV complex, the naive adjoint Hodge sum has quartic
+rather than Laplace-type principal symbol.
+
+## 8. q79 status after this theorem
+
+The q79 deformation contract already has the structural formula
+
+```text
+B_Q=Dbar_Q+Dbar_Q*,
+Delta_Q=B_Q^2.
+```
+
+Once the four physical endpoint/chamber/metric rows are supplied, `Dbar_Q`,
+its adjoint and this factorization are functorial. The new theorem therefore
+removes the need to source three unrelated Hodge-action coefficients.
+
+What it does not yet supply is the physical nonlinear q79 defect map whose
+Jacobian is `B_Q`, or prove that this repair cost is the SM/QFT/GR action. The
+exact next source statement is:
+
+```text
+q79SelectedClosureDefectJacobianToHodgeOperator.v1
+```
+
+It must show, on the selected metric and operator domain, that one physical
+nonlinear closure-defect map vanishes at the q79 fixed point and has derivative
+
+```text
+D Phi_Q(C_*)=sqrt(kappa) B_Q.
+```
+
+The theorem above then gives the repair-flow derivative
+`-kappa B_Q^2` with no further Hessian assumption. One coefficient must be
+shared across the full q79 complex, with no additional sector weights.
+
+## 9. Frontier
+
+Closed exactly here:
+
+- classification of sector-diagonal Hodge repair Hessians;
+- harmonic preservation iff the harmonic weight vanishes;
+- equal-weight positive ray under adjoint reversal;
+- shared-circle and double-return insufficiency by explicit counterexample;
+- single closure-supercharge square implies equal weights and harmonic zero
+  cost automatically;
+- a zero-defect squared-residual functional has Hessian `L*L`, so a selected
+  closure-charge Jacobian emits the Hodge repair operator rather than assuming
+  it;
+- phase independence and one-scale rigidity of the repair Hessian;
+- nonlinear nonuniqueness by an exact same-Hessian family;
+- zero new fitted or observed-value inputs.
+
+Still open:
+
+```text
+B.HS.01:     {blockers["B.HS.01"]}
+B.GEO.01:    {blockers["B.GEO.01"]}
+B.OP.01:     {blockers["B.OP.01"]}
+B.ACTION.01: {blockers["B.ACTION.01"]}
+```
+
+## 10. External mathematical context
+
+The Hilbert-complex and Hodge-Laplacian framework is standard; see Arnold,
+Falk and Winther, *Finite element exterior calculus: from Hodge theory to
+numerical stability*, arXiv:0906.4325. The identification of a nilpotent
+differential and its adjoint as supercharges whose anticommutator is a Hodge
+Hamiltonian is classical; see Witten, *Supersymmetry and Morse Theory*,
+J. Differential Geometry 17 (1982), 661-692.
+
+These references support the mathematics, not the MTT physical source claim.
+
+## 11. Reproduction
+
+```powershell
+python .\\build_q79_hodge_action_axiom_selection_audit.py
+python .\\verify_q79_hodge_action_axiom_selection_audit.py
+```
+
+Expected output:
+
+```text
+Q79_HODGE_ACTION_AXIOM_SELECTION_AUDIT_BUILD_PASS
+Q79_HODGE_ACTION_AXIOM_SELECTION_AUDIT_VERIFY_PASS
+```
+"""
+
+
+def main() -> None:
+    prior_hodge = load(PRIOR_HODGE)
+    physical_seed = load(PHYSICAL_SEED)
+    upstairs_automorphism = load(UPSTAIRS_AUTOMORPHISM)
+    shared_circle = load(SHARED_CIRCLE)
+    action_independence = load(ACTION_INDEPENDENCE)
+    fixed_point_gradient = load(FIXED_POINT_GRADIENT)
+    action_unit = load(ACTION_UNIT)
+    nonlinear_nogo = load(NONLINEAR_NOGO)
+    finite_bv_hodge = load(FINITE_BV_HODGE)
+    mixed_order_nogo = load(MIXED_ORDER_NOGO)
+
+    require(
+        prior_hodge["schema"]
+        == "MTTQ79MinimalHodgeClosureActionComposition.v1",
+        "prior Hodge theorem schema",
+    )
+    require(
+        prior_hodge["theorem"]["tier"].endswith(
+            "PHYSICAL_Q79_ACTION_NOT_SELECTED"
+        ),
+        "prior Hodge theorem tier",
+    )
+    require(
+        physical_seed["status"].startswith(
+            "Q79_TRACEFREE_HETEROTIC_DEFORMATION_COMPLEX"
+        ),
+        "physical seed tier",
+    )
+    require(
+        upstairs_automorphism["status"]
+        == "FORWARD_UPSTAIRS_RULE_PROTOTYPE_CLOSED_PHYSICAL_COMMON_COMPLEX_OPEN",
+        "upstairs automorphism tier",
+    )
+    require(
+        shared_circle["theorem"]["tier"]
+        == "CLOSED_EXACT_CIRCLE_MAPPING_STACK_AND_LINEARIZED_HODGE_THEOREM",
+        "shared circle tier",
+    )
+    require(
+        action_independence["theorem"]["proved"] is True,
+        "closure/action independence theorem",
+    )
+    require(
+        fixed_point_gradient["status"]
+        == "CLOSURE_HESSIAN_GENERATES_UNIQUE_SELECTED_TIME_DAMPED_OVERLAP_KERNEL",
+        "fixed-point gradient tier",
+    )
+    require(
+        fixed_point_gradient["theorem"][
+            "proved_at_fixed_point_gradient_flow_tier"
+        ]
+        is True,
+        "fixed-point gradient theorem",
+    )
+    require(
+        action_unit["status"]
+        == "ALPHA_PHYS_REDUCED_TO_SINGLE_EXTERNAL_DIMENSIONFUL_ANCHOR",
+        "physical action unit tier",
+    )
+    require(
+        nonlinear_nogo["status"].startswith(
+            "QUADRATIC_TT_TO_NONLINEAR_ACTION_SELECTION_NOGO_CLOSED"
+        ),
+        "nonlinear no-go tier",
+    )
+    require(
+        finite_bv_hodge["status"].startswith(
+            "FREE_FINITE_SHELL_BV_HODGE_CYCLE"
+        ),
+        "finite BV Hodge tier",
+    )
+    require(
+        mixed_order_nogo["status"].startswith(
+            "Q79_NAIVE_ADJOINT_HODGE_LAPLACE_PROMOTION_EXCLUDED"
+        ),
+        "mixed-order Hodge no-go tier",
+    )
+
+    identity3 = sp.eye(3)
+    differential = sp.Matrix(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [0, 0, 0],
+        ]
+    )
+    adjoint = differential.T
+    exact_projector = adjoint * differential
+    coexact_projector = differential * adjoint
+    harmonic_projector = identity3 - exact_projector - coexact_projector
+    hodge_laplacian = exact_projector + coexact_projector
+    adjoint_reversal = sp.Matrix(
+        [
+            [0, 1, 0],
+            [1, 0, 0],
+            [0, 0, 1],
+        ]
+    )
+
+    x, y, z = sp.symbols("x y z", real=True)
+    general_hessian = (
+        x * exact_projector
+        + y * coexact_projector
+        + z * harmonic_projector
+    )
+    harmonic_equations = list(general_hessian * harmonic_projector)
+    reversal_equations = list(
+        adjoint_reversal.T
+        * general_hessian
+        * adjoint_reversal
+        - general_hessian
+    )
+    ray_solution = sp.solve(
+        harmonic_equations + reversal_equations,
+        [x, z],
+        dict=True,
+    )
+
+    b1 = differential + adjoint
+    b2 = sp.I * (differential - adjoint)
+    p, q = sp.symbols("p q", real=True)
+    b_pq = p * b1 + q * b2
+    b_pq_square = sp.simplify(b_pq**2)
+
+    state_symbols = sp.symbols("state_0 state_1 state_2", real=True)
+    state = sp.Matrix(state_symbols)
+    nonlinear_plus = sp.Matrix([state_symbols[0] ** 2, 0, 0])
+    nonlinear_minus = sp.Matrix([0, state_symbols[1] ** 2, 0])
+    defect_plus = differential * state + nonlinear_plus
+    defect_minus = adjoint * state + nonlinear_minus
+    defect_map = sp.Matrix.vstack(defect_plus, defect_minus)
+    origin_substitution = {symbol: 0 for symbol in state_symbols}
+    defect_jacobian_at_origin = defect_map.jacobian(state).subs(
+        origin_substitution
+    )
+    defect_cost = sp.expand(
+        (defect_plus.dot(defect_plus) + defect_minus.dot(defect_minus)) / 2
+    )
+    defect_cost_hessian_at_origin = sp.hessian(
+        defect_cost,
+        state_symbols,
+    ).subs(origin_substitution)
+    repair_vector_field = -sp.Matrix(
+        [sp.diff(defect_cost, symbol) for symbol in state_symbols]
+    )
+    repair_jacobian_at_origin = repair_vector_field.jacobian(state).subs(
+        origin_substitution
+    )
+
+    identity6 = sp.eye(6)
+    zero3 = sp.zeros(3)
+    j_circle = sp.Matrix.vstack(
+        sp.Matrix.hstack(zero3, -identity3),
+        sp.Matrix.hstack(identity3, zero3),
+    )
+    differential6 = block_diag_twice(differential)
+    exact6 = block_diag_twice(exact_projector)
+    coexact6 = block_diag_twice(coexact_projector)
+    harmonic6 = block_diag_twice(harmonic_projector)
+    reversal6 = block_diag_twice(adjoint_reversal)
+    symmetric_hessian6 = exact6 + coexact6
+    asymmetric_hessian6 = 2 * exact6 + coexact6
+
+    kappa, tau, time = sp.symbols(
+        "kappa tau time",
+        positive=True,
+        real=True,
+    )
+    scaled_hessian = kappa * hodge_laplacian
+    repair_scaled = (
+        harmonic_projector
+        + sp.exp(-kappa * tau) * hodge_laplacian
+    )
+    repair_unit_reparameterized = (
+        harmonic_projector
+        + sp.exp(-(kappa * tau)) * hodge_laplacian
+    )
+    unitary_scaled = (
+        harmonic_projector
+        + sp.exp(-sp.I * kappa * time) * hodge_laplacian
+    )
+    unitary_unit_reparameterized = (
+        harmonic_projector
+        + sp.exp(-sp.I * (kappa * time)) * hodge_laplacian
+    )
+
+    scalar, lam = sp.symbols("scalar lambda", real=True)
+    nonlinear_family = (
+        kappa * scalar**2 / 2
+        + lam * scalar**4 / 4
+    )
+    nonlinear_derivatives_at_origin = {
+        order: sp.simplify(
+            sp.diff(nonlinear_family, scalar, order).subs(scalar, 0)
+        )
+        for order in range(5)
+    }
+
+    primitive_rows = physical_seed["minimal_source_reduction_theorem"][
+        "primitive_geometric_rows"
+    ]
+    physical_gates = upstairs_automorphism["physical_readiness"]["gates"]
+    mixed_checks = mixed_order_nogo["naive_adjoint_Hodge_no_go"]["checks"]
+
+    checks = {
+        "D_squared_is_zero": differential**2 == sp.zeros(3),
+        "adjoint_squared_is_zero": adjoint**2 == sp.zeros(3),
+        "Hodge_projectors_sum_to_identity": exact_projector
+        + coexact_projector
+        + harmonic_projector
+        == identity3,
+        "Hodge_projectors_are_pairwise_orthogonal": is_zero(
+            exact_projector * coexact_projector
+        )
+        and is_zero(exact_projector * harmonic_projector)
+        and is_zero(coexact_projector * harmonic_projector),
+        "harmonic_preservation_forces_zero_harmonic_weight": sp.solve(
+            harmonic_equations,
+            [z],
+            dict=True,
+        )
+        == [{z: 0}],
+        "adjoint_reversal_exchanges_D_and_Dstar": (
+            adjoint_reversal
+            * differential
+            * adjoint_reversal
+            == adjoint
+        ),
+        "adjoint_reversal_exchanges_Hodge_channels": (
+            adjoint_reversal
+            * exact_projector
+            * adjoint_reversal
+            == coexact_projector
+        ),
+        "harmonic_and_reversal_conditions_leave_one_ray": ray_solution
+        == [{x: y, z: 0}],
+        "first_real_closure_charge_is_self_adjoint": b1.H == b1,
+        "second_real_closure_charge_is_self_adjoint": b2.H == b2,
+        "first_closure_charge_squares_to_Hodge_laplacian": b1**2
+        == hodge_laplacian,
+        "second_closure_charge_squares_to_Hodge_laplacian": b2**2
+        == hodge_laplacian,
+        "real_closure_charges_anticommute": is_zero(b1 * b2 + b2 * b1),
+        "general_shared_coefficient_charge_has_one_scale": b_pq_square
+        == (p**2 + q**2) * hodge_laplacian,
+        "nonlinear_defect_vanishes_at_fixed_point": defect_map.subs(
+            origin_substitution
+        )
+        == sp.zeros(6, 1),
+        "nonlinear_defect_Jacobian_is_stacked_D_and_Dstar": (
+            defect_jacobian_at_origin
+            == sp.Matrix.vstack(differential, adjoint)
+        ),
+        "zero_defect_cost_Hessian_is_Jacobian_Gram": (
+            defect_cost_hessian_at_origin
+            == defect_jacobian_at_origin.T * defect_jacobian_at_origin
+        ),
+        "zero_defect_cost_Hessian_is_Hodge_laplacian": (
+            defect_cost_hessian_at_origin == hodge_laplacian
+        ),
+        "negative_gradient_repair_linearizes_to_minus_Hodge_laplacian": (
+            repair_jacobian_at_origin == -hodge_laplacian
+        ),
+        "circle_complex_structure_is_orthogonal": (
+            j_circle.T * j_circle == identity6
+        ),
+        "circle_complex_structure_squares_to_minus_identity": j_circle**2
+        == -identity6,
+        "circle_complex_structure_has_fourfold_return": j_circle**4
+        == identity6,
+        "circle_commutes_with_realified_differential": is_zero(
+            j_circle * differential6 - differential6 * j_circle
+        ),
+        "circle_commutes_with_symmetric_Hessian": is_zero(
+            j_circle * symmetric_hessian6
+            - symmetric_hessian6 * j_circle
+        ),
+        "circle_also_commutes_with_asymmetric_Hessian": is_zero(
+            j_circle * asymmetric_hessian6
+            - asymmetric_hessian6 * j_circle
+        ),
+        "asymmetric_Hessian_preserves_harmonic_kernel": is_zero(
+            asymmetric_hessian6 * harmonic6
+        )
+        and asymmetric_hessian6.rank() == symmetric_hessian6.rank(),
+        "asymmetric_Hessian_fails_adjoint_reversal": not is_zero(
+            reversal6.T
+            * asymmetric_hessian6
+            * reversal6
+            - asymmetric_hessian6
+        ),
+        "scale_preserves_harmonic_kernel": is_zero(
+            scaled_hessian * harmonic_projector
+        ),
+        "scale_preserves_positive_projector": scaled_hessian
+        * hodge_laplacian
+        == kappa * hodge_laplacian,
+        "repair_scale_is_time_reparameterization": repair_scaled
+        == repair_unit_reparameterized,
+        "unitary_scale_is_time_reparameterization": unitary_scaled
+        == unitary_unit_reparameterized,
+        "nonlinear_family_has_common_value_at_origin": (
+            nonlinear_derivatives_at_origin[0] == 0
+        ),
+        "nonlinear_family_has_common_gradient_at_origin": (
+            nonlinear_derivatives_at_origin[1] == 0
+        ),
+        "nonlinear_family_has_common_Hessian_at_origin": (
+            nonlinear_derivatives_at_origin[2] == kappa
+        ),
+        "nonlinear_family_differs_at_fourth_order": (
+            nonlinear_derivatives_at_origin[4] == 6 * lam
+        ),
+        "physical_source_rows_remain_zero_of_four": len(primitive_rows) == 4
+        and not any(primitive_rows.values()),
+        "physical_upstairs_action_remains_open": (
+            physical_gates["physical_upstairs_action"]["closed"] is False
+        ),
+        "physical_particles_as_cohomology_remain_open": (
+            physical_gates["A46_particles_as_cohomology"]["closed"] is False
+        ),
+        "closure_cost_action_independence_is_proved": (
+            action_independence["theorem"]["proved"] is True
+        ),
+        "generic_fixed_point_gradient_bridge_was_already_closed": (
+            fixed_point_gradient["theorem"][
+                "proved_at_fixed_point_gradient_flow_tier"
+            ]
+            is True
+        ),
+        "internal_action_unit_is_closed": (
+            action_unit["closed_inputs"]["internal_action_normalization_closed"]
+            is True
+        ),
+        "physical_action_scale_remains_open": (
+            action_unit["theorem_result"]["physical_numeric_alpha_selected"]
+            is False
+        ),
+        "quadratic_data_nonlinear_action_nogo_is_closed": (
+            nonlinear_nogo["claim_tiers"][
+                "quadratic_TT_data_select_unique_nonlinear_action"
+            ]
+            == "CLOSED_NO_GO"
+        ),
+        "finite_BV_Hodge_witness_is_not_actual_q79_completion": (
+            "uniform interacting regulator removal and fixed-coupling Cstar completion"
+            in finite_bv_hodge["claim_boundary"]["open"]
+        ),
+        "mixed_order_BV_naive_Hodge_promotion_is_excluded": (
+            mixed_checks[
+                "naive_adjoint_Hodge_scales_quartically_not_quadratically"
+            ]
+            is True
+        ),
+    }
+    require(
+        all(checks.values()),
+        f"failed checks: {[key for key, value in checks.items() if not value]}",
+    )
+
+    packet = {
+        "schema": "MTTQ79HodgeActionAxiomSelectionAudit.v1",
+        "date": RESEARCH_DATE,
+        "status": (
+            "HODGE_CLOSURE_REPAIR_SHAPE_REDUCED_TO_ONE_POSITIVE_RAY_"
+            "BY_SINGLE_SELF_ADJOINT_CLOSURE_CHARGE_FACTORIZATION_"
+            "SHARED_CIRCLE_ALONE_INSUFFICIENT_PHYSICAL_Q79_LINEARIZATION_"
+            "ACTION_SCALE_AND_NONLINEAR_COMPLETION_OPEN"
+        ),
+        "inputs": {
+            "prior_minimal_Hodge_action": source_record(
+                "20 Mathematical Language Discovery Program",
+                ROOT,
+                PRIOR_HODGE,
+                prior_hodge,
+            ),
+            "physical_gauge_pair_deformation_seed": source_record(
+                "20 Mathematical Language Discovery Program",
+                ROOT,
+                PHYSICAL_SEED,
+                physical_seed,
+            ),
+            "upstairs_automorphism_transfer": source_record(
+                "20 Mathematical Language Discovery Program",
+                ROOT,
+                UPSTAIRS_AUTOMORPHISM,
+                upstairs_automorphism,
+            ),
+            "shared_circle_gauge_stack": source_record(
+                "20 Mathematical Language Discovery Program",
+                ROOT,
+                SHARED_CIRCLE,
+                shared_circle,
+            ),
+            "closure_cost_physical_action_independence": source_record(
+                "mtt-sm-parity-closure",
+                SM_ROOT,
+                ACTION_INDEPENDENCE,
+                action_independence,
+            ),
+            "fixed_point_gradient_to_Hessian_bridge": source_record(
+                "mtt-sm-parity-closure",
+                SM_ROOT,
+                FIXED_POINT_GRADIENT,
+                fixed_point_gradient,
+            ),
+            "physical_action_unit": source_record(
+                "mtt-protospinor-gr-response-proof",
+                GR_ROOT,
+                ACTION_UNIT,
+                action_unit,
+            ),
+            "quadratic_nonlinear_action_nogo": source_record(
+                "mtt-protospinor-gr-response-proof",
+                GR_ROOT,
+                NONLINEAR_NOGO,
+                nonlinear_nogo,
+            ),
+            "finite_BV_Hodge_shell": source_record(
+                "mtt-qm-source-proof",
+                QM_ROOT,
+                FINITE_BV_HODGE,
+                finite_bv_hodge,
+            ),
+            "mixed_order_BV_Hodge_no_go": source_record(
+                "mtt-qm-source-proof",
+                QM_ROOT,
+                MIXED_ORDER_NOGO,
+                mixed_order_nogo,
+            ),
+        },
+        "finite_Hodge_witness": {
+            "basis": ["exact_source", "coexact_target", "harmonic"],
+            "D": matrix_json(differential),
+            "D_adjoint": matrix_json(adjoint),
+            "P_exact": matrix_json(exact_projector),
+            "P_coexact": matrix_json(coexact_projector),
+            "P_harmonic": matrix_json(harmonic_projector),
+            "Delta_D": matrix_json(hodge_laplacian),
+            "adjoint_reversal": matrix_json(adjoint_reversal),
+        },
+        "Hodge_sector_classification": {
+            "general_Hessian": "A_(x,y,z)=x P_exact+y P_coexact+z P_harmonic",
+            "nonnegative_class": "x>=0, y>=0, z>=0",
+            "cohomology_preservation": {
+                "condition": "A P_harmonic=0",
+                "consequence": "z=0",
+                "physical_q79_selection": (
+                    "conditional: particles as cohomology of one selected "
+                    "physical upper complex remain open"
+                ),
+            },
+            "adjoint_reversal": {
+                "condition": (
+                    "S is isometric, S D S^(-1)=D*, and S A S^(-1)=A"
+                ),
+                "consequence": "x=y",
+                "physical_q79_selection": (
+                    "no independent selected q79 adjoint-reversal source is "
+                    "currently registered"
+                ),
+            },
+            "positive_ray": "(x,y,z)=(kappa,kappa,0), kappa>0",
+            "prior_coefficient_map": {
+                "x": "a+c",
+                "y": "b+c",
+                "z": "c",
+                "ray_consequence": "c=0 and a=b=kappa",
+            },
+        },
+        "shared_circle_insufficiency_theorem": {
+            "realified_dimension": 6,
+            "J": matrix_json(j_circle),
+            "J_squared": "-I6",
+            "J_fourth_power": "I6",
+            "D_realified": matrix_json(differential6),
+            "P_exact_realified": matrix_json(exact6),
+            "P_coexact_realified": matrix_json(coexact6),
+            "P_harmonic_realified": matrix_json(harmonic6),
+            "symmetric_Hessian": matrix_json(symmetric_hessian6),
+            "asymmetric_Hessian": matrix_json(asymmetric_hessian6),
+            "asymmetric_weights": {
+                "exact": 2,
+                "coexact": 1,
+                "harmonic": 0,
+            },
+            "statement": (
+                "A compatible complex circle J with J^2=-I and J^4=I, even "
+                "together with harmonic preservation, does not force equal "
+                "exact/coexact weights: both the symmetric and displayed "
+                "asymmetric Hessians commute with J and have the same harmonic "
+                "kernel."
+            ),
+            "tier": "CLOSED_EXACT_FINITE_COUNTEREXAMPLE",
+        },
+        "closure_supercharge_square_theorem": {
+            "nilpotent_charge": "Q=D",
+            "adjoint_charge": "Q*=D*",
+            "B1": matrix_json(b1),
+            "B2": matrix_json(b2),
+            "relations": [
+                "B1*=B1",
+                "B2*=B2",
+                "B1^2=B2^2=Delta_D",
+                "{B1,B2}=0",
+                "B_(p,q)^2=(p^2+q^2) Delta_D",
+            ],
+            "complex_parameterization": (
+                "B_u=uD+conj(u)D*, u=rho exp(i theta), "
+                "B_u^2=rho^2 Delta_D"
+            ),
+            "quarter_turn_sequence": [
+                "B1",
+                "B2",
+                "-B1",
+                "-B2",
+                "B1",
+            ],
+            "phase_interpretation": (
+                "The shared-circle phase rotates first-order closure-charge "
+                "polarization while its quadratic repair Hessian is invariant."
+            ),
+            "selection_reduction": (
+                "A single self-adjoint first-order closure charge with one "
+                "coefficient shared across D and D* replaces separate Hodge "
+                "duality, harmonic-zero and relative-normalization premises. "
+                "Only its positive magnitude remains."
+            ),
+            "tier": (
+                "CLOSED_EXACT_UNIVERSAL_SINGLE_SHARED_COEFFICIENT_"
+                "CLOSURE_CHARGE_CLASS"
+            ),
+        },
+        "nonlinear_closure_defect_linearization_theorem": {
+            "general_statement": (
+                "If Phi(C*)=0 and E(C)=1/2||Phi(C)||^2, then "
+                "Hess E(C*)=D Phi(C*)* D Phi(C*). The negative-gradient "
+                "repair field linearizes to the negative of this Gram "
+                "operator."
+            ),
+            "physical_specialization": (
+                "If D Phi_Q(C*)=sqrt(kappa) B_Q with B_Q self-adjoint and "
+                "B_Q^2=Delta_Q, then the repair linearization is "
+                "-kappa Delta_Q."
+            ),
+            "finite_nonlinear_witness": {
+                "state_variables": [str(symbol) for symbol in state_symbols],
+                "Phi_plus": matrix_json(defect_plus),
+                "Phi_minus": matrix_json(defect_minus),
+                "Phi_Jacobian_at_origin": matrix_json(
+                    defect_jacobian_at_origin
+                ),
+                "squared_defect_cost": str(defect_cost),
+                "cost_Hessian_at_origin": matrix_json(
+                    defect_cost_hessian_at_origin
+                ),
+                "repair_Jacobian_at_origin": matrix_json(
+                    repair_jacobian_at_origin
+                ),
+            },
+            "prior_result_boundary": (
+                "The generic Hessian-to-gradient-flow bridge was already "
+                "closed in the fixed-point packet. The new result identifies "
+                "the Hessian as a Jacobian Gram operator and gives the exact "
+                "condition under which it is the Hodge Laplacian."
+            ),
+            "tier": (
+                "CLOSED_EXACT_UNIVERSAL_ZERO_DEFECT_GAUSS_NEWTON_"
+                "LINEARIZATION_PHYSICAL_Q79_DEFECT_MAP_OPEN"
+            ),
+        },
+        "scale_rigidity_theorem": {
+            "family": "A_kappa=kappa Delta_D, kappa>0",
+            "invariants": [
+                "ker(A_kappa)=ker(Delta_D)",
+                "P_harmonic and P_positive are kappa-independent",
+                "Comm(A_kappa)=Comm(Delta_D)",
+                "R_kappa(tau)=R_1(kappa tau)",
+                "U_kappa(t)=U_1(kappa t)",
+            ],
+            "internal_normalization": "kappa_int=1 is a unit convention",
+            "physical_scale": (
+                "one absolute action/clock scale remains and cannot be selected "
+                "from dimensionless projector, kernel or holonomy data"
+            ),
+            "current_external_certificate": (
+                "alpha_int=1 is closed; alpha_phys or an equivalent "
+                "dimensionful anchor remains open"
+            ),
+            "tier": "CLOSED_EXACT_SHAPE_RIGIDITY_PHYSICAL_SCALE_OPEN",
+        },
+        "nonlinear_nonuniqueness_theorem": {
+            "family": (
+                "f_lambda(s)=kappa*s^2/2+lambda*s^4/4"
+            ),
+            "derivatives_at_origin": {
+                str(order): str(value)
+                for order, value in nonlinear_derivatives_at_origin.items()
+            },
+            "conclusion": (
+                "The quadratic closure-repair Hessian does not select nonlinear "
+                "vertices or the full physical action."
+            ),
+            "tier": "CLOSED_EXACT_SAME_HESSIAN_COUNTERFAMILY",
+        },
+        "q79_source_audit": {
+            "structural_Dbar_Q_and_B_Q_formula_available": True,
+            "structural_formula": "B_Q=Dbar_Q+Dbar_Q*, Delta_Q=B_Q^2",
+            "accepted_physical_source_rows": 0,
+            "required_physical_source_rows": 4,
+            "selected_physical_Dbar_Q_executed": False,
+            "single_shared_coefficient_closure_charge_selected": False,
+            "physical_repair_linearization_to_minus_kappa_Delta_Q": False,
+            "physical_nonlinear_closure_defect_map_emitted": False,
+            "physical_defect_Jacobian_equals_sqrt_kappa_B_Q": False,
+            "closure_cost_identified_with_physical_action": False,
+            "physical_action_scale_selected": False,
+            "nonlinear_action_selected": False,
+            "mixed_order_BV_warning": (
+                "The Maxwell detour complex has mixed differential orders; its "
+                "naive adjoint Hodge sum is not Laplace type. The present "
+                "factorization is restricted to a genuine first-order Hilbert "
+                "complex."
+            ),
+        },
+        "parameter_ledger": {
+            "sector_weights_before_structure": 3,
+            "weights_after_harmonic_preservation": 2,
+            "positive_scales_after_closure_charge_factorization": 1,
+            "remaining_dimensionless_Hodge_shape_ratios": 0,
+            "internal_unit_conventions": 1,
+            "physical_absolute_scale_selected": False,
+            "new_observed_inputs": 0,
+            "new_fitted_parameters": 0,
+        },
+        "theorems": {
+            "circle_no_go": {
+                "name": "SharedCircleDoesNotSelectHodgeChannelRatioTheorem",
+                "statement": (
+                    "A shared complex circle and its twofold-sign/fourfold-return "
+                    "structure do not imply equal exact/coexact weights."
+                ),
+            },
+            "closure_charge": {
+                "name": "SingleClosureSuperchargeSquareSelectionTheorem",
+                "statement": (
+                    "For a nilpotent Hilbert differential D, every self-adjoint "
+                    "first-order charge B_u=uD+conj(u)D* in the single-shared-"
+                    "coefficient class satisfies B_u^2=|u|^2(D*D+DD*). Thus "
+                    "harmonic zero cost and equal exact/coexact weights are "
+                    "automatic, the circle phase drops out, and only one "
+                    "positive scale remains."
+                ),
+            },
+            "nonlinear_defect": {
+                "name": "ZeroDefectGradientRepairLinearizationTheorem",
+                "statement": (
+                    "At a zero of a nonlinear closure-defect map Phi, the "
+                    "squared-defect cost has Hessian D Phi* D Phi and its "
+                    "negative-gradient repair linearizes to the negative Gram "
+                    "operator. A closure-charge Jacobian therefore emits the "
+                    "Hodge repair operator."
+                ),
+            },
+            "scale": {
+                "name": "HodgeRepairScaleReparameterizationRigidityTheorem",
+                "statement": (
+                    "Positive rescaling of the Hodge repair generator preserves "
+                    "its kernel and spectral projectors and only reparameterizes "
+                    "its real and imaginary flows. Dimensionless structure "
+                    "cannot select the absolute physical scale."
+                ),
+            },
+        },
+        "blocker_assessment": {
+            "B.HS.01": (
+                "OPEN: the four physical endpoint, hidden carrier, common "
+                "chamber and metric/connection source rows remain zero of four."
+            ),
+            "B.GEO.01": (
+                "OPEN: the physical projective connection and q79 operator "
+                "domain have not been instantiated."
+            ),
+            "B.OP.01": (
+                "OPEN: the actual rank-102 Dbar_Q, Delta_Q, harmonic projector "
+                "and positive spectrum have not been executed."
+            ),
+            "B.ACTION.01": (
+                "OPEN BUT NARROWED: three independent Hodge-shape axioms are no "
+                "longer required if one selected closure-supercharge square "
+                "principle holds. The generic nonlinear zero-defect gradient "
+                "bridge is exact. Still missing are the physical q79 defect "
+                "map/Jacobian source, closure-cost/action shadow theorem, nonlinear "
+                "completion, transferred products and absolute scale."
+            ),
+        },
+        "frontier_delta": (
+            "The action-shape frontier is reduced from three separately declared "
+            "Hodge axioms to one upstream factorization premise. The shared "
+            "circle alone is proved insufficient, but when it rotates a single "
+            "self-adjoint closure charge its phase cancels from the square and "
+            "the unique dimensionless repair shape is the Hodge Laplacian. A "
+            "nonlinear zero-defect squared-residual flow is proved to linearize "
+            "to the charge Gram operator. One overall scale, the physical q79 "
+            "defect map/Jacobian, nonlinear completion and physical-action "
+            "identification remain open."
+        ),
+        "next_required_object": {
+            "name": "q79SelectedClosureDefectJacobianToHodgeOperator.v1",
+            "must_emit": [
+                "the selected physical rank-102 Hilbert metric and operator domain",
+                "the physical nilpotent Dbar_Q from the four-row source tuple",
+                "one nonlinear q79 closure-defect map Phi_Q with Phi_Q(C*)=0",
+                "D Phi_Q(C*)=sqrt(kappa) B_Q for one self-adjoint first-order B_Q",
+                "one coefficient shared across Dbar_Q and Dbar_Q*",
+                "a proof that no additional sector weights occur",
+            ],
+            "does_not_need_to_emit_yet": [
+                "the absolute SI value of kappa",
+                "the full nonlinear SM/QFT/GR action",
+            ],
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_shared_circle_alone_selects_equal_Hodge_weights": False,
+            "claims_double_traversal_selects_a_physical_branch": False,
+            "claims_internal_circle_is_Lorentzian_time": False,
+            "claims_physical_q79_Dbar_Q_is_executed": False,
+            "claims_closure_supercharge_principle_is_already_physically_selected": False,
+            "claims_physical_q79_closure_defect_map_is_emitted": False,
+            "claims_closure_cost_is_the_physical_action": False,
+            "claims_quadratic_Hessian_selects_nonlinear_vertices": False,
+            "claims_naive_mixed_order_BV_Hodge_sum_is_Laplace_type": False,
+            "claims_physical_action_scale_is_selected": False,
+            "claims_B_ACTION_01_closed": False,
+            "uses_observed_physics_values": False,
+            "adds_fitted_parameter": False,
+        },
+    }
+
+    OUT_PACKET.write_text(
+        json.dumps(packet, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    OUT_NOTE.write_text(build_note(packet), encoding="utf-8")
+
+    print("Q79_HODGE_ACTION_AXIOM_SELECTION_AUDIT_BUILD_PASS")
+    print("shared circle alone selects Hodge ratio: NO")
+    print("single closure-charge square selects Hodge shape: YES, up to scale")
+    print("physical q79 linearization, action identity, nonlinearity and scale: OPEN")
+
+
+if __name__ == "__main__":
+    main()

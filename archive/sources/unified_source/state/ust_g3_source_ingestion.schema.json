@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mtt.unified-source.g3-ingestion.schema.v1",
+  "title": "MTT UST.G3 physical source ingestion packet",
+  "type": "object",
+  "required": [
+    "schema",
+    "source_orbit_id",
+    "source_commit",
+    "primitive_bindings",
+    "normalization_binding",
+    "readout_binding",
+    "rows",
+    "physical_promotion"
+  ],
+  "properties": {
+    "schema": {"const": "mtt.unified-source.g3-candidate.v1"},
+    "source_orbit_id": {"type": "string", "minLength": 1},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "primitive_bindings": {
+      "type": "object",
+      "required": ["U_eta9", "W9_tau", "positive_chamber", "tangent_connection"],
+      "additionalProperties": false,
+      "properties": {
+        "U_eta9": {"$ref": "#/$defs/binding"},
+        "W9_tau": {"$ref": "#/$defs/binding"},
+        "positive_chamber": {"$ref": "#/$defs/binding"},
+        "tangent_connection": {"$ref": "#/$defs/binding"}
+      }
+    },
+    "normalization_binding": {
+      "type": "object",
+      "required": ["state", "source_orbit_id", "artifact", "sha256"],
+      "properties": {
+        "state": {"enum": ["DERIVED", "BOUND", "MISSING"]},
+        "source_orbit_id": {"type": "string"},
+        "artifact": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"}
+      }
+    },
+    "readout_binding": {"$ref": "#/$defs/binding"},
+    "rows": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {"$ref": "#/$defs/row"}
+    },
+    "physical_promotion": {"type": "boolean"}
+  },
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "required": ["state", "source_orbit_id", "artifact", "sha256"],
+      "properties": {
+        "state": {"enum": ["BOUND", "MISSING"]},
+        "source_orbit_id": {"type": "string"},
+        "artifact": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"}
+      }
+    },
+    "row": {
+      "type": "object",
+      "required": ["id", "grade", "source_refs", "reason"],
+      "properties": {
+        "id": {"enum": ["amplitude", "local_freeness", "topology", "augmentation", "metric", "dynamics", "readout"]},
+        "grade": {"enum": ["PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_SOURCE"]},
+        "source_refs": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

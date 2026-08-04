@@ -36,7 +36,10 @@ def main() -> None:
         "Inherited theorem.",
         "Conditional completion.",
         "Physical interpretation.",
-        "product of three bundle projectors is\npermitted only when those projectors strongly commute",
+        "A product of three\nbundle projectors is permitted only when those projectors strongly commute",
+        "Circle--lens--nil labels",
+        "trace, trace-zero, and reused-full carrier lanes",
+        "not identified with the\nq79/Fu--Yau compactification",
         "Corrected fixed-point chain",
         "projected time-step\nfixed point is not automatically a steady solution",
         "Conditional contraction uniqueness",
@@ -72,6 +75,7 @@ def main() -> None:
         "\\begin{proposition}[Microcausality]",
         "s>2",
         "No equations, fixed-point theorems, stability results, or physical conclusions have been altered",
+        "constructed from the nil, lens, and shared-circle data",
     ]
     for item in forbidden:
         require(item not in text, f"superseded FP VI claim remains: {item}")

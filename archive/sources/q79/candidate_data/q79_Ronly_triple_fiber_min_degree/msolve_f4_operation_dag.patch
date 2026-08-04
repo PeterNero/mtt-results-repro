@@ -1,0 +1,265 @@
+diff --git a/src/neogb/la_ff_8.c b/src/neogb/la_ff_8.c
+--- a/src/neogb/la_ff_8.c
++++ b/src/neogb/la_ff_8.c
+@@ -32,6 +32,142 @@ static len_t *q79_f4_basis_provenance = NULL;
+ static bl_t q79_f4_basis_provenance_size = 0;
+ static uint32_t q79_f4_provenance_round = 0;
+ 
++typedef struct {
++    len_t node;
++    uint32_t coefficient;
++} q79_f4_dag_term_t;
++
++static int q79_f4_dag_enabled = 0;
++static int q79_f4_dag_active = 0;
++static const char *q79_f4_dag_path = NULL;
++static FILE *q79_f4_dag_file = NULL;
++static len_t q79_f4_dag_next_node = 1;
++static uint64_t q79_f4_dag_reducer_terms = 0;
++
++static void q79_f4_dag_initialize(const bs_t *bs, const md_t *md)
++{
++    q79_f4_dag_path = getenv("MSOLVE_F4_OPERATION_DAG");
++    if (q79_f4_dag_path == NULL || q79_f4_dag_path[0] == '\0') {
++        return;
++    }
++    q79_f4_dag_file = fopen(q79_f4_dag_path, "w");
++    if (q79_f4_dag_file == NULL) {
++        return;
++    }
++    if (md->ff_bits != 8 || md->nthrds != 1) {
++        fprintf(q79_f4_dag_file, "ERROR\tREQUIRES_FF8_AND_ONE_THREAD\n");
++        fclose(q79_f4_dag_file);
++        q79_f4_dag_file = NULL;
++        return;
++    }
++    q79_f4_dag_enabled = 1;
++    q79_f4_dag_next_node = 1;
++    q79_f4_dag_reducer_terms = 0;
++    fprintf(q79_f4_dag_file,
++            "FORMAT\tMSOLVE_F4_OPERATION_DAG_V1\t%u\t%u\t%u\n",
++            md->fc, bs->ht->nv, bs->ht->evl);
++    for (bl_t i = 0; i < bs->ld; ++i) {
++        const hm_t *row = bs->hm[i];
++        const cf8_t *coefficients = bs->cf_8[row[COEFFS]];
++        fprintf(q79_f4_dag_file, "INITIAL\t%u\t%d\t%u\n",
++                i, row[DEG], row[LENGTH]);
++        for (len_t j = 0; j < row[LENGTH]; ++j) {
++            const exp_t *exponent = bs->ht->ev[row[OFFSET+j]];
++            fprintf(q79_f4_dag_file, "ITERM\t%u", coefficients[j]);
++            for (len_t k = 1; k < bs->ht->evl; ++k) {
++                fprintf(q79_f4_dag_file, "\t%u", exponent[k]);
++            }
++            fprintf(q79_f4_dag_file, "\n");
++        }
++        fprintf(q79_f4_dag_file, "ENDINITIAL\n");
++    }
++    fflush(q79_f4_dag_file);
++}
++
++static void q79_f4_dag_attach_input(
++        hm_t *row,
++        const bs_t *bs,
++        const bl_t basis_index,
++        const hi_t multiplier_hash,
++        const char kind,
++        const len_t matrix_row
++        )
++{
++    if (!q79_f4_dag_enabled) {
++        return;
++    }
++    const len_t node = q79_f4_dag_next_node++;
++    const exp_t *exponent = bs->ht->ev[multiplier_hash];
++    fprintf(q79_f4_dag_file, "INPUT\t%u\t%u\t%c\t%u\t%u",
++            node, q79_f4_provenance_round, kind, matrix_row, basis_index);
++    for (len_t k = 1; k < bs->ht->evl; ++k) {
++        fprintf(q79_f4_dag_file, "\t%u", exponent[k]);
++    }
++    fprintf(q79_f4_dag_file, "\n");
++    row[MULT] = node;
++}
++
++static len_t q79_f4_dag_reduce(
++        const len_t parent,
++        const q79_f4_dag_term_t *terms,
++        const len_t count,
++        const int nonzero
++        )
++{
++    if (!q79_f4_dag_active) {
++        return parent;
++    }
++    if (count == 0 && nonzero) {
++        return parent;
++    }
++    if (!nonzero) {
++        return parent;
++    }
++    const len_t node = q79_f4_dag_next_node++;
++    fprintf(q79_f4_dag_file, "REDUCE\t%u\t%u\t%u",
++            node, parent, count);
++    for (len_t i = 0; i < count; ++i) {
++        fprintf(q79_f4_dag_file, "\t%u\t%u",
++                terms[i].node, terms[i].coefficient);
++    }
++    fprintf(q79_f4_dag_file, "\n");
++    q79_f4_dag_reducer_terms += count;
++    return node;
++}
++
++static void q79_f4_dag_scale(hm_t *row, const uint32_t coefficient)
++{
++    if (!q79_f4_dag_active || coefficient == 1) {
++        return;
++    }
++    const len_t node = q79_f4_dag_next_node++;
++    fprintf(q79_f4_dag_file, "SCALE\t%u\t%u\t%u\n",
++            node, row[MULT], coefficient);
++    row[MULT] = node;
++}
++
++static void q79_f4_dag_capture(const mat_t *mat, const bl_t from)
++{
++    if (!q79_f4_dag_enabled || !q79_f4_dag_active) {
++        return;
++    }
++    for (len_t k = 0; k < mat->np; ++k) {
++        const len_t row_index = mat->np - 1 - k;
++        fprintf(q79_f4_dag_file, "BASIS\t%u\t%u\n",
++                from+k, mat->tr[row_index][MULT]);
++    }
++    fprintf(q79_f4_dag_file, "ENDROUND\t%u\n", q79_f4_provenance_round);
++    fflush(q79_f4_dag_file);
++    q79_f4_dag_active = 0;
++}
++
++static void q79_f4_dag_finalize(void)
++{
++    if (q79_f4_dag_file == NULL) {
++        return;
++    }
++    fprintf(q79_f4_dag_file, "END\t%u\t%llu\n",
++            q79_f4_dag_next_node - 1,
++            (unsigned long long)q79_f4_dag_reducer_terms);
++    fclose(q79_f4_dag_file);
++    q79_f4_dag_file = NULL;
++    q79_f4_dag_enabled = 0;
++    q79_f4_dag_active = 0;
++}
++
+ static void q79_f4_provenance_ensure(const bl_t need)
+ {
+@@ -86,7 +222,8 @@ static void q79_f4_provenance_prepare(mat_t *mat, const bs_t *bs)
+                 q79_f4_provenance_enabled = 0;
+                 return;
+             }
+-            const len_t multiplier_degree = (len_t)bs->ht->hd[row[MULT]].deg;
++            const hi_t multiplier_hash = row[MULT];
++            const len_t multiplier_degree = (len_t)bs->ht->hd[multiplier_hash].deg;
+             const len_t bound = q79_f4_basis_provenance[basis_index]
+                 + multiplier_degree;
+             fprintf(file, "INPUT\t%c\t%u\t%u\t%u\t%u\n",
+@@ -94,11 +231,14 @@ static void q79_f4_provenance_prepare(mat_t *mat, const bs_t *bs)
+                     kind, i, basis_index, multiplier_degree, bound);
+             row[BINDEX] = bound;
++            q79_f4_dag_attach_input(
++                    row, bs, basis_index, multiplier_hash, kind, i);
+         }
+     }
+     fprintf(file, "ENDINPUTS\n");
+     fclose(file);
+     q79_f4_provenance_active = 1;
++    q79_f4_dag_active = q79_f4_dag_enabled;
+ }
+ 
+ static void q79_f4_provenance_capture(
+@@ -235,6 +375,9 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
+     cf8_t * const * const mcf  = mat->cf_8;
+ 
+     len_t q79_provenance = bi;
++    q79_f4_dag_term_t *q79_terms = NULL;
++    len_t q79_term_count = 0;
++    len_t q79_term_capacity = 0;
+     rba_t *rba;
+     if (tr > 0) {
+         rba = mat->rba[tmp_pos];
+@@ -286,6 +429,17 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
+         if (q79_f4_provenance_active && dts[BINDEX] > q79_provenance) {
+             q79_provenance = dts[BINDEX];
+         }
++        if (q79_f4_dag_active) {
++            if (q79_term_count == q79_term_capacity) {
++                q79_term_capacity = q79_term_capacity == 0
++                    ? 16 : 2 * q79_term_capacity;
++                q79_terms = realloc(q79_terms,
++                        (uint64_t)q79_term_capacity * sizeof(q79_f4_dag_term_t));
++            }
++            q79_terms[q79_term_count].node = dts[MULT];
++            q79_terms[q79_term_count].coefficient = mul % fc;
++            q79_term_count++;
++        }
+ 
+         if (i < ncl) {
+             /* set corresponding bit of reducer in reducer bit array */
+@@ -661,6 +815,8 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
+     }
+     if (k == 0) {
++        q79_f4_dag_reduce(mh, q79_terms, q79_term_count, 0);
++        free(q79_terms);
+         return NULL;
+     }
+ 
+@@ -680,8 +836,11 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
+     row[BINDEX]   = q79_f4_provenance_active
+         ? q79_provenance : bi;
+-    row[MULT]     = mh;
++    row[MULT]     = q79_f4_dag_reduce(
++            mh, q79_terms, q79_term_count, 1);
+     row[COEFFS]   = tmp_pos;
+     row[PRELOOP]  = j % UNROLL;
+     row[LENGTH]   = j;
+     mat->cf_8[tmp_pos]  = cf;
++    free(q79_terms);
+ 
+     return row;
+ }
+@@ -1540,8 +1699,12 @@ static void exact_sparse_reduced_echelon_form_ff_8(
+                      * NOTE: this has to be done here, otherwise the reduction may
+                      * lead to wrong results in a parallel computation since other
+                      * threads might directly use the new pivot once it is synced. */
+                     if (mat->cf_8[npiv[COEFFS]][0] != 1) {
++                        const cf8_t q79_lead = mat->cf_8[npiv[COEFFS]][0];
+                         normalize_sparse_matrix_row_ff_8(
+                                 mat->cf_8[npiv[COEFFS]], npiv[PRELOOP], npiv[LENGTH], st->fc);
++                        q79_f4_dag_scale(npiv,
++                                mod_p_inverse_8(q79_lead, (uint8_t)st->fc));
+                     }
+                     k   = __sync_bool_compare_and_swap(&pivs[npiv[OFFSET]], NULL, npiv);
+                     cfs = mat->cf_8[npiv[COEFFS]];
+diff --git a/src/neogb/f4.c b/src/neogb/f4.c
+--- a/src/neogb/f4.c
++++ b/src/neogb/f4.c
+@@ -535,6 +535,7 @@ static int32_t compute_new_elements(
+     linear_algebra(mat, bs, bs, md);
+     q79_f4_provenance_capture(mat, provenance_from, md, sht);
++    q79_f4_dag_capture(mat, provenance_from);
+ 
+     /* check for bad prime */
+     if (md->trace_level == APPLY_TRACER) {
+@@ -795,6 +796,7 @@ static int32_t core_f4(
+ 
+     done = initialize_f4(&bs, &md, &mat, gmd, gbs, fc);
+     q79_f4_provenance_initialize(bs);
++    q79_f4_dag_initialize(bs, md);
+ 
+ 
+     /* let's start the f4 rounds, we are done when no more spairs
+@@ -822,6 +824,7 @@ static int32_t core_f4(
+ 
+         print_round_timings(VERBSTREAM, md, rrt, crt);
+     }
++    q79_f4_dag_finalize();
+     if (*errp > 0) {
+         free_basis_and_only_local_hash_table_data(&bs);
+     } else {

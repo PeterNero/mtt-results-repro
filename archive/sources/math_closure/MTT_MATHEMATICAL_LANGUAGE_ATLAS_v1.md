@@ -1,0 +1,4016 @@
+# MTT Mathematical Language Atlas v1
+
+Date: 2026-07-18
+
+## 1. Purpose and evidence boundary
+
+This document asks a different question from the active proof programs:
+
+> Is MTT repeatedly struggling because its successful objects live in several
+> mathematical reference systems without a canonical language for transporting
+> one source through all of them?
+
+The formal evidence base is the frozen `mtt-results-repro` authority bundle,
+not the unfiltered research history. The machine inventory verified:
+
+```text
+authority rows                 62
+authority artifact references 553
+unique SHA-256 artifacts       488
+curated result packets          28
+missing artifacts                0
+hash mismatches                  0
+```
+
+A separate hash-recorded frontier supplement parses the contiguous A-series
+ledger through A132:
+
+```text
+ledger rows                    132
+post-A62 rows                   70
+missing A-series identifiers     0
+duplicate identifiers            0
+missing referenced papers        0
+```
+
+The supplement does not overwrite the frozen authority tier. It records later
+mathematics and candidate frontiers, including the gauge-action program and the
+q79 genus-two period/monodromy program. July 16-17 q79 family-index papers are
+used as an additional explicitly dated research snapshot, not silently promoted
+into A01-A62.
+
+There are 38 benchmark or declared-result authority rows, 22 open/no-go boundary
+rows, and 2 context/intermediate rows under the inventory classification. Term
+presence is not proof that a framework is fully instantiated.
+
+The current declared physics boundary remains unchanged: embedded
+renormalized-SM equivalence is closed at the one-shared-physical-primitive/profile
+standard. This is not zero-knob derivation. The parameter ledger contains 15
+measured charged-sector profile coordinates, 2 measured neutral-extension
+coordinates, and one shared construction-side primitive `P_EW`.
+
+## 2. The mathematical languages already doing real work
+
+| Layer | Reference objects | Main operations | Successful examples |
+|---|---|---|---|
+| Finite arithmetic | cyclic groups, finite fields, group algebras, characters | CRT, character evaluation, exact enumeration | `q=79 mod 448`, finite branch and character certificates |
+| Finite harmonic analysis | qutrit Weyl-Heisenberg basis, circulant shifts | finite Fourier/Weyl transform, left regular action | sparse `27 x 27` realization |
+| Algebraic geometry | K3/Mukai data, line bundles, spectral covers, sheaves | Chern classes, extensions, pullback, determinant/Prym data | q79 charge sector and bundle source constraints |
+| Local-to-global geometry | Cech/Deligne cocycles, gerbes, transition functions | coboundary, descent, patching | 81-entry and 729-triple literal Cech witness |
+| Gauge and analytic geometry | connections, curvature, HYM/Strominger systems | moment-like constraint equations, Laplacian inversion | global selected rank-two HYM representative |
+| Functional analysis | Wiener algebra, Fourier coefficients, Green/Riesz maps | contraction, tail bounds, spectral gap estimates | certified HYM existence and local uniqueness |
+| Operator geometry | projectors, Hessians, Dirac operators, real structures | compression, Schur complement, commutators, spectral traces | exact branch support, `D_F`, inner fluctuations |
+| Representation theory | SM and exceptional-group representations | commutants, anomaly traces, automorphism kernels | typed 48-state family carrier, native gauge group, anomaly cancellation |
+| Finite spectral geometry | finite algebra, Hilbert carrier, `D_F`, `J`, grading | order-zero/order-one checks, intersection form | profile-tier 96-dimensional finite triple |
+| Gauge-fixed spectral analysis | gauge/ghost Hessians and zero modes | BRST quotient, determinant and spectrum | exact finite SU2 and SU3 rows |
+| Causal response | retarded kernels and selected representatives | response derivative, predecessor lag, causal choice | primitive `16 -> 15` q79 lag and response packets |
+| Perturbative QFT | renormalized SM, BRST/Faddeev-Popov machinery | running, matching, observable evaluation | declared embedded-SM observable functor; imported, not derived |
+| Statistical transport | measured-coordinate spaces | Jacobian and covariance pushforward | 15-source to 8-output precision workspace |
+| Singularity and period geometry | genus-two curves, thimbles, homology local systems | Picard-Lefschetz, Gauss-Manin, periods, normal functions | q79 integral-branch and effective `Z^90` search program |
+| Certified algebraic numerics | interval balls, lattice bases, polynomial root isolation | Arb/ACB, Krawczyk, Rouche, LLL, Smith form | period-tail and branch-separation certificates |
+| Family-index geometry | twisted K-classes and two-circle correspondences | SpinC pushforward, determinant transport | q79 rank-three family-index and `P(3,9)` packets at their declared tier |
+| Cubic exceptional geometry | `E6` matter `27` and normalized symmetric cubic | trilinear polarization and branching | heterotic rank-one Yukawa seed; not yet linked to qutrit `27` |
+| Certified computation | exact finite algebra, residual bounds, interval checks | hash, witness, exhaustive audit, interval enclosure | machine-verifiable result and no-go packets |
+| Proof semantics | source, selector, tier, provenance and dependency ledgers | promotion and guardrail checks | non-looping authority chain |
+
+The corpus is not short of sophisticated mathematics. Its strongest exact results
+typically combine at least three layers.
+
+## 3. Benchmark interfaces
+
+| Benchmark | Input reference | Transform/operator | Output reference | Certificate | Tier |
+|---|---|---|---|---|---|
+| q79 | `C[Z64]`, Mukai `Z7` charge | primitive shift, projector compression, CRT | `Z448` branch label | exact order, primitive lag, Schur collapse, congruences | derived exact |
+| 27 carrier | `Z3` class times qutrit Hilbert-Schmidt basis | left Weyl action | `End(C^27)` | rank, Weyl relation, orthogonality, unitarity residual | derived exact |
+| Cech witness | local `F3^2` Deligne data | Cech coboundary and exponentiation | global finite gerbe class | 81 entries, 729 cocycle triples | derived exact |
+| HYM representative | q79/F/m1 bundle and theta density | inverse Laplacian plus nonlinear fixed-point map | global connection | Wiener tail and contraction ball | numeric certified |
+| family carrier | selected lane projectors plus E6-to-SM dictionary | representation functor | `C^3_family tensor H_16` | anomaly and commutant tables | derived exact |
+| native gauge group | rank `1 < 2 < 3` bundle automorphisms | action on six Weyl rows | `(U1 x SU2 x SU3)/Z6` | exact global kernel | derived exact |
+| finite triple | completed finite algebra plus Yukawa profile | finite Dirac assembly | 96-dimensional operator package | KO6 and finite-triple identities | profile replay |
+| Higgs fluctuation | finite algebra and `D_F` | `sum a[D_F,b]` and selected projector | one-Higgs module and traces | 676-pair execution and rank checks | profile replay |
+| finite gauge rows | selected finite carriers and gauge-fixed complexes | Hessian spectra and log determinants | SU2/SU3 threshold rows | exact spectra and no-go checks | derived exact |
+| GR TT support | exact central-circle carrier | TT projector and adjoint shape map | helicity-2 support | factorization and support identity | derived exact internally |
+| charged profile | measured masses/couplings | scheme transport and matrix assembly | Yukawa/Higgs rows | versioned replay packet | profile replay |
+| precision profile | 15 measured coordinates | SMDR plus finite-difference Jacobian | 8 outputs and covariance | positive-definite covariance and diagnostics | profile replay |
+
+## 4. What the current reference system looks like
+
+The work currently moves through this chain:
+
+```text
+finite branch/character data
+    -> bundle, sheaf, gerbe and connection data
+    -> finite or continuum operator data
+    -> gauge/branch quotient
+    -> response and spectral data
+    -> renormalized observable coordinates
+    -> measured-scheme comparison
+```
+
+Each node has mature mathematics. The arrows are much less uniform. The same
+recurring blockers appear at the arrows:
+
+1. **Source identity:** prove that two payloads are realizations of one source,
+   rather than compatible numbers assembled after the fact.
+2. **Integral-to-finite lift:** finite torsion data can forget branch order,
+   Picard-zero characters, and integral connection information.
+3. **Geometry-to-operator realization:** turn a selected bundle/connection into
+   the actual `D_E`, Hessian, Green, Riesz, or response coefficients.
+4. **Finite-to-continuum transport:** identify a finite basis with the selected
+   holomorphic or gauge-transported continuum basis.
+5. **Gauge and branch quotient:** distinguish a physical orbit from a chosen
+   representative, and derive a global measure when probabilities are claimed.
+6. **Dimensionful normalization:** map dimensionless internal spectra into a
+   physical scheme without silently inserting a measured anchor.
+7. **Classical-to-quantum transport:** derive the BRST/BV complex, capture
+   measure, and local observable algebra rather than importing standard QFT.
+8. **Primary-to-secondary index transport:** connect a topological/family index
+   to curvature, determinant connection, eta holonomy and the intended flavor
+   observable without identifying differently typed determinant lines.
+
+This is why repeated construction of another matrix often advances support but
+does not close source promotion. The missing object is usually an arrow, not a
+node.
+
+## 5. Corpus gap check
+
+After correcting false positives and deduplicating by hash, the authoritative
+bundle contains no explicit use of the following as an organizing framework:
+
+```text
+unbounded KK correspondences
+derived or dg geometry
+symplectic/moment-map reduction
+tangent groupoids
+variational bicomplexes
+factorization algebras
+Lorentzian/Krein spectral triples
+modular/Tomita-Takesaki flow
+Tannakian reconstruction
+adelic or p-adic reference spaces
+Quillen/Bismut superconnections
+differential K-theory pushforwards
+```
+
+There is one detected artifact each for AQFT, microlocal/wavefront language, and
+cellular sheaves, but no integrated construction. Absence of vocabulary does not
+prove absence of an implicit idea. It does show that these tools have not been
+made part of the executable authority language.
+
+The post-A62 supplement changes the picture substantially for singularity and
+period methods: Picard-Lefschetz theory, Gauss-Manin transport, thimbles,
+normal functions, Leray data, genus-two periods, integral symplectic lattices,
+and interval-certified root/period computation are now explicit. These should
+be treated as a second successful reference system already emerging inside the
+corpus: a homology local system over parameter space with a flat connection and
+integral monodromy. It solves transport in moduli space, but not by itself the
+geometry-to-operator or physical-normalization arrows.
+
+## 6. Existing frameworks that fit specific gaps
+
+### 6.1 Groupoids, stacks and derived moduli
+
+Gauge-equivalent configurations should be retained as a groupoid or quotient
+stack rather than collapsed prematurely to a set. Derived intersections retain
+the deformation and obstruction directions that ordinary intersections discard.
+This directly targets gauge quotienting, branch stabilizers, and underdetermined
+source lifts.
+
+Reference: Pantev, Toen, Vaquie and Vezzosi construct shifted symplectic
+structures on derived mapping and moduli stacks:
+<https://arxiv.org/abs/1111.3209>.
+
+### 6.2 Moment maps and symplectic reduction
+
+HYM equations already belong to a moment-map pattern in gauge geometry. If the
+MTT closure cost `J` can be proved to be the squared norm of a moment map, then
+`J=0`, gauge reduction, stability, and Hessian positivity become parts of one
+geometric statement rather than separate axioms.
+
+Reference: Atiyah and Bott's Yang-Mills configuration-space treatment:
+<https://www.math.toronto.edu/mgualt/Morse%20Theory/Atiyah-Bott.pdf>.
+
+### 6.3 Unbounded KK correspondences
+
+Unbounded KK cycles with connections form composable correspondences between
+spectral triples. They are a natural candidate for the missing continuum/finite
+operator arrow, especially when a bare homomorphism cannot preserve Dirac and
+connection data.
+
+Reference: Mesland, *Unbounded bivariant K-theory and correspondences in
+noncommutative geometry*: <https://arxiv.org/abs/0904.4383>.
+
+### 6.4 Cellular sheaves and compatibility Laplacians
+
+A cellular sheaf attaches data spaces to nodes and restriction maps to edges.
+Its coboundary measures local incompatibility; its cohomology and sheaf
+Laplacian expose global sections, obstructions, multiplicities, and conditioning.
+This is the closest existing computational model of the repeated MTT
+"same-source" problem.
+
+Reference: Curry, *Sheaves, Cosheaves and Applications*:
+<https://arxiv.org/abs/1303.3255>.
+
+### 6.5 Structured correspondences and double categories
+
+A double category can keep equivalence/refinement arrows separate from physical
+transform arrows, while 2-cells certify that a square commutes. Structured
+cospans provide a mature compositional architecture for systems with interfaces.
+
+Reference: Baez and Courser, *Structured Cospans*:
+<https://arxiv.org/abs/1911.04630>.
+
+### 6.6 Differential cohomology
+
+Differential cohomology keeps topology, differential-form curvature, and
+holonomy in one object. It is better typed than moving informally among a finite
+cocycle, a smooth gerbe, a connection, and a charge quantization condition.
+
+Reference: Freed, *Dirac Charge Quantization and Generalized Differential
+Cohomology*: <https://arxiv.org/abs/hep-th/0011220>.
+
+### 6.7 BV, factorization algebras and microlocal analysis
+
+The variational/BV complex handles gauge symmetry and equations of motion at
+cochain level. Factorization algebras encode local observables and their gluing.
+Microlocal wavefront conditions type retarded products and renormalized
+distributions. These tools target the imported-QFT and causal-kernel boundary,
+not the finite arithmetic benchmark.
+
+References:
+
+- Costello and Gwilliam, factorization algebras:
+  <https://arxiv.org/abs/2310.06137>.
+- Gwilliam and Rejzner, perturbative AQFT observables as a factorization algebra:
+  <https://arxiv.org/abs/2212.08175>.
+- Brunetti and Fredenhagen, microlocal renormalization:
+  <https://arxiv.org/abs/math-ph/9903028>.
+
+### 6.8 Tangent groupoids
+
+A tangent groupoid interpolates between a geometry and its tangent/quantized
+operator picture. It is worth testing on the classical-to-spectral arrow, but it
+does not by itself solve source identity, gauge quotienting, or physical scale.
+
+Reference: Carinena et al., *Connes' Tangent Groupoid and Strict Quantization*:
+<https://arxiv.org/abs/math/9802102>.
+
+### 6.9 Differential K-theory and superconnections
+
+Differential K-theory packages an integral K-class, connection/curvature data,
+and secondary holonomy information. Quillen/Bismut superconnections supply the
+heat-kernel bridge from a geometric Dirac family to its Chern character and
+analytic index. This is a particularly strong fit for q79 twisted family
+indices, HYM curvature, spectral-action heat traces, determinant phases and
+global anomalies.
+
+It does not identify the ordinary flavor line `det(E_nu)` with the analytic
+line `Det(D_nu)`. The required sufficient theorem is a selected,
+connection-preserving identification `E_nu ~= Ind(D_nu)` followed by
+compatibility of determinant connections. The executable audit currently finds
+q79 family-index readiness `5/11`, neutral determinant-bridge readiness `2/10`,
+and zero existing superconnection constructions.
+
+References:
+
+- Quillen, *Superconnections and the Chern character*:
+  <https://doi.org/10.1016/0040-9383(85)90047-3>.
+- Freed and Lott, *An index theorem in differential K-theory*:
+  <https://arxiv.org/abs/0907.3508>.
+- Dai and Freed, *Eta-Invariants and Determinant Lines*:
+  <https://arxiv.org/abs/hep-th/9405012>.
+
+### 6.10 First-Tits cubic Jordan reference on the 27 carrier
+
+The selected qutrit vector space is three copies of `M3`, hence has exactly the
+underlying `9+9+9` format used by a first Tits construction. At `mu=1` its cubic
+norm is
+
+```text
+N(a,b,c)=det(a)+det(b)+det(c)-tr(abc).
+```
+
+For `A=M3`, the resulting cubic Jordan algebra is an Albert algebra and its
+norm-isometry group is of type `E6`. This supplies an intrinsic quadratic
+adjoint, cubic polarization, rank `1/2/3` strata and a cyclic `SL3^3` action.
+
+The exact MTT prototype passes 21 checks over `F7`, including 128 adjoint-law
+witnesses and all `27^3` finite Heisenberg quiver actions. Its polarized tensor
+has exactly 108 determinant entries and 162 closed three-block-cycle entries.
+The naive common-left action fails, so the candidate genuinely uses the already
+computed right commutant.
+
+This does not identify the existing componentwise associative algebra with an
+Albert product, nor `Q_sel^U` with the physical `E6` matter representation. It
+defines a sharp new intertwiner problem.
+
+The q79 `BPU(3)` existence theorem now globalizes this candidate. Each selected
+smooth `PU(3)` bundle defines a degree-three Azumaya bundle
+`A=P x_PU(3) M3(C)`, and the canonical unital construction
+
+```text
+J(A,1)=A direct_sum A direct_sum A
+```
+
+is a rank-27 smooth Albert bundle. Reduced norm, trace, adjoint and the cubic
+glue under every algebra-automorphism transition. The executable contract
+closes 13/18 gates and passes 1,728 exact norm plus 1,728 adjoint transition
+checks. No scalar fit is needed: `P=A`, `N=Nrd` and `beta=1` are the
+distinguished functorial choices.
+
+The remaining obstruction is typed, not algebraic. The source operator carrier
+uses family/character `C3_class` and the projective `3_F` module; the selected
+trinification `27` uses cyclic `C/L/R` bifundamental edges. A physical bridge
+must expose an independent family factor while intertwining the other indices.
+
+The direct bridge has now been decided negatively. Under selected left
+`A2_F`, `Q_sel` is nine copies of `3_F`, while the `E6` 27 is an `A2_F`
+singlet. Their central characters differ, so the equivariant Hom space is zero.
+The correct object is instead the selected `Z3` grading
+
+```text
+e8 = (e6+sl3_F) + (J_27 tensor 3_F) + (J_27^* tensor 3_F^*).
+```
+
+The dimensions are `86+81+81=248`. More strongly, tetracode addition between
+the three grade-one words reproduces all six first-Tits cross-product support
+channels: three determinant cofactors and three mixed closed cycles. The
+remaining current-level problem is signed coefficient transport, not block
+typing or support.
+
+That coefficient problem has subsequently been closed. All 162 charged roots
+map bijectively to `J tensor F` and its dual. A 2,720-equation exact `F2`
+system has rank 154, nullity 10 and zero residual, fixing the first-Tits
+determinant/mixed-trace coefficient in the level-one current basis. The same
+basis extracts rank-78 `e6` and rank-8 `sl3_F` actions. All 78 exceptional
+operators preserve the cubic, all eight family operators preserve
+`epsilon_F`, and 1,458 mixed moment-map identities pass. The graded reference
+is therefore closed at current-algebra level.
+
+References:
+
+- Moran and Pumpluen, first Tits construction:
+  <https://arxiv.org/abs/2403.16342>.
+- Benedetti, Filip and Manivel, the `9+9+9` `E6` cubic:
+  <https://iris.unige.it/retrieve/e268c4cd-7cf2-a6b7-e053-3a05fe0adea1/Orbital%20degeneracy%20loci%20II.pdf>.
+
+### 6.11 Hodge-resolved cyclic A-infinity state system
+
+The corpus has 337 Yoneda occurrences, 13 harmonic-projection occurrences and
+872 Green-operator occurrences, but no explicit `A_infinity`, Massey,
+homological-perturbation or Hodge-transfer construction in 28,558 scanned
+source files. The missing operation is therefore a serious candidate for the
+geometric `I_HYM` frontier.
+
+The pre-projection object is a cyclic differential graded category of selected
+HYM bundles, with morphisms `Omega^(0,*)Hom(E,F)`, differential `dbar`,
+composition product, metric, harmonic projector and Green homotopy. Its
+cohomology is the projected zero-mode space. Homological transfer equips that
+space with `m2,m3,...`; internal tree edges are precisely the Green homotopy.
+
+This also makes reverse projection a theorem rather than an analogy. A
+post-projection SU action must lift to chain maps preserving the differential,
+product and cyclic structure. The coarse lift `i rho p` is insufficient because
+it erases the contractible sector and need not be local or multiplicative.
+
+An exact Heisenberg-Nil benchmark passes all DGA, contraction and Stasheff
+checks. It has cohomology dimensions `(1,2,2,1)` and six nonzero transferred
+`m3` entries, including `m3(a,a,b)=ac`, although the binary projected product
+reports `m2(a,b)=0`. A pre-projection `sl2` action also descends exactly. Of six
+chain-DGA derivations, four are visible after projection and two are
+homotopically invisible.
+
+This is an auxiliary theorem, not a q79 topology claim. Actual q79 readiness is
+`5/15`; the missing core is a selected graded Dolbeault subcomplex and a proof
+of `Q_N^2=0`, the Hodge contraction, cyclicity and normalized zero-mode
+overlaps.
+
+References:
+
+- Merkulov, Hodge/Dolbeault strongly homotopy structures:
+  <https://arxiv.org/abs/math/9809172>.
+- Cheng and Getzler, homotopy transfer along a contraction:
+  <https://arxiv.org/abs/math/0610912>.
+- Blesneag et al., heterotic holomorphic Yukawa couplings:
+  <https://arxiv.org/abs/1512.05322>.
+
+### 6.12 Hodge-index BV effective state object
+
+The Hodge-transfer candidate alone is incomplete. An acyclic complex has zero
+cohomology and hence a zero minimal state model, but it can retain a nontrivial
+determinant, analytic torsion or eta phase. This occurs in the corpus-native
+compact-Nil `p!=0` BRST branch: its physical cohomology block is acyclic and its
+determinant is computed, although that numerical branch is correctly obstructed
+as the final Qa/SU3 source.
+
+The stronger umbrella object takes two readouts from one pre-projection complex:
+
+```text
+(C,Q,S,metric,current action)
+  -> Hodge transfer: H and higher tree interactions
+  -> BV/index pushforward: determinants, torsion, index and phases.
+```
+
+An exact rational Gaussian benchmark verifies that the same eliminated block
+`C_UV` supplies both the tree propagator `C_UV^-1` and loop factor `det C_UV`.
+It passes the Schur determinant identity and inverse-block identity exactly. A
+second based-chain benchmark has zero rational cohomology but nontrivial torsion
+coordinate `5`, invariant under 25 unimodular basis changes.
+
+This is the best current analogue of an MTT state space. The `A_infinity`
+component handles bundle composition and Yukawa interactions; cyclic
+`L_infinity`/BV data handles gauge fields and quantum pushforward; the
+differential-index component retains global secondary data. Physical readiness
+is `6/18` because the selected q79 differential, action, master equations,
+chain-level current lift and normalized pushforward remain open.
+
+References:
+
+- Cattaneo and Mnev, BV pushforward and deformation retraction:
+  <https://arxiv.org/abs/2605.30558>.
+- Costello, renormalized BV effective field theory:
+  <https://arxiv.org/abs/0706.1533>.
+- Arvanitakis et al., homotopy transfer as tree-level integrating out:
+  <https://arxiv.org/abs/2007.07942>.
+
+### 6.13 Upstairs automorphism-transfer principle
+
+The construction direction is forward, not reconstructive. Specify a simpler
+upper object `U=(C,Q,product,pairing,Hodge/action tensors)` and derive
+
+```text
+Aut(U)       -> projected gauge/current symmetry,
+H(C,Q)       -> particle/zero-mode states,
+transfer(U)  -> interactions,
+BV/index(U)  -> loops and secondary invariants.
+```
+
+An exact auxiliary benchmark begins only with the Heisenberg differential,
+exterior product, top pairing and Hodge contraction. The full chain-DGA
+derivation space has dimension six. Cyclicity reduces it to five; Hodge
+compatibility reduces it to three. The surviving derivations satisfy `sl2`
+exactly, the cohomology decomposes as `1+2+2+1`, and all 108 binary plus 648
+ternary equivariance checks pass. No target SU matrices or values are used.
+
+The corpus has two physical-tier analogues of the same pattern. A47 obtains
+`U1`, `USp2=SU2`, `SU3` and the faithful `/Z6` quotient from native carrier
+tensors. The E8 reference obtains `e6+sl3_F` from the first-Tits cubic and family
+epsilon tensor. These are upper automorphism theorems, not fitted matrix labels.
+
+The missing physical object is one selected q79 complex and upper action whose
+cohomology gives the A46 chiral rows and whose transfer/index readouts give
+interactions and loops. Reverse lifts and Tannakian reconstruction are retained
+only as falsification tools for that candidate.
+
+### 6.14 q79 twisted cohesive/perfect-complex bridge
+
+The q79 corpus now supplies a non-auxiliary pre-projection chain object. The
+global Hartshorne-Serre transform
+
+```text
+S_HS=R p_J*(U' tensor^L p_X^*kappa_hol)[1] in D^b(J,alpha)
+```
+
+has explicit local two-term cone differentials, qutrit shift-clock action,
+`alpha`-twisted chain descent and exact cohomological amplitude. On the open
+stratum `r!=0`, the differential `d=(A,rI)` has the exact strong deformation
+retraction
+
+```text
+i(x)=(x,-r^-1 A x), p(x,v)=x, h(y)=(0,r^-1 y)
+```
+
+onto three states for arbitrary `A`. The symbolic identities `di=0`, `pi=I`,
+`ip+hd=I` and `dh=I` all pass. This is the first q79 forward projection from a
+real upper differential rather than a reconstruction of projected symmetry.
+
+The result also proves its own boundary. The homotopy has a simple pole on
+`E_B`, where the cohomological amplitude changes, so the three-state projector
+is not global. Further, `kappa_hol` has `(c1,c2)=(-H,3u)`, not the physical
+`V3` rows `(0,9u)`. The suitable global reference is therefore a twisted
+cohesive/perfect dg module with a selected Hermitian superconnection and
+stratified Hodge readout. The existing cone is a `10/10` derived bridge but only
+`3/13` under that strict physical one-object standard.
+
+That proposed global reference has now been constructed at structural tier.
+Twisted cohesive descent turns the certified `S_HS` atlas into an integrable
+antiholomorphic superconnection. Its endomorphism transitions are ordinary
+because the scalar `alpha` cocycle cancels under conjugation. After choosing a
+smooth Hermitian metric, the total-space supercharge is elliptic and has a
+self-adjoint compact-resolvent Hodge realization on compact `J`. An exact
+`9x9` stratified witness proves the required distinction: the full Hodge
+matrix remains polynomial at `r=0`, while the harmonic dimension jumps and
+the fiberwise Green norm diverges as `1/r^2`. Thus a global total-space Hodge
+package exists, but no uniform fiberwise rank-three projector does. This does
+not increase the strict physical `3/13` count because the metric/action,
+physical `V3/W9` carrier and `J`-to-`X` transform remain unselected.
+
+Artifact:
+`Q79_TWISTED_COHESIVE_SUPERCONNECTION_AND_STRATIFIED_HODGE_THEOREM_v1.md`.
+
+The next composition is now closed at structural benchmark tier. On the
+ordinary endomorphism dg algebra of `S_HS`, a perturbation of the cohesive
+superconnection has canonical Maurer-Cartan curvature
+`F(a)=d a+a^2`. Combining this with the previously proved gauge-fixed
+squared-residual theorem gives `Hess E(0)=Delta_1` and tangent repair
+`partial_s a=-Delta_1 a`. Thus the heat semigroup is derived as the linear
+shadow of nonlinear integrability repair on one actual q79 upper object,
+rather than inserted as an unrelated filter.
+
+The conditional BHT equivalence transports the formal deformation problem,
+`Ext` groups and Yoneda products between `kappa_hol` and `S_HS`. It does not
+automatically transport Hermitian pairings, adjoints or Hodge spectra. An
+exact finite isometric-chain witness proves the sufficient stronger theorem:
+if a transform intertwines the differential and product and is isometric,
+then it also intertwines the nonlinear residual, Hodge Hessian and heat
+semigroup. The corresponding physical q79 isometry or controlled-distortion
+certificate is still open, as are the physical `V3/W9` endpoint and HYM data.
+
+Artifact:
+`Q79_COHESIVE_MAURER_CARTAN_REPAIR_AND_DERIVED_TRANSFORM_INTERTWINER_THEOREM_v1.md`.
+
+A cross-repo reconciliation now closes the finite target side more strongly.
+The older q79 packet had proved the qutrit Fourier lemma while leaving the
+ordered `10_M/bar5_M` polarization source open. The later SM-slot source emits
+exactly `U_10=I_3` and `U_bar5=F_3` on the retarded q79 branch, together with
+the selected transported-projector trace-Gram normalization. Exact replay
+gives `F_3^dagger Z F_3=X` and `F_3^dagger X F_3=Z^-1`. The selected static
+finite endpoint is therefore unitary and no longer an open matrix search.
+
+This does not backdate a dynamic result. The physical `V3/W9` endpoint,
+harmonic zero-mode identification, `D_E/Riesz/Green/dotD`, primitive `C1`
+overlaps and continuum metric/tail comparison remain open. The true cutset is
+now the dynamic harmonic-mode embedding into the fixed static qutrit endpoint.
+
+Artifact:
+`Q79_SELECTED_STATIC_QUTRIT_FOURIER_ISOMETRY_AND_CONTINUUM_CUTSET_THEOREM_v1.md`.
+
+The quantum-language synthesis is now explicit as well. A retained state in
+`Ran(P)` has position, momentum and energy spectral measures; these are three
+readouts of one state, not three primitive carrier directions. Fourier is the
+flat translation-character chart, while curved Cauchy geometry uses a
+covariant Dirac/Laplace spectral transform. A stationary Hamiltonian is a
+separate requirement for a global energy chart. Projection selects the state
+sector; it is not the Fourier transform.
+
+The exact finite witness verifies Parseval and all three distributions and
+shows that a translation-invariant band projector converts sharp site
+localization to a POVM. A separate compact diagonal witness proves that
+operator-norm spectral convergence can coexist with divergent cutoff traces.
+Hilbert space therefore organizes domains, projection, spectral calculation
+and finite resolution; renormalization or an exact finite theory is still
+needed to control cutoff removal. The selected qutrit `F_3` remains typed as
+internal matter polarization rather than spatial momentum.
+
+Artifact:
+`Q79_RETAINED_STATE_SPECTRAL_CHARTS_AND_FINITE_RESOLUTION_THEOREM_v1.md`.
+
+The actual `S_HS` benchmark now reaches the selected finite endpoint on its
+maximal constant-rank stratum. Away from `E_B`, its exact rank-three
+cohomology carries the same irreducible clock-shift representation as the
+selected static qutrit. The normalized cohomology intertwiner is unitary and
+unique up to a common `U(1)` phase because the exact joint commutant of `X`
+and `Z` is `C I_3`.
+
+This map cannot extend unchanged through `E_B`: the full cohesive Hodge
+operator is regular, but its harmonic rank jumps from three to seven. A
+constant rank-three unitary bundle map is therefore globally impossible for
+this object. The next source must retain a stratified target, construct a
+different physical endpoint with constant relevant rank, or prove a
+variable-rank Feshbach/gluing theorem. This is a benchmark obstruction and
+does not alter the physical `V3/W9` Chern/HYM boundary.
+
+Artifact:
+`Q79_OPEN_STRATUM_QUTRIT_COHOMOLOGY_UNITARY_AND_GLOBAL_EXTENSION_NOGO_THEOREM_v1.md`.
+
+#### Stratified persistent-exceptional refinement
+
+The rank jump is now computed rather than left as a bare obstruction. For the
+same exact cohesive witness, the open spectrum is
+`0^3 direct-sum (r^2)^4 direct-sum (1+r^2)^2`. Three exact orthogonal spectral
+projectors resolve the identity. The rank-three zero projector converges to a
+persistent projector, while the four-dimensional `r^2` eigenspace is
+independent of `r` and becomes harmonic at the exceptional stratum. Hence
+
+```text
+ker(Delta_0)=C^3_persistent direct-sum C^4_exceptional.
+```
+
+Normalized frames and the isometric specialization `v -> (v,0)` give the
+minimal two-stratum Hilbert reference. The persistent summand inherits the
+selected qutrit action. The exceptional summand remains deliberately untyped,
+and no perverse-sheaf, vanishing-cycle, physical-particle or gauge-cancellation
+claim is made without the missing symmetry action and gluing theorem.
+
+Artifact:
+`Q79_STRATIFIED_PERSISTENT_EXCEPTIONAL_HARMONIC_REFERENCE_THEOREM_v1.md`.
+
+#### Exceptional index and qutrit-extension obstruction
+
+The four exceptional modes are now identified as two copies of
+`C[-1] --r--> C[0]`. They are acyclic away from the exceptional stratum and
+contribute `(2,2)` to cohomology at `r=0`. Their virtual index is zero, so the
+full index remains three even though harmonic dimension changes from three to
+seven.
+
+The same selected scalar qutrit multiplier cannot act on the enlarged fiber.
+Taking determinants in `ZX=omega XZ` forces `3` to divide the representation
+dimension, excluding dimensions four, seven, five and two. A continued
+exceptional action must instead be center-neutral on each two-dimensional
+pair, with the same representation in degrees `-1` and `0`. There are 45
+unitary-equivalence two-character multisets. No existing source selects one,
+so the identity action is retained only as a minimal witness and not promoted
+to physics.
+
+Artifact:
+`Q79_EXCEPTIONAL_ACYCLIC_PAIR_INDEX_AND_QUTRIT_EXTENSION_OBSTRUCTION_THEOREM_v1.md`.
+
+#### Arbitrary Ext-block rank stratification
+
+The rank-one exceptional calculation is now placed in its correct general
+family. For the actual upstream differential `d_r=[A,r I_3]`, singular-value
+decomposition reduces every complex `3 x 3` block to three independent normal
+directions. If `k=rank(A)` and `m=3-k`, then at `r=0`
+
+```text
+dim H^-1=6-k,  dim H^0=3-k,
+dim harmonic=9-2k=3+2m,  index=3.
+```
+
+Each zero singular value contributes one gap-closing acyclic pair. The four
+rank strata therefore have harmonic dimensions `9,7,5,3` and pair counts
+`3,2,1,0`. The former `3 -> 7` theorem is exactly the rank-one row, but no
+current source selects that row for the physical q79 object. Intermediate
+ranks one and two also fail the same-multiplier qutrit dimension test; ranks
+zero and three pass only the necessary dimension test and still require an
+equivariant source theorem.
+
+Artifact:
+`Q79_GENERAL_EXT_BLOCK_RANK_STRATIFICATION_AND_INDEX_THEOREM_v1.md`.
+
+#### Local DVR presentation and Fitting geometry
+
+The categorical cone morphism has now been literalized correctly. Resolving
+`k0` locally by `R --t--> R`, trivializing `V`, and lifting the three Ext
+classes gives one `6 x 6` presentation per qutrit row:
+
+```text
+M_j=[[A_j,r I_3],[-t I_3,0]].
+```
+
+Complete minor enumeration gives
+
+```text
+I2=R, I3=(a,r,t), I4=(rt), I5=((rt)^2), I6=((rt)^3).
+```
+
+The matrix has rank six for `rt!=0`, rank three generically on `rt=0`, and
+rank two only at `a=r=t=0`. Its local module normal forms recover exactly
+`k0^3` off `E_B`, rank-three kernel/cokernel on generic `E_B`, and one extra
+point module in the cokernel at `a=0`. This also explains why residue-field
+fiber dimension can jump through Tor without changing the cohomology-sheaf
+rank.
+
+Exact row and column chain maps transport `M_j` under shift and clock and obey
+the selected projective qutrit relation. Thus the qutrit acts on the resolved
+local chain before projection. Literal good-cover overlap matrices, HYM data
+and the physical analytic/finite endpoint remain open. Intrinsic global
+Fitting descent and the hidden topological endpoint are closed by the next
+theorem.
+
+Artifact:
+`Q79_LOCAL_DVR_CONE_PRESENTATION_FITTING_AND_QUTRIT_EQUIVARIANCE_THEOREM_v1.md`.
+
+#### Global Fitting descent and spectral divisor match
+
+The global object `S_HS in D^b(J,alpha)` has twisted coherent cohomology
+sheaves. Fitting ideals are invariant under local module isomorphism and under
+tensoring by an invertible overlap line, so their local ideals glue to
+ordinary ideal sheaves even though the modules themselves are alpha-twisted.
+This closes intrinsic global Fitting descent without pretending that the
+symbolic `G_ij` declarations are literal overlap matrices.
+
+The resolved local differential satisfies
+
+```text
+det(M_j)=(r t)^3.
+```
+
+Here `r=0` is the Hartshorne-Serre plane-section divisor of class `H` and
+`t=0` is the Jacobian zero section `D0`. Its zeroth Fitting divisor is therefore
+
+```text
+3(H+D0)=3H+3D0,
+```
+
+matching both the independently computed BHT virtual support class and
+`det(S_HS)=O_J(3H+3D0)`. The selected degree-two section `a` gives two reduced
+points in the deepest local rank-two locus `(a,r,t)`.
+
+Downstream transport already supplies a selected smooth determinant-one
+hidden `P(3,9)` representative at the topological tier. What remains is the
+holomorphic/HYM promotion, common Gauduchon polystability, and either a basic
+total Chern-Weil representative or a theorem producing a positive balanced
+metric from the invariant `dd^c` potential. The newer Bott-Chern reduction
+shows that separate exact visible/hidden split-source forms are sufficient but
+not mandatory for the Aeppli step. Literal overlap execution and the
+continuum-to-finite physical intertwiner remain downstream. The visible `V3`
+branch is separate from this hidden Hartshorne-Serre cone.
+
+Artifact:
+`Q79_GLOBAL_FITTING_DESCENT_AND_SPECTRAL_DIVISOR_MATCH_THEOREM_v1.md`.
+
+#### Local-first Cech-Hilbert descent and branch multiplicity
+
+For a connected finite cover with local Hilbert fibers `H_i` and unitary
+transition maps `U_ij`, a global state is a compatible tuple in
+
+```text
+ker(d0),  (d0 psi)_ij=psi_j-U_ij psi_i.
+```
+
+Choosing a spanning tree identifies this equalizer with the intersection of
+the fixed spaces of all cycle holonomies in one root fiber. Consequently its
+dimension is at most the local fiber dimension. It is not the product of the
+dimensions of every patch. In the exact three-patch witnesses, local dimension
+three gives global dimensions three for identity gluing and one for holonomy
+`diag(1,omega,omega^2)`, rather than the naive tensor dimension 27.
+
+Compatible retained projectors obey `U_ij P_i=P_j U_ij` and descend by
+intersecting their root range with the same holonomy-fixed space. An
+incompatible local projector does not define a global coherent sector.
+
+The q79 central-twist witness sharpens the distinction:
+
+```text
+G01 G12 G20=omega I3,
+ordinary vector equalizer dimension=0,
+projective rays return,
+endomorphism equalizer dimension=9.
+```
+
+Thus a twisted/projective global object need not have an ordinary global
+vector section, while its endomorphisms, determinants and Fitting ideals can
+descend ordinarily. Global Hilbert structure therefore does not imply that
+all local alternatives are simultaneously actual universes. This is a no-go
+for that inference, not a disproof of the Many-Worlds interpretation. A
+physical nonlinear local closure-repair source and actualization law remain
+open; the abstract nonlinear compatibility mechanism is closed next.
+
+Artifact:
+`LOCAL_FIRST_CECH_HILBERT_DESCENT_AND_BRANCH_MULTIPLICITY_THEOREM_v1.md`.
+
+#### Nonlinear closure-repair descent and conditional actualization
+
+Let local nonlinear defects satisfy
+
+```text
+Phi_j o U_ij=V_ij o Phi_i
+```
+
+for isometric configuration overlaps `U_ij` and unitary defect overlaps
+`V_ij`. Then the squared-defect costs, negative-gradient vector fields and
+their unique local flows intertwine. The product repair flow consequently
+preserves the nonlinear Cech equalizer. Compatible fixed points and attraction
+basins descend, and wherever asymptotic limits exist they define a conditional
+global map
+
+```text
+A:Gamma(Basin)->Gamma(Fix).
+```
+
+Single-valued global basin labels are the holonomy-fixed local labels, not a
+product over patches. Exact witnesses show both logical possibilities:
+trivial holonomy can retain multiple basins, while reflection holonomy can
+leave one compatible label. Thus descent supplies a selection criterion but
+does not itself select the physical repair law, initial state or probability
+measure.
+
+Differentiating at a zero-defect fixed point recovers the previous
+Cech-Hilbert theorem because `Hess C=D Phi^* D Phi` and the Hessians intertwine.
+On the proven q79 open stratum, the accepted finite Haar projector, the exact
+qutrit carrier unitary and the central twisted cocycle give a descended
+projective repair flow. Its ordinary vector equalizer remains zero; the
+coherent line and generic basin limit close as rays. This is a structural
+finite result, not literal BHT overlap execution or a physical collapse law.
+
+Artifact:
+`LOCAL_CLOSURE_REPAIR_DESCENT_AND_CONDITIONAL_ACTUALIZATION_FUNCTOR_THEOREM_v1.md`.
+
+#### Projective operational record measure and actualization cutset
+
+The newer QM source result closes the canonical q79 binary operational
+probability tier. Its Fock recorder has effects `P_Haar,Q`, common rate
+`gamma=log(448)` in intrinsic time and stopped output law
+
+```text
+mu(ready)=exp(-gamma u),
+mu(ds,a)=gamma exp(-gamma s) Tr(rho P_a) ds.
+```
+
+Transporting both `rho` and `P_a` through the exact open-stratum qutrit
+overlaps leaves every trace weight invariant. The central cycle phase cancels
+under conjugation, so the output measure and selective instrument descend on
+projective rays even though the ordinary vector equalizer is zero. The exact
+root preparation gives `(1/3,2/3)` conditional record weights and
+
+```text
+(Pr(ready),Pr(P),Pr(Q))=(1/448,149/448,149/224)
+```
+
+in every chart, with no observed probability or new stochastic primitive.
+
+This does not select an ontic history. The nonselective infinite-time channel
+for the witness preparation has rank two and purity `5/9`, rather than either
+normalized selective branch. A spectral probability measure likewise does
+not choose one sample point. Thus the canonical operational probability tier
+is closed while preparation selection, universal apparatus contexts,
+continuum repair-basin coupling and objective single-history actualization
+remain open.
+
+Artifact:
+`Q79_PROJECTIVE_OPERATIONAL_RECORD_MEASURE_DESCENT_AND_ACTUALIZATION_CUTSET_THEOREM_v1.md`.
+
+#### Operational ontology non-entailment and single-history countermodel
+
+The exact checkpoint law has two mathematically distinct completions with the
+same retained operational reduct. A uniform space of 448 atoms, partitioned
+as
+
+```text
+1 ready + 149 P + 298 Q,
+```
+
+gives exactly `(1/448,149/448,149/224)` and exactly one record per sampled
+atom. The imported selective instrument supplies the corresponding
+conditional state. Independently, the normalized record-amplitude vector is
+the image of a reference vector under an explicit exact unitary Householder
+dilation. Declaring one sampled record actual or declaring all three nonzero
+record components coactual changes only an added actualization predicate; it
+does not change the Hilbert vector, effects, instrument or output law.
+
+Therefore the retained q79 Hilbert, unitary, projective and operational data
+do not entail Many-Worlds. They also do not entail a single-history ontology.
+The latter still needs a selected physical actualization source. This is a
+model-theoretic non-entailment result, not a disproof of Everett.
+
+The exact selected DFT3 gives a second guard: the same state `e0` has one
+nonzero coefficient in the clock basis and three in the Fourier basis. A
+world count based only on nonzero coefficients is therefore not invariant
+without a separately selected record decomposition. The one-history witness
+is restricted to the selected `ready/P/Q` context and assigns no
+counterfactual values to all projectors, preserving the existing contextuality
+boundary.
+
+Artifact:
+`Q79_OPERATIONAL_ONTOLOGY_NONENTAILMENT_AND_SINGLE_HISTORY_COUNTERMODEL_THEOREM_v1.md`.
+
+#### Hessian-spectral trajectory and deterministic-repair cutset
+
+The accepted finite q79 Morse-Bott repair is
+
+```text
+R_t=P+exp(-t)Q.
+```
+
+For the root ray, whose `P` weight is `1/3`, the normalized weight evolves as
+`1/(1+2 exp(-2t))` and tends to one. Thus the selected Hessian repair is a
+coherent projection, not a two-record outcome law. The canonical no-knob
+two-basin alternative based on projector variance has
+
+```text
+C_var=p(1-p),
+dp/dt=4p(1-p)(2p-1).
+```
+
+Its separatrix is `1/2`, so the root flows deterministically to `Q`; the
+unitarily invariant `CP^2` measure gives basin weights `(1/4,3/4)`, not
+`(1/3,2/3)`. More strongly, every pure-ray ensemble representing the rank-one
+root density is supported on that same ray. A deterministic map whose complete
+state is the retained pure qutrit therefore cannot produce nontrivial record
+weights. A richer preprojection microstate remains possible but unsourced.
+
+The selected Hessian spectral recorder does supply the exact pathwise route:
+
+```text
+L_P=sqrt(log(448))P,
+L_Q=sqrt(log(448))Q,
+J_a(rho)=P_a rho P_a/Tr(rho P_a).
+```
+
+The total hazard is preparation independent, the normalized no-count state is
+constant, and the state-valued first-count paths integrate exactly to the
+accepted selective instrument. At unit horizon the law is
+`(1/448,149/448,149/224)`. Hazards and normalized jump updates intertwine the
+q79 overlaps, so one marked path per realization descends projectively.
+
+This closes a consistent single-path operational semantics, not a physical
+ontology theorem. MTT may adopt the stochastic path, derive a richer
+deterministic upper microstate, or remain operational. The physical continuum
+closure-to-apparatus coupling and that ontology decision remain open.
+
+Artifact:
+`Q79_HESSIAN_SPECTRAL_TRAJECTORY_AND_DETERMINISTIC_REPAIR_CUTSET_THEOREM_v1.md`.
+
+#### Continuum spectral-recorder compiler and transfer error
+
+The word "continuum" has two distinct meanings in the current corpus. The
+Cauchy quantum model already has the infinite-dimensional space
+`L2(Sigma;F_q79)` and a bounded Fock recorder whose internal symbols are the
+finite q79 projectors. The physical internal Hull-Strominger/HYM endpoint,
+its low modes and its map to the qutrit are still open.
+
+The exact compiler between these layers is now closed. If a selected positive
+augmented Hessian `A_c` has an invariant three-mode sector `E` with
+
+```text
+P_c=chi_0(A_c)|_E,  Q_c=I_E-P_c,
+rank(P_c)=1,        rank(Q_c)=2,
+```
+
+and a selected isometry `T:E->C^3` intertwines this pair with `P_f,Q_f`, then
+a declared minimal nondemolition Luders meter and common clock rate `gamma`
+force, up to output-channel phases,
+
+```text
+L_P=sqrt(gamma)P,  L_Q=sqrt(gamma)Q,  K=-(gamma/2)I.
+```
+
+The Hudson-Parthasarathy identity holds, bounded QSDE uniqueness lifts `T` to
+the Fock cocycle, and the no-count maps, hazards, conditional jumps, stopped
+instrument and complete path law all intertwine. Thus these are compiler
+outputs rather than separate physical source rows.
+
+For an approximate isometry, with
+`epsilon_a=||P_a^f T-T P_a^c||`, the hazard error is at most `epsilon_a`, the
+unnormalized jump error is at most `2 epsilon_a+epsilon_a^2`, and the marked
+horizon probability error is at most
+`(1-exp(-gamma u))epsilon_a`. A normalized conditional-state bound follows
+whenever both event weights have a positive lower bound. The exact `F_3`
+three-mode witness reproduces the q79 `(1/3,2/3)` split and order-448 path law,
+but it is structural and is not the missing physical HYM embedding.
+
+The reduced physical source obligation is now sharp: emit the selected
+zero-defect endpoint and augmented Hessian, its invariant rank-`1+2` low
+sector, a selected continuum-to-qutrit partial isometry with certified tails
+and product errors, and the physical clock normalization. The compact shared
+circle does not supply that rate or a random sample without another theorem.
+
+Artifact:
+`Q79_CONTINUUM_SPECTRAL_RECORDER_COMPILER_AND_INTERTWINER_ERROR_THEOREM_v1.md`.
+
+#### Physical endpoint, full residual and finite-readout decision
+
+The requested UST.G1E/G2 commit is now hash-bound into this branch. The
+ordinary-bundle-to-cohesive embedding is reused, not reproved. Applying its
+seven rows to all currently bound candidates gives an exact current-source
+decision: `S_HS/kappa_hol` fails the physical Chern row, the smooth V3/W9 pair
+has no selected holomorphic/common-HYM promotion, and the four-row `S_phys`
+object remains an unfilled input contract. No present object is a physical
+endpoint; this does not exclude a future ordinary or cohesive endpoint.
+
+For any such zero-defect endpoint, the complete repair residual is now typed as
+
+```text
+Phi_phys=(MC_Y,L0^dagger,mu_TX,mu_V,mu_W,B_bal,A_Bianchi,N_SU3).
+```
+
+Its extra derivative is the stack `K` of the tangent, visible and hidden HYM
+moment-map derivatives, balanced derivative, real anomaly derivative and SU3
+normalization derivative. With the selected minimal orthogonal sum of the
+endpoint-induced `L2` target metrics,
+
+```text
+H_phys=Delta_Y,1+K^dagger K,
+ker(H_phys)=ker(Delta_Y,1) intersect ker(K).
+```
+
+No current identity proves absorption or scalar rescaling. In particular, the
+real anomaly row receives all five rank-102 lanes in one residual target. Its
+Gram term permits the six ordered cross-gauge blocks absent from the old
+augmented-Hodge skeleton. The allowable full-Hessian mask therefore grows from
+19 blocks and 7716 positions to 25 blocks and all 10404 positions. Actual
+nonzero coefficients are not claimed.
+
+The same-source finite theorem also requires the residual-target square
+`S_R K_c=K_f T_fin`. For a non-surjective isometry, forward intertwining alone
+does not transport `K^dagger K`; a reducing finite image or an adjoint-square
+certificate is required. The approximate Hessian bound retains the resulting
+adjoint-leakage term, followed by a spectral-gap projector bound. The physical
+endpoint, numerical `K`, corrected projector and dynamic `T_fin` remain open.
+
+Artifact:
+`Q79_PHYSICAL_V3W9_ENDPOINT_FULL_RESIDUAL_AND_FINITE_INTERTWINER_DECISION_v1.md`.
+
+### 6.15 Physical eta9 Prym lattice and gerbe reduction
+
+The physical visible cover `C_phys in |9H+3D0|` has certified invariants
+`K_C^2=1458`, `c2=1530`, `q=1`, `p_g=249` and `h11=1034`. These imply
+
+```text
+b2=1532,  signature=-534,  (b2+,b2-)=(499,1033).
+```
+
+Its free integral intersection form is the odd indefinite unimodular lattice
+`I_(499,1033)`. It contains the explicit primitive square-`-132` vector with
+negative coordinates `(11,3,1,1)`. For the degree-three map to the K3 base, the
+rational norm-zero complement has signature `(496,1014)` and rank 1510; Meyer's
+theorem makes it represent `-132`. Hence neither ambient integral topology nor
+the rational norm kernel blocks the required Prym square.
+
+There is a second exact reduction. With `D=9H+3D0`, `DD(alpha)=delta wedge x`,
+`H.delta=0` and `x^2=0`, one has `D cup DD(alpha)=0`. Weak Lefschetz and
+Poincare duality make `j_*:H^3(C_phys,Z)->H^5(J,Z)` injective, proving
+`j^*DD(alpha)=0` integrally for every smooth physical cover. The topological
+gerbe obstruction is closed; a flat analytic Brauer/Deligne class can still be
+nonzero. The exact remaining layers are the integral simultaneous
+`Nm/Gysin/square` fiber, type `(1,1)`, flat Deligne trivialization and HYM.
+
+### 6.16 Homogeneous normal-function upper reference
+
+Affine continuation is the projection of a simpler linear upper rule:
+
+```text
+nu -> M_gamma nu+n_gamma
+(nu,1) -> [[M_gamma,n_gamma],[0,1]] (nu,1).
+```
+
+On the exact A120 q79 benchmark, this gives 90 integral `5x5` determinant-one
+operators. Every local extension splits, no common rational splitting exists,
+and the full homogeneous surface relation closes exactly. The A121 Deligne
+transgression is then a linear quotient readout of the same extended local
+system. This proves a real prior-to-projection simplification: local translations
+are blocks of one global extension, not separate correction rules.
+
+Only the operator construction transfers to the physical `eta9` cover. The old
+genus-two polynomial, critical values, rank-92 basis, `8x92` period matrix and
+beta vector do not. The physical adapter is `3/8`; it still needs its own
+selected divisor source, connection, affine cocycle, period/differential-
+character lattice and flat-class decision.
+
+### 6.17 Differential-Picard eta9 source reduction
+
+The physical construction can now be stated before projection as one typed
+object
+
+```text
+U_eta9=(C,tau_alpha,L_qhat,o_FM_hat,P_hat,H).
+```
+
+Here `C` is the selected smooth finite-flat cover, `tau_alpha` trivializes the
+remaining flat gerbe, `L_qhat` is a differential line with integral class `q`,
+and `H` records the selected polarization/HYM representative. The terms
+`o_FM_hat` and `P_hat` supply the differential K-orientation and transform kernel.
+Differential norm, Gysin, cup-square, homogeneous monodromy, Deligne phase,
+inverse BHT and Hodge zero modes are seven functorial readouts. An executable acyclic
+dependency graph verifies that none needs to be postulated as an independent
+post-projection rule.
+
+For the two-graph carrier the compiler reproduces `Nm(q)=0`, the algebraic
+Gysin coefficient 12 and `q^2=-132`. Only the mixed row
+`m_f-m_g=-9gamma*x` remains among those algebraic formulas. The construction
+must proceed through an integral/Hodge/holomorphic/differential/HYM lift tower;
+vanishing integral `DD(alpha)` closes only its topological gerbe stage. The
+mod-101 replacement quartic supplies a unique necessary Cartier differential,
+but it is not yet the selected source map or a characteristic-zero point of this
+upper object.
+
+### 6.18 Homotopy-fiber rules before projection
+
+The sharpest formulation of an upstream gauge rule is a homotopy fiber, not an
+equation imposed after constructing an unconstrained object:
+
+```text
+BSU3_hat=hofib_Ohat(det_hat:BU3_hat->BU1_hat),
+Prym_hat=hofib_Ohat(Nm_hat:Pic_hat(C)->Pic_hat(B)).
+```
+
+An object includes a coherent determinant or norm trivialization, and its gauge
+transformations preserve that trivialization. The executable benchmark proves
+`d(det)_I=trace`, an eight-dimensional `sl3(C)` kernel, closure of all 64 basis
+commutators and scalar center `Z3`. The Hermitian compact real form is `su3`.
+Thus the special-unitary algebra and center are features of the upper source
+type, not labels reapplied after projection.
+
+The q79 two-graph coefficients satisfy `1-4+3=0`, so the conditional integral
+class lies in the topological norm kernel. A differential fiber point still
+needs an explicit trivialization. The exact `S1` example `c1=0`, holonomy `-1`
+shows why the latter is not implied by topological zero. The remaining flat
+Deligne/Brauer phase is precisely the physical obstruction to this pointed
+source, rather than an unrelated final correction.
+
+### 6.19 One determinant fiber for the faithful SM gauge group
+
+Apply the same rule simultaneously to rank three and rank two:
+
+```text
+S(U3xU2)=ker(det3 det2:U3xU2->U1).
+```
+
+The derivative is `tr(X3)+tr(X2)`. Its kernel has dimension 12 and an exact
+`8+3+1` basis; all 144 ordered commutators close. The primitive integer abelian
+direction is `diag(2,2,2,-3,-3)`. At group level,
+
+```text
+(A,B,z) -> (z^2 A,z^-3 B)
+```
+
+is surjective from `SU3xSU2xU1`, with the six-element kernel `z^6=1`. Hence
+
+```text
+S(U3xU2) ~= (SU3xSU2xU1)/Z6.
+```
+
+This independently reproduces the A47 center enumeration and turns its four
+post-projection gauge statements into one candidate source type. Block-diagonal
+inclusion in `SU5` yields the exact twelve-dimensional complement with charges
+`+/-5/6`; this is a structural comparison, not a GUT or coupling-unification
+claim.
+
+### 6.20 Matter weights from the same determinant fiber
+
+The A46 matter seed is `10_M+bar5_M+1_M`. With the primitive determinant-fiber
+weights `(2,-3)` and its selected chiral orientation, define
+`Y=-q_fiber/6`. The single calculation
+
+```text
+Lambda2(5)+bar5+1
+```
+
+then emits
+
+```text
+(3,2)_(1/6), (bar3,1)_(-2/3), (bar3,1)_(1/3),
+(1,2)_(-1/2), (1,1)_(1), (1,1)_(0),
+```
+
+plus the weak scalar `(1,2)_(1/2)`. All six rows satisfy the same `Z6` descent
+condition, all five local/mixed anomaly sums vanish, and the three-family Witten
+count is 12. The executable derivation withholds the A46 row values until the
+final equality test. This replaces an imported charge-table step with one
+upstream representation calculation, while retaining A46's source module and
+discrete chiral orientation as inputs.
+
+### 6.21 A50 finite-sheet/determinant-fiber identity
+
+A48-A50 already close the completed `96`-dimensional finite real-even triple at
+the declared profile tier. The new bridge consumes that result. A50's two linear
+sheet constraints have primitive null vector `(3,-1,3)` and emit
+`6Y=(1,-4,2,-3,6,0)`. The determinant-fiber exterior-algebra construction emits
+the same vector independently.
+
+After expanding the six rows with multiplicities `(6,3,3,2,1,1)`, the two
+one-family generators are exactly the same `16x16` matrix. It has rank 15,
+trace zero, cubic trace zero, primitive charge gcd one and exact `Z6` descent.
+Thus A50's native shared-circle/unimodularity reduction is the
+representation-level realization of the determinant-fiber rule. What remains is
+to identify their differential connection, holonomy and coherent determinant
+trivialization on the actual geometric carrier.
+
+### 6.22 Pointed differential carrier formula
+
+The differential globalization has an exact conditional construction. Given
+typed differential compact carriers `V3,V2` and one differential line `L_Y`, set
+
+```text
+E3=V3 tensor L_Y^2,
+E2=V2 tensor L_Y^-3.
+```
+
+Then `det(E3)=L_Y^6` and `det(E2)=L_Y^-6`. Connection traces, curvature traces
+and determinant holonomies cancel by the same `+6-6` identity, producing a
+canonical pointed `S(U3xU2)` object. The line action is already identified with
+A50 on the finite `H16` module.
+
+This is now understood as a lifted presentation rather than the universal
+physical source. A charge-one `L_Y` is a sixth root of the canonical determinant
+line and need not exist in every `Z6` gauge-bundle sector. The formula remains
+valid whenever that lift is chosen.
+
+### 6.23 Universal differential gauge carrier and A50 holonomy
+
+The stronger source rule is one object:
+
+```text
+(P,A) in B_conn S(U3xU2)(X).
+```
+
+Equivalently, it is `(E3,nabla3;E2,nabla2;tau)` with a parallel
+`tau:det(E3) tensor det(E2) ~= O_hat`. In the A46 chiral orientation the central
+cocharacter is
+
+```text
+c_Y(z)=(z^-2 I3,z^3 I2),
+a=Tr(A2)/6=-Tr(A3)/6.
+```
+
+The associated bundles
+
+```text
+E3 tensor E2, Lambda2(E3), E3*, E2*, Lambda2(E2), O, E2
+```
+
+emit the exact fermion weights `6Y=(1,-4,2,-3,6,0)` and Higgs weight `3`.
+Consequently A50's finite shared circle is exactly the central connection and
+holonomy action of this one carrier. The oriented cover has the same A47 `Z6`
+kernel. The character lattice of `S(U3xU2)` has central weights `6Z`, proving
+that a universal charge-one line is absent; the B21 line is extra lift data.
+
+This closes the universal differential and representation theorem, not the
+selection of a physical background or quantum measure. The next source is one
+classifying differential cocycle `X->B_conn S(U3xU2)`, or a rule for summing
+over such sectors. Four-dimensional color and weak connections are dynamical
+fields and do not require fixed HYM representatives. The q79 HYM bundles remain
+typed internal compactification backgrounds.
+
+### 6.24 Shared-circle gauge complex and six lifts
+
+The universal carrier has now been tested on an exact finite model of the common
+circle. For the cycle complex
+
+```text
+C0(C_n,g) --d0--> C1(C_n,g),
+```
+
+`rank(d0)=n-1` and the harmonic projector is
+`P_H=(1/n)11^T`. Hence `P_H d0=0`, so the projected circle holonomy is gauge
+invariant before any particle representation is evaluated. Tensoring with
+`g=s(u3xu2)` gives
+
+```text
+H1(C_n,g)=8_color+3_weak+1_shared-abelian.
+```
+
+That one abelian mode emits the full A50 phase vector. Since `G` is connected,
+all principal `G` bundles on `S1` are trivial. The lift obstruction vanishes in
+`H2(S1,Z6)`, while lift choices form `H1(S1,Z6)=Z6`. All six choices act
+identically on descended A46 matter. They are six cover presentations, not six
+physical branches. The executable prototype checks exact Hodge identities and
+Smith forms for cycle discretizations `n=3,...,10`; no discretization size is
+assigned physical meaning.
+
+### 6.25 Globally hyperbolic obstruction and nonlinear BRST
+
+Foundation v7 assumes a globally hyperbolic Lorentzian physical base. Smooth
+Cauchy splitting gives
+
+```text
+Y4 ~= R x Sigma3,
+```
+
+so the optional `Z6` cover-lift obstruction and lift choices reduce to
+
+```text
+o6(P) in H2(Sigma3,Z6),
+Lifts(P) an H1(Sigma3,Z6)-torsor when o6(P)=0.
+```
+
+For `H1(Sigma,Z)=Z^b1 direct_sum_i Z_(n_i)` and free rank `b2` in
+`H2(Sigma,Z)`, the two coefficient groups are respectively
+`Z6^b1 direct_sum_i Z_gcd(n_i,6)` and
+`Z6^b2 direct_sum_i Z_gcd(n_i,6)`. Contractible slab charts have zero
+obstruction and a unique lift; `S1xR2` has six lifts and no obstruction;
+`T3` has three obstruction coordinates. These are topology diagnostics because
+the corpus does not select `Sigma3`.
+
+Crucially, the faithful `G=S(U3xU2)` theory does not require the optional lift.
+The new executable source constructs its twelve-generator complexified algebra,
+checks all 144 brackets and 1,728 Jacobi triples, and proves exact
+Chevalley-Eilenberg nilpotency. On
+
+```text
+H16=Lambda2(C5) direct_sum (C5)* direct_sum C,
+```
+
+all 144 representation brackets and the matter Maurer-Cartan identity close.
+This supplies the classical nonlinear source beneath A03's imported standard
+BRST dictionary on every `G` bundle. It does not construct a BV measure, prove
+the quantum master equation, or promote the audited constructive-QG template.
+
+### 6.26 Shifted-cotangent BV source
+
+The nonlinear B24 field stack has a canonical upper completion
+
+```text
+F_P=(Conn(P) x Gamma(E_H16) x Gamma(E_H16^vee)) // Gau(P),
+E_BV,P=T*[-1]F_P.
+```
+
+The degree-minus-one cotangent form supplies antifields and the Hamiltonian
+`S_Q=<Phi*,Q Phi>`. Since the B24 homological vector field obeys `Q^2=0`,
+
+```text
+1/2 {S_Q,S_Q}=<Phi*,Q^2 Phi>=0.
+```
+
+For any same-carrier gauge-invariant action `S0`, the full
+`S_BV=S0+S_Q` therefore satisfies the classical master equation. An executable
+dual-number DGA with `d x=eta` checks a genuinely affine
+`Q A=c_x+[A,c_0]`, 24 ghost rows, 12 connection rows, 576 `H16` and 576 dual
+representation brackets. Its invariant Frobenius-current action seed and every
+finite divergence coefficient vanish exactly, giving a finite algebraic QME
+seed. This is not a regulated four-dimensional measure or QME.
+
+### 6.27 Sector-graded differential-cohomology domain
+
+The determinant-product fibration gives `pi1(G)=Z`, generated by determinant
+windings `(-1,+1)`, while `pi3(G)=Z^2`. Since `Y4~=R x Sigma3`, the ordinary
+sector set is exactly
+
+```text
+pi0 Bun_G(Y4)=H2(Sigma3,Z),
+nu=c1(det E2)=-c1(det E3).
+```
+
+The optional cover multiplies `pi1(G)` by six, so it exists precisely for
+`nu in 6H2`; faithful fields exist for every `nu`. Ordinary `H4(Y4)` vanishes,
+but a boundary-framed four-ball has relative sectors
+`pi4(BG)=pi3(G)=Z^2`, one integer for each nonabelian block. The all-sector BV
+object is therefore graded by ordinary and relative data, assembled according
+to the boundary problem.
+
+No normalized translation-invariant probability exists on a countably infinite
+free sector lattice: equal atom mass is forced to zero. Finite torsion orbits do
+have a unique uniform probability. Hence topology fixes the domain and finite
+torsion baseline, but free directions require a same-source action and phase
+character. The determinant-flux block becomes a differential-cohomology theta
+series after a Hodge form is selected. Generic nonabelian instanton sums also
+require moduli and fluctuation determinants and are not ordinary Gaussian theta
+series.
+
+### 6.28 Invariant kinetic sector-magnitude functional
+
+The exact symmetric invariant-form system on `s(u3xu2)` has dimension three.
+The full `H16` trace nevertheless lies on one positive ray:
+
+```text
+Tr_H16(rho(X)rho(Y))=4 Tr_C5(XY).
+```
+
+It gives the one-family normalized indices `(2,2,2)` for
+`(U1_GUT,SU2,SU3)` and exactly replays A51. Gauge symmetry alone does not force
+that ray; it is the finite spectral/action source at its declared tier. After
+A86-A89 scheme transport, the three kinetic coefficients are a selected
+relative shape plus one existing common anchor. Therefore every framed
+integer-sector BPS magnitude follows from
+
+```text
+S_min=8pi^2(g3^-2 |k3|+g2^-2 |k2|)
+```
+
+without a parameter per sector. The primitive zero-anchor amplitude, spatial
+Hodge form, degree-correct phase transgression, instanton determinants and
+renormalized measure remain open.
+
+### 6.29 Flux Heisenberg phase and Hodge polarization
+
+For a closed oriented Cauchy slice, free magnetic classes pair perfectly with
+electric character data through Poincare duality, while torsion classes pair
+through the linking form. Their Weyl extension is a Heisenberg group. Exact
+`Z3`, `Z5` and `Z6` clock-shift models verify the cocycle, nondegenerate
+commutator pairing, character orthogonality and irreducibility. Thus all
+determinant-flux and framed-instanton phase rows are evaluations of global
+characters, not parameters attached independently to sectors.
+
+This topological structure cannot produce the positive form in the kinetic
+weight. In three dimensions `H2 cup H2` lands in zero `H4`, while
+
+```text
+Q_h(nu)=integral_Sigma3 nu wedge *_h nu
+```
+
+depends on a spatial metric. The exact `T3` counterexample
+`diag(1,1,1)` versus `diag(2,1/2,1/2)` proves that this dependence is not one
+overall normalization. One shared circle maps into an `r`-torus of phases by
+one integer cocharacter in `Z^r`, with image rank at most one. B23 does not
+select that cocharacter or its internal-to-spacetime transgression. The next
+source theorem must therefore emit the Hodge polarization and cocharacter
+together.
+
+### 6.30 Metric-to-Hodge and primitive visible C2 axion source
+
+The globally hyperbolic metric closes the Hodge source formula without adding a
+gauge-sector matrix. If `g=-beta dt^2+h_t`, then each Cauchy metric emits
+
+```text
+Q_h(nu,mu)=integral_Sigma3 nu wedge *_h mu.
+```
+
+On flat `T3`, full symbolic contraction gives `Q_h=h/sqrt(det h)`. The
+numerical metric remains a GR-source input, but the map from that metric to the
+flux weight is no longer open.
+
+The phase source also sharpens. A97 already supplies a periodic
+model-independent heterotic axion coupled to the visible simple-group class;
+it is not B23 circle holonomy. Restriction through the B22 carrier gives
+
+```text
+c2(E5)=c2(E3)+c2(E2)-nu^2.
+```
+
+The exact `E8 -> E6 -> SU5 -> SU3 x SU2` index chain is one. Hence on a
+framed four-ball the axion selects `exp(i theta_MI(k3+k2))`, the primitive
+cocharacter `(1,1)`. The ordinary magnetic character is instead retained as a
+Heisenberg state coordinate. A mapping-class calculation proves that an
+unmarked `T3` has no nonzero diffeomorphism-natural integral cocharacter.
+
+### 6.31 Instanton deformation complex and determinant-line density
+
+The latest selected 27-mode heat packet can now be placed exactly rather than
+left as an unspecified determinant input. Define
+
+```text
+L=4 log(4 pi^2/9)+4 log(8 pi^2/9).
+```
+
+Its six family sectors each have log pseudodeterminant `3L`; the Higgs sector
+also has `3L` because its two extra positive eigenvalues are one. Hence the
+reported full value is exactly `21L`. This is the common-internal-spectrum
+case already proved to translate the matching scale without producing a
+nonuniversal threshold shape.
+
+The physical nonabelian object is instead the anti-self-dual deformation
+complex
+
+```text
+Omega0(ad P) --d_A--> Omega1(ad P) --d_A+--> Omega2_+(ad P).
+```
+
+Its cohomology records stabilizers, tangent zero modes and obstructions. On a
+regular irreducible framed stratum, the index gives
+
+```text
+dim M_(k3,k2)^fr = 12|k3|+8|k2|.
+```
+
+The primed fluctuation determinant excludes those zero modes and is naturally
+a density or section of
+`det(H0) tensor det(H1)^(-1) tensor det(H2)` over moduli. An exact finite
+benchmark shows that rescaling a cohomology basis changes the determinant-line
+coordinate while leaving every primed Laplacian determinant fixed. Thus the
+zero-mode metric, orientation and moduli measure are independent required
+source data; they cannot be recovered from the finite positive spectrum alone.
+
+### 6.32 Upper anomaly line and metric-induced zero-mode density
+
+The B19 source `Lambda2(5)+bar5+1` removes a further apparent collection of
+postprojection rules. For a generic traceless Cartan element of `su5`, exact
+symbolic expansion gives
+
+```text
+Tr_Lambda2(5)(H^3)=Tr_5(H^3),
+Tr_bar5(H^3)=-Tr_5(H^3).
+```
+
+Thus the complete upper cubic anomaly polynomial vanishes identically. Its
+restriction to the B22 `S(U3xU2)` carrier reproduces all five projected local
+anomaly zeros, twelve weak doublets and trivial `Z6` descent. By determinant-
+line naturality and the published Dai-Freed/bordism results, this removes the
+gauge-anomaly obstruction to a trivialization. It does not choose an absolute
+phase or finite-counterterm convention.
+
+The B29 metric and B27 kinetic pairing also induce the zero-mode `L2` Gram
+matrix on `H1`:
+
+```text
+G_ij=g_s^-2 integral tr(z_i wedge *z_j),
+dvol_0=sqrt(det G)|d^d xi|.
+```
+
+The executable verifies the exact basis law
+`G'=A^T G A` and cancellation of its coordinate Jacobian. Therefore the
+zero-mode density rule is not another scalar source row. On smooth regular
+product strata it gives coupling power
+`g3^(-12|k3|)g2^(-8|k2|)`; hyperkahler orientation and dimensions divisible
+by four make the `SU3/SU2` block-swap sign positive. Numerical Gram entries
+still require the selected connection and smooth Hessian family.
+
+### 6.33 Representation-valued AHS-Dirac index and instanton vertex
+
+The normalized anti-self-dual deformation operator
+
+```text
+D_A=d_A^* direct_sum sqrt(2)d_A^+
+```
+
+now has an exact quaternionic symbol certificate:
+
+```text
+sigma(D_A)^*sigma(D_A)=|xi|^2 I4,
+det sigma(D_A)=|xi|^4.
+```
+
+Thus the gauge Hessian is a Laplace-type elliptic family after a Euclidean
+metric and connection are selected. The same upper chiral carrier satisfies
+
+```text
+ch2(Lambda2 E5 direct_sum E5*)=4 ch2(E5).
+```
+
+On the B29 framed sector its three-family scalar Dirac index is
+`12(k3+k2)`, aligned with the diagonal axion cocharacter. The stronger
+per-family index, however, is
+
+```text
+I_rep=(2k3+3k2,k3,k3,k2,0,0)
+```
+
+in `Q,u^c,d^c,L,e^c,N^c` order. This map has rank two, while its scalar sum
+has rank one. It detects `(1,-1)` by
+`(-1,1,1,-1,0,0)` although the scalar index vanishes. The reference system
+must therefore retain the representation-valued index bundle before taking its
+numerical index.
+
+For three families every nonzero framed sector has protected fermion zero
+modes; pure unit `SU3` and `SU2` sectors each have twelve. Exact Berezin
+saturation then proves that the massless vacuum scalar is zero. The proper
+output is a top-exterior fermion vertex, contracted only afterward with
+external fields or selected Yukawa/Higgs/mass data. This changes the codomain
+of the remaining numerical pushforward without changing B27-B31.
+
+### 6.34 Temporal Euclidean polarization and compactified vertex criterion
+
+A Euclidean metric is not a natural pointwise function of the Lorentzian metric
+alone. Solving `X^T H+H X=0` for the six Lorentz generators leaves the
+one-dimensional space `H=a eta`, which contains no nonzero positive form. The
+missing structure is exactly an unoriented timelike line `[n]`. Its projector
+
+```text
+P_n(v)=-g(n,v)n
+```
+
+defines
+
+```text
+W_n=I+(i-1)P_n,
+e_n(u,v)=g(W_nu,W_nv)=g(u,v)+2g(n,u)g(n,v).
+```
+
+The companion is positive, obeys `det(e_n)=-det(g)`, and is unchanged by
+`n -> -n`. It therefore neither selects nor consumes the causal arrow. On an
+oriented globally hyperbolic realization temporal lines exist and form one
+homotopy class. B33 consequently treats the choice as a temporal
+polarization/gauge datum whose physical irrelevance must follow from the
+renormalized QME, not as a new MTT coupling.
+
+On every companion metric, the B32 AHS block and the ghost, Higgs and
+three-family `H16` Weyl blocks form an elliptic complexified squared principal
+family of rank `160`. The ideal-instanton boundary is now typed by the product
+Uhlenbeck stratification,
+
+```text
+codim(ell3,ell2)=8 ell3+4 ell2,
+```
+
+and `I_rep` factors exactly into residual plus bubble indices. The color unit
+vertex has the diagonal benchmark determinant
+`m_u m_d m_c m_s m_t m_b`. The weak unit vertex is saturable only when its
+twelve-dimensional restricted Yukawa-overlap map has full rank. These are
+exact criteria; the selected wavefunction overlaps and their phase are not yet
+computed.
+
+### 6.35 Constrained saddle, projection defect and internal Gram reduction
+
+B34 now has a controlled executable small-size saddle rather than only a
+principal-symbol criterion. For
+
+```text
+A_0=2 rho^2/(r^2+rho^2),
+H_0=r/sqrt(r^2+rho^2),
+```
+
+the unit winding, `8 pi^2` gauge action, `4 pi^2(rho m_A)^2` Higgs-gradient
+term and constraint value `384 pi^2/(7 rho^4)` are exact. NLO matching and the
+independent scale-derivative relation both select
+
+```text
+sigma=(7/192) rho^4 (rho m_A)^2.
+```
+
+The constrained size direction has positive leading Hessian
+`48 pi^2 m_A^2/g^2`. The inner Higgs potential is logarithmically divergent if
+extended globally, so the matched massive Bessel tail is mandatory.
+
+The normalized chiral kernel
+
+```text
+f_rho=sqrt(2)rho/[pi(r^2+rho^2)^(3/2)]
+```
+
+gives the exact Higgs moments `(1,4/5,2/3,4/7,1/2)`. Consequently,
+
+```text
+P H^2 P-(P H P)^2=(2/75)P.
+```
+
+This positive projection defect is the weak radial complement Gram factor. It
+emits `K_rad=(2/75)I_12` and determinant `(2/75)^12`; keeping only the
+compressed scalar `4/5` would erase the channel that makes the radial map full
+rank. The six color spatial overlap eigenvalues are exactly one.
+
+The remaining weak operator is internal and reduces exactly to
+
+```text
+K_Q=Y_u^*Y_u+Y_d^*Y_d,
+K_L=Y_nu^*Y_nu+Y_e^*Y_e,
+
+det K_Z=(2/75)^12 det(K_Q)^3 det(K_L).
+```
+
+Hence the twelve-dimensional rank condition is only two `3 x 3` Gram tests.
+Complementary channels can close rank even when neither projected matrix is
+invertible by itself. B11 fixes `T_J` and family support but not `I_HYM`. A35
+now supplies one selected dimensionless neutral derivative map; physical
+action weights and the charged/quark rank-lifting maps remain q79 source
+problems. The fixed-center, compact-test-function small-instanton face is now
+integrable; collision, multi-bubble, large-size, nonzero-determinant and BV
+boundary faces remain open.
+
+### 6.36 Beta-Jacobi reverse projection
+
+The B34 Higgs moments are not unrelated response rows. Pushing the normalized
+zero-mode measure through `t=H_0(r)` gives exactly
+
+```text
+d mu(t)=4t^3 dt on [0,1],
+mu_n=4/(n+4).
+```
+
+Hence the cyclic upper operator is multiplication by `t` on
+`L2([0,1],4t^3dt)`. In the normalized shifted-Jacobi basis it is one canonical
+tridiagonal operator with
+
+```text
+d_n=[1+9/((2n+3)(2n+5))]/2,
+a_n=(n+1)(n+4)/[(2n+5)sqrt((2n+4)(2n+6))].
+```
+
+Its first entries are `d_0=4/5` and `a_0^2=2/75`, proving that the projection
+defect is the first discarded upper channel. The `N x N` principal truncation
+reproduces all selected moments through degree `2N-1` exactly. This supplies a
+canonical finite-projected algebra for this observable class, with a declared
+exactness order rather than a fitted cutoff.
+
+The natural next object was a block-Jacobi dilation of a selected family moment
+matrix. Section 6.37 performs it for A35's neutral derivative. The construction
+does not manufacture charged rows; its rank cut instead identifies exactly
+what the still-missing quark source must add.
+
+### 6.37 Selected neutral block dilation and the quark rank cut
+
+One selected family operator is now strong enough to perform the first block
+construction. A35 emits the dimensionless neutral derivative
+
+```text
+Gamma_nu = I3+X3,
+G_nu = Gamma_nu^* Gamma_nu
+     = [[2,1,1],[1,2,1],[1,1,2]].
+```
+
+It has determinant four and spectrum `{1,1,4}`. Its positive square root is
+the rational matrix `S_nu=I3+J3/3`. On
+
+```text
+L2([0,1],4t^3dt) tensor C3
+```
+
+the cyclic source map `V xi=1 tensor S_nu xi` gives the exact matrix moments
+
+```text
+V^*(M_t tensor I3)^n V = [4/(n+4)]G_nu.
+```
+
+The block Jacobi matrix has blocks `d_n I3` and `a_n I3`; its `N`-block
+truncation is exact through degree `2N-1`. The first matrix Schur complement is
+
+```text
+(2/75)G_nu,
+```
+
+with rank three, determinant `32/421875` and spectrum
+`{2/75,2/75,8/75}`. Thus the normalized neutral derivative closes the
+structural lepton family-rank test. It does not yet attach the physical action
+weight, VEV or dimensionful neutrino readout.
+
+The quark side now has a sharp no-go. A08 supplies one rank-one seed. Even if
+independent rank-one embeddings are granted to the up and down slots,
+
+```text
+K_Q=A_u b b^*+A_d d d^*
+```
+
+has rank at most two and determinant zero. No phase or scalar normalization can
+create the third family direction. The next source must therefore be a genuine
+rank-lifting q79 Ext/HYM correction, not another coefficient multiplying the
+tree seed.
+
+### 6.38 Static Weyl route and Fourier-dual rank lift
+
+A newer selected SM-slot back-import changes the last sentence above. The
+static source route is already closed:
+
+```text
+Z/phase -> {u,e},
+X/shift -> {d,nuD}.
+```
+
+The A48 finite bimodule gives a compact preprojection description. Assign one
+bit for the `C+`/`C-` scalar label and one for `M3` color versus `C` lepton
+support. Their total parity reproduces the selected route exactly:
+
+```text
+u_R:(0,0)->Z, d_R:(1,0)->X,
+e_R:(1,1)->Z, N_R:(0,1)->X.
+```
+
+Thus the four projected routing rules are one XOR character upstairs. The
+source-level qutrit Weyl carrier is also already selected. If `F3` is its
+finite Fourier transform, then
+
+```text
+F3 Z F3^*=X,
+I+Z=F3^*(I+X)F3.
+```
+
+Since A35 selects the neutral `I+X` response, polarization covariance supplies
+the unique `I+Z` companion. Both have determinant two and Gram spectrum
+`{1,1,4}`. More strongly,
+
+```text
+det[E33+epsilon(I+X)] = epsilon^2(1+2epsilon),
+|det[E33+epsilon(I+Z)]|^2 = 4epsilon^4(epsilon^2+epsilon+1).
+```
+
+Either routed response is full rank for positive `epsilon`. The actual dynamic
+frontier is therefore only: after separating sector scalar weights, prove
+normalized shift-lane shape naturality from `nuD` to `d`, prove Fourier
+covariance from the shift to phase shape, and prove one nonzero quark
+activation. The existing conditional packet has exactly these matrices but
+remains correctly rejected as selected dynamic MTT data.
+
+### 6.39 Universal q79 shared differential line
+
+The phrase "the same shared circle" now has an exact preprojection meaning.
+Use the universal flat differential line
+
+```text
+L64_univ -> B_nabla Z64
+```
+
+and require every q79 occurrence to be a specified coherent pullback. The
+selected sheet map is the unique nontrivial homomorphism
+
+```text
+h_S3(sigma)=32 parity(sigma).
+```
+
+For either odd root `r=1,33`, `chi_r o h_S3=sign`. Hence the pullback of
+`L64_univ` is canonically the SpinC determinant line as a flat line with
+connection, not merely an isomorphic circle fiber. The same line tensors the
+trace/trace-zero/full CLN carrier. Its scalar holonomy commutes with all three
+lane projectors, the root-independent `C4` real plane, `J_DE`, and the selected
+finite Reynolds Hessian
+
+```text
+H_fin=kappa_fin(I-P_Haar).
+```
+
+The executable result has lane ranks `1+2+3`, Reynolds rank two, Hessian rank
+four and finite TT block `kappa_fin I2`, with no dimensionless fit. This closes
+the formerly open B8 full-Hessian test at the finite root-stack-symbol tier.
+
+The theorem also exposes the exact boundary. The sheet map has image only
+`{0,32}`; the quarter-turn belongs to the larger parent `C4=<16>`, which must
+remain declared. The flat symbol connection cannot equal a full nonzero-Chern
+HYM connection. Continuum Hessian preservation requires a spectral-symbol
+functor, a unitary parallel comparison and naturality of the same action.
+
+Artifact:
+`Q79_UNIVERSAL_SHARED_DIFFERENTIAL_LINE_AND_FINITE_OPERATOR_INTERTWINER_v1.md`.
+
+### 6.40 Gauge-fixed q79 Hull-Strominger contraction object
+
+The string fixed-point target has been updated to consume the latest q79
+results. Reference Hull-Strominger existence, its selected unmarked T-dual,
+the smooth real and integral physical Bianchi classes, and invariant
+Bott-Chern injectivity are already closed at their declared tiers. The
+physical analytic source is one common ordinary/twisted visible-hidden
+holomorphic gauge pair in a shared Gauduchon chamber.
+
+After Coulomb gauge and removal of infinitesimal automorphism kernels, let
+`F` be the coupled Hull-Strominger operator, `x0` a seed and `G` a validated
+approximate inverse. The Newton map `T=I-GF` contracts a radius-`r` ball if
+
+```text
+Y+(Z0+Z1 r)r<r,
+Z0+Z1 r<1.
+```
+
+The visible, hidden and metric derivatives admit a sharper nonnegative
+three-block bound `K(r)`. In a weighted max norm the contraction constant is
+`max_i(Kw)_i/w_i`; its optimum is `rho(K)` under the usual irreducibility
+hypothesis. This converts the physical existence/uniqueness problem into a
+finite list of residual, inverse, tail and coupling estimates.
+
+The existing rank-two HYM Wiener certificate proves that this validation
+architecture works, but its numerical constants are not the physical q79
+rank-three/rank-nine constants. Those remain to be emitted from the selected
+physical gauge pair.
+
+Artifact:
+`Q79_GAUGE_FIXED_HULL_STROMINGER_CONTRACTION_AND_UNIQUENESS_TARGET_v1.md`.
+
+### 6.41 Physical q79 heterotic deformation carrier and minimal seed
+
+The latest carrier audit proves that no existing q79 packet yet supplies a
+physical rank-three/rank-nine HYM seed. The visible route makes local freeness
+automatic only after a still-missing selected `eta=9H` differential-Picard
+source `U_eta9`; the integral gerbe restriction is already closed zero, but its
+characteristic-zero graph pair is now closed by two certified Krawczyk
+witnesses, and the apparent mixed Abel-Jacobi coefficient is closed instead as
+a support-forced twisted transgression. The flat Deligne trivialization and
+smooth eta9 extension remain open. The
+hidden route is closed at smooth-projective topological and derived tiers but
+not as a selected twisted-holomorphic HYM bundle. Its older
+`hidden_SU9_HYM_connection=true` row is the separate K3 reference `c2=11`
+connection, not the physical nonbasic `P(3,9)` carrier. The latest theta residual
+search explicitly disclaims physical promotion.
+
+This boundary cannot be crossed by reusing the reference gauge connection.
+Its visible bundle is pulled back from K3 and has `c3=0`, whereas the physical
+visible target has `c3=+/-6`. Newton corrections live in
+`Omega^1(ad E)` for one fixed bundle and preserve Chern classes. The reference
+metric/flux geometry remains valid initialization data; only the gauge seed is
+excluded.
+
+The determinant-one physical extension carrier is
+
+```text
+Q_phys=T*X direct-sum ad(TX) direct-sum ad(E_v)
+       direct-sum ad(E_h^tau) direct-sum TX.
+```
+
+Its complex rank is `3+8+8+80+3=102`; the visible/hidden gauge adjoints account
+for `88`. The order-three twist cancels in `End(E_h)`, so the hidden adjoint is
+an ordinary global bundle. The associated Hodge operator must be inverted on
+the complement of its harmonic kernel; zero Fredholm index alone is not an
+inverse theorem.
+
+An exact torus family `A_t=t H sin(x)dy` has fixed vanishing Chern data but
+`||Lambda F_t||_L2=2 pi |t|`. Therefore topological, finite-carrier and derived
+data cannot emit the physical residual `Y`. The primitive source is reduced to
+four geometric rows: the visible `U_eta9` source, hidden twisted-holomorphic
+carrier, common positive Gauduchon chamber, and fixed tangent-connection
+convention. The seven visible projected rules are already proved to be
+readouts of `U_eta9`. Connections, flux, `Dbar_Q`, Galerkin Jacobian, inverse
+and radii bounds are derived outputs.
+
+Artifact:
+`Q79_PHYSICAL_GAUGE_PAIR_DEFORMATION_COMPLEX_AND_MINIMAL_SEED_THEOREM_v1.md`.
+
+## 7. Proposed reference system: a certified representation diagram
+
+The strongest current candidate is not one exotic space. It is a typed diagram
+whose compatible points represent one physical source in all required languages.
+
+Let `I` be an interface category and let
+
+```text
+D : I -> C
+```
+
+assign to each interface its arithmetic, geometric, operator, quotient, response,
+or observable realization. The proposed reference object is
+
+```text
+R_MTT = holim_I D.
+```
+
+At a strictly finite linear level, replace the homotopy limit by the kernel of a
+compatibility coboundary. If node values are `x_v` and an edge `e:u->v` carries
+the transport `T_e`, define
+
+```text
+(delta_D x)_e = T_e x_u - x_v,
+L_D = delta_D^* W delta_D.
+```
+
+Then:
+
+```text
+ker L_D                     = compatible multi-representations
+dim ker L_D modulo gauge    = number of unresolved source directions
+smallest nonzero eigenvalue = stability/conditioning of promotion
+nonzero minimum residual    = obstruction or incompatible source claims
+```
+
+The associated linear compatibility transform is
+
+```text
+Pi_D = I - delta_D^* (delta_D delta_D^*)^+ delta_D,
+```
+
+where `+` denotes the Moore-Penrose inverse. `Pi_D` projects local payloads to
+the nearest globally compatible payload when the spaces are Hilbert spaces. For
+finite groups, the analogous operator is defined in the group algebra and is
+diagonalized by characters. For nonlinear gauge geometry, the construction must
+be upgraded to a groupoid/derived-stack homotopy limit and linearized at a
+candidate solution.
+
+This is not yet a new theorem. Its finite linear form is closely related to a
+sheaf Laplacian and synchronization. The potentially new contribution would be
+the MTT-specific typed diagram combining:
+
+```text
+finite arithmetic descent
+differential-cohomology lift
+bundle/HYM moment-map reduction
+unbounded spectral correspondence
+causal response typing
+renormalized observable transport
+machine-checkable 2-cell certificates
+```
+
+Nine richer vertex types have now been isolated:
+
+1. a **homotopy-fiber differential source**, for making determinant, norm and
+   their coherent flat trivializations part of the source type;
+2. an **`S(U3xU2)` determinant-fiber carrier**, for deriving the faithful gauge
+   group, matter weights and A50 unimodularity from one object;
+3. a **Gauss-Manin integral local system**, for transporting cycles, periods
+   and normal functions through parameter space without losing monodromy;
+4. a **differential-index superconnection object**, for transporting twisted
+   bundle data through Dirac families, heat kernels, indices and determinant
+   holonomy without losing differential or secondary information;
+5. a **Hodge-resolved cyclic dg/A-infinity state system**, for retaining the
+   pre-projection differential, Green homotopy, symmetry lifts and all induced
+   zero-mode interaction tensors;
+6. a **Hodge-index BV effective state object**, combining tree transfer with
+   loop determinants and secondary invariants from the same source complex;
+7. an **upstairs automorphism-transfer object**, making symmetry, states and
+   interactions outputs of upper tensors and dynamics rather than inputs.
+8. a **universal shared differential-line object**, making SpinC, CLN,
+   root-plane and finite-Hessian occurrences coherent pullbacks rather than
+   separately matched circles;
+9. a **gauge-fixed coupled contraction object**, turning a selected physical
+   string-background candidate into residual, inverse, tail and block-coupling
+   inequalities with a local uniqueness conclusion;
+10. a **physical heterotic extension complex**, coupling the visible, twisted
+   hidden, tangent, complex and flux lanes before projection, with harmonic
+   kernel removal and a nonredundant geometric seed contract.
+
+The diagram remains the orchestration layer. These objects carry more of the
+information that ordinary matrix or scalar vertices discard.
+
+## 8. Why this could be a real improvement
+
+It converts recurring prose obligations into calculations:
+
+| Current phrase | Diagram calculation |
+|---|---|
+| "same-source theorem missing" | no certified point/lift in `holim D` |
+| "source promotion" | solve a lifting problem along a projection of `holim D` |
+| "hidden knob" | positive-dimensional kernel after quotienting gauge |
+| "branch not selected" | multiple connected components or orbits survive |
+| "finite data forgets integral lift" | projection has a nontrivial fiber |
+| "physical normalization open" | unanchored scale null direction |
+| "intertwiner missing" | an edge map `T_e` is absent or fails commutation |
+| "numbers agree but provenance is open" | observable nodes agree while the source square fails |
+| "no-go" | compatibility residual is bounded away from zero |
+
+This is analogous to Fourier analysis only in a limited, testable sense: the
+right transform may turn difficult gluing constraints into mode-by-mode
+compatibility conditions. It does not make physics true by notation.
+
+## 9. First falsifiable benchmark suite
+
+### B1. CRT as an exact global-section problem
+
+Represent the maps from `Z448` to `Z64` and `Z7`. Verify that fixing local
+sections `15` and `2` leaves exactly one global section, `79`, modulo 448. The
+compatibility operator must recover the existing theorem without embedding the
+answer.
+
+### B2. Literal Cech witness as kernel computation
+
+Build the exact `F3` Cech coboundary on the 81 emitted entries. Verify all 729
+triple constraints as `delta_D x=0`, compute kernel and gauge dimensions, and
+identify which data are cocycle, coboundary, and cohomology class.
+
+### B3. Qutrit Weyl realization as a commuting source square
+
+Treat the abstract group-algebra relations and the `27 x 27` left action as two
+nodes. Verify that the representation square commutes and determine whether its
+commutant exposes exactly the known unresolved basis/gauge freedom.
+
+### B4. HYM local-to-global chain
+
+Connect transition cocycles, Fourier coefficients, inverse Laplacian, and the
+fixed-point solution in one diagram. The linearized compatibility Laplacian
+should reproduce the certified contraction gap and distinguish local uniqueness
+from global branch uniqueness.
+
+### B5. Deliberate source mismatch
+
+Combine a valid finite qutrit packet with the swapped integral line-bundle
+branch known to share the same mod-3 shadow. The finite nodes should pass, while
+the integral-lift edge produces a nonzero obstruction or a multi-element fiber.
+This is the decisive test that the language detects a real historical blocker.
+
+### B6. Physical-scale null direction
+
+Apply the diagram to the internally normalized GR TT support packet. It should
+recover the exact internal support while leaving a one-dimensional scale null
+direction. A framework that invents the physical normalization fails this test.
+
+### B7. Measured-profile identifiability
+
+Apply the diagram to the 15-source/8-output SMDR profile map. It must recover
+Jacobian rank eight, source nullity seven, the transported covariance and its
+conditioning, while refusing to relabel measured coordinates as predictions.
+
+### B8. Orthogonal complex strain reference
+
+Given a selected ordered three-frame, split `Sym(3)=D direct_sum N` and define
+`J(D_i)=N_i`, `J(N_i)=-D_i`. Verify exact complex/symplectic identities and
+test a source-certified six-dimensional strain Hessian using
+`H_odd=(H+JHJ)/2`. This candidate fails if MTT cannot select the frame or if a
+certified nonzero `H_odd` excludes compatibility.
+
+### B9. Differential family-index refinement
+
+Refine the selected q79 two-circle K-theory pushforward to a twisted
+differential-K pushforward. Its underlying K-class must reproduce
+`kappa_hidden#`; its curvature must reproduce the existing Chern-Weil rows. No
+neutral flavor interpretation is allowed unless a separate index-bundle
+intertwiner is proved.
+
+### B10. First-Tits cubic on the qutrit carrier
+
+Equip the three `M3` blocks with the first-Tits norm and adjoint. Verify the
+cubic composition law, finite qutrit left/right quiver invariance, sparse
+polarization support, intrinsic rank strata and `Z3` norm center. Then construct
+or exclude a source-selected cubic-preserving intertwiner to the actual q79
+`E6` matter `27`.
+
+The local algebra and smooth q79 globalization pass, but the proposed direct
+physical map fails the central-character test. B10 survives as the cubic
+component `J_27` of the corrected B11 object, not as a relabeling of `Q_sel`.
+
+### B11. E8 Jordan-qutrit graded reference
+
+Keep the family qutrit `3_F` and exceptional Albert module `J_27` independent,
+then compose them through the selected `Z3`-graded `E8` bracket. The exact
+prototype closes dimensions, representation types, the direct-map no-go and
+all six tetracode/Albert support channels. Next transport the signed level-one
+Chevalley/OPE coefficients to `epsilon_F tensor cross_J` and check Jacobi in
+that basis.
+
+This experiment now passes. B11 readiness is `12/14`; the only remaining gates
+are the selected holomorphic/HYM family zero modes and their normalized
+four-dimensional overlap/value map.
+
+### B12. Hodge transfer and reverse-projection lift
+
+Start from a graded differential algebra with projector, Green homotopy and
+cyclic pairing. Verify the contraction, transfer `m2` and `m3`, and test whether
+a post-projection symmetry has a pre-projection chain-derivation lift. The
+auxiliary Heisenberg-Nil model passes exactly: a projected-zero binary product
+has a nonzero ternary successor, and `sl2` lifts before projection.
+
+The physical B12 test is stricter. Construct a selected finite q79 Dolbeault
+subcomplex and prove `[P_N,dbar]=0`, or derive the required perturbative
+corrections. Then transfer its zero-mode products and reproduce `I_HYM` without
+entering scalar rows.
+
+### B13. Common-source tree/loop pushforward
+
+Split one exact finite quadratic source into retained and eliminated blocks.
+Verify that its Green operator produces the Schur-complement tree interaction
+while its determinant produces the loop factor, with no separately selected
+row. Also test an acyclic chain whose projected state space vanishes but whose
+integral torsion is nontrivial.
+
+The two finite benchmarks pass. The physical test must now derive one q79
+interaction and one determinant from the same selected differential, action and
+Green block. The obstructed compact-Nil determinant may test mechanics but is
+barred as the physical source.
+
+### B14. Forward upstairs symmetry and particle projection
+
+Do not begin with projected SU matrices. Specify a differential, product,
+pairing and Hodge/action tensors upstairs; compute their full automorphism
+algebra and its action on cohomology. The auxiliary Nil test derives `sl2`,
+`1+2+2+1` projected states and equivariant `m2,m3` exactly.
+
+The physical test is to construct the smallest selected q79 subcomplex that
+derives one multiplet, one native symmetry action, one interaction and one
+complement determinant. Postprojection reconstruction is only a cross-check.
+
+### B15. q79 stratified cohesive-superconnection test
+
+Use the certified `S_HS` cone as the first geometric upper benchmark. Its
+off-support contraction is now recovered from a global antiholomorphic
+superconnection, and the full operator retains the exceptional-stratum
+cohomology without an `r^-1` singularity. The exact no-go for a uniform
+fiberwise Green operator is part of the pass. The structural benchmark is
+therefore closed. Separately construct the physical `V3/W9` carrier with
+`(c1,c2,c3)=(0,9u,+/-6)`; do not identify it with the HS source merely because
+both yield a magnitude-three diagnostic. The physical test passes only when a
+selected superconnection action and `J`-to-`X` transform make the global Hodge
+contraction, product and index readout derive the typed carrier, one
+interaction and one determinant.
+
+### B16. Physical eta9 homogeneous normal-function test
+
+Construct one selected physical `eta9` graph/divisor carrier and emit its
+finite-flat algebra and inhomogeneous Gauss-Manin connection. Compute its
+integral affine cocycle, homogenize it to a rank-one linear extension, and apply
+the normalized Deligne/Leray functional. The test passes only if the resulting
+flat class is proved zero or nonzero in the carrier's own integral period image.
+Old genus-two numerical values are forbidden inputs. In parallel, compute the
+integral `(Nm,j_*)` lattice map and solve the prescribed square-`-132` affine
+fiber before imposing type `(1,1)`.
+
+### B17. Differential-Picard source emission test
+
+Emit one actual `U_eta9` rather than seven output packets. A passing source must
+provide a selected characteristic-zero `C`, a divisor or line `q` with the exact
+norm/Gysin/square rows, a flat gerbe trivialization, and a stable transformed
+HYM object. The norm, charge, square, monodromy and Deligne packets must then be
+regenerated mechanically from that source and agree without additional choices.
+The current mod-101 Cartier kernel is an input to reconstruction, not a pass.
+
+### B18. Pointed differential Prym-to-SU3 test
+
+Construct `(L_qhat,phi_Nm)` as an actual point of the physical norm homotopy
+fiber, not merely a Chern class in the kernel. Refine inverse BHT to a twisted
+differential-K pushforward and verify that `phi_Nm` maps to a determinant
+trivialization of the rank-three transform. Then compute curvature and holonomy
+from that same pointed object. A vanishing `c1`, rational Chern character or
+integral Dixmier-Douady class is not an acceptable substitute.
+
+### B19. Pointed `S(U3xU2)` carrier test
+
+Package the A47 rank-one, rank-two and rank-three tensors as one differential
+`S(U3xU2)` object with a preserved determinant-product trivialization. Derive
+its matter weights before projection and compare them with the physical
+hypercharge table only afterward. Passing the Lie algebra or `Z6` group identity
+alone does not select the physical carrier or its representation content.
+
+### B20. A50/determinant-fiber finite intertwiner
+
+This benchmark is now closed. A50's primitive sheet null vector and the
+determinant-fiber construction give the identical `16x16` generator, including
+unimodularity traces and `Z6` descent. A48-A50 remain closed at profile tier.
+
+### B21. Differential pointed globalization
+
+The conditional construction is now closed: `V3 tensor L_Y^2` and
+`V2 tensor L_Y^-3` cancel determinant, connection, curvature and holonomy
+exactly. This does not supply the three geometric inputs.
+
+### B22. Universal differential carrier and A50 holonomy
+
+This benchmark now passes. One differential `S(U3xU2)` carrier emits the
+rank-three and rank-two blocks, determinant pointing, unique central connection,
+all A46/A50 matter weights and the Higgs weight. The exact A50 connection and
+holonomy intertwiner follows before choosing a sixth-root line. The character
+lattice calculation proves that the old standalone `L_Y` target was not
+universal.
+
+### B23. Shared-circle mapping-stack test
+
+This benchmark now passes at exact linearized tier. The cycle Hodge projector
+extracts one common holonomy mode, the full cohomology splits as `8+3+1`, and
+the abelian mode emits every A50 phase. The circle lift obstruction vanishes;
+the six lifts form a `Z6` torsor and have identical descended matter action.
+
+### B24. Globally hyperbolic obstruction and classical BRST
+
+This benchmark now passes at exact classical/source tier. Globally hyperbolic
+splitting reduces the optional cover obstruction to `H2(Sigma3,Z6)` and lift
+choices to `H1(Sigma3,Z6)`. The faithful quotient carrier remains global for
+every obstruction value. Its twelve-generator Chevalley-Eilenberg differential
+and full `H16` representation close exactly, providing the nonlinear BRST
+source beneath A03's imported profile dictionary.
+
+### B25. Shifted-cotangent classical BV source
+
+This benchmark now passes at exact classical/source tier. On every faithful
+`G` sector, B24's homological field stack has a canonical `T*[-1]` BV
+completion. Its master Hamiltonian closes for every gauge-invariant same-source
+action. A nonzero-differential finite execution also has a zero flat-Berezinian
+QME residual. This finite result is not promoted to a continuum measure.
+
+### B26. Physical sector-domain classification
+
+This benchmark now passes exactly. Ordinary faithful `G` bundles are classified
+by `nu in H2(Sigma3,Z)`; the optional cover is the six-divisible sublattice.
+Boundary-framed local sectors add two relative instanton integers from
+`pi3(G)=Z^2`. The ordinary/framed distinction and the impossibility of a
+normalized uniform probability on free directions are both certified.
+
+### B27. Invariant kinetic sector magnitudes
+
+This benchmark now passes at the adopted one-shared-anchor corpus-action tier.
+The invariant kinetic cone has dimension three, the `H16` trace selects the
+positive A51 normalization ray, and A86-A89 reduce all integer-sector BPS
+magnitudes to their selected relative shape and one existing common anchor.
+There are zero per-sector magnitude parameters and zero new parameters.
+
+### B28. Flux Heisenberg phase functional and Hodge no-go
+
+This benchmark now passes at exact topological/representation tier. Free and
+torsion magnetic sectors have perfect character pairings, the finite cyclic
+Heisenberg models close, and all sector phases reduce to global character
+evaluation with zero per-sector phase parameters. It also proves that no
+positive magnetic norm follows from three-dimensional topology and that one
+shared circle can populate the phase torus only along one integer
+cocharacter.
+
+### B29. Metric-to-Hodge and primitive visible C2 axion source
+
+This benchmark now passes at exact source-functor/topological-phase tier. The
+Cauchy metric emits the positive Hodge form, the A97 model-independent axion
+restricts to `c2(E3)+c2(E2)-nu^2`, and framed instanton phases lie on the
+primitive `(1,1)` cocharacter with no sectorwise phase parameters. The
+ordinary magnetic character is correctly typed as Heisenberg state data unless
+a vacuum or spatial marking is supplied.
+
+### B30. Framed instanton determinant line and common-spectrum no-go
+
+This benchmark now passes at exact index/typing tier. It reproduces the signed
+one-loop coefficients `(41/10,-19/6,-7)`, proves that the latest selected
+27-mode log pseudodeterminant is exactly `21L`, and therefore identifies it as
+the already classified common-spectrum matching-scale term. The physical
+anti-self-dual complex gives framed zero-mode dimension
+`12|k3|+8|k2|`. A finite cohomological benchmark proves that the primed
+determinant is not the whole one-loop answer: the output is determinant-line
+valued and requires a zero-mode metric and orientation.
+
+### B31. Upper anomaly line and metric-induced zero-mode density
+
+This benchmark now passes at exact upper-polynomial/pullback/density-functor
+tier. One identity on `Lambda2(5)+bar5+1` implies every projected local anomaly
+zero. Published Dai-Freed/bordism theorems remove the global gauge-anomaly
+obstruction, while retaining the distinction between trivializability and a
+selected absolute phase. The same B29/B27 pairing emits the basis-invariant
+zero-mode density and exact coupling powers without a new scalar row.
+
+### B32. AHS-Dirac representation-valued index and instanton vertex
+
+This benchmark now passes at exact elliptic-symbol/index/vertex-typing tier.
+The normalized AHS symbol is quaternionic and Laplace type. The upper
+three-family scalar index `12(k3+k2)` agrees with B29, but the faithful
+rank-two index vector detects both charges and proves that every nontrivial
+sector has protected fermion modes. Hence a massless scalar sector weight is
+zero; the pushforward must first emit a top-exterior fermion vertex.
+
+### B33. Temporal polarization, Uhlenbeck boundary and saturation criterion
+
+This benchmark now passes at exact obstruction/companion/principal-family and
+criterion tier. Lorentz symmetry forbids a metric-only natural Wick companion;
+an unoriented temporal line supplies a positive, orientation-independent one.
+The complete complexified principal family is elliptic, the product Uhlenbeck
+codimension and index factorization are exact, and color/weak vertex
+saturability reduces to determinant/full-rank tests. No preferred Euclidean
+metric and no continuous fit parameter are introduced.
+
+### B34. Smooth saddle, numerical vertex pushforward and QME independence
+
+Stages 1-4 now pass `142/142` exact checks. A controlled small-size constrained
+`SU(2)`-Higgs saddle emits the leading action, constraint, multiplier and
+positive scale Hessian. Its normalized zero modes emit the six unit color
+overlaps and the exact weak radial factor `(2/75)I_12`. The weak rank test is
+reduced to the two internal `3 x 3` Gram matrices `K_Q` and `K_L`, and the
+fixed-center compact-test small-instanton face is integrable. No continuous fit
+parameter was added.
+
+The normalized neutral derivative/shape contribution to `K_L` is now emitted
+and full rank. The selected static Weyl carrier and matter-slot route also
+contain exact Fourier-dual rank-lifting quark shapes. The remaining B34 family
+work is to prove their sector-natural dynamic transfer and one nonzero quark
+activation, then attach the physical neutral and charged action weights. After
+that come the complete lower-order
+gauge/ghost/Higgs/Dirac/Yukawa Hessian, nonzero heat/zeta finite parts and full
+collective measure, collision, multi-bubble, center, large-size and infinity
+faces, anomaly-free phase/counterterm convention, and the renormalized QME and
+temporal-polarization homotopy identity. The leading matched saddle is
+controlled asymptotically; it is not relabeled as an exact global broken-phase
+instanton.
+
+### B35. Higgs cyclic dilation and selected neutral block source
+
+The scalar stage passes `24/24` checks and the selected neutral block stage
+passes `45/45`. The Higgs/zero-mode pair pushes forward to the `Beta(4,1)`
+measure, its infinite Jacobi operator is explicit, and every `N x N`
+truncation is moment-exact through degree `2N-1`. Tensoring with the selected
+neutral shape Gram gives a positive matrix-valued moment source and a full-rank
+first Schur complement. No fitted coefficient is added. The remaining family
+gate is not a generic block-Lanczos exercise: two rank-one quark seeds are
+proved insufficient, while B36 identifies the already-selected static Weyl
+carrier that can supply the rank lift.
+
+### B36. Static Weyl polarization and dynamic naturality gate
+
+This stage passes `48/48` checks. It consumes the newer selected static route
+`Z->{u,e}`, `X->{d,nuD}`, reconstructs it as a total parity on the A48 finite
+bimodule and proves that `I+Z` and `I+X` are Fourier-dual full-rank shapes. Each
+lifts `E33` to rank three for every positive activation. The remaining dynamic
+gate is only the pair of lane-naturality/Fourier-covariance identities plus a
+nonzero selected quark activation. The existing conditional response packet
+is retained solely as a rejected comparison until those source identities are
+proved.
+
+### B37. Universal shared-line pullback and finite-Hessian square
+
+This stage passes exactly. The unique nontrivial `S3->Z64` map pulls either
+odd universal root line to the SpinC determinant sign line. The same specified
+line pullback tensors the `1+2+3` CLN carrier; its scalar holonomy commutes with
+all lane projectors, the root-plane `J_DE`, the rank-two Reynolds projector and
+the rank-four normalized finite Hessian. The finite TT block is exactly `I2`.
+This is a connection and holonomy theorem because the character equality
+identifies the associated flat differential lines, not merely their fibers.
+The physical continuum-HYM Hessian remains a separate symbol-naturality test.
+
+### B38. Coupled physical Hull-Strominger contraction certificate
+
+The analytic theorem and block optimization pass. The follow-up seed theorem
+now also closes the exact carrier type, order-three adjoint twist cancellation,
+harmonic-kernel projection and four-row minimal source contract. It proves that
+the reference gauge connection cannot be the physical seed because the visible
+`c3` differs, while retaining the reference metric lane. An explicit
+same-Chern/different-residual family proves that `Y` cannot be recovered from
+the existing topological packets.
+
+The actual physical execution still requires the selected visible `U_eta9`
+characteristic-zero graph/Prym source with flat Deligne trivialization and a
+genuine hidden twisted-holomorphic locally free carrier in one common Gauduchon
+chamber. From that pair, assemble the rank-`102`
+`Dbar_Q`, project its harmonic kernel, and only then compute `L_N`, `G_N`, `Y`,
+`Z0`, `Z1` and `K(r)`. Do not restart the reference Fu-Yau, Bianchi, finite
+`27`-carrier or shared-line calculations.
+
+### B39. Sector-polarized gauge source and rank-102 Galerkin compiler
+
+The exact transform rows now exclude a tempting but false shortcut. The visible
+physical source has character `(3,0,-9,3)` in the basis
+`(rank,H,u,Omega)`, while the hidden inverse-Hori source has
+`(3,-1,-3,0)`. Their difference is `(0,-1,6,-3)`. Since the selected BHT and
+two-circle transport have an exact round trip, one unmarked K-class cannot emit
+both sectors.
+
+The correct common object is sector-polarized: orthogonal idempotents for the
+already selected first and second `E8` factors retain `U_eta9` and `kappa_hol`
+as distinct source components, while coherent pullbacks of the same universal
+flat line act on both. Scalar line twisting and the hidden order-three twist
+cancel in endomorphisms, so both compile into the ordinary rank-88 gauge lane.
+This adds no continuous or discrete fit parameter.
+
+The same certificate compiles the exact rank-102 augmented-Hodge skeleton. In lane
+order `(T*X,adTX,adEv,adEh,TX)`, the Dolbeault extension has 12 typed blocks
+and 7131 one-mode scalar positions; its self-adjoint closure has 19 typed
+blocks and 7716 potentially nonzero positions. This is a genuine Galerkin
+type compiler, not a numerical physical matrix. The later full-residual theorem
+supersedes the claim that the other 2688 positions are physically forced zero:
+the real anomaly row permits all six missing cross-gauge blocks through
+`K^dagger K`, giving a 25-block allowable full-Hessian mask. The remaining
+frontier is confined to the selected visible and hidden holomorphic endpoints,
+their common positive Gauduchon/HYM chamber, and the connection-dependent
+entries needed for the corrected projector, `Y` and `K(r)`.
+
+### B40. Common BHT-Hori Clifford polarization and conditional double return
+
+Expanding the exact Poincare kernel on the two-circle fiber produces one
+integral signed-permutation operator `J_FM` on
+`Lambda*(R^2)=(1,p,q,pq)`. It sends that basis to `(rs,s,-r,-1)` and obeys
+
+```text
+J_FM^T J_FM=I,  det J_FM=1,  J_FM^2=-I,  J_FM^4=I.
+```
+
+The same matrix independently reproduces the emitted BHT character
+`3H-3gamma*x+3xy-Hxy` and the B-field-corrected Hori character
+`3-H+9as+3gamma*a`. Thus BHT and Hori are two realizations of one exact
+preprojection `Cl_(0,1)`/complex-polarization operator. Its complex `+/-i`
+projectors both have rank two, and `I_sector tensor J_FM` commutes with the
+visible-hidden idempotents and scalar pullbacks of the shared line.
+
+This also isolates the rigorous content of the proposed double traversal. The
+unmarked square is `-I`; if the geometric double path carries the already
+available shared-line holonomy `-1`, the product is exactly `+I`. The algebraic
+cancellation is closed, while the required map from the physical or A1
+meridian to the odd `S3` sheet class remains open. No identification with
+Lorentzian time, flat spacetime or vanishing gravity is made.
+
+### B41. Binary-sheet FM root lift and exact SpinC return
+
+The conditional sign statement is now resolved on the actual binary sheet
+carrier. A strict `S3->Z64` quarter-root map is impossible: an involution can
+map only to `0` or `32`, while the square roots of the determinant halfturn
+`32` are `16` and `48`. The correct domain is the already constructed
+non-split binary extension `Dic_3`.
+
+An explicit `SO(4)` conjugacy identifies `J_FM` with left quaternion
+multiplication by the selected binary transposition lift `q1`. Transporting
+`q2` through the same frame produces the second exact FM braid generator and
+verifies
+
+```text
+J1^2=J2^2=-I,
+J1 J2 J1=J2 J1 J2,
+(J1 J2)^3=-I.
+```
+
+Exhausting the `Dic_3->Z64` relations leaves exactly two maps:
+`(q1,q2)->(16,16)` and `(48,48)`. Their phases are `+i` and `-i`, independent
+of the odd root, and both square to the shared determinant phase `-1` at `32`.
+Hence `+/-i J1,+/-i J2` obey the ordinary `S3` relations and square to
+identity. The two solutions are conjugate SpinC lifts of one determinant line,
+not two fitted parameters or automatically two observable universes.
+
+This phase `C4` acts on the fiber of `L64_univ`; it is not the excluded
+vertical-lattice quarter-turn that exchanges the twisted and marked Fu-Yau
+circles. The marked-circle no-go remains intact. Identification with the
+parameter-space A1 Deligne meridian and promotion to the physical eta9 HYM
+carrier remain open.
+
+### B42. eta9 three-graph superset and two-graph exhaustion
+
+The physical eta9 graph arithmetic now has a sharper carrier. Reusing the
+certified characteristic-zero `(k,d)=(1,12)` graph, every two-graph solution
+obeys
+
+```text
+k_g=1+3a,
+d_g=18a-12,
+e_required=6a^2-48a+50,
+e_available=2+6a.
+```
+
+The exact factorization
+
+```text
+e_required-e_available=6(a-1)(a-8)
+```
+
+reduces all positive integers to `1<=a<=8`; nonnegative incidence leaves only
+`a=1,7,8`. The minimal `a=1` member is the old genus-17 degree-six carrier and
+necessarily saturates all eight available coincidences. The old interpolation
+wall is therefore proved intrinsic to that minimal two-graph architecture.
+
+The three-graph divisor
+
+```text
+q=Gamma_f-Gamma_2-Gamma_3+p^*H
+```
+
+with curve classes `H,2H,2H` and balanced map degrees `12,3,3` instead gives
+norm zero, Gysin coefficient `12` and square `-132` with every graph
+coincidence equal to zero. Conversely, the zero-coincidence norm, Gysin and
+square equations force the two new classes to be `2H`. Every smooth `2H`
+member is the hyperelliptic genus-five pullback of a plane conic.
+Castelnuovo-Severi excludes elliptic degree two and therefore forces the unique
+split `3+3`. The exact normal form `v^2=Q(P^3+16Q^3)` turns fixed-K3 existence
+into a square thirteen-coefficient system. The union remains `5H`, so the
+exact `O(4H)` extension and its eighteen directions are unchanged.
+
+This closes integral source arithmetic, not physical source existence. B43
+constructs the two required smooth genus-five members of `|2H|` on the explicit
+q79 K3. B44 then reclassifies the former mixed Abel-Jacobi row as an automatic
+support transgression. The corrected Hurwitz count predicted a zero-dimensional
+underlying-curve incidence after quotienting the one-dimensional
+target-translation orbit; B43 supplies its nonempty witnesses.
+
+### B43. Certified q79 genus-five elliptic graph pair
+
+The finite incidence left by B42 is now executed. In the conic chart
+
+```text
+X2=s^2+b t^2,
+Y2=c s^2+s t+d t^2,
+Z2=e s^2+f s t+t^2,
+```
+
+and with normalized binary cubics `P3,Q3`, the exact q79 equation is
+
+```text
+F6(X2,Y2,Z2)=lambda Q3(P3^3+16Q3^3).
+```
+
+Its thirteen coefficient equations in thirteen variables have two distinct
+certified real algebraic roots. Each root lies in a strict `10^-60` Krawczyk
+box; the maximum radius ratios are below `4.9e-24`. Interval certificates keep
+the conic determinant, `Res(P3,Q3)`, `Disc(Q3)`, the norm of the three Fermat
+cubic-factor discriminants and the degree-twelve leading coefficient away from
+zero. Both lambda intervals are positive.
+
+Consequently each root gives a smooth genus-five member of the selected q79
+`|2H|` with the exact degree-three map
+
+```text
+X=P3/Q3,
+Y=w/(sqrt(lambda) Q3^2)
+```
+
+to `Y^2=X^3+16`. A nonzero projective cross-minor proves the two image conics
+are distinct. Independent target translations then give a nonempty locus with
+all graph coincidences zero. The three-graph norm, algebraic Gysin and square
+rows therefore have actual characteristic-zero carrier witnesses.
+
+This is witness existence, not primitive MTT selection. B44 proves that the
+formerly requested integral mixed row is not a period condition on these
+maps. The current visible frontier is the smooth eta9 local-jet extension,
+followed by the flat Deligne class on that selected surface.
+
+### B44. Spectral-support transgression and Prym reclassification
+
+The target DGA has
+
+```text
+d gamma=H*delta,
+H_alpha=delta*x.
+```
+
+For every support `D(a,b)=aH+bxy`, exact twisted closure gives
+
+```text
+d[c gamma*x]+H_alpha*D(a,b)=(a+c)H*delta*x.
+```
+
+The unique coefficient in the nonclosed `gamma*x` channel is therefore
+`c=-a`. The physical support `D=9H+3xy` automatically emits `-9gamma*x`.
+This is a chain-homotopy readout of the support, not an independent
+Abel-Jacobi period of the graph curves.
+
+The ordinary GRR arithmetic is now cleanly separated:
+
+```text
+j_*ell_0=27H^2+27HD0,
+j_*q=12H^2,
+D^2/2=(81/2)H^2+27HD0.
+```
+
+Hence the ordinary degree-four row is `-(3/2)H^2`; adding the universal
+support transgression reproduces exactly
+`-(3/2)H^2-9gamma*x`. The graph square remains `-132`. This is a concrete
+example of the preprojection program succeeding: a lower-world mixed-value
+condition becomes one automatic differential upstairs.
+
+The theorem does not trivialize the flat gerbe, construct the twisted line or
+place the three graphs on one smooth eta9 surface. It changes the correct
+order: build the selected local-jet eta9 surface first, then evaluate the flat
+Deligne class and promote the ordinary graph divisor to the twisted line.
+
+### B45. Degree-12 theta syzygy and eta9 local-jet reduction
+
+The inherited graph is no longer governed by an assumed interpolation count.
+On the Fermat cubic, multiplication by two has quartic coordinates
+
+```text
+A=Y(X^3-Z^3),
+B=X(Z^3-Y^3),
+C=Z(Y^3-X^3)
+```
+
+and two exact quadratic syzygies
+
+```text
+(XZ,YZ,XY),
+(Y^2,X^2,Z^2).
+```
+
+Their minors have no projective common zero. For the plane-cubic evaluation
+kernel this proves
+
+```text
+[2]^*M_L=L^-2 direct_sum L^-2.
+```
+
+The selected odd degree-three genus-two map has a translated fiber
+`F=W1+W2+W3` with `2F~3K`. Since `L=O_E(3O)`, this gives
+`phi^*L^2=K^9`. Adjunction then closes the inherited degree-12 theta kernel:
+
+```text
+O_K3(9H)|C tensor ([2]phi)^*M_L = O_C^2.
+```
+
+There are exactly two global rows and every nonzero combination is nowhere
+zero. On either selected genus-five `2H` curve, the corresponding kernel has
+rank two, degree `63` and `h0=55`. After subtracting its twelve pairwise base
+intersections it has degree `39`, `h0=31`, vanishing `H1` and globally
+generated evaluation directions. Thus arbitrary compatible values at those
+twelve points extend.
+
+The remaining coefficient obstruction is now finite and exact. The eight
+intersections of the inherited `H` curve with the two `2H` curves impose eight
+linear conditions on its two-dimensional theta-row space:
+
+```text
+M_compat in Mat(8,2).
+```
+
+A nonzero inherited row exists exactly when `rank(M_compat)<=1`, equivalently
+when its 28 maximal minors vanish. If that gate passes, `H1(O(4H))=0` supplies
+the global coefficient lift with eighteen directions per theta coordinate.
+First-normal-jet smoothness, triple-intersection control, flat Deligne
+trivialization and the alpha-twisted line remain open. The next experiment must
+compute this matrix in one exact algebraic compositum; it must not reopen the
+already closed integral, map-existence, transgression or theta-kernel rows.
+
+### B46. Primitive-H theta-interpolation superset
+
+The `8x2` gate is a property of the present `H+2H+2H` carrier, not a universal
+eta9 obstruction. Reverse the graph arithmetic and require at least one
+primitive degree-three `H` graph. Inside the explicit finite class
+
+```text
+n_i in {-1,+1},
+2 <= graph count <= 6,
+sum_i k_i < 9,
+all graph coincidences zero,
+d_i >= 3,
+```
+
+norm zero, Gysin `12H^2` and square `-132` leave exactly five signatures.
+Requiring two copies of the same primitive `(H,3)` cover type selects one
+signature inside this class:
+
+```text
+q_prim = -Gamma_(H,3)^1 - Gamma_(H,3)^2
+         -Gamma_(4H,6) + p^*(2H).
+```
+
+The selection is arithmetic and conditional, not yet an MTT source theorem.
+The exact component theta-kernel data are
+
+```text
+(H,3):  rank 2, degree 27,  h0 25,
+(H,3):  rank 2, degree 27,  h0 25,
+(4H,6): rank 2, degree 126, h0 94.
+```
+
+The base intersections impose `10,10,16` points. After subtraction the three
+kernels have `(degree,h0)=(7,5),(7,5),(94,62)`, remain globally generated and
+have surjective evaluation. At each pairwise intersection the two evaluation
+hyperplanes meet in one line, and the three component maps can interpolate all
+chosen nonzero line values independently. Thus this conditional carrier has no
+global `8x2` compatibility bottleneck.
+
+The base union has class `6H`, so `H1(O(3H))=0` and each theta coordinate has
+eleven global extension directions. A general lift is basepoint-free. The
+remaining theorem is geometric: select a second distinct q79 `(H,3)` curve and
+a smooth `(4H,6)` curve, certify transverse coincidence-free intersections,
+then execute first-normal jets and the flat Deligne class. B46 is a parallel
+superset branch and does not retire the certified B42-B45 carrier.
+
+### B47. Primitive-H rational-chart exhaustion
+
+The first B46 existence search is now finite and exact. In the affine
+hyperplane chart `z=r*x+w*y`, scan every `(r,w) in F_101^2` and compare its
+Igusa-Clebsch invariants with every value of the specialized Hesse parameter
+`v=b^3`. On the normalized `I2*J2*I10*J10` nonzero stratum, use the
+scale-independent fingerprint
+
+```text
+(I4/I2^2, I6/I2^3, I10/I2^5).
+```
+
+The affine chart has `10007` normalized hyperplanes. The 102 projective
+boundary hyperplanes are `y=t*x` plus `x=0`; 99 are normalized and none
+matches. Thus all `101^2+101+1=10303` rational projective hyperplanes have been
+scanned, with `10106` in the normalized stratum. The 97 Hesse fingerprints are
+distinct. The complete scan has exactly one match:
+
+```text
+(r,w,v)=(9,52,40),
+fingerprint=(17,73,47),
+det(Jacobian)=18 mod 101.
+```
+
+This reproduces the existing nonsingular Hensel witness and excludes a second
+`F_101`-rational primitive `H3` witness in the full normalized projective
+hyperplane space. The two smooth `J2=0` Hesse parameters are checked in the
+complementary `I4` chart against 101 projective `I2=0,I4!=0` hyperplanes; there
+is no match. Thus the no-go covers all 99 smooth specialized Hesse parameters.
+It does not exclude an extension-field solution or a different degree-three
+cover source. Corrected global Rabinowitsch and sequential ideal-saturation
+runs both exceeded a 300-second resource boundary, so the next computation is
+a witness-local `F_(101^m)` search rather than another broad quotient.
+
+### B48. Explicit q79 `4H6` quotient carrier
+
+The primitive carrier's genus-17 component no longer requires a direct large
+incidence solve. Use the smooth plane quartic
+
+```text
+8x^4+8x^2yz+8xy^3-3xz^3+8y^2z^2=0.
+```
+
+It is invariant under `[x:y:z] -> [x:zeta*y:zeta^2*z]`. Exactly two fixed
+points lie on the quartic, so its order-three quotient has genus one. In the
+invariant coordinates `A=yz/x^2`, `B=y^3/x^3`, `C=z^3/x^3`, elimination and
+completion of the square give
+
+```text
+Y^2=A^4+(7/2)A^3+3A^2+2A+1.
+```
+
+The exact binary-quartic invariants are `I=0`, `J=-351/4` and discriminant
+`-4563/16`. The quotient is therefore smooth with `j=0`. The pointed
+quartic-to-Weierstrass map gives `V^2=U^3+13/4`; over `Q(rho)`, `rho^6=13`,
+
+```text
+X_F=4U/rho^2,
+Y_F=8V/rho^3
+```
+
+gives `Y_F^2=X_F^3+16` exactly and preserves the origin and `O(3O)`.
+
+For the selected q79 branch sextic, the quartic-sextic tangency ideal has
+Groebner basis `[1]` in all three projective patches. The intersection consists
+of 24 reduced points. Pulling the quartic back through the q79 double cover
+therefore gives a smooth connected curve in `|4H|` with
+
+```text
+g=17,
+degree to the j=0 quotient=2*3=6.
+```
+
+This closes explicit geometric `4H6` existence and marked Fermat identification
+over `Q(rho)`, and reproduces the B46 theta-kernel data
+`(rank,degree,h0)=(2,126,94)`. Transport of the selected Hermitian connection
+and MTT selection of this curve remain open. The only missing curve in the
+primitive carrier is now the second distinct `H3` source.
+
+### B49. Weighted Hesse invariant source lift
+
+The second-`H3` search should not eliminate its relative invariant scale before
+execution. Introduce the typed weighted-projective coordinate `s` and retain
+the four source equations
+
+```text
+I2=sJ2,
+I4=s^2J4,
+I6=s^3J6,
+I10=s^5J10.
+```
+
+Universal difference-of-powers identities prove that these rows imply the old
+three cross-product rows. Conversely, on `J2!=0`, the cross rows together with
+`s=I2/J2` recover all four source rows. This is an exact preprojection
+reformulation on the declared chart, not a relaxation and not a fitted scale.
+
+Over `F_101` the source rows have term counts `31,96,196,504` and degrees
+`6,12,18,30`. The known branch lifts to
+
+```text
+(r,w,v,s)=(9,52,40,9)
+```
+
+with four zero residuals and Jacobian determinant `23 mod 101`. It is therefore
+a simple isolated source branch. The compact saturated solver input is 10,602
+bytes rather than 160,298 bytes for the eliminated model, although a global
+quotient still exceeded the current 300-second resource boundary. The next
+experiment is an `F_(101^2)` or witness-local solve of these four rows. The
+scale coordinate must remain typed, and neither timeout may be promoted to a
+no-go theorem.
+
+### B50. Minimal extension orbit for the second `H3`
+
+The unsaturated B49 source ideal is now solved exactly over `F_101`. It is
+zero-dimensional of degree `2880`; `s` is a separating coordinate and its
+square-free eliminant has degree `2088`. Substitution of the three rational
+coordinate polynomials into all four source rows gives zero in the full
+quotient `F_101[s]/(f)`.
+
+The Frobenius factors satisfy
+
+```text
+deg gcd(f,s^101-s)=2,
+deg gcd(f,s^(101^2)-s)=2,
+deg gcd(f,s^(101^3)-s)=8.
+```
+
+The only rational roots are the known smooth point at `s=9` and a singular
+`J10=0` point at `s=23`. There is no strict quadratic factor. Both projective
+boundary charts have independently verified unit ideal, so the full
+projective source has no new `F_(101^2)` point.
+
+There are exactly two irreducible cubic orbits. One has `v=-2` and is singular.
+The other is defined by
+
+```text
+alpha^3+12alpha^2+69alpha+31=0
+```
+
+and has
+
+```text
+r=50+5alpha+45alpha^2,
+w=91+79alpha+63alpha^2,
+v=55+14alpha+64alpha^2,
+s=alpha,
+b=73+87alpha+91alpha^2,
+b^3=v.
+```
+
+Its `J2`, `J10` and `4x4` Jacobian determinant are all nonzero. It is therefore
+one smooth simple Frobenius orbit and the first finite-field source candidate
+for the second primitive `H3`. The next construction is its characteristic-zero
+Hensel lift and marked degree-three Fermat map, followed by translation,
+intersection and first-normal-jet certificates.
+
+### B51. Unramified characteristic-zero lift of the second `H3`
+
+The smooth B50 cubic orbit now satisfies the exact integral source over
+
+```text
+O=Z_101[alpha]/(alpha^3+12alpha^2+69alpha+31).
+```
+
+The cubic is irreducible and separable modulo 101. Direct integral
+transvectant evaluation shows that all four initial residual rows are divisible
+by 101. Solving the invertible `4x4` Jacobian gives one exact Newton correction,
+and reevaluation gives four zero rows modulo `101^2`. The Hesse cube root also
+lifts and still obeys `b^3=v`; `J2` and `J10` remain units.
+
+The multivariate Hensel lemma therefore gives a unique smooth source branch
+over the unramified cubic extension of `Q_101`. This closes local
+characteristic-zero existence of the second primitive `H3`. It does not yet
+provide a global number-field presentation, the marked degree-three map,
+selected connection transport or MTT branch selection. The next computation
+is now component assembly, not another source search.
+
+### B52. Primitive `H3+H3+4H6` base carrier
+
+The two `H3` branches and the explicit `4H6` curve now coexist on the selected
+q79 degree-two K3 after finite algebraic base extension. Restricting the plane
+quartic and q79 branch sextic to each `H3` line gives exact Bezout identities
+
+```text
+gcd(quartic,quartic')=1,
+gcd(quartic,branch)=1.
+```
+
+Consequently each `H3` meets `4H6` in eight reduced transverse K3 points. The
+two lines meet at one plane point where both the branch sextic and quartic are
+nonzero, so their K3 pullbacks meet in two reduced transverse points and there
+is no triple point. This closes the exact pairwise counts
+
+```text
+2, 8, 8
+```
+
+and reproduces the B46 interpolation divisors `10,10,16`.
+
+For maps to the common Fermat target, fix `tau1=0`. At most two elements of
+`E[5]` are forbidden for `tau2`; after choosing it, at most sixteen are
+forbidden for `tau3`. Since `|E[5]|=25`, at least 23 and 9 choices remain.
+Thus a zero-coincidence three-graph carrier exists over a finite extension.
+Every conditional carrier hypothesis in B46 is now supplied, so its theta
+interpolation and global `O(3H)` coefficient lift close at algebraic-existence
+tier. No observed value or fit parameter enters. Explicit marked map values,
+torsion labels, connection transport, first-normal jets, the flat Deligne row
+and MTT selection remain open.
+
+### B53. Unique marked Fermat map on the second `H3`
+
+The second `H3` line sextic is now handled over
+`K=F_101[alpha]/(alpha^3+12alpha^2+69alpha+31)`. Its factorization has two
+linear and two irreducible quadratic factors. There are four oriented cubic
+partitions `h=QR` and, for each partition, exactly three roots of `z^3=-16` in
+the complement algebra. The resulting twelve cases are exhausted exactly.
+Seven square-residual gcds are units and four are the cleared-denominator
+artifact `(t+52)^6`; at `t=49` their leading square coefficient vanishes, so
+they do not define regular maps. Exactly one case survives.
+
+For the emitted `P,Q,S,lambda,k`, direct finite-field arithmetic proves
+
+```text
+Q(P^3+16Q^3)=lambda*h*S^2,
+k^2=-3 lambda,
+U=12Q^2-kSy,  V=12Q^2+kSy,  W=6PQ,
+U^3+V^3+W^3=0.
+```
+
+The relevant gcds are one. At `Q=0`, cancellation in the hyperelliptic local
+uniformizer gives the regular limit `[-1:1:0]`. The pole degree is twelve and
+the cancelled base divisor has degree three, so the pullback of the Fermat
+hyperplane has degree nine and the map has degree three. This closes the unique
+selected residue-field marked map inside the declared twelve-case class. It
+does not assert a global characteristic-zero formula.
+
+### B54. First Hensel digit for the marked map
+
+The B51 integral source lift is now propagated into the B53 map equations. The
+coprime monic factors `Q,R` lift uniquely modulo `101^2`. After normalizing
+`S` to be monic, the full identity has thirteen coefficient equations in the
+eight corrections
+
+```text
+Delta P0,...,Delta P3, Delta S0,...,Delta S2, Delta lambda.
+```
+
+Its residue Jacobian has rank eight with every column pivotal. The unique
+Newton correction is consistent in all five overdetermined rows and makes all
+thirteen residual coefficients vanish modulo `101^2`; the chosen `k` also
+lifts with `k^2=-3 lambda`. This is an exact nonsingular local Hensel seed for
+the marked map. An explicit all-orders series or global number-field map is not
+yet emitted. The immediate geometric computation is therefore target-map
+evaluation at the already certified `2,8,8` intersections, followed by the
+finite `E[5]` translation search.
+
+### B55. Exact `H3-H3` target values and zero translation
+
+At the unique base intersection of the two selected `H3` lines, the affine q79
+branch value is
+
+```text
+d=79+23 alpha+15 alpha^2.
+```
+
+It is already a square in `K=F_(101^3)`, with the two ordered roots
+
+```text
+3+4 alpha+51 alpha^2,
+98+97 alpha+50 alpha^2.
+```
+
+Thus no extra sheet field is needed. Exact evaluation of the external rational
+Djukanovic map and the B53 cubic-field map gives four regular points on the
+same plane Fermat cubic. In the `W=1` chart they are
+
+```text
+R1: [74+27a+58a^2 : 81+49a+50a^2 : 1],
+    [81+49a+50a^2 : 74+27a+58a^2 : 1],
+R2: [17+90a+88a^2 : 55+39a+43a^2 : 1],
+    [55+39a+43a^2 : 17+90a+88a^2 : 1].
+```
+
+The values are unequal on both same-sign sheets. The checked count
+`#E(F_101)=102` gives trace zero and hence
+`#E(F_(101^3))=101^3+1=1030302`, which is prime to five. Therefore neither
+nonzero difference lies in `E[5]`: all 25 labels are admissible for the second
+graph. The no-coincidence-first rule canonically selects `tau2=O`, eliminating
+the first apparent torsion choice. The remaining value frontier is the two
+four-point base divisors against `4H6`, their sixteen K3 values and `tau3`.
+
+### B56. Sixteen `H3-4H6` values and zero `tau3`
+
+The two four-point base intersection divisors are now evaluated as finite
+etale algebras `A_i=K[t]/(q_i)`. All H3 and `4H6` map denominators have exact
+unit certificates in those algebras. Transporting the plane Fermat map and the
+`4H6` short model to the common curve
+
+```text
+Y^2=X^3-432
+```
+
+gives two exact target-class rows. For the rational `H3`,
+
+```text
+X_H3-X_4H=65+6t+27t^2+85t^3,
+gcd(X_H3-X_4H,q_1)=1.
+```
+
+For the cubic-field `H3`,
+
+```text
+X_H3-X_4H=(36+49a+20a^2)
+ +(55+31a+44a^2)t
+ +(21+30a+7a^2)t^2
+ +(39+54a+34a^2)t^3,
+gcd(X_H3-X_4H,q_2)=1.
+```
+
+Both gcd claims come with displayed Bezout coefficients. Equality of elliptic
+points would force equality of `X`, so all sixteen K3 graph coincidences are
+excluded at once, independently of K3 sheet and square-root signs. The
+origin-first rule selects `tau3=O`. Together with B55, the selected residue
+carrier has
+
+```text
+tau1=tau2=tau3=O
+```
+
+and no finite torsion knob. Promotion to the compatible characteristic-zero
+maps and selected connections remains open; the quotient rows are now ready
+for first-normal derivative evaluation.
+
+### B57. Pairwise fiber jets
+
+The finite part of first-normal smoothness is now executed. On
+`Y^2=X^3-432`, a secant through distinct points `P,Q` is tangent at `P` exactly
+when
+
+```text
+2Y_P(Y_Q-Y_P)-3X_P^2(X_Q-X_P)=0.
+```
+
+For the two `H3-H3` points the endpoint defects are the nonzero cubic-field
+elements `5+27a+39a^2` and `68+12a+99a^2`. For each `H3-4H6` quotient algebra,
+the endpoint defects have form `c+d eta mu`; their norms
+`c^2+3h d^2` have explicit Bezout gcd one with the quartic. Thus all 36
+endpoint tangency checks pass and the third zero of every pairwise target
+hyperplane is distinct from both prescribed values. The remaining jet problem
+is global first-normal restriction along each full graph component, not a
+pairwise-point calculation.
+
+### B58. First-normal and Bertini closure
+
+The global jet gate admits a smaller exact proof. On the explicit degree-two
+K3, `H0(3H)` has the ten cubic base monomials plus the cover coordinate `w`.
+This complete system embeds the K3; with the plane-cubic target line it gives a
+very ample 33-dimensional system on `K3xE`. Every B46 extension is
+
+```text
+F=F0+s_union H,
+H in H0(O(3H) box O_E(1)).
+```
+
+B57 implies the vertical discriminant is nonzero on every component, so its
+remaining critical set is finite and avoids crossings. At each such point the
+normal derivative of `s_union H` is a nonzero linear functional, excluding one
+proper affine hyperplane. Their finite union cannot fill affine 33-space over a
+characteristic-zero field. Off the union, multiplication by nonzero `s_union`
+preserves the very-ample first-jet map, so Bertini supplies smoothness on a
+nonempty open. Thus first-normal and global smooth eta9 existence are closed
+conditional on one compatible characteristic-zero marked lift. The 33
+directions are proof witnesses, not physical parameters.
+
+### B59. Compatible marked-map 101-adic compiler
+
+The B54 seed is no longer supported by only one arithmetic digit. A single
+Newton-Hensel compiler now transports the four invariant-source rows, Hesse
+cube root, coprime `Q*R` factorization, full thirteen-row marked-map identity
+and Fermat square root together through `101^6`. At each of four new digits,
+the source system has rank `4/4`, the map system has rank `8/8` inside thirteen
+equations, and all five surplus rows are exactly consistent. Every residual
+vanishes modulo the new power before the next digit begins.
+
+This is a finite exact compiler with zero new fit parameters. It is not yet an
+all-orders existence theorem. The next mathematical-language question is now
+especially sharp: are the five surplus rows in the localized ideal generated
+by the eight pivot map rows and four source equations, or are all thirteen
+rows manifestations of one universal Hesse degree-three map identity? Either
+answer would replace repeated compatibility tests by one preprojection rule.
+
+### B60. Hesse-Hurwitz geometric promotion
+
+The coefficient-level overdetermination is no longer a blocker to geometric
+existence. B51's four weighted invariant equations are precisely the `a=0`,
+`b^3=v` specialization of the universal Hesse-pair genus-two family. The
+`a=0` factor is the fixed Fermat elliptic curve, so the universal normalized
+degree-three cover transports to the all-orders q79 source curve after finite
+characteristic-zero base extension.
+
+Factor selection is exact rather than verbal. At `p=101`, the Fermat model
+`y^2=x^3+16` has Hasse invariant zero. The complementary Hesse model has
+
+```text
+H=5+71 alpha+70 alpha^2 != 0.
+```
+
+Thus the Fermat factor is supersingular and its complement is ordinary; they
+cannot be geometrically isogenous or exchanged. The B53 origin/sign marking
+then identifies the selected target orientation, with B59 providing an
+independent four-digit coordinate-chart check. B58's conditional hypothesis is
+therefore discharged and smooth eta9 existence is closed at algebraic tier
+after finite base extension. The universal five-row syzygy and explicit
+unramified coefficient series remain open, but they are no longer existence
+gates.
+
+### B61. Polarized theta cubical-connection transport
+
+The target connection needed by the primitive carrier maps is no longer an
+independent choice. On the marked Fermat elliptic curve,
+`L=O_E(1)=O_E(3O)` is symmetric and rigidified at the origin. Its canonical
+cubical metric fixes a Chern connection functorially, and every pointed marked
+map pulls that connection back. For map degrees `3,3,6`, the pulled-back line
+degrees are `9,9,18`; the induced rank-two theta-kernel construction gives
+component degrees `27,27,126`, agreeing with the independent kernel ledger.
+
+The two apparent ambiguities vanish before projection. Changing the marked-map
+root sign is elliptic inversion, under which the symmetric cubical connection
+is canonically invariant. B55-B56 give `tau1=tau2=tau3=O`, so no translation
+adds a Poincare flat factor. The flat-Picard and binary-sign parameter counts
+are therefore both zero. This theorem concerns the polarized theta line and
+its functorial pullbacks. It does not silently promote them to the physical
+visible Fu-Yau HYM connection, and it does not trivialize the flat
+Deligne/Brauer class.
+
+### B62. Physical eta9 Deligne homotopy-fiber cutset
+
+The remaining flat-gerbe problem now has its correct physical dimensions.
+For `L_eta9=O_K3(9H) box O_E(3O)`, Kunneth and Riemann-Roch give
+`h0=83*3=249`, so smooth eta9 surfaces vary in an open of `P^248`. Their
+geometric genus is 249. The relative Hodge obstruction splits into one ambient
+`H20(J)` line and a primitive rank-248 cotangent block. BHT zero-section
+normalization fixes the ambient Brauer value to zero, leaving the primitive
+block as the actual flat Deligne target.
+
+The B58 graph-preserving smooth family is only `A^33`. Its restricted
+derivative therefore has shape `k^33 -> k^248`, with a normal compatibility
+quotient of rank at least 215. Equivalently, the graph-incidence/Deligne-zero
+homotopy fiber has virtual dimension `-215`. This does not prove the graph
+slice empty; it proves that any solution there must be supported by at least
+215 structural identities. On the full family,
+`c248(Omega1_P248)=249 H^248`, a conditional zero count that still requires a
+global logarithm or admissible normal-function extension and discriminant
+boundary control. B60 raises domain-existence readiness to `4/8`; explicit
+coefficient execution remains `3/8`. B61's cubical theta connection is not
+silently counted as the missing Gauss-Manin connection.
+
+### B63. eta9 graph-Cayley direct-block compiler
+
+The graph slice is now an exact sparse operator, not just a 33-dimensional
+count. Over the selected cubic residue field, multiply the two certified `H3`
+line equations and the certified `4H` quartic to obtain nonzero
+`s_union in H0(O(6H))`. Multiplication by `s_union` gives an explicit
+`249x33` inclusion of the graph-preserving extension space into the eta9
+section space. Exact cubic-field elimination gives rank 33, and the rank
+remains 33 in the primitive quotient because a finite graph-containing cover
+equation does not vanish identically on the graph union.
+
+The physical eta9 Cayley degrees are `beta0=(-9,-1,3)`, primitive row
+`(9,1,0)`, gerbe output `(9,1,2)` and socle `(18,2,2)`. Thus the next matrix is
+directly `D_graph=M248*S_graph`, of shape `248x33`. It requires 8,184 Jacobian
+normal-form reductions rather than the 30,876 symmetric reductions of full
+`M248`. The degree-three `M32` entries are not transferred. One explicit eta9
+equation `F0` is still needed to instantiate the Jacobian ring and flat-class
+value.
+
+### B64. eta9 graph-intersection boundary rows
+
+The compatible coefficient values at every crossing of the primitive graph
+union are now emitted exactly. Convert each already selected common target to
+Fermat coordinates by `[U:V:W]=[36+Y:36-Y:-6X]` and take the projective cross
+product of the two target vectors. The resulting row is nonzero and
+annihilates both targets. Two direct cubic-field rows cover the `H3-H3`
+crossings. Four compact rows over the two existing degree-four finite-etale
+quotient algebras, with their two K3 sheet signs, cover all sixteen `H3-4H`
+crossings. No quartic root ordering, translation, torsion label or fitted
+number is introduced.
+
+The component interpolation spaces retain dimensions `5,5,62` after imposing
+these crossing values. Do not reselect or split the boundary data. The next
+operator is the exact right inverse of each component evaluation map. It must
+emit one kernel section on each `H3` and on the `4H` component taking precisely
+the B64 rows. Only after that component solve should the compatible sections be
+lifted coefficientwise through
+`0 -> O(3H) -> O(9H) -> O_Runion(9H) -> 0` to obtain a concrete residue
+equation `F0` for B63's Cayley compiler.
+
+### B65. Two H3 component evaluation lifts
+
+The abstract genus-two interpolation theorem is now an exact matrix
+calculation. On either component, the hyperelliptic basis
+`1,...,t^9,sheet,...,sheet*t^6` has dimension 17, so the three coefficient
+functions give 51 unknowns. Contraction with the raw marked Fermat target has
+rank 26 and kernel dimension 25. Adding the two `H3-H3` and eight `H3-4H`
+evaluations gives rank 46. The `1` and `mu` augmented ranks are also 46, so all
+B64 rows lift exactly and each affine solution space has dimension five.
+Deterministic RREF emits both sections. Do not reopen the genus-two component
+maps or treat the five homogeneous directions as physical parameters.
+
+### B66. 4H component evaluation lift
+
+The genus-17 component is also explicit. Reducing the plane-quartic coordinate
+ring by its `x^4` relation gives 34 degree-nine rows and 22 K3-sheet times
+degree-six rows in `H0(O(9H)|4H)`. The marked quartic quotient homogenizes to
+`[G0+mu*G1:G0-mu*G1:G2]`. Its Fermat identity and all sixteen B64 incidences
+vanish exactly. The two `mu`-parity contraction matrices have rank 74, giving
+the predicted theta-kernel dimension 94. Adding the boundary rows raises rank
+and augmented rank to 106, leaving dimension 62 and emitting one exact
+particular section. Do not reopen the `4H` component evaluation map.
+
+### B67. Global residue eta9 equation F0
+
+The three B65-B66 sections now lift globally. The exact restriction map from
+the 83-row `O(9H)` basis to component spaces of dimensions `17,17,56` has
+shape `90x83`, rank 72 and kernel dimension 11. The kernel is precisely the
+`O(3H)` extension system. For each target coordinate and both `1,mu` field
+parts, the augmented rank is 72 and the residual vanishes. RREF therefore
+emits a nonzero equation `F0=A0*T0+A1*T1+A2*T2` with 214 sparse spectral rows
+containing all three graphs.
+
+The complete graph-preserving family is `F0+s_union*H`, with the same 33
+directions compiled in B63. This closes the missing residue coefficient
+triple, not smoothness of the RREF representative, characteristic-zero
+coefficient promotion, the eta9 Jacobian normal forms or the flat Deligne
+value. The immediate computation is now a smooth-witness selection inside the
+emitted 33-direction family followed by B63's 8,184 direct reductions.
+
+### B68. Explicit number-field smooth eta9 lift
+
+Lift every B67 gamma-coordinate coefficient by its integer representative to
+`Q(gamma)`, where gamma has minimal polynomial
+`X^6+24X^5+89X^4+44X^3+33X^2+16X+64`. The polynomial is irreducible modulo
+101, and reduction at the degree-one prime `(11,gamma-3)` gives the explicit
+good fiber used for smoothness. Exact Singular elimination makes all three
+basepoint ideals and all nine product-chart Lagrange singularity ideals unit.
+The characteristic-zero eta9 complete intersection is therefore smooth, and
+its reduction at the prime over 101 remains exactly B67's graph-containing
+equation. This is coefficient promotion, not promotion of the three marked
+graph maps.
+
+### B69. Weighted Cayley Jacobian reducer and basis cache
+
+For `Phi=uK+vE+sF_Q`, the positive variable weights
+`(1,1,1,3,1,1,1,6,9,2)` make every term weight 12. Over the B68 good fiber,
+the ten ordinary derivatives have a weighted standard basis of size 26,883.
+The cover equation reduces to zero and `w^12*t2^4*s^2` remains a nonzero
+one-term representative of the multidegree `(18,2,2)` socle line. The basis
+is stored in hash-certified SSI form so downstream normal forms can be
+resumed without recomputing it. B69 owns only the reducer and cache; do not
+credit it with B70's matrix execution.
+
+### B70. Executed lifted eta9 direct graph block
+
+Every B63 direct product has now been reduced against the B69 basis. The exact
+row-first identity `NF(ab)=NF(NF(a)b)` converts the monolithic calculation into
+35 resumable rectangles while preserving every quotient class. All 8,184
+normal forms lie on the same socle line. The assembled matrix has shape
+`248x33`, 7,419 nonzero entries, rank 33 over `GF(11)` and left nullity 215.
+The first 33 rows have determinant `4 mod 11`. This proves finite-field rank
+33 only; it does not by itself promote the matrix to characteristic zero.
+
+This closes the direct finite-field derivative block, not the
+carrier-specific Deligne logarithm or the semiample residue promotion.
+
+### B71. Selected-frame Cayley toric regularity
+
+The Cayley singularity equations are
+
+```text
+K=E=F_Q=0,
+u dK + v dE + s dF_Q=0,
+(u,v,s) != 0.
+```
+
+For `s!=0`, these are exactly B68's nine Lagrange systems after normalizing
+`s=1`. For `s=0`, independence of the smooth K3 and elliptic factor
+differentials forces `u=v=0`. The weighted `w` axis omitted by B68 has
+`K=w^2!=0`. Hence the total Cayley hypersurface is smooth.
+
+This does not by itself imply Mavlyutov regularity: logarithmic derivatives
+discard normal directions on toric boundary strata. B71 closes the stronger
+statement by selecting a toric presentation before auditing it. All 133
+projective coefficient directions over `GF(11)` are classified; 37 are
+intrinsically admissible. A lazy exact edge/triangle search selects the first
+invertible `PGL(3)` elliptic frame passing 525 intrinsic Cayley systems. A
+support-local triangular extension `C_regular=C_reduced+K B`, equivalently
+`u_old=u_new+sB`, then passes an independent 420-system replay. Both are
+coordinate choices and add no physical knob.
+
+In the selected presentation, each open orbit is tested by saturating every
+active base, elliptic and Cayley-multiplier ratio. All
+`15x7x7=735` saturated subsystem ideals are units. Thus toric regularity is
+closed exactly; it is not inferred from ordinary smoothness.
+
+The tautological class is generated by global sections and
+`pi_*(xi^7)=h_5(6H,3L,9H+L)` gives `xi^7=14301=1 mod 11`. It is therefore big
+and nef, with unit toric-Jacobian normalization at the good prime.
+
+### B72. Structural toric-residue promotion and relative rank 33
+
+B72 is closed by a structural certificate that replaces the impractical giant
+critical-degree Groebner basis with an exact rank separation. The eight selected
+logarithmic generators regenerate from the B68/B71 model with 986 terms; the Cox
+Euler identities recover `Fs` and `Ft2`, so they generate the full logarithmic
+ideal. The degree-`3 beta` Macaulay matrix has shape `46214x48336` and exact rank
+`39124` by the regular-sequence Hilbert series. Adjoining the 249 interior row
+images yields an explicit nonzero `39125`-minor with determinant `7 mod 11`.
+At least one selected class in `R1(Phi)_(3 beta-beta0)` is therefore nonzero.
+
+The B71 empty critical locus lifts to characteristic zero by proper good
+reduction. Mavlyutov Theorem 4.4 injects the complementary `R1` pieces in
+degrees `(9,1,0)` and `(9,1,2)` and makes them orthogonal to the boundary Gysin
+summands. Poincare duality consequently gives a nonzero product in degree
+`(18,2,2)`. Since `J subset J1`, the ordinary top piece surjects onto this
+nonzero class. Its special-fiber dimension is exactly one, generated by the B69
+socle, so upper semicontinuity makes the local top module flat of rank one and
+the transported socle survives in characteristic-zero `R1`.
+
+All B70 products lie on this line. The unit minor `4 mod 11` therefore promotes
+to relative characteristic-zero multiplication rank 33 and left nullity 215.
+Mavlyutov's scale for `a=2,b=4` is `-1/48=8 mod 11`; the corresponding scaled
+minor is `4*8^33=2 mod 11`. The direct giant critical normal form is an optional
+independent replay, not an open gate.
+
+Primary artifacts are
+`q79_eta9_cayley_R1_augmented_row_minor.packet.json`,
+`q79_eta9_cayley_structural_residue_promotion.packet.json` and
+`Q79_ETA9_CAYLEY_STRUCTURAL_RESIDUE_PROMOTION_v1.md`. Compatible
+characteristic-zero marked graph maps and the physical flat Deligne logarithm
+`beta_C` remain independent objects.
+
+## 10. Decision rule
+
+Adopt this reference system only if the prototypes do at least three of the
+following:
+
+1. reproduce an existing exact result with fewer independent constructions;
+2. turn a qualitative source-promotion statement into a kernel/obstruction
+   calculation;
+3. expose hidden free directions automatically;
+4. reject a known false stitching of individually valid packets;
+5. produce a new theorem or a new calculable value not inserted as input;
+6. compose across sectors without losing gauge, branch, or provenance data.
+
+If it merely restates the ledgers in categorical vocabulary, retire it.
+
+## 11. Current ranking
+
+```text
+1. Certified representation diagram + compatibility Laplacian
+2. Homotopy-fiber differential source and `B_conn S(U3xU2)` gauge stack
+3. Binary-sheet FM shared-root and SpinC return system
+4. Common q79 BHT-Hori Clifford polarization and shared-line pullbacks
+5. Universal q79 shared differential line and coherent operator pullbacks
+6. Upstairs automorphism-transfer, q79 cohesive complex and differential-Picard source
+7. Physical eta9 carrier arithmetic, primitive-H superset and support transgression
+8. Sector-polarized q79 gauge source and rank-102 Galerkin compiler
+9. Physical q79 heterotic deformation complex and minimal seed
+10. Gauge-fixed coupled Hull-Strominger contraction object
+11. Hodge-index BV effective state object
+12. Hodge-resolved cyclic dg/A-infinity transfer component
+13. E8 Jordan-qutrit Z3 grading for family/exceptional composition
+14. q79 Azumaya-to-Albert cubic globalization
+15. Differential-K/superconnection secondary-data component
+16. Gauss-Manin integral local systems for branch and period transport
+17. Orthogonal complex strain reference after selected frame reduction
+18. Moment-map/derived-stack formulation of closure and gauge quotient
+```
+
+Adelic, tropical, wavelet, Koopman, modular-flow, Lorentzian spectral, and
+Tannakian approaches remain candidates for targeted subproblems. The authority
+evidence does not yet justify making any of them the primary reference system.
+
+## 12. Immediate next experiment
+
+B1-B7 are now executable and pass at their stated prototype tiers. They recover
+the CRT selection, distinguish cocycle from cohomology class in the normalized
+`F3^2` model, reproduce the qutrit algebra and commutant, retain the HYM
+local/global boundary, detect finite-shadow information loss, expose the GR
+scale null direction, and quantify profile identifiability. The adapter to the
+literal emitted 81-entry/729-triple Cech witness remains to be written.
+
+B8's original 29 algebraic checks still pass, and B37 now supplies the missing
+source-certified full `6 x 6` strain Hessian at the selected finite
+root-stack-symbol tier. It is `kappa_fin(I-P_Haar)`, has rank four and projects
+to `kappa_fin I2` on TT. The stronger continuum nonzero-Chern HYM Hessian is
+not needed for the exact finite result and remains an optional symbol-
+naturality upgrade.
+
+B10 has passed its algebraic prototype and smooth globalization, but the direct
+physical map is excluded exactly. B11 is now closed at current-algebra tier:
+the `248` decomposition, family/exceptional split, all support channels, signed
+coefficients, neutral actions, invariant tensors and mixed moment map pass. The
+immediate frontier is the typed geometric factor in
+`Y_(iA,jB,kC)=I_HYM(i,j,k) T_J(A,B,C)`: construct the selected holomorphic/HYM
+zero modes, their transferred cyclic products, kinetic normalization and RG
+transport. B12 identifies the next exact gate: build the selected finite
+Dolbeault complex and prove its contraction using the existing `P_N` and
+`Green_N`. B13 adds the requirement that one determinant/secondary invariant be
+derived from that same source, preventing a state-only transfer from discarding
+acyclic quantum data. B14 fixes the direction of construction: define the q79
+upper complex and action first, then derive symmetry, particles and values
+downward. B15 now supplies the first actual q79 upper chain object and exact
+open-stratum projection. Its `r^-1` pole and Chern-row mismatch sharpen the next
+gate to a global physical `V3/W9` cohesive HYM superconnection. B16 removes the
+ambient lattice and topological-gerbe obstructions for the physical `eta9`
+carrier and replaces affine continuation by one exact homogeneous local system.
+The immediate arithmetic/analytic frontier is now the integral `(Nm,j_*)`
+fiber and the carrier-specific flat Deligne-class computation. B17 compresses
+those tasks into emission of one `U_eta9`, while retaining each lift obstruction
+as a separately falsifiable gate. B18 strengthens the target to a pointed
+homotopy-fiber object whose norm trivialization is transported into the physical
+determinant trivialization. B19 asks whether the already closed A47 group rows
+come from one actual pointed `S(U3xU2)` carrier, and makes matter weights the
+first independent projection test. That weight test now passes exactly at
+representation tier: `Lambda2(5)+bar5+1` reproduces A46 and all anomaly rows.
+B20 also passes: the A50 and determinant-fiber `H16` generators are identical.
+B21 supplies the exact conditional lifted construction. B22 now also passes:
+one universal differential `S(U3xU2)` carrier emits the A50 connection and
+holonomy rows, while the character lattice proves why a charge-one `L_Y` is not
+universal. B23 now passes on the common circle: the exact Hodge split gives
+`8+3+1`, the lift obstruction vanishes and all six lifts have the same physical
+action. B24 now passes at exact classical/source tier: globally hyperbolic
+splitting reduces the optional cover obstruction to Cauchy-slice cohomology,
+and the twelve-generator nonlinear BRST algebra with its full `H16` matter
+action closes exactly. B25 now also passes at classical/source tier: its
+shifted-cotangent Hamiltonian obeys the classical master equation, and a finite
+unimodular QME seed passes all exact checks. B26 now classifies the ordinary and
+framed sector domain and proves that topology alone cannot normalize its free
+lattice. B27 now reduces every integer-sector kinetic magnitude to A86's
+selected shape and A87's one existing anchor, with no per-sector parameter.
+B28 now passes: Poincare/linking pairings and finite Heisenberg models reduce
+all sector phases to global characters, while an exact no-go proves that their
+positive norm requires metric data. B29 now passes at source-functor tier: the
+Cauchy metric emits the Hodge form and the A97 universal axion restricts to the
+primitive SM `c2` direction, selecting framed cocharacter `(1,1)`. It also
+separates an ordinary Heisenberg state character from an action coupling. B30
+now consumes the latest finite 27-mode spectrum, proves its exact common-scale
+form, derives the framed `12|k3|+8|k2|` zero-mode count and replaces an
+untyped scalar determinant by the correct determinant-line density. B31 now
+passes: one upper chiral-carrier identity replaces the projected anomaly rules,
+the published global theorem removes the determinant-line anomaly obstruction,
+and the existing metric/action induce the basis-invariant zero-mode density and
+its fixed coupling powers. B32 now passes: the normalized AHS symbol is
+elliptic, the scalar upper index is lifted to a faithful rank-two matter index,
+and every nontrivial sector is correctly typed as a fermion-zero-mode vertex
+rather than a scalar weight. B33 now passes: it proves the Lorentz-naturality
+obstruction, constructs the orientation-independent temporal companion,
+assembles the complexified elliptic principal family, types the product
+Uhlenbeck boundary and closes the determinant/full-rank saturation criteria.
+This removes the need to predict a preferred Wick metric if renormalized BV
+gauge independence can be proved. B34 stages 1-4 now construct the controlled
+small-size saddle, normalize its zero modes, derive the projection defect and
+weak radial Gram factor, close the six color spatial overlaps, prove positive
+scale curvature, control the fixed-center small-instanton face and reduce the
+remaining weak rank question to `det(K_Q)det(K_L)`. B35 now emits the selected
+neutral shape Gram, proves its full rank and constructs its matrix-valued
+Jacobi source. It also proves that two rank-one charged seeds cannot close
+`K_Q`. B36 consumes the newer selected static Weyl route, finds its finite-
+bimodule total-parity rule and proves the Fourier-dual quark shapes lift the
+seed exactly. The next dynamics tests are now the lane-naturality and
+polarization-covariance identities, nonzero quark activation, physical action
+weights, the full lower-order Hessian and heat finite parts, the remaining
+compactified faces, phase and counterterm choice, and the renormalized QME or
+exact projection to A03. B9's classical BV pattern is integrated here; its q79
+determinant pushforward remains separate. B37 now closes the common q79
+shared-line and finite full-Hessian square. B38 gives the correct final local
+string-background test. B39 proves that the visible and hidden rank-three
+preimages are distinct K-classes, constructs the sector-polarized common-source
+compiler and fixes the exact rank-102 block sparsity. The next experiment must
+therefore construct the selected physical visible-hidden holomorphic pair,
+evaluate the 19-block augmented-Hodge skeleton and all six additional
+cross-gauge blocks permitted by the physical anomaly `K` row, project the
+corrected harmonic kernel and decide the radii inequality without reopening
+the already closed reference Hull-Strominger, Bianchi, 27-carrier or
+shared-line layers.
+B40 then identifies one exact complex-polarization operator beneath both BHT
+and Hori. Its rank-two eigenspaces should be used as the next Galerkin basis.
+In parallel, construct the path-to-sheet comparison deciding whether the
+shared `-1` holonomy closes the twofold transform return on the physical
+branch.
+B41 closes that return on the binary sheet/SpinC carrier: use the two exact
+conjugate roots `+i/-i`, not the insufficient `S3` halfturn, and retain the
+marked vertical-C4 no-go. The remaining A1 comparison is optional for the
+Deligne boundary program; the physical priority remains construction of the
+eta9 and hidden holomorphic/HYM endpoints.
+B42 replaces the old eta9 two-graph interpolation target by the exact
+`H+2H+2H` three-graph carrier. The immediate visible-source experiment is now
+completed by B43: two smooth distinct genus-five curves in the selected K3
+`|2H|` system carry the forced degree `3+3` maps, and the coincidence-free
+translation locus is nonempty. B44 closes the coefficient `-9gamma*x` as the
+support-forced twisted transgression and proves that no separate integral `H1`
+period test is required for it. B45 closes the inherited theta kernel and both
+positive twelve-point interpolation problems. The next experiment is the
+exact `8x2` compatibility-matrix execution, followed by first-normal jets and
+the flat Deligne trivialization. The integral norm, ordinary Gysin, square,
+map-existence, transgression and theta-kernel rows must not be reopened.
+B46 proves that the `8x2` gate is carrier-specific. Its bounded reverse search
+selects the unique same-primitive `H3+H3+4H6` arithmetic signature and closes
+all pairwise coefficient interpolation plus the global `O(3H)` lift,
+conditional on geometric carrier existence. The next high-value computation
+is therefore witness-local construction of the second q79 `H3` curve and the
+`4H6` curve. Either that carrier exists and bypasses the `8x2` gate, or its
+exact nonexistence certificate sends the program back to the B45 matrix. First
+normal jets and the flat Deligne class remain downstream in both cases.
+B47 eliminates the full rational projective scan: the known Hensel point is
+the unique normalized match over `F_101`, including all 102 boundary
+hyperplanes. The complementary smooth `I2=0` chart is also exhausted with no
+match. Start the next `H3` experiment over `F_(101^2)`. Do not rerun the same
+rational projective space or treat either global elimination timeout as a
+no-go theorem. The `4H6` incidence system remains an independent parallel
+construction.
+B48 closes that parallel construction without the broad incidence system. Use
+the explicit order-three plane quartic and its transverse q79 pullback as the
+`4H6` carrier. The primitive branch now has one open curve source rather than
+two: obtain a second distinct `H3` over an extension field or from another
+degree-three cover family. The marked Fermat isomorphism and `O(3O)` transport
+are now explicit over `Q(rho)`, `rho^6=13`; only the selected Hermitian
+connection remains to transport. Do not reopen `4H6` geometric existence or
+the marked algebraic line identification.
+B49 supplies the correct preprojection backend for the only remaining curve
+source. Execute the four weighted rows over `F_(101^2)` or a witness-local
+factor field, require a nonzero `4x4` Jacobian and then Hensel-lift a branch
+distinct from `(9,52,40,9)`. Do not return to the eliminated cross-product
+system and do not count `s` as a physical parameter.
+B50 executes that backend and moves the frontier one field degree higher than
+anticipated. `F_(101^2)` is now excluded projectively; use the unique smooth
+cubic orbit as the second-`H3` seed. The immediate task is a cubic unramified
+Hensel lift, not another finite-field search. Do not reopen the rational scan,
+the quadratic extension or either projective boundary chart.
+B51 closes the local characteristic-zero lift by an exact integral Newton
+certificate. Treat the second `H3` source as closed at unramified local
+existence tier. Next emit its marked Fermat map and assemble it with the
+rational `H3` and explicit `4H6` curve in one compositum; then execute
+translations, intersections, first-normal jets and the flat Deligne row.
+B52 performs that component assembly and closes the base intersections and
+existence of coincidence-removing finite translations. Do not reopen the
+second-curve search, `4H6` construction, `2,8,8` intersection counts or B46
+theta interpolation.
+B53 closes the unique regular marked degree-three map on the cubic-field
+second `H3` branch by an exhaustive twelve-case search and exact Fermat
+identity. Do not reopen source-to-Hesse normalization or the residue-map
+search.
+B54 lifts that map through the first 101-adic digit and proves the normalized
+map equations are nonsingular. Do not call this a global number-field map or
+an explicit all-orders series.
+B55 evaluates both `H3` maps at their two common K3 points and selects
+`tau2=O`; do not reintroduce an arbitrary second-graph torsion label.
+B56 closes all sixteen `H3-4H` target classes and selects `tau3=O`. Do not
+reopen finite `E[5]` translation search on this residue carrier. The next exact
+computation is the global first-normal restriction map.
+B57 closes the finite pairwise fiber-jet/tangency checks. Do not reopen local
+intersection tangency.
+B58 closes the global first-normal/Bertini step conditional on a compatible
+characteristic-zero carrier. Do not reopen a global jet matrix. Promote the B54
+marked-map seed to an all-orders or global map, transport the selected
+connection, then address the flat Deligne row.
+B59 promotes the B54 seed through four additional exact digits, to `101^6`,
+with all five surplus rows consistent and no new parameter. Do not reopen
+finite-depth marked-map lifting. Prove the localized surplus-row syzygy or
+derive the universal Hesse map identity; only then claim an all-orders map.
+B60 closes the all-orders geometric marked-cover and smooth eta9 existence
+gates after finite characteristic-zero base extension by Hesse-Hurwitz
+promotion and an exact ordinary/supersingular factor split. Do not reopen
+geometric cover existence or B58's global jet matrix. The explicit unramified
+series/local syzygy is optional reproducibility work.
+B61 closes the polarized theta-line connection and its three pullbacks with no
+flat-Picard or sign knob. Do not reopen that line-level transport. The next
+visible-carrier calculation is the restricted flat Deligne/Brauer holonomy;
+the physical Fu-Yau HYM connection remains a distinct analytic target.
+B62 proves that this is a rank-248 zero problem restricted to an `A^33` graph
+slice. Do not rerun generic smoothness or import the old hidden-family `M32`.
+B68 now supplies the explicit physical eta9 equation, B72 proves the graph
+differential has characteristic-zero rank 33, and B73 emits the exact
+215-coordinate quotient operator. The remaining source is `beta_C`, not a new
+coefficient triple or a new normal-syzygy search.
+B63 emits the exact sparse graph inclusion and physical Cayley compiler. Do not
+materialize full `M248` first. Emit one graph-containing `F0`, build its Cayley
+Jacobian ideal and reduce only the 8,184 products in the direct `248x33` block.
+Then compute a left-nullspace `N` and test the carrier-specific normal residual
+`N*beta_C` before attempting the residual 33-direction solve.
+B64 fixes all eighteen crossing coefficient values as exact nonzero target
+cross products. Do not reopen translation selection, root ordering or boundary
+interpolation. Construct the three component-evaluation right inverses against
+those rows, lift the compatible restrictions to one explicit eta9 `F0`, and
+then execute B63's direct graph block.
+B65 and B66 execute all three component right inverses with ranks
+`46,46,106` and affine dimensions `5,5,62`. Do not return to component
+interpolation or choose new boundary values.
+B67 emits the global residue `F0` by a rank-72 `90x83` restriction solve and
+identifies its 11-dimensional scalar kernel. Do not ask again where the eta9
+coefficient triple comes from. Its coefficient vector is the fixed input to
+B68; do not reselect it inside the 33-direction family.
+B68 proves that the explicit integer-coordinate lift is smooth by good
+reduction at `(11,gamma-3)`. Do not reopen smooth representative selection or
+introduce a graph-slice displacement.
+B69 instantiates the exact weighted Cayley reducer and reusable standard-basis
+cache. Do not rerun ordinary-degree elimination or attribute B70's matrix to
+this basis-only packet.
+B70 executes all 8,184 entries and proves rank 33 with a nonzero minor. The
+next operator is the carrier-specific Deligne logarithm `beta_C` in the same
+248-row basis, together with the 215-row test `N*beta_C`. In parallel, prove
+the marked graph-map compatibility theorem; do not reopen B63-B70.
+B71 proves toric log-regularity in a selected coordinate presentation by all
+735 saturated open-torus Lagrange charts and the unit big-and-nef intersection
+`xi^7=14301=1 mod 11`. Do not confuse ordinary Cayley smoothness with this
+stronger toric-orbit condition.
+B72 closes characteristic-zero structural residue promotion. An exact
+`39125x39125` augmented minor has determinant `7 mod 11`, proving a selected
+row survives `R1`; Mavlyutov's injection and boundary orthogonality, together
+with the rank-one ordinary top line, promote the B70 block to
+characteristic-zero relative `R1` cup rank 33 and nullity 215. The direct giant
+critical Groebner basis is optional redundancy, not a gate.
+B73 emits the canonical finite-field left-normal operator and graph solver:
+`N` has shape `215x248`, rank 215 and `N*D=0`; `S` has shape `33x248` and
+`S*D=I_33`. Do not reopen the 215-row quotient. Emit the physical
+normal-function vector `beta_C` from B68's eta9 source, test `N*beta_C`, and
+on zero solve `h=S*beta_C` and lift over the selected DVR.
+B74 constructs the eta9 finite-flat cubic algebra and its trace-free rank-two
+flat connection on the etale locus. Do not confuse its linear `S3` sheet
+monodromy with the affine normal-function cocycle.
+B76 proves the exact finite-algebra/residue intertwiner
+`Tr(h*v_delta)=-lambda(h*delta f)` with universal residue Gram determinant
+`-1`. Do not reopen the finite connection or invent a second residue source.
+B77 identifies the normalized source as the q79 class `delta` at integral
+Cech, Hodge-curvature and `P_delta` residue tiers. The ambient Brauer value is
+canonically zero. The Prym line `q` is downstream of `tau_alpha` and is not the
+source of `beta_C`.
+B78 computes the eta9 discriminant degree `5976`, the 5,976-meridian generic
+pencil presentation, square-root line `O(2988)` and genus-2,987 pencil double
+traversal. The adapter remains `5/8`: emit the normalized-delta integral
+translation multipliers, enforce the ordered affine relation, construct the
+period quotient and only then evaluate `N*beta_C`.
+
+B79 proves that the normalized-delta transgression is nonzero over `Q` and is
+not a rational coboundary. B81 constructs its canonical integral affine
+cocycle and proves that it is nonzero of infinite order. Do not reopen cocycle
+existence or confuse it with explicit coordinates.
+
+B82 computes the exact integral period domain: the vanishing lattice has rank
+1,509, signature `(496,1013)`, Hodge numbers `(248,1013,248)` and discriminant
+group `(Z/3)^22 + Z/54`. The period execution shape is `248x1509`. Do not call
+its image a discrete lattice without a separate closedness argument, and do
+not infer its entries from these structural invariants.
+
+B83 computes the 42-dimensional primitive ambient source lattice and emits
+`z_Z=gamma tensor u_B` with `<delta tensor u_A,z_Z>=1`. The `u_B` factor is an
+integral dual test direction, not a second physical time. Any remaining index
+at this stage belongs to transgression, not to the source lattice.
+
+B84 proves exact local double-traversal closure for one A1 meridian. Its square
+has identity linear part and zero affine translation. Global nonsplitting
+therefore requires a composite word involving distinct meridians.
+
+B85 proves that the certified algebraic divisor sublattice has pairing ideal
+`4Z` and constructs the primitive ordered elliptic sheet braid. B86 realizes
+the root graph `Rminus tensor u_B` inside a smooth periodic eta9 family and
+obtains exact pairing four, reducing the selected integral index to
+`{1,2,4}`.
+
+B87 closes integral saturation by the compact-dual theorem. Primitive A1
+attaching spheres make singular-fiber `H3` torsion free; the B83 pairing-one
+dual lifts compactly over the punctured pencil and pairs one with the source.
+Poincare-Leray duality therefore emits an integral finite tube combination
+with pairing one. The selected index is exactly `1`. Do not reopen saturation,
+and do not mislabel this existence theorem as an explicit meridian vector.
+
+The immediate eta9 frontier after B87 is:
+
+```text
+concrete pencil and finite twisted meridian cycle
+  -> 1,509-coordinate integral representative
+  -> 248 period/residue coordinates
+  -> beta_C
+  -> N*beta_C
+  -> h=S*beta_C on zero, or certified exclusion on nonzero.
+```
+
+B89 fixes the first object in that chain. Its hash-derived integral section
+`F1` and B68's `F0` define one exact pencil over `Q(gamma)`. At
+`(11,gamma-3)`, all nine endpoint singularity ideals and all nine determinantal
+axis rank-drop ideals are units. Therefore `F1` and the common axis are smooth
+in characteristic zero. Do not call the pencil Lefschetz until its relative
+critical scheme is proved reduced of length 5,976 and its critical values are
+separated.
+
+B90-B91 give the first explicit local meridian on this fixed pencil. An
+exhaustive `GF(11)` rational-locus scan finds one critical point with
+nondegenerate restricted Hessian. The full critical-system Jacobian is a unit,
+so the point lifts uniquely through eight 11-adic digits. The normalized
+source residue is also a unit at the lift. This closes existence of one
+source-active characteristic-zero A1 meridian, not its rank-1,509 coordinate
+or its global affine multiplier. The frontier is now to assemble enough
+transported A1 meridians to realize B87's gauge-invariant pairing-one cycle;
+full enumeration of all 5,976 nodes is optional if a smaller detecting
+subsystem is proved sufficient.
+
+B92-B94 now provide such a subsystem seed, but not yet the detecting theorem.
+At the single unramified place `(41,gamma-30)`, exhaustive disjoint-chart
+enumeration finds three distinct A1 points with distinct pencil values. All
+three lift uniquely through eight 41-adic digits and all three have nonzero
+normalized `P_delta` residue. Dedicated replay reconstructs the nine-equation
+systems and source Jacobian independently. What remains is topological rather
+than another local search: put the three vanishing roots in one integral
+marking, compute their Picard-Lefschetz transport/intersections, and decide
+whether their generated subsystem detects B87's pairing-one compact dual.
+
+B95 proves that local residue activity is not local source incidence. The
+three source-row vectors are nonzero modulo 41, so the selected A1 nodes are
+outside the source zero locus even though `P_delta` is a unit at each. Do not
+convert those units or the chart Hessian ratios into integral affine
+translation multipliers.
+
+B96 replaces the vague request for a short word by the finite
+relation-defect criterion. A transported subsystem with cycles `e_i` and
+local coefficients `m_i` detects the affine class iff some actual relation
+`sum r_i e_i=0` has `sum r_i m_i != 0`. If the cycles are independent, the
+restricted cocycle is rationally split. For the concrete three-node seed,
+first compute its common Gram matrix. A nonzero Gram determinant proves the
+seed cannot detect; a zero determinant only nominates a relation, which must
+still be checked as an equality in the rank-1,509 lattice. Within pairings
+`{-1,0,1}`, the only singular candidates are the four signed affine-A2
+patterns. A primitive actual relation with unit defect is the finite B87
+coordinate certificate.
+
+B97 moves the analytic side beyond finite-place evidence. It certifies three
+distinct complex A1 critical points of the fixed B89 pencil in one real
+number-field embedding using full `9x9` Arb/Krawczyk inclusions, constrained
+Hessian determinants and complex `P_delta` balls. This closes local complex
+root isolation for a three-node pilot. It does not identify those roots with
+the 41-adic branches, enumerate the other critical values, certify a global
+path tree, or emit integral cycles. Continue with certified homotopy/path
+clearance and then apply B96; do not return to random finite-prime searches.
+
+B98 closes global path-interior clearance without a degree-5,976 eliminant.
+All critical values are algebraic, while each selected two-edge path uses a
+waypoint `(r,c*pi)` with nonzero rational `r,c`. The transcendence of `pi`
+proves that the first edge contains no algebraic point except the regular base
+and the second contains no algebraic point except its selected endpoint. Arb
+orientation certificates prove the three paths are simple and pairwise
+noncrossing away from `lambda=0`. Do not reopen path-interior enumeration. The
+remaining endpoint question is whether another critical point shares one of
+the selected values; after that check, transport the local Milnor cycles and
+execute B96's relation-defect test.
+
+B99 promotes the B97 roots from isolated critical points to certified local
+vanishing cycles. The carrier pivots `K_w` and `E_t2` and pencil derivative
+`F1` all exclude zero, so `(y,z,t1)` are local carrier coordinates and
+`phi=-F0/F1` is a holomorphic Morse function. The constrained-Hessian identity
+`det Hess(phi)=-det Hess_T(C)/F1^3` is replayed with Arb and excludes zero for
+all three nodes. Thus three oriented local vanishing `S^2` cycles now exist
+rigorously. Do not count them as rank-1,509 coordinates yet: their continuation
+to the common `lambda=0` fiber, integral intersections, and B96 relation defect
+remain the active calculation.
+
+B100 supplies the exact Ehresmann operator on those paths. With
+`A=D_q(K,E,F0+lambda F1)`, the right inverse `A*(AA*)^-1` gives the unique
+minimal Hermitian horizontal lift and preserves the defining equations
+exactly. Proper smooth transport makes its action on integral homology
+connection-independent. Treat the Hermitian choice as computational gauge,
+never as source data.
+
+B101 transports octahedral skeletons of all three local Morse spheres into
+the common `lambda=0` fiber. All 18 trajectories pass two-resolution,
+projection-residual and sampled-rank tests; the largest endpoint refinement
+change is `1.874e-9`. This is a numerical-discovery representative, not a
+rank-1,509 integral coordinate.
+
+B102 adds all 36 edge-midpoint directions and obtains three 18-vertex,
+32-face meshes. Their minimum flat triangle separations are `1.696643`,
+`1.795915` and `2.347371`. The data favor independent vanishing cycles, but
+the continuous faces are not interval-enclosed. Prove a facewise transport
+deviation bound before declaring pairings zero or excluding B96's affine-A2
+case; otherwise adaptively subdivide only the closest face pairs.
+
+B103 emits the complete rank-1,509 vanishing de Rham residue basis that B82
+previously supplied only by Hodge count. Against the fixed 26,883-generator
+B69 leading ideal, exhaustive Cox-degree enumeration leaves `248`, `1013`
+and `248` standard monomials in degrees `(9,1,0)`, `(9,1,1)` and `(9,1,2)`.
+The equality with the B82 vanishing Hodge dimensions promotes the ordinary
+Cayley classes to the regular logarithmic `R1` classes in these degrees, and
+proper good reduction plus Nakayama lifts the basis locally to characteristic
+zero. Use this basis for the selected B89 Gauss-Manin matrices. Do not confuse
+it with an integral cycle basis or polarization normalization; those still
+require certified monodromy and Picard-Lefschetz identification.
+
+The next Cox degree gives a sharp pole-six result: degree `(9,1,3)` contains
+208,570 ambient monomials and zero B69 standard monomials. Together with the
+pure `s^0/s^1/s^2` form of the B103 Hodge basis, this proves that the selected
+associated-graded Higgs field is three-step nilpotent and that every top
+derivative numerator lies in the Jacobian ideal. Do not call this the full
+Gauss-Manin connection. Its missing information is the original-generator
+right inverse and divergence used by Griffiths-Dwork reduction, or
+equivalently a separately selected polarization and harmonic Hodge metric
+that reconstructs the flat connection.
+
+The B89 strict Higgs arrows have now been executed in every B103 row. Their
+shapes and ranks are `248 x 1013` of rank 248 and `1013 x 248` of rank 248;
+their witness determinants are `4` and `7` modulo 11. The composite has
+determinant `8`, hence the selected characteristic-zero Higgs operator has
+Jordan type `3^248 1^765`. Record this as 248 maximal Hodge chains and 765
+middle primitive directions, with no size-two chain. Do not promote the
+Jordan decomposition to integral cycles or global monodromy until the flat
+connection and integral marking are emitted.
+
+The exact toric return language is now fixed. Select the unimodular Cox class
+minor `(x,t0,u)` and its complementary torus coordinates
+`(y,z,w,t1,t2,v,s)`. The resulting integral Gale dual has rank seven,
+primitive ray columns and `Q V^T=0`; its maximal minors emit the invariant Cox
+top form. Preserve the B72 eight-generator logarithmic frame and recover the
+two omitted generators by the Cox-Euler identities. At pole six, never
+differentiate coefficients relative to cached Groebner generators. First
+compose them into the ten original partials and verify
+`deg(C_i)=(9,1,2)+deg(z_i)`. Then the Batyrev-Cox identity returns the fixed
+pencil derivative as `-sum_i partial_i(C_i)` in degree `(9,1,2)`. Reduce that
+row while retaining its Jacobian quotient, because its normal form is only the
+`H02` component; factors `1/4` and `1/3` generate the lower `H11` and `H20`
+components on the next two recursive passes.
+
+Implement those recursive passes in the complete homogeneous components, not
+in a fresh global Groebner presentation. The ten original partials give exact
+Macaulay maps of shapes `42706 x 85644`, `5439 x 5497` and `282 x 34` in
+`H02`, `H11` and `H20`, with image ranks `42458`, `4426` and `34`.
+Adjoin the B103 quotient-unit representatives. In `H11` and `H20`, exact
+sparse elimination has already produced full coordinate systems with selected
+minor determinants `9` and `1` modulo 11 and verified identities
+`C_selected=B R`. The emitted triangular transcripts are reusable right
+inverses: reduce an ambient row in `B`, back-substitute in `R`, retain the
+first quotient coordinates, and interpret the remaining coordinates in the
+selected original-partial multiplier columns. The corresponding solver passes
+mixed quotient/image self-tests with zero coordinate and reconstruction
+residuals. The analogous `H02` factorization remains the current large finite
+calculation.
+
+The lower-pole chain terminates structurally at `H20`. Its complete 34-column
+Jacobian domain contains only 33 `dPhi/du` multiplier columns and one
+`dPhi/ds` multiplier column. All 33 multipliers are independent of `u`, and
+the last is independent of `s`, so `sum_i partial_i(C_i)=0` for every H20
+preimage. There is no hidden fourth recursive return. Preserve each stage-one
+ambient numerator in the complete 42,706-row basis, apply the H02 coordinate
+solver, diverge with `1/4`, solve in H11, diverge with `1/3`, solve in H20,
+and stop at its B103 quotient coordinates. This is still selected-good-fiber
+de Rham data; characteristic-zero rational connection functions, integral
+monodromy and periods remain later promotion gates.
+
+The first full recursive source block is now executable evidence for this
+language. Multiplying every H20 source by the selected pencil derivative gives
+the complete `5439 x 248` H11 ambient matrix with 57,536 nonzero entries. The
+H11 coordinate solver recovers the frozen B104 strict block exactly, while its
+retained image preimages produce a nontrivial factor-`1/3` H20 correction with
+43,385 quotient entries. The resulting target-by-source block has shape
+`1509 x 248`, 251,618 nonzero entries and rank 248 over `GF(11)`. Thus the new
+calculation extends B104 rather than replacing or reopening it. The analogous
+unreduced H11-source matrix is already emitted in H02 ambient degree with shape
+`42706 x 1013` and 235,016 entries; execute it after the H02 coordinate
+factorization, then process the pole-six H02 sources.
+
+The H02 coordinate factorization has now passed that test in an isolated
+calculation worktree. Its full selected minor has determinant `2 mod 11`, and
+the independently recomputed sparse identity has zero residual. Feeding all
+1,013 H11 source derivatives through it, then through the `1/4` and `1/3`
+returns, emits a full `1509 x 1013` block of rank 1,013 with 1,389,033 nonzero
+entries. Its H02 quotient is exactly B104; the new H11 and H20 return parts
+contain 932,569 and 228,292 entries. Combined with the H20 source result, the
+complete finite return is therefore closed on the first 1,261 B103 source
+columns. Keep the final 248 H02 source columns tied to the targeted pole-six
+lift rather than inferring them from the two completed blocks.
+
+An independent concatenation certificate now sharpens that statement. The
+combined H20-plus-H11 operator has shape `1509 x 1261`, 1,640,651 nonzero
+entries and rank exactly 1,261 over `GF(11)`. Thus the 1,261 closed columns are
+jointly independent, not merely full-rank inside their separate blocks. The
+canonical main-repository packet has SHA-256:
+`c5df385c6219486edf427f4942169a48cc6481c9c28d58a91fbdadc5e7758645`.
+The absent columns remain exactly the 248 H02 pole-six returns; family
+flatness, characteristic-zero lifting, integral monodromy and periods are not
+promoted by this finite-fiber rank calculation.
+
+Do not repeat either original division attempt. The unbounded
+nonstandard-generator division exhausted the practical memory path without a
+mathematical result. The finite call at pole-six weight 46 did finish. A fresh
+fixed-width matrix replay corrects its earlier trailing-slot diagnostic and
+finds exact reconstruction residuals in columns 2 through 225; only column 1
+closes. The isolated degree-31 Cox group failed as well. Therefore
+`division(selectedG,J,46,w)` is now rigorously excluded as a complete lift
+algorithm for the nonstandard ten-generator `J`; this is an algorithmic
+no-go, not a failure of ideal membership. The canonical negative packet has
+SHA-256
+`b81953df973422c184e616b22545767115420424e6bcde9429ef957437e0aea3`.
+The explicit `1 x 225` residual replay packet has SHA-256
+`e831713cd5adb98ead9b40e65c5d9151e27954100d80443092f647bb253245e1`.
+The sole valid column has also been rebuilt and independently replayed; its
+identity packet SHA-256 is
+`81fc5a0e96cf6ecc48a935128868907ab577109df062716f092b0753c55945bc`.
+
+The exact 225-generator export and all 30 contiguous Cox-degree groups verify
+independently, with packet SHA-256
+`d339e79b9132453bbd09c37671891d761182fe80c0c0b6a85ca885a9ee2f48c5`.
+The inherited reduced-standard-basis degree-31 `lift` pilot on the first
+failing generator was cancelled after 884.37 seconds with no raw result,
+transform or accepted packet. This excludes that implementation as the
+scalable 225-column execution route but does not disprove ideal membership.
+The resource-exclusion packet SHA-256 is
+`19787363018d41405124c8f6e48b6e0808254471ef616beaba91b9b426e5acd1`.
+An explicit `option(noredSB)` corroboration mode remains available; the active
+primary route is the finite degree-wise sparse Macaulay solve. Every route must
+still emit and replay the zero polynomial identity before promotion.
+
+The Macaulay route is concretely frozen by schedule SHA-256
+`e9b0f12f41a499c1c663d1affd81650c355923faf9edf8bf210ab1c1ee9300dc`.
+Its first unsolved block, Cox degree `(16,3,1)`, is exactly
+`37449 x 66633` with 5,474,421 entries and 13 selected right-hand sides. The
+matrix/RHS packet and factorizer-input packet have SHA-256 values
+`b9ebf1fcdcfbab8c41d73d6b5657a95771a68bf9b35c7dc59dc289747a522cf4`
+and `02f78ad36f1493c948d42e8be0cf257069dfd4ecec362f96a1ee43817ac9dc77`.
+The corrected upstream audit replays all 248 source divisions with explicit
+fixed-width residual matrices. All residuals vanish, and the 225-generator
+union plus all 361,549 quotient terms are unchanged. Packet SHA-256:
+`c5a7c5e361d24fb607587d46d403ffd99e800dd23a65422570bd67a56a1a4394`.
+
+Central job `f50f84f0-f3c4-4960-882c-65f687b8c8d0` completed the first hard
+block chain. The augmented degree-`(16,3,1)` system has rank 37,449 and
+determinant 4 modulo 11. Its thirteen RHS columns solve exactly, expand to a
+`10 x 13` polynomial matrix with 275,062 terms, and independently replay with
+zero `J_original*T_delta-G_delta` residual. The terminal identity packet
+SHA-256 is
+`888874ea7d95988da92739abccc0143ad5d0210d05fc053a724e4562b9b6f0ac`.
+Together with the first valid division column this gives one independently
+replayed `10 x 14` prefix, SHA-256
+`d2fdc6911c8ef7df62c432bf6a647abdbe6c6e255f0b799da4b041c601ea57a5`.
+Thus 14 of 225 transform columns are closed and 211 columns in 28 blocks
+remain at that checkpoint.
+
+Central job `5a7ace35-e8b1-49d0-8357-4d2c01e09e09` then closed the degree
+`(19,2,1)` block at columns `[42,54)`. Its augmented rank is 36,138, its
+determinant is 9 modulo 11, and all twelve RHS columns solve with zero quotient
+coordinates and zero reconstruction residual. The resulting `10 x 12`
+polynomial transform contains 243,569 terms and independently replays with
+zero `J_original*T_delta-G_delta` residual. Final identity packet SHA-256:
+`25ed10b3f00343d08f388708e8d816ce9b3db5b0b7824b397f936ce7cf9b2681`.
+
+The new disjoint transform-coverage certificate admits only hash-bound blocks
+with a passing independent identity replay. It certifies exactly 26 of 225
+columns at the preceding checkpoint. The degree `(20,2,1)` block then closed
+with augmented rank 40,362, determinant 4 modulo 11, four exact RHS solutions,
+88,190 transform terms and zero independent residual. Its identity packet
+SHA-256 is
+`6cf5f45ff58ef8c08a29d2581ccf00a31bf849d265627fa7a6dcaa85f943793c`.
+Central job `aeadef45-abe4-4f90-aa4c-f947c84003d6` next closed degree
+`(17,3,1)` with full augmented rank 42,318, determinant 7 modulo 11, fourteen
+exact RHS solutions, 324,069 transform terms and zero independent residual.
+Its identity packet SHA-256 is
+`e408db774e20bc5608be47f00d9fec23c1c91ed1b3fbe5165d8c156a13b78485`.
+Central job `fc2d51f8-6705-4c93-ac27-21579c2cb25a` then closed degree
+`(6,2,2)` with full augmented rank 41,669, determinant 1 modulo 11, one exact
+RHS, 23,893 transform terms and zero independent residual. Its identity packet
+SHA-256 is
+`a41dcdcc113c3a1f9cd4ba0e103c10c44a91c55292e115fb8abc4cb3c876fa34`.
+Central job `4c28d2b5-e813-4411-aa61-8dc66198d789` then closed degree
+`(21,2,1)` with full augmented rank 44,924, determinant 5 modulo 11, two exact
+RHS solutions, 47,723 transform terms and zero independent residual. Its
+identity packet SHA-256 is
+`7ed300586357e5f5bf43ced4a92fbb4b6235b25c576f790fe88e239727e3f222`.
+Coverage is therefore now exactly 58 of 225 columns in `[0,29)`, `[32,55)`,
+`[72,76)` and `[89,91)`, leaving 167 columns in 21 groups. Packet
+SHA-256:
+`3b53697fb3ff944931339c7b5482d24fff5436fce2bae73e6a11d8b1cedf53c7`.
+The operational readiness snapshot lists ten further verified-input groups
+without counting them as solved;
+packet SHA-256
+`8e5e9c6fec58f39ab858790691a9155bb56f6be6bfed083c8015be6f7b245a55`.
+
+The family dependence is no longer wholly abstract. Affineness of the B89
+pencil gives exact selected charts `C_d(lambda)=C_d,0+lambda C_d,1`. The three
+new sparse updates have nonzero-column counts `1`, `2620` and `20485` in H20,
+H11 and H02. The complete H20 resolvent is rank one: for
+`K=C_0^{-1}C_1`, `K^2=7K` and `det(I+lambda K)=1+7lambda` modulo 11. Its
+selected-minor pole `lambda=3` differs from the known rational A1 value
+`lambda=8`, so it is typed as a possible chart boundary rather than a physical
+singular fiber. Packet SHA-256:
+`242789b351b96679b22ed5c0f9f101720754838629b8fbd58bff73f9a71359e6`.
+
+The next family calculation should apply `C_0^{-1}C_1` implicitly to the
+actual recursive connection/holomorphic seed blocks and certify their block-
+Krylov stabilization. This may replace full entrywise rational reconstruction
+by a much smaller reachable Picard-Fuchs system, while preserving exact chart
+transition and interval-transport requirements.
+The prepared K-action executor accepts only coordinate files hash-bound by
+passing source packets and independently tests `C_0(KX)=C_1X`. Current H11
+seeds comprise 248 direct H20-source columns and 1,013 recursive H11-source
+columns; current H02 seeds comprise the 1,013 direct H11-source columns. The
+last 248 H02-source seeds must come from the transform branch above.
+
+An exact matching/cover certificate now bounds the size of that execution.
+The H11 update has structural rank 2,522 in three active support components;
+the H02 update has structural rank 15,980 in 19. Thus, after the final H02
+branch is present, the reachable block-Krylov spaces have dimensions at most
+4,031 and 17,241, respectively. These are upper bounds, not asserted algebraic
+ranks. Packet SHA-256:
+`cf85c577695ca60d53f3126fd8e9442a42506971b7f317dab686fd1193879d2f`.
+
+The support labels are generated upstairs by one simple rule. For the affine
+source `s F1`, every base or `t` partial shifts the multiplier fiber sector by
+one `s`, the `s` partial has shift zero, and the `u,v` partials vanish. This
+recovers all three H11 lanes and five H02 degree-two lanes before quotient
+projection; only `v^2` is inactive in H02. The exact replay packet has SHA-256
+`e415571872972fdbb757c229862c9fae929b8c34997beba755b129cd4a843974`.
+This is a preprojection operator theorem, not an assertion that the selected
+`C_0^{-1}` preserves each lane.
+
+The resulting preprojection reference system is the truncated symmetric
+algebra `k[u,v,s]/(u,v,s)^3`. Its graded label dimensions are `1,3,6`, its
+total label dimension is ten, and its quadratic degree splits as
+`s^2 | {us,vs} | {u^2,uv,v^2}`, giving the exact `1+2+3` flag. The creation
+operators `M_u,M_v,M_s` commute, raise the common fiber number, and have zero
+cubic words. The original Jacobian and affine update both use this same small
+operator dictionary. One third-Cox `G_m` action supplies the shared grading;
+over the complex numbers its compact form is a single `U(1)`, with the
+quadratic piece carrying charge two. This is not a spacetime-dimension or
+double-time-traversal theorem. Packet SHA-256:
+`8b0c9dd01993ac5a18b68d1ca6e15b79c898607bd08053b23785bf2b1eddb9c1`.
+
+Keep that Cox grading distinct from the flat universal shared line. Their
+exact combined carrier is `L_shared tensor A_fib` over the product base
+`B_nabla Z64 x B Gm_Xi`. The flat line acts uniformly and commutes with all
+creation operators. On the q79 sheet halfturn, Cox degrees `0,1,2` have signs
+`+,-,+`; only degree one agrees with the SpinC determinant sign. Degree two is
+the square of the weight-one character on the parent C4 but is even after the
+sheet pullback. Packet SHA-256:
+`d8492a9b343555973fe112ce316d2523d041096e06e595c42a3d1a86aafc3050`.
+
+The H02 support refinement has a reusable template theorem. Six medium
+components are identical `417 x 166` maps of rank 165, while nine are
+identical `417 x 83` maps of rank 83. Each wide template has the unique
+Koszul kernel `[B2,-B1]`; its six copies account exactly for six structural
+rank defects. Consequently `rank(K_H02)<=15974` and the final reachable
+Krylov dimension is at most 17,235. Packet SHA-256:
+`fe7b870af91f85ee26f1d514f8c2530ce4edd19faa02f6746f24c259ac36d248`.

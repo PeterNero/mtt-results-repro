@@ -1,0 +1,142 @@
+{
+  "schema": "mtt.unified-source.g3-current-candidate-audit.v1",
+  "theorem_id": "UST.G3A",
+  "state": "CLOSED_EXACT_INGESTION_CONTRACT_PHYSICAL_SOURCE_OPEN",
+  "kernel_model_sha256": "f89735301d9f7ac5da72f83b280ed93f9ef92645e0f4e52731ff11cc81d18b99",
+  "source_commit": "33c25ea2922ef26ab2c71d6165247bee8b08463f",
+  "source_locks": [
+    {
+      "id": "S.PHYSICAL_SEED",
+      "path": "Q79_PHYSICAL_GAUGE_PAIR_DEFORMATION_COMPLEX_AND_MINIMAL_SEED_THEOREM_v1.md",
+      "sha256": "202d461e568e981e531e58a7116121e969cc17d1f56c9ac41590c3311d157fe6"
+    },
+    {
+      "id": "S.COHESIVE_MC",
+      "path": "Q79_COHESIVE_MAURER_CARTAN_REPAIR_AND_DERIVED_TRANSFORM_INTERTWINER_THEOREM_v1.md",
+      "sha256": "55db305c7139bc181011bf1bba3667ed4c238a10bd1d99ae0240609d293bfa15"
+    },
+    {
+      "id": "S.COHESIVE_HODGE",
+      "path": "Q79_TWISTED_COHESIVE_SUPERCONNECTION_AND_STRATIFIED_HODGE_THEOREM_v1.md",
+      "sha256": "0716ea1378098508c01106308bf32b3aa90bbc8cad47529f48752aed4eb3d6c7"
+    },
+    {
+      "id": "S.FITTING_P39",
+      "path": "Q79_GLOBAL_FITTING_DESCENT_AND_SPECTRAL_DIVISOR_MATCH_THEOREM_v1.md",
+      "sha256": "ba92f433303a3a9f9588658448a556f883bca123e708756e2115d2bddbfdea16"
+    },
+    {
+      "id": "S.ENDPOINT_COMPILER",
+      "path": "Q79_AUGMENTED_ENDPOINT_HILBERT_SPECTRAL_COMPILER_THEOREM_v1.md",
+      "sha256": "77453971f76294863f6acda44d3051143376497375452322a114d3a83ab7ea24"
+    },
+    {
+      "id": "S.PHYSICAL_FULL_RESIDUAL",
+      "path": "q79_physical_v3w9_endpoint_full_residual.packet.json",
+      "sha256": "937039df105881a4dcbf1ed31d86ab842b5da2ee6df832e7c834d9eb71cae441"
+    },
+    {
+      "id": "S.FINITE_TRANSFER",
+      "path": "q79_same_source_continuum_to_finite_intertwiner_cutset.packet.json",
+      "sha256": "565219b949d9f82cb39090489994450f7dfc2a54e9abbb4a28332a3ab2d73891"
+    }
+  ],
+  "evidence_grades": ["PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_SOURCE"],
+  "row_ids": ["amplitude", "local_freeness", "topology", "augmentation", "metric", "dynamics", "readout"],
+  "primitive_geometric_source_rows": ["U_eta9", "W9_tau", "positive_chamber", "tangent_connection"],
+  "normalization_row": {
+    "id": "lambda_act",
+    "allowed_states": ["DERIVED", "BOUND", "MISSING"],
+    "current_state": "MISSING",
+    "maximum_independent_positive_scale_rays": 1
+  },
+  "derived_not_primitive": ["connections", "flux", "physical_residual", "K", "H_phys", "Green_operator", "Galerkin_coefficients"],
+  "readout_certificate": "T_fin",
+  "row_dependencies": {
+    "amplitude": ["U_eta9", "W9_tau"],
+    "local_freeness": ["U_eta9", "W9_tau"],
+    "topology": ["U_eta9", "W9_tau"],
+    "augmentation": ["U_eta9", "W9_tau", "positive_chamber", "tangent_connection"],
+    "metric": ["positive_chamber", "tangent_connection", "lambda_act"],
+    "dynamics": ["U_eta9", "W9_tau", "positive_chamber", "tangent_connection", "lambda_act"],
+    "readout": ["U_eta9", "W9_tau", "positive_chamber", "tangent_connection", "lambda_act", "T_fin"]
+  },
+  "candidates": [
+    {
+      "id": "C.REFERENCE_HS_BUNDLE_PAIR",
+      "source_orbit_id": "reference_pullback_HS_pair",
+      "candidate_type": "ordinary_bundle_pair",
+      "normalization_state": "MISSING",
+      "rows": [
+        {"id": "amplitude", "grade": "PASS", "source_refs": ["S.PHYSICAL_SEED"], "reason": "Reference objects are ordinary bundles."},
+        {"id": "local_freeness", "grade": "PASS", "source_refs": ["S.PHYSICAL_SEED"], "reason": "Reference rank-three and rank-nine bundles are locally free."},
+        {"id": "topology", "grade": "FAIL", "source_refs": ["S.PHYSICAL_SEED"], "reason": "Visible c3 is zero rather than plus-or-minus six and the hidden pullback row differs from physical P(3,9)."},
+        {"id": "augmentation", "grade": "PARTIAL", "source_refs": ["S.PHYSICAL_SEED"], "reason": "Reference geometry does not instantiate the physical mixed gauge pair."},
+        {"id": "metric", "grade": "PARTIAL", "source_refs": ["S.PHYSICAL_SEED"], "reason": "Reference HYM metric exists but is not selected on the physical bundle topology."},
+        {"id": "dynamics", "grade": "PARTIAL", "source_refs": ["S.PHYSICAL_SEED"], "reason": "Reference residual data cannot be transported across the Chern obstruction."},
+        {"id": "readout", "grade": "OPEN", "source_refs": ["S.ENDPOINT_COMPILER"], "reason": "No physical same-source continuum-to-finite map is emitted."}
+      ],
+      "strict_pass_count": 2,
+      "promotable": false
+    },
+    {
+      "id": "C.S_HS_COHESIVE_BENCHMARK",
+      "source_orbit_id": "S_HS_kappa_hol_benchmark",
+      "candidate_type": "derived_cohesive_benchmark",
+      "normalization_state": "MISSING",
+      "rows": [
+        {"id": "amplitude", "grade": "CONDITIONAL", "source_refs": ["S.COHESIVE_HODGE", "S.COHESIVE_MC"], "reason": "The cohesive object is global, but physical transformed amplitude requires the unselected physical transform."},
+        {"id": "local_freeness", "grade": "PARTIAL", "source_refs": ["S.COHESIVE_MC"], "reason": "The inverse benchmark is not the complete physical rank-three/rank-nine pair."},
+        {"id": "topology", "grade": "FAIL", "source_refs": ["S.COHESIVE_MC", "S.PHYSICAL_SEED"], "reason": "kappa_hol has Chern rows (-H,3u), not physical visible rows (0,9u)."},
+        {"id": "augmentation", "grade": "PARTIAL", "source_refs": ["S.COHESIVE_MC", "S.COHESIVE_HODGE"], "reason": "The endomorphism DGA and MC residual are exact, but the physical augmented equation rows are absent."},
+        {"id": "metric", "grade": "CONDITIONAL", "source_refs": ["S.COHESIVE_HODGE"], "reason": "Hermitian metrics exist but no physical metric or normalization is selected."},
+        {"id": "dynamics", "grade": "PARTIAL", "source_refs": ["S.COHESIVE_MC"], "reason": "Canonical integrability repair is present; physical HYM, balanced and anomaly rows are open."},
+        {"id": "readout", "grade": "OPEN", "source_refs": ["S.ENDPOINT_COMPILER"], "reason": "No physical isometric or error-controlled finite intertwiner is selected."}
+      ],
+      "strict_pass_count": 0,
+      "promotable": false
+    },
+    {
+      "id": "C.HIDDEN_P39_TOPOLOGICAL_ENDPOINT",
+      "source_orbit_id": "hidden_P39_topological_endpoint",
+      "candidate_type": "single_sector_topological_endpoint",
+      "normalization_state": "MISSING",
+      "rows": [
+        {"id": "amplitude", "grade": "OPEN", "source_refs": ["S.FITTING_P39"], "reason": "Physical transformed amplitude is not certified."},
+        {"id": "local_freeness", "grade": "OPEN", "source_refs": ["S.FITTING_P39"], "reason": "Twisted-holomorphic locally free rank-nine promotion remains open."},
+        {"id": "topology", "grade": "PARTIAL", "source_refs": ["S.FITTING_P39"], "reason": "The hidden smooth-projective topological K-class closes, but the visible sector is absent."},
+        {"id": "augmentation", "grade": "OPEN", "source_refs": ["S.FITTING_P39"], "reason": "No full physical augmented endpoint is emitted."},
+        {"id": "metric", "grade": "OPEN", "source_refs": ["S.FITTING_P39"], "reason": "Common positive chamber and HYM metric remain open."},
+        {"id": "dynamics", "grade": "OPEN", "source_refs": ["S.FITTING_P39"], "reason": "Physical residual and K are not emitted."},
+        {"id": "readout", "grade": "OPEN", "source_refs": ["S.ENDPOINT_COMPILER"], "reason": "Same-source finite transport remains open."}
+      ],
+      "strict_pass_count": 0,
+      "promotable": false
+    },
+    {
+      "id": "C.SMOOTH_PROJECTIVE_V3W9_PAIR",
+      "source_orbit_id": "smooth_projective_V3W9_cohomological_pair",
+      "candidate_type": "two_sector_smooth_projective_cohomological_candidate",
+      "normalization_state": "MISSING",
+      "rows": [
+        {"id": "amplitude", "grade": "OPEN", "source_refs": ["S.PHYSICAL_FULL_RESIDUAL"], "reason": "The pair has not been promoted to a holomorphic or cohesive physical object."},
+        {"id": "local_freeness", "grade": "PARTIAL", "source_refs": ["S.PHYSICAL_FULL_RESIDUAL"], "reason": "Smooth-projective ranks three and nine are present, but holomorphic locally free promotion remains open."},
+        {"id": "topology", "grade": "PASS", "source_refs": ["S.PHYSICAL_FULL_RESIDUAL"], "reason": "The visible and hidden Chern, determinant and twist rows match the retained physical cohomological candidate."},
+        {"id": "augmentation", "grade": "PARTIAL", "source_refs": ["S.PHYSICAL_FULL_RESIDUAL"], "reason": "Cohomological Bianchi compatibility is present; the selected differential augmentation is not instantiated."},
+        {"id": "metric", "grade": "OPEN", "source_refs": ["S.PHYSICAL_FULL_RESIDUAL"], "reason": "Common Gauduchon polystability, HYM connections and source-forced target metric remain open."},
+        {"id": "dynamics", "grade": "CONDITIONAL", "source_refs": ["S.PHYSICAL_FULL_RESIDUAL"], "reason": "The complete residual and Frechet-K formulas are exact, conditional on a selected zero-defect endpoint."},
+        {"id": "readout", "grade": "OPEN", "source_refs": ["S.FINITE_TRANSFER"], "reason": "The exact transfer criterion is closed, but no same-source physical T_fin is selected."}
+      ],
+      "strict_pass_count": 1,
+      "promotable": false
+    }
+  ],
+  "anti_splicing": {
+    "rule": "Rows from different source_orbit_id values do not define one source unless hash-bound transports preserve every used structure.",
+    "transport_certificate_present": false,
+    "mixed_candidate_promotion_allowed": false
+  },
+  "promotable_candidate_count": 0,
+  "physical_promotion": false,
+  "next_required_packet": "mtt.unified-source.g3-candidate.v1"
+}

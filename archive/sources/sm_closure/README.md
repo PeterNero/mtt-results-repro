@@ -105,30 +105,169 @@ remaining frontier:
     theta Fourier tail/Wiener contraction passes with Z=0.38508 and
     Y+Zr=0.00932703<r=0.01; literal Cech-HYM witnesses are closed 2/2
   U3 source-block audit closed; no unified public 15D official likelihood found
-  U5 selected Dirac channel closed; the three-basin minimal-trace theorem now
-    fixes m_lightest=0 conditionally and gives NO/IO sum postchecks
-    0.058784/0.101001 eV; the old three-clause frontier is reduced to one
-    selected complex-symmetric neutral mass operator. Its source-provenance
-    inventory is now 4/8 fields: source id, neutral basis, Dirac/self-character
-    gate, and no-observed-selector certificate are closed. The dimensionful
-    successor now proves a normal-form reduction: only three lawful exits remain
-    (Dirac-complete `M_D=v_u Y_nu`, Majorana/seesaw blocks with selected
-    self-character `k=0` or `672`, or nil-boundary effective spectrum plus
-    reconstruction). The follow-up overlap/physical/action gate is now executed:
-    the next value-source pass promotes neutral carrier/projector and trace-Gram
-    readiness to 5/9 OK gates and 6/12 subfields. The selected pieces are the
-    `L`, `N^c`, and rank-1 `H`/`H_u` carrier projectors, trace-Gram
-    normalization, and same-source slot consistency. Accepted exits remain 0/3,
-    `omega_gap_phys` is still unselected, and Dirac-only action completeness is
-    not derived. It closes no new value rows: dimensionful M_D/M_L/M_R blocks and absolute
-    normalization/scheme remain open; benchmark seesaw data, observed splittings,
-    conditional physical-unit bridges, and the dimensionless C1 nuD response are
-    not accepted as that mass operator
-  U6 conditional PQ theorem and axion ratios closed; the exact E6 Qpsi color
-    anomaly is +12 from matter and -12 from complete-27 exotics, hence zero;
-    the matter-only/singlet diagnostic gives N_DW=3, not 1. The remaining
-    object is one selected flux/threshold axion-current anomaly-matching map
-  U9 antiunitary orbit and retarded q79 representative closed; global measure open
+  U5 closed at the adopted one-neutral-holonomy plus one-absolute-scale tier:
+    the same-source self-conjugacy test excludes Majorana blocks at the selected
+    non-self-conjugate phase, the nil minimal-trace boundary gives
+    `m_lightest=0`, and `0<|phi|<pi/6` selects normal ordering. Strict no-knob
+    selection of `phi`, the absolute scale, saturation source and covariance
+    remains an upgrade target
+  U6 model-independent heterotic axion reduction is `9/10`: the selected
+    compact oriented q79 background emits the universal B6 axion, the visible
+    `E8->E6->SU3c` basic-form indices are exactly one, so `k3=N_DW=1`, and the
+    canonical `f_MI` reduction formula adds no independent axion parameter.
+    Pure `Qpsi` remains anomaly-free by exact `+12-12=0` Wess-Zumino matching.
+    Perturbative quality and an exact global-minimum quality inequality are
+    closed. The Fu-Yau topology supplies at least 21 pre-lifting axion
+    candidates. The full source-free `E8 x E8` structural rows are now
+    `k_vis=(1,+3d)`, `k_hid=(1,-3d)`, and `k_NS5=(1,0)`, without assuming a
+    flat hidden bundle. Their exact identity `k_vis+k_hid=2k_NS5` proves that
+    no direction can be blind to both hidden condensation and the wrapped NS5
+    while retaining QCD coupling. The NS5 wrapped cycle, primitive charge and
+    action formula `S_NS5=2*pi/alpha_GUT` are closed structurally (`2/9`), and
+    Fu-Yau worldsheet lift/Pfaffian gates are exact. Worldsheet-only potentials
+    cannot displace strong CP because the primitive surviving universal axion
+    minimizes the QCD angle for every fixed model-dependent configuration.
+    A101 repairs the Strominger source to a correctly typed two-connection
+    `E8 x E8` functional and closes the exact hidden group/spectrum/confinement
+    decision theorem. An exhaustive `E8` Weyl/root calculation proves the
+    characteristic minimum `q1^2+q2^2-|q1.q2|=30`; Minkowski reduction then
+    rules out abelianizing the hidden `E8` with only the two Fu-Yau circle
+    curvatures inside the smooth 24-unit source-free budget. The NS5 prefactor
+    is refined to `A_NS5=kappa/(16*pi*alpha_GUT)` and its exact A98 envelopes
+    are closed. A102 constructs the exact minimal rank-one Fu-Yau candidate
+    `c2(V3)+c2(W9)+tau=9+11+4=24`, proves stable locally free `SU3` and
+    `SU9` HYM representatives exist, and executes the affine-`E8` embedding
+    `SU(9)/Z3` with `248=80+84+bar84` and hidden index
+    `38+63+63=164`. A103 proves every such stable hidden `SU9,c2=11`
+    bundle has full `SU9` HYM holonomy: parity and sharp (possibly twisted)
+    Mukai bounds exclude the `SO9`, `Sym8(SU2)`, and `3x3` tensor reductions.
+    The hidden commutant is therefore finite `Z3`; no continuous hidden gauge
+    factor or hidden gaugino condensate remains. On the visible side, A103
+    retires the invalid printed Iwasawa `c3=6` source, constructs smooth
+    shared-circle clutching bundles with `integral c3=+/-6`, and constructs
+    the q79 determinant-zero degree-three spectral cover. A104 computes its
+    smooth generic spectral surface exactly (`K_C^2=18`, `c2(C)=90`, `p_g=9`,
+    `h11=74`) and proves the restricted integral Dixmier-Douady class is zero:
+    both pairings are proportional to the selected `delta.H=0`, and
+    `H^3(C,Z)=Z^2` leaves no torsion escape. A105 normalizes the Poincare
+    gerbe at the zero section and uses determinant zero to remove the one
+    trace component. The only remaining gerbe obstruction is an
+    eight-dimensional Prym class, canonically dual to the eight-dimensional
+    `PGL(3)` alignment space. A106 now derives the marked K3 normal form
+    `w^2=G3^2+Q2 H4` from the lattice roots `H+/-delta`, including the exact
+    18-dimensional splitting-conic family count. It also replaces a naive
+    floating `beta=0` test by eight exact relative-Deligne period congruences
+    on an integral `H^2(C,Z)` branch and derives the residue basis, period
+    matrix, and covariant `8x8` Jacobian. The former 8 beta coordinates and 64
+    Jacobian entries are therefore outputs, not source rows. The remaining
+    geometric source is one 18-complex-dimensional marked K3 point and one
+    elliptic modulus; the eight `PGL(3)` coordinates are solved variables. The
+    existing `tau=i` Appell-Humbert implementation is diagnostic only because
+    no same-Fu-Yau source bridge is proved. A107 proves the exact obstruction:
+    the single pair `(delta,0)` has a parabolic `SL(2,Z)` stabilizer with no
+    order-four element, so a lens quarter-turn cannot preserve one branch. Its
+    minimal lawful superset is the orbit `(delta,0) -> (0,delta) ->
+    (-delta,0) -> (0,-delta)`. If MTT selects that parent orbit, the global
+    order-four action fixes `tau=i`, `j=1728`, and one gerbe execution covers
+    all four orientations. The strict source count remains 19 complex moduli;
+    it becomes 18 only after the typed
+    `LensQuarterTurnToFuYauChernOrbitSourceTheorem`. The existing U9 retarded
+    selector is not cross-promoted to this orbit. The marked K3, exact period
+    zero, twisted spectral sheaf, inverse Fourier-Mukai local freeness,
+    balanced HYM, differential Bianchi identity, and seven numerical NS5
+    inputs remain open, so U6 is not declared closed. A108 now prevents the
+    older Strominger fixed-point paper from being used to fill that gap: its
+    displayed configuration fixes `X`, `J`, `E`, and topology and therefore
+    varies no K3 period. The paper's OU second-variation claim and
+    `epsilon^-2` fiber-gap argument also require explicit repairs. Under the
+    repaired conditional fixed-field package, A108 derives the exact period
+    selector `H_eff=H_pp-H_pu H_uu^-1 H_up` on all 36 real K3 directions.
+    Coupling it to A106 at conditional `tau=i` gives a square 52-real-equation
+    system in the K3 period and `PGL(3)` alignment, with determinant
+    `det(H_eff)*|det_C(D_A F)|^2` in the triangular complex-linear case and a
+    full `16x16` realified gerbe determinant otherwise. The architecture is
+    closed; seven same-source period derivative fields and an actual exact
+    solution remain open, with zero fitted parameters added. A109 also closes
+    the constructive-model half of that fork: explicit rational `Q2,G3,H4`
+    give a smooth sextic `F6=G3^2+Q2 H4`, and four exact projective ideal tests
+    reduce to `[1]` on all three affine charts. The two split conic lifts meet
+    in six reduced points and realize the primitive lattice
+    `Gram(H,delta)=diag(2,-4)`. This fills `4/8` strict direct-model fields
+    (`5/8` only under the open Z4 `tau=i` bridge). It is deliberately an
+    existence/test witness: it removes zero strict source moduli and does not
+    select an MTT vacuum. A110 extends that witness to the square elliptic
+    cubic and identity trial alignment. An exact mutual-Gauss calculation
+    proves the spectral surface smooth on all nine product charts. A nine-patch
+    Cartier cover then emits `O(delta)` transitions with `72` inverse and `729`
+    triple-cocycle checks, from which the unique Fu-Yau elliptic torsor and
+    normalized Poincare formula
+    `alpha_ijk(e_hat)=chi_ehat(n_ijk,0)` follow. The formula-level Cech blocker
+    is closed; good-cover logarithm values, eight Prym periods, integral
+    `Z^92` membership, and an exact zero/no-go remain open. A111 now makes
+    that analytic target executable without treating the surface as an
+    unsupported projective hypersurface. Projection to `E_i` gives the exact
+    genus-two family `u^2=f_ab(t)=g_ab^2+q_ab h_ab`. Its discriminant is
+    `P45(a)+b Q43(a)`; the elliptic norm has degree `90` and
+    `gcd(N90,N90')=1`, proving exactly `90` distinct nodal fibers and
+    reproducing `c2(C)=90`, `b2(C)=92`. The eight `sl3` residue numerators and
+    the degree-zero divisor
+    `D_delta=P_1+P_2-P_infinity_plus-P_infinity_minus` are now explicit.
+    A112 now isolates every critical value using exact-integer MPSolve input:
+    its `90` certified disks are pairwise disjoint, with `8` real roots and
+    `41` nonreal conjugate pairs. Exact elliptic lifting gives all `90` base
+    points, and a degree-one fiber subresultant gives all `90` nodal points;
+    its leading coefficient is proved nonzero on the critical locus. The next
+    A113 lifts those disks into the normalized square torus and certifies all
+    `90` positive based meridians. It also adds the two torus-handle carriers
+    required because the base has genus one. The frozen FLINT execution emits
+    `90` candidate local matrices: every braid word replays exactly to an
+    integral `Sp(4,Z)` rank-one transvection, and the candidate vanishing cycles
+    span `H_1(F_*,Z)` with rank `4`. A114 now certifies continuous disjoint root
+    tubes over all `11,932` segments of the two nonlocal `A/B` paths. Its
+    80-digit interval projection certifies all `74` braid crossings and exact
+    chain-twist replay promotes both handle matrices in `Sp(4,Z)`. A115 then
+    reconstructs all 90 local trajectories in a certified two-chart atlas,
+    proves disjoint continuous root tubes over `300,428` local path segments,
+    and interval-certifies `2,392` local braid crossings. Exact marking
+    transport promotes all `90/90` A113 transvections. The inventory is now 90
+    local plus two handle actions in one frozen marking. A116 cuts the torus
+    along those handle carriers and certifies a 90-ray distinguished fan with
+    positive arc/circle margins. It independently transports the six branch
+    roots over all 90 fan meridians, certifies continuous tubes over `229,436`
+    path segments, and interval-certifies `3,476` crossings. All 90 positive
+    Picard-Lefschetz factors are promoted. In the measured left-action
+    convention their exact product is
+    `M_90...M_1=B^-1 A^-1 B A`, closing the global integral `H_1`
+    Gauss-Manin surface relation. A117 first distinguishes those transport
+    paths from closed surface cycles and gives the retained rank count. A118
+    executes all `90/90` primitive thimble columns; its old `86`-column `T K`
+    table is now retained only as a convergence diagnostic. A119 independently
+    continues the fiber periods and detects the central lifts `+A,-B`, aligns
+    all 90 thimble orientations, and replaces the preliminary `86+4` split by
+    the saturated coupled chain quotient. The handle-only Smith diagonal
+    `(1,1,1,3)` becomes `(1,1,1,1)` after the thimble tails are included. The
+    emitted primary basis has `82` pure-thimble and `8` handle-supported
+    columns. A primitive ambient fiber/horizontal Leray pair supplies the last
+    two classes; all 16 of its periods vanish exactly for the eight primitive
+    `sl(3)` residue forms. Thus an exact rank-92 integral basis and the full
+    floating `8x92` period table are assembled. The propagated two-run maximum
+    column-scaled difference envelope is `6.4785e-8`. A120 closes the exact
+    balanced-sextic Mumford source and full affine normal-function cocycle;
+    A121 identifies the normalized Deligne representative
+    `beta_C=[R_B] in C^8/Pi(H^2(C,Z))` and emits its eight floating rows with
+    `5.922e-10` production/tight agreement. A122 closes the exact nonidentity
+    source correction: every aligned carrier uses its own `q_A` roots and
+    implicit root velocities. The identity A121 result is preserved and the
+    old nonidentity beta/Jacobian values are retired. Corrected full-rank
+    descents lower the beta norm but approach a nodal wall with order-one
+    residual evidence; neither a smooth zero nor a global no-go is claimed.
+    Exact `Z^92` membership, a Picard-Lefschetz residual theorem or a selected
+    nonzero integral branch remain open. A111-A122 remove zero strict source
+    moduli and do not select the trial carrier
+  U9 closed at the selected antiunitary-orbit tier: the two conjugate carriers
+    have the unique invariant measure `(1/2,1/2)`, and conditioning on the
+    selected retarded event gives q79 with probability one. A global measure
+    over every possible MTT carrier remains a strict upgrade, not this tier
   U7/U8 have conditional quantization/constructive results; strict derivations open
   finite-geometry A49: the native C+H+M3(C) KO6 triple has a proved no-go:
     the N_R:C--C self-edge obstructs orientability and its 3x3 antisymmetric

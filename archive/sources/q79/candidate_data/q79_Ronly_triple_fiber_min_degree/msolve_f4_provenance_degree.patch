@@ -1,0 +1,226 @@
+diff --git a/src/neogb/la_ff_8.c b/src/neogb/la_ff_8.c
+index 71ff8ab..0d9ecf4 100644
+--- a/src/neogb/la_ff_8.c
++++ b/src/neogb/la_ff_8.c
+@@ -23,6 +23,112 @@
+ #include "data.h"
+ #include "../msolve/streams.h"
+ 
++/* Optional q79 audit instrumentation.  The value propagated in BINDEX is an
++ * upper bound on the largest original-generator degree used by this concrete
++ * F4 row.  It is enabled only while one audited F4 matrix is reduced. */
++static int q79_f4_provenance_enabled = 0;
++static int q79_f4_provenance_active = 0;
++static const char *q79_f4_provenance_path = NULL;
++static len_t *q79_f4_basis_provenance = NULL;
++static bl_t q79_f4_basis_provenance_size = 0;
++static uint32_t q79_f4_provenance_round = 0;
++
++static void q79_f4_provenance_ensure(const bl_t need)
++{
++    if (!q79_f4_provenance_enabled || need <= q79_f4_basis_provenance_size) {
++        return;
++    }
++    bl_t next = q79_f4_basis_provenance_size == 0 ? 64 : q79_f4_basis_provenance_size;
++    while (next < need) {
++        next *= 2;
++    }
++    q79_f4_basis_provenance = realloc(
++            q79_f4_basis_provenance, (uint64_t)next * sizeof(len_t));
++    for (bl_t i = q79_f4_basis_provenance_size; i < next; ++i) {
++        q79_f4_basis_provenance[i] = 0;
++    }
++    q79_f4_basis_provenance_size = next;
++}
++
++static void q79_f4_provenance_initialize(const bs_t *bs)
++{
++    q79_f4_provenance_path = getenv("MSOLVE_F4_PROVENANCE_DUMP");
++    if (q79_f4_provenance_path == NULL || q79_f4_provenance_path[0] == '\0') {
++        return;
++    }
++    q79_f4_provenance_enabled = 1;
++    q79_f4_provenance_active = 0;
++    q79_f4_provenance_round = 0;
++    q79_f4_provenance_ensure(bs->ld);
++    FILE *file = fopen(q79_f4_provenance_path, "w");
++    if (file == NULL) {
++        q79_f4_provenance_enabled = 0;
++        return;
++    }
++    fprintf(file, "FORMAT\tMSOLVE_F4_ORIGINAL_DEGREE_UPPER_BOUND_V1\n");
++    for (bl_t i = 0; i < bs->ld; ++i) {
++        q79_f4_basis_provenance[i] = (len_t)bs->hm[i][DEG];
++        fprintf(file, "INITIAL\t%u\t%u\n", i, q79_f4_basis_provenance[i]);
++    }
++    fclose(file);
++}
++
++static void q79_f4_provenance_prepare(mat_t *mat, const bs_t *bs)
++{
++    if (!q79_f4_provenance_enabled) {
++        return;
++    }
++    q79_f4_provenance_round++;
++    FILE *file = fopen(q79_f4_provenance_path, "a");
++    if (file == NULL) {
++        q79_f4_provenance_enabled = 0;
++        return;
++    }
++    fprintf(file, "MATRIX\t%u\t%d\t%u\t%u\t%u\n",
++            q79_f4_provenance_round, mat->cd, bs->ld, mat->nru, mat->nrl);
++    for (len_t block = 0; block < 2; ++block) {
++        hm_t **rows = block == 0 ? mat->rr : mat->tr;
++        const len_t count = block == 0 ? mat->nru : mat->nrl;
++        const char kind = block == 0 ? 'R' : 'T';
++        for (len_t i = 0; i < count; ++i) {
++            hm_t *row = rows[i];
++            const bl_t basis_index = row[BINDEX];
++            if (basis_index >= q79_f4_basis_provenance_size) {
++                fprintf(file, "ERROR\t%c\t%u\tBASIS_INDEX\t%u\n",
++                        kind, i, basis_index);
++                fclose(file);
++                q79_f4_provenance_enabled = 0;
++                return;
++            }
++            const len_t multiplier_degree = (len_t)bs->ht->hd[row[MULT]].deg;
++            const len_t bound = q79_f4_basis_provenance[basis_index]
++                + multiplier_degree;
++            fprintf(file, "INPUT\t%c\t%u\t%u\t%u\t%u\n",
++                    kind, i, basis_index, multiplier_degree, bound);
++            row[BINDEX] = bound;
++        }
++    }
++    fprintf(file, "ENDINPUTS\n");
++    fclose(file);
++    q79_f4_provenance_active = 1;
++}
++
++static void q79_f4_provenance_capture(
++        const mat_t *mat,
++        const bl_t from,
++        const md_t *md,
++        const ht_t *sht
++        )
++{
++    if (!q79_f4_provenance_enabled || !q79_f4_provenance_active) {
++        return;
++    }
++    q79_f4_provenance_ensure(from + mat->np);
++    FILE *file = fopen(q79_f4_provenance_path, "a");
++    if (file == NULL) {
++        q79_f4_provenance_enabled = 0;
++        q79_f4_provenance_active = 0;
++        return;
++    }
++    for (len_t k = 0; k < mat->np; ++k) {
++        const len_t row_index = mat->np - 1 - k;
++        const hm_t *row = mat->tr[row_index];
++        const len_t bound = row[BINDEX];
++        const deg_t lead_degree = sht->hd[md->hcm[row[OFFSET]]].deg;
++        q79_f4_basis_provenance[from+k] = bound;
++        fprintf(file, "OUTPUT\t%u\t%u\t%u\t%u\t%d\t%u\n",
++                q79_f4_provenance_round, from+k, row_index, bound,
++                lead_degree, row[LENGTH]);
++    }
++    fprintf(file, "ENDMATRIX\n");
++    fclose(file);
++    q79_f4_provenance_active = 0;
++}
++
+ /* That's also enough if AVX512 is avaialable on the system */
+ #if defined HAVE_AVX2
+ #include <immintrin.h>
+@@ -112,6 +218,7 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
+     const len_t ncl             = mat->ncl;
+     cf8_t * const * const mcf  = mat->cf_8;
+ 
++    len_t q79_provenance = bi;
+     rba_t *rba;
+     if (tr > 0) {
+         rba = mat->rba[tmp_pos];
+@@ -152,6 +259,10 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
+         /* found reducer row, get multiplier */
+         const uint32_t mul= (uint32_t)(fc - dr[i]);
+         dts   = pivs[i];
++        if (q79_f4_provenance_active && dts[BINDEX] > q79_provenance) {
++            q79_provenance = dts[BINDEX];
++        }
++
+         if (i < ncl) {
+             /* set corresponding bit of reducer in reducer bit array */
+             if (tr > 0) {
+@@ -546,7 +657,8 @@ static hm_t *reduce_dense_row_by_known_pivots_sparse_ff_8(
+             j++;
+         }
+     }
+-    row[BINDEX]   = bi;
++    row[BINDEX]   = q79_f4_provenance_active
++        ? q79_provenance : bi;
+     row[MULT]     = mh;
+     row[COEFFS]   = tmp_pos;
+     row[PRELOOP]  = j % UNROLL;
+diff --git a/src/neogb/f4.c b/src/neogb/f4.c
+index da783eb..d58493b 100644
+--- a/src/neogb/f4.c
++++ b/src/neogb/f4.c
+@@ -531,7 +531,9 @@ static int32_t compute_new_elements(
+ 
+     convert_hashes_to_columns(mat, md, sht);
+     sort_matrix_rows_decreasing(mat->rr, mat->nru);
++    const bl_t provenance_from = bs->ld;
+     linear_algebra(mat, bs, bs, md);
++    q79_f4_provenance_capture(mat, provenance_from, md, sht);
+ 
+     /* check for bad prime */
+     if (md->trace_level == APPLY_TRACER) {
+@@ -793,6 +795,7 @@ static int32_t core_f4(
+     double rrt, crt;
+ 
+     done = initialize_f4(&bs, &md, &mat, gmd, gbs, fc);
++    q79_f4_provenance_initialize(bs);
+ 
+ 
+     /* let's start the f4 rounds, we are done when no more spairs
+@@ -811,6 +814,7 @@ static int32_t core_f4(
+ 
+         if (!done) {
+             dump_f4_ancestry_inputs(mat, bs, md);
++            q79_f4_provenance_prepare(mat, bs);
+             done = compute_new_elements(mat, bs, md, errp);
+         }
+         if (!done && md->trace_level != APPLY_TRACER) {
+diff --git a/src/neogb/symbol.c b/src/neogb/symbol.c
+index 386a697..45cfb99 100644
+--- a/src/neogb/symbol.c
++++ b/src/neogb/symbol.c
+@@ -333,7 +333,8 @@ static void symbolic_preprocessing(
+         rrows[nrr]  = multiplied_poly_to_matrix_row(sht, bht, h, etmp, b);
+         /* track trace information ? */
+         if (md->trace_level == LEARN_TRACER
+-                || f4_ancestry_dump_enabled()) {
++                || f4_ancestry_dump_enabled()
++                || q79_f4_provenance_enabled) {
+            rrows[nrr][BINDEX]  = prev;
+             if (bs->ht->eld == bs->ht->esz-1) {
+                 enlarge_hash_table(bs->ht);
+@@ -369,7 +370,8 @@ static void symbolic_preprocessing(
+             trows[ntr] = multiplied_poly_to_matrix_row(sht, bht, h, etmp, b);
+             /* track trace information ? */
+             if (md->trace_level == LEARN_TRACER
+-                    || f4_ancestry_dump_enabled()) {
++                    || f4_ancestry_dump_enabled()
++                    || q79_f4_provenance_enabled) {
+                 trows[ntr][BINDEX]  = prev;
+                 if (bs->ht->eld == bs->ht->esz-1) {
+                     enlarge_hash_table(bs->ht);
+@@ -548,7 +550,8 @@ static void symbolic_preprocessing_for_reduction(
+         rows[rr]  = multiplied_poly_to_matrix_row(sht, bht, h, etmp, b);
+         /* track trace information ? */
+         if (md->trace_level == LEARN_TRACER
+-                || f4_ancestry_dump_enabled()) {
++                || f4_ancestry_dump_enabled()
++                || q79_f4_provenance_enabled) {
+             rows[rr][BINDEX]  = lmps[i];
+             if (bht->eld == bht->esz-1) {
+                 enlarge_hash_table(bht);

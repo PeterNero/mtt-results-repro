@@ -15,7 +15,7 @@ scaffold: its shape gates pass, but its selected-source flags are false and
 `rho_E` is identity smoke.
 
 The adjacent SM-parity repo is status evidence only.  Current head:
-`34810e5 Refresh verification report after kernel rows`; dirty: `False`.
+`a0c2bf2c Certify q79 all-76 hub and A-handle frontier`; dirty: `True`.
 
 ## Q79 Source Side
 

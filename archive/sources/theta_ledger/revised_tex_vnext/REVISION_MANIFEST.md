@@ -1,6 +1,6 @@
 # Theta/Execution TeX Revision Manifest
 
-Date: 2026-07-11
+Date: 2026-07-15
 
 ## Source Policy
 
@@ -60,6 +60,25 @@ Required adjacent limitation:
 > observed-branch selection, or a derivation of perturbative quantization from
 > MTT.
 
+## Foundational Geometry Reconciliation
+
+The 2026-07-15 reconciliation is now controlling:
+
+- `1+3 x 3=(1+3)+(1+2+3)=4+6` is a local component identity for
+  `Q_WW in Hom(TP,TI)`, not multiplication of manifold dimensions.
+- the shared circle is common `U(1)` phase/holonomy data and is counted once;
+- the q79/Fu--Yau branch is the current global compactification candidate;
+- `L(3,1) x Nil3` is an auxiliary/effective model;
+- literal `S1 x Lens x Nil`, literal manifold nesting, and compact phase
+  circle equals physical time are not proof premises.
+
+Theta I--III were rechecked under this ontology. Their numerical profile
+targets survive. Theta I's former simultaneous unit-`L2` normalization and
+overlap definition was inconsistent because it forced every overlap to one.
+The corrected papers use weighted gauge-kinetic coefficients with fixed
+period/cohomology normalization and keep the Lens--Nil result at the calibrated
+auxiliary-ansatz tier.
+
 ## Authority Files
 
 The authority identifiers and absolute paths are maintained in
@@ -70,12 +89,12 @@ sources are A01--A07, with A11--A13 used only for q79 and scoped GR-TT claims.
 
 | Project | Current result |
 |---|---|
-| Theta Closure I v2 | Multi-loop common-scheme profile transport inserted; overlap targets and covariance recomputed; obsolete gap/QG/cosmology scale chain removed |
-| Theta Closure II v2 | Route-A geometry retargeted to the new profile; first-pass dimensional/lens clarification preserved; result classified as calibrated ansatz-level existence |
-| Theta Closure III v2 | Obsolete profile replaced; Route-B result reclassified as a conditional representation-level cross-check; all shared Route-A inputs and the normalization bridge made explicit |
-| Theta Closure IV v2 | Dimensionless volume coefficient updated and physical length restored; Newton prediction demoted to conditional scaling; obsolete few-TeV tensor bound withdrawn and tensor formula renormalized |
+| Theta Closure I v2 | Multi-loop profile targets retained; overlaps corrected to weighted gauge-kinetic coefficients; repeated-circle/product language removed; existence result classified as auxiliary calibration |
+| Theta Closure II v2 | Route-A geometry retargeted to the new profile; shared circle counted once; Lens-base/Nil model explicitly separated from q79/Fu--Yau |
+| Theta Closure III v2 | Route-B result retained as a conditional representation-level cross-check; literal seven-dimensional product rejected; weighted normalization and shared bridges explicit |
+| Theta Closure IV v2 | `20.0706400 R1^3` retained only as the auxiliary `S1 x S2 x Nil3` volume coefficient; Newton relation requires the unproved `X_int=X_aux` identification |
 | Theta Closure V v2 | Weak-angle relation reduced to its exact same-scale identity; selected Mt-scale value emitted; former 5 TeV prediction withdrawn; genuine held-out source criterion stated |
-| Execution I v3 | Rebuilt from current A01--A22 authority: gauge/precision, selected rank-two HYM, internal K-threshold, admitted physical rows, and strong-CP status separated; obsolete CY benchmark retired |
+| Execution I v3 | q79 gauge/HYM/threshold status retained; selected q79 geometry explicitly separated from the auxiliary Lens--Nil overlap model; globalization intertwiner remains open |
 | Execution II v3 | Rebuilt from current charged-flavor, CKM, Higgs and A30--A31 neutral authorities; fitted matrices retired; profile-standard closure separated from strict magnitude/neutrino source frontier |
 | Superset Determinations v3 | Rebuilt as the parameter-identifiability ledger; obsolete crossing/zeta/K/minimum-threshold/alpha-s chain retired; claim classes and strict-upgrade accounting installed |
 | Geometry-Light v3 | Exact identities separated from assumptions and phenomenological bounds; principal-symbol wave-speed condition and no-internal-gap-cutoff guard added |

@@ -15,10 +15,10 @@ then assemble theorem-derived `A_selected` and `b_selected`.
 ## Repo Snapshot
 
 - `q79`: `omitted-current-repo-head-for-reproducibility` dirty=`False`
-- `constants`: `c40eec8 Import routec sector projectors dotd` dirty=`False`
-- `gr`: `1dc67ca Reanchor long PhiFin source cutsets` dirty=`False`
-- `qa_su3`: `1f5bbde Build HYM full quotient spectrum source packet` dirty=`False`
-- `sm_parity`: `34810e5 Refresh verification report after kernel rows` dirty=`False`
+- `constants`: `ef3c7e0 Import routec tracemap basis values` dirty=`False`
+- `gr`: `bb2de60 Refresh proto-spinor quantum gravity proof chain` dirty=`False`
+- `qa_su3`: `1b067bf Rank BN27 source emission route` dirty=`False`
+- `sm_parity`: `a0c2bf2c Certify q79 all-76 hub and A-handle frontier` dirty=`True`
 
 ## Support Reductions
 

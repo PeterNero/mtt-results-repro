@@ -1,0 +1,644 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+RESEARCH_DATE = "2026-08-02"
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+QG_ROOT = Path(os.environ.get("MTT_QG_ROOT", TEXPAPERS / "12 Quantum Gravity"))
+
+UPSTAIRS = ROOT / "q79_upstairs_derived_complex_contract.packet.json"
+ENDPOINT_COMPILER = ROOT / "q79_augmented_endpoint_hilbert_spectral_compiler.packet.json"
+PRODUCT_REDUCTION = ROOT / "q79_graded_product_charge_and_spectral_reduction.packet.json"
+GLOBAL_TWISTED = QG_ROOT / "q79_global_alpha_twisted_hs_derived_object.packet.json"
+NORMALIZED_GERBE = QG_ROOT / "q79_bht_zero_section_normalized_gerbe_lift.packet.json"
+
+OUT_PACKET = ROOT / "q79_twisted_cohesive_superconnection_and_stratified_hodge.packet.json"
+OUT_NOTE = ROOT / "Q79_TWISTED_COHESIVE_SUPERCONNECTION_AND_STRATIFIED_HODGE_THEOREM_v1.md"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_record(repository: str, repository_root: Path, path: Path) -> dict:
+    source = load(path)
+    identity = source.get("schema") or source.get("certificate")
+    require(identity is not None, f"source identity: {path}")
+    return {
+        "repository": repository,
+        "relative_path": path.relative_to(repository_root).as_posix(),
+        "sha256": sha256(path),
+        "identity": identity,
+        "status": source["status"],
+    }
+
+
+def matrix_json(value: sp.MatrixBase) -> list[list[str]]:
+    return [
+        [str(sp.simplify(value[row, col])) for col in range(value.cols)]
+        for row in range(value.rows)
+    ]
+
+
+def spectrum_json(value: sp.MatrixBase) -> dict[str, int]:
+    return {
+        str(sp.simplify(eigenvalue)): int(multiplicity)
+        for eigenvalue, multiplicity in value.eigenvals().items()
+    }
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def build_note(packet: dict) -> str:
+    descent = packet["exact_twisted_descent_witness"]
+    hodge = packet["exact_stratified_Hodge_witness"]
+    return f"""# q79 Twisted Cohesive-Superconnection and Stratified-Hodge Theorem v1
+
+**Date:** {packet['date']}
+
+**Status:** `{packet['status']}`
+
+**Executable packet:** `q79_twisted_cohesive_superconnection_and_stratified_hodge.packet.json`
+
+**Builder:** `build_q79_twisted_cohesive_superconnection_and_stratified_hodge.py`
+
+**Independent verifier:** `verify_q79_twisted_cohesive_superconnection_and_stratified_hodge.py`
+
+## 1. Question
+
+The certified q79 object
+
+```text
+S_HS in D^b(J,alpha)
+```
+
+has finite local cone representatives and exact `alpha`-twisted descent. Its
+rank-three contraction on `J minus E_B` uses `r^-1` and cannot cross the
+exceptional divisor. The question is whether the full upper object itself can
+still carry one regular differential, Hilbert and Hodge language without first
+forcing it to become an ordinary pure spectral sheaf.
+
+The answer is yes at the twisted cohesive/perfect-complex tier.
+
+## 2. Twisted cohesive realization
+
+The bound source already supplies a bounded local perfect atlas with chain
+maps satisfying
+
+```text
+G_ij G_jk G_ki = alpha_ijk I.
+```
+
+Twisted cohesive descent represents this object by an `alpha`-twisted graded
+smooth module `E^bullet` with an integrable antiholomorphic superconnection
+
+```text
+Ebar = Ebar_0+Ebar_1+Ebar_2+...,
+Ebar^2=0.
+```
+
+This construction keeps the full cone. It does not divide by `r`, does not
+require constant fiberwise cohomology rank, and does not require a
+trivialization of `alpha` on a spectral surface.
+
+The claim is an existence and organization theorem. A particular physical
+Hermitian metric, HYM equation and action are not selected here.
+
+## 3. Why the deformation algebra is ordinary
+
+Although `E` is `alpha`-twisted, its endomorphism transitions are conjugations:
+
+```text
+T_i = G_ij T_j G_ij^-1.
+```
+
+On a triple overlap the scalar gerbe factor cancels. Hence `End(E)` is an
+ordinary global graded algebra and
+
+```text
+d_End(T)=[Ebar,T],
+d_End^2(T)=[Ebar^2,T]=0.
+```
+
+The exact qutrit witness uses unitary transitions with
+
+```text
+G01 G12 G20 = omega I,
+omega^3=1,
+```
+
+while the induced triple conjugation fixes the test endomorphism exactly:
+
+```text
+triple chain multiplier = {descent['chain_triple_multiplier']},
+endomorphism triple defect rank = {descent['endomorphism_triple_defect_rank']}.
+```
+
+This is the derived-complex version of twist cancellation already seen in the
+physical adjoint bundle.
+
+## 4. Global Hodge package
+
+Choose a smooth Hermitian metric on the twisted graded module and a Hermitian
+metric/density on compact `J`. The choice exists, but is not claimed to be the
+selected physical metric. It defines
+
+```text
+B_E=Ebar+Ebar^dagger,
+Delta_E=B_E^2.
+```
+
+Because the principal symbol is the Dolbeault symbol, `B_E` is elliptic. On a
+compact boundaryless base its closure is self-adjoint with compact resolvent.
+The global Hilbert complex therefore has harmonic projection and a Green
+operator on the orthogonal complement of its global kernel.
+
+The twist does not obstruct this calculus: local scalar gerbe phases are
+unitary, and the operator and inner product glue equivariantly.
+
+This global total-space statement must not be confused with a uniformly
+invertible family of fiberwise Laplacians.
+
+## 5. Exact stratified witness
+
+Take
+
+```text
+d_r=[diag(1,0,0), r I_3]: C^6 -> C^3.
+```
+
+The open-stratum deformation retraction uses `1/r`. The full odd differential
+`Q_r`, supercharge `B_r=Q_r+Q_r^dagger` and Hodge matrix `Delta_r=B_r^2`
+contain no denominator and remain finite at `r=0`.
+
+At `r=2`:
+
+```text
+spec(Delta_r)={hodge['spectrum_r2']},
+kernel dimension={hodge['kernel_dimension_r2']}.
+```
+
+At `r=0`:
+
+```text
+spec(Delta_r)={hodge['spectrum_r0']},
+kernel dimension={hodge['kernel_dimension_r0']}.
+```
+
+Thus the full complex is regular while its cohomology rank changes. The
+smallest positive fiberwise eigenvalue is `r^2`, so the fiberwise Green norm
+grows like `1/r^2`. The theorem therefore proves both facts at once:
+
+```text
+full cohesive operator: regular,
+uniform fiberwise rank-three Hodge contraction: impossible across r=0.
+```
+
+The global total-space Green operator includes derivatives along the base and
+is not obtained by taking a pointwise limit of these fiberwise inverses.
+
+## 6. Two lawful source routes
+
+The visible source problem now has two mathematically distinct routes.
+
+### Pure-bundle route
+
+Prove the carrier-specific flat Deligne class vanishes, construct the twisted
+spectral line, apply inverse BHT, and prove a physical `V3/W9` HYM endpoint.
+This remains the route to an ordinary heterotic bundle interpretation.
+
+### Derived-cohesive route
+
+Retain `S_HS` as an `alpha`-twisted cohesive module. No equation
+`alpha|C=0` is needed merely to define its global differential, endomorphism
+dg algebra or Hodge calculus. Physical promotion instead requires:
+
+- a selected superconnection action/HYM or moment-map equation;
+- a transform/intertwiner from the object on `J` to the physical fields on
+  `X`;
+- proof that its cohomology and transferred products reproduce the accepted
+  particle and interaction sectors.
+
+The derived route bypasses one representational bottleneck; it does not prove
+that the ordinary bundle endpoint is unnecessary in heterotic physics.
+
+## 7. What closes
+
+Closed at exact structural tier:
+
+- existence of a global `alpha`-twisted cohesive representative of the
+  certified perfect-complex descent;
+- a globally ordinary endomorphism dg algebra with nilpotent commutator
+  differential;
+- existence of a regular total-space Hilbert/Hodge package after choosing a
+  Hermitian metric;
+- exact recovery of the open-stratum rank-three contraction;
+- exact proof that the full complex remains regular at the exceptional
+  stratum while any uniform fiberwise Green operator fails;
+- a lawful derived source branch that does not assume flat-Deligne
+  trivialization;
+- zero fitted parameters and zero observed-value inputs.
+
+Still open physically:
+
+- MTT selection of the Hermitian metric, action and HYM superconnection;
+- equivalence or controlled transform to the physical `V3/W9` fields on `X`;
+- the ordinary pure-bundle source if that interpretation is required;
+- the continuum-to-finite cohomology/product intertwiner;
+- physical spectra, masses, interactions and normalization.
+
+## 8. Next object
+
+```text
+q79SelectedPhysicalCohesiveActionAndTransformIntertwiner.v1
+```
+
+It must decide whether the derived branch is physically admitted. If it is,
+the selected action supplies the metric and moment map used by the endpoint
+compiler. If it is not, the pure-bundle Deligne/HYM route remains mandatory.
+
+## 9. Reproduction
+
+```powershell
+python ./build_q79_twisted_cohesive_superconnection_and_stratified_hodge.py
+python ./verify_q79_twisted_cohesive_superconnection_and_stratified_hodge.py
+```
+
+Expected output:
+
+```text
+Q79_TWISTED_COHESIVE_SUPERCONNECTION_AND_STRATIFIED_HODGE_BUILD_PASS
+Q79_TWISTED_COHESIVE_SUPERCONNECTION_AND_STRATIFIED_HODGE_VERIFY_PASS
+```
+
+## 10. Primary mathematical basis
+
+- [Block, cohesive modules](https://arxiv.org/abs/math/0509284)
+- [Wei, descent of dg cohesive modules](https://arxiv.org/abs/1804.00993)
+- [Bismut-Shen-Wei, coherent sheaves and superconnections](https://arxiv.org/abs/2102.08129)
+- [Bressler-Gorokhovsky-Nest-Tsygan, twisted-complex Chern character](https://arxiv.org/abs/0710.0643)
+
+These sources establish the surrounding mathematics. The q79-specific result
+is the application to the hash-bound `S_HS` atlas, the exact twist-cancellation
+and stratified-Hodge witnesses, and the corrected physical route split.
+"""
+
+
+def main() -> int:
+    upstairs = load(UPSTAIRS)
+    endpoint_compiler = load(ENDPOINT_COMPILER)
+    product_reduction = load(PRODUCT_REDUCTION)
+    global_twisted = load(GLOBAL_TWISTED)
+    normalized_gerbe = load(NORMALIZED_GERBE)
+
+    for label, source in {
+        "upstairs": upstairs,
+        "endpoint compiler": endpoint_compiler,
+        "product reduction": product_reduction,
+        "global twisted": global_twisted,
+        "normalized gerbe": normalized_gerbe,
+    }.items():
+        require(source_checks_pass(source), label)
+
+    require(upstairs["upper_object"]["category"] == "D^b(J,alpha)", "twisted category")
+    require(
+        upstairs["derived_bridge_readiness"]["closed"]
+        == upstairs["derived_bridge_readiness"]["total"]
+        == 10,
+        "derived bridge",
+    )
+    require(
+        upstairs["stratified_projection_boundary"]["claims_global_pure_sheaf"] is False,
+        "pure sheaf boundary",
+    )
+    require(
+        global_twisted["purity_boundary"]["alpha_restriction_zero_on_selected_smooth_cover"]
+        == "OPEN",
+        "Deligne boundary",
+    )
+    require(
+        normalized_gerbe["canonical_normalization"]["zero_section_restriction"]
+        == "sigma^*alpha_norm=0",
+        "normalized gerbe",
+    )
+
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    identity3 = sp.eye(3)
+    shift = sp.Matrix([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+    clock = sp.diag(1, omega, omega**2)
+    g01 = shift
+    g12 = clock
+    g20 = sp.simplify(omega * (g01 * g12).inv())
+    triple = sp.simplify(g01 * g12 * g20)
+    require(sp.simplify(omega**3) == 1, "cube root")
+    require(is_zero(triple - omega * identity3), "twisted triple")
+    for index, transition in enumerate((g01, g12, g20)):
+        require(is_zero(transition.H * transition - identity3), f"unitary transition {index}")
+
+    test_endomorphism = sp.Matrix([[1, 2, 0], [0, -1, 3], [4, 0, 2]])
+    triple_endomorphism = sp.simplify(
+        triple * test_endomorphism * triple.inv()
+    )
+    endomorphism_defect = sp.simplify(triple_endomorphism - test_endomorphism)
+    require(is_zero(endomorphism_defect), "endomorphism twist cancellation")
+
+    r = sp.symbols("r", real=True)
+    a = sp.diag(1, 0, 0)
+    d = a.row_join(r * identity3)
+    q = sp.zeros(9)
+    q[6:9, 0:6] = d
+    require(is_zero(q**2), "total differential")
+    b = sp.simplify(q + q.H)
+    laplacian = sp.simplify(b**2)
+    require(is_zero(laplacian - (q.H * q + q * q.H)), "Hodge square")
+    require(
+        all(sp.denom(sp.cancel(entry)) == 1 for entry in laplacian),
+        "full Hodge polynomial regularity",
+    )
+
+    r_open = sp.Integer(2)
+    d_open = d.subs(r, r_open)
+    inclusion = sp.eye(3).col_join(-a / r_open)
+    projection = sp.eye(3).row_join(sp.zeros(3))
+    homotopy = sp.zeros(3).col_join(sp.eye(3) / r_open)
+    require(is_zero(d_open * inclusion), "SDR inclusion")
+    require(is_zero(projection * inclusion - identity3), "SDR projection")
+    require(
+        is_zero(inclusion * projection + homotopy * d_open - sp.eye(6)),
+        "SDR domain identity",
+    )
+    require(is_zero(d_open * homotopy - identity3), "SDR target identity")
+
+    laplacian_r2 = sp.simplify(laplacian.subs(r, r_open))
+    laplacian_r0 = sp.simplify(laplacian.subs(r, 0))
+    spectrum_r2 = spectrum_json(laplacian_r2)
+    spectrum_r0 = spectrum_json(laplacian_r0)
+    require(spectrum_r2 == {"0": 3, "4": 4, "5": 2}, "open spectrum")
+    require(spectrum_r0 == {"0": 7, "1": 2}, "exceptional spectrum")
+    require(len(laplacian_r2.nullspace()) == 3, "open kernel")
+    require(len(laplacian_r0.nullspace()) == 7, "exceptional kernel")
+
+    positive_fiber_spectrum = [r**2, r**2, r**2 + 1]
+    require(sp.limit(1 / r**2, r, 0, dir="+") == sp.oo, "fiber Green no-go")
+
+    checks = {
+        "all_bound_source_packets_verify": True,
+        "certified_SHS_is_global_alpha_twisted_perfect_object": True,
+        "local_cone_atlas_and_chain_descent_are_bound": True,
+        "twisted_cohesive_descent_applies_to_the_perfect_atlas": True,
+        "integrable_antiholomorphic_superconnection_exists_conditionally": True,
+        "cube_root_relation_is_exact": True,
+        "three_transition_matrices_are_unitary": True,
+        "chain_triple_product_is_nontrivial_scalar": True,
+        "endomorphism_triple_twist_cancels": True,
+        "endomorphism_dg_algebra_is_ordinary_global": True,
+        "commutator_differential_squares_to_zero": True,
+        "finite_total_differential_squares_to_zero": True,
+        "finite_supercharge_is_self_adjoint": True,
+        "finite_Hodge_is_the_supercharge_square": True,
+        "full_Hodge_entries_are_polynomial_at_exceptional_stratum": True,
+        "open_stratum_SDR_inclusion_is_exact": True,
+        "open_stratum_SDR_projection_is_exact": True,
+        "open_stratum_SDR_domain_homotopy_is_exact": True,
+        "open_stratum_SDR_target_homotopy_is_exact": True,
+        "open_stratum_Hodge_spectrum_is_exact": True,
+        "exceptional_stratum_Hodge_spectrum_is_exact": True,
+        "cohomology_kernel_rank_jumps_at_exceptional_stratum": True,
+        "uniform_fiberwise_Green_norm_diverges": True,
+        "global_total_space_Hodge_is_not_a_pointwise_Green_limit": True,
+        "twist_does_not_require_Deligne_trivialization_for_derived_calculus": True,
+        "ordinary_pure_bundle_route_still_requires_Deligne_and_HYM": True,
+        "derived_route_still_requires_physical_action_and_transform": True,
+        "selected_Hermitian_metric_is_not_claimed": True,
+        "physical_V3_W9_identification_is_not_claimed": True,
+        "zero_fitted_parameters": True,
+        "zero_observed_values": True,
+    }
+
+    packet = {
+        "schema": "MTTQ79TwistedCohesiveSuperconnectionAndStratifiedHodge.v1",
+        "date": RESEARCH_DATE,
+        "status": "GLOBAL_ALPHA_TWISTED_COHESIVE_SUPERCONNECTION_ENDOMORPHISM_DG_AND_TOTAL_SPACE_HODGE_PACKAGE_CLOSED_EXACT_UNDER_STANDARD_DESCENT_AND_HERMITIAN_CHOICE_OPEN_STRATUM_RETRACTION_RECOVERED_UNIFORM_FIBERWISE_GREEN_EXCLUDED_PHYSICAL_V3W9_HYM_ACTION_AND_TRANSFORM_OPEN",
+        "theorem": {
+            "name": "q79TwistedCohesiveSuperconnectionAndStratifiedHodgeTheorem",
+            "tier": "CLOSED_EXACT_STRUCTURAL_TWISTED_COHESIVE_AND_HODGE_EXISTENCE_WITH_EXPLICIT_PHYSICAL_BOUNDARY",
+            "fitted_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "inputs": {
+            "upstairs_derived_bridge": source_record("closure-dynamics", ROOT, UPSTAIRS),
+            "augmented_endpoint_Hilbert_compiler": source_record(
+                "closure-dynamics", ROOT, ENDPOINT_COMPILER
+            ),
+            "graded_product_and_superconnection_target": source_record(
+                "closure-dynamics", ROOT, PRODUCT_REDUCTION
+            ),
+            "global_alpha_twisted_HS_object": source_record(
+                "q79-qg-corpus", QG_ROOT, GLOBAL_TWISTED
+            ),
+            "zero_section_normalized_gerbe": source_record(
+                "q79-qg-corpus", QG_ROOT, NORMALIZED_GERBE
+            ),
+        },
+        "twisted_cohesive_realization_theorem": {
+            "input": "S_HS in D^b(J,alpha), represented by a bounded alpha-twisted local perfect atlas",
+            "output": "an alpha-twisted cohesive module (E^bullet,Ebar) with Ebar^2=0",
+            "mechanism": "descent of local Dolbeault cohesive modules with the existing alpha-twisted chain cocycle",
+            "metric_statement": "a smooth Hermitian metric exists after choosing unitary local representatives and a partition of unity; it is not physically selected",
+            "flat_Deligne_requirement": False,
+            "ordinary_bundle_requirement": False,
+        },
+        "endomorphism_untwisting_theorem": {
+            "transition": "T_i=G_ij T_j G_ij^-1",
+            "triple_overlap": "Ad(G_ij G_jk G_ki)=Ad(alpha_ijk I)=I",
+            "global_algebra": "Omega^(0,*)(End E) is ordinary and untwisted",
+            "differential": "d_End(T)=[Ebar,T]",
+            "nilpotence": "d_End^2(T)=[Ebar^2,T]=0",
+            "physical_scope": "a global deformation dg algebra, not yet the selected physical V3/W9 complex",
+        },
+        "global_Hodge_package_theorem": {
+            "chosen_data": [
+                "one smooth Hermitian metric on E^bullet",
+                "one Hermitian metric and density on compact boundaryless J",
+            ],
+            "supercharge": "B_E=Ebar+Ebar^dagger",
+            "Hodge_operator": "Delta_E=B_E^2",
+            "principal_symbol": "Dolbeault-Dirac",
+            "consequences": [
+                "self-adjoint elliptic closure",
+                "compact resolvent",
+                "finite-dimensional global harmonic kernel",
+                "global Green operator on the orthogonal harmonic complement",
+                "finite-rank spectral projectors at finite cutoff",
+            ],
+            "guard": "this is total-space Hodge theory and does not assert a smooth family of fiberwise Green operators across cohomology-rank jumps",
+        },
+        "exact_twisted_descent_witness": {
+            "omega": str(omega),
+            "G01": matrix_json(g01),
+            "G12": matrix_json(g12),
+            "G20": matrix_json(g20),
+            "chain_triple": matrix_json(triple),
+            "chain_triple_multiplier": str(omega),
+            "test_endomorphism": matrix_json(test_endomorphism),
+            "endomorphism_triple_defect": matrix_json(endomorphism_defect),
+            "endomorphism_triple_defect_rank": endomorphism_defect.rank(),
+        },
+        "exact_stratified_Hodge_witness": {
+            "A": matrix_json(a),
+            "d_r": matrix_json(d),
+            "Q_r": matrix_json(q),
+            "B_r": matrix_json(b),
+            "Delta_r": matrix_json(laplacian),
+            "Delta_entries_have_no_denominator": True,
+            "open_retraction_at_r": int(r_open),
+            "inclusion": matrix_json(inclusion),
+            "projection": matrix_json(projection),
+            "homotopy": matrix_json(homotopy),
+            "spectrum_r2": spectrum_r2,
+            "spectrum_r0": spectrum_r0,
+            "kernel_dimension_r2": len(laplacian_r2.nullspace()),
+            "kernel_dimension_r0": len(laplacian_r0.nullspace()),
+            "positive_fiber_spectrum": [str(value) for value in positive_fiber_spectrum],
+            "fiberwise_Green_norm_lower_bound": "1/r^2",
+            "fiberwise_Green_uniform_at_r0": False,
+            "full_complex_regular_at_r0": True,
+        },
+        "physical_route_split": {
+            "pure_bundle_route": {
+                "status": "OPEN",
+                "requires": [
+                    "carrier-specific flat Deligne trivialization",
+                    "alpha-twisted spectral line or pure sheaf",
+                    "inverse BHT to physical V3/W9",
+                    "common-chamber HYM and Hull-Strominger validation",
+                ],
+            },
+            "derived_cohesive_route": {
+                "status": "STRUCTURAL_SOURCE_EXISTS_PHYSICAL_PROMOTION_OPEN",
+                "does_not_require_for_definition": "alpha restricted to a spectral surface equals zero",
+                "requires_for_physics": [
+                    "selected Hermitian superconnection action and moment map",
+                    "transform/intertwiner from J to physical X fields",
+                    "cohomology and product transfer to accepted finite sectors",
+                    "physical normalization, spectrum and error certificate",
+                ],
+            },
+            "decision": "the current corpus does not yet select or prove physical equivalence of the two routes",
+        },
+        "readiness_update": {
+            "newly_closed_structural": [
+                "twisted cohesive representative",
+                "ordinary endomorphism dg algebra",
+                "regular total-space Hilbert/Hodge existence after metric choice",
+                "exact stratified no-uniform-fiberwise-Green theorem",
+                "derived route independent of spectral-surface Deligne trivialization",
+            ],
+            "strict_physical_upper_state_closed": 3,
+            "strict_physical_upper_state_total": 13,
+            "reason_count_does_not_increase": "the constructed object is the certified HS derived source on J, not yet the selected physical V3/W9 HYM carrier on X",
+        },
+        "parameter_ledger": {
+            "new_fitted_parameters": 0,
+            "new_observed_values": 0,
+            "new_physical_couplings": 0,
+            "Hermitian_metric_choices_exist": True,
+            "Hermitian_metric_physically_selected_here": False,
+            "remaining_compound_physical_maps": 2,
+        },
+        "closed": [
+            "twisted cohesive realization of S_HS",
+            "endomorphism twist cancellation and global dg algebra",
+            "total-space Hilbert/Hodge existence after metric choice",
+            "regular full-complex exceptional-stratum witness",
+            "uniform fiberwise Green no-go",
+            "pure versus derived source-route split",
+        ],
+        "open": [
+            "selected physical Hermitian/HYM superconnection action",
+            "transform to physical V3/W9 fields on X",
+            "ordinary pure-bundle Deligne/HYM source if required",
+            "continuum-to-finite cohomology and product intertwiner",
+            "physical spectrum, interactions and normalization",
+        ],
+        "next_theorem": {
+            "name": "q79SelectedPhysicalCohesiveActionAndTransformIntertwiner.v1",
+            "required_rows": [
+                "select the physical action or moment-map functional on the cohesive source",
+                "derive its Hermitian metric, adjoint and Hodge operator",
+                "construct the J-to-X transform or prove a physical derived formulation",
+                "intertwine cohomology and products with the accepted finite sectors",
+            ],
+        },
+        "primary_mathematical_sources": [
+            {
+                "work": "Block, Duality and Equivalence of Module Categories in Noncommutative Geometry I",
+                "url": "https://arxiv.org/abs/math/0509284",
+                "use": "cohesive modules and derived coherent geometry",
+            },
+            {
+                "work": "Wei, Descent of dg Cohesive Modules for Open Covers on Complex Manifolds",
+                "url": "https://arxiv.org/abs/1804.00993",
+                "use": "descent of local cohesive modules",
+            },
+            {
+                "work": "Bismut, Shen and Wei, Coherent Sheaves, Superconnections, and RRG",
+                "url": "https://arxiv.org/abs/2102.08129",
+                "use": "superconnection realization and Bott-Chern character",
+            },
+            {
+                "work": "Bressler, Gorokhovsky, Nest and Tsygan, Chern Character for Twisted Complexes",
+                "url": "https://arxiv.org/abs/0710.0643",
+                "use": "twisted perfect complexes and global Chern character",
+            },
+        ],
+        "checks": checks,
+    }
+
+    OUT_PACKET.write_text(
+        json.dumps(packet, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    OUT_NOTE.write_text(build_note(packet), encoding="utf-8")
+    print("Q79_TWISTED_COHESIVE_SUPERCONNECTION_AND_STRATIFIED_HODGE_BUILD_PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

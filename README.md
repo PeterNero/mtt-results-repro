@@ -1,6 +1,6 @@
 # MTT Results Reproduction
 
-Current snapshot: 2026-07-12
+Current snapshot: 2026-08-05
 
 This repository is a self-contained numerical-results capsule for Modal Triplet
 Theory (MTT). It collects the matrices, spectra, scalar values, covariance
@@ -12,11 +12,14 @@ The repository has three deliberately separate layers:
 1. `inventory/` is exhaustive. It records every machine result, certificate,
    calculation script, audit, and detected numerical object from the pinned
    source repositories.
-2. `archive/` is exhaustive and hash-preserving. It contains every indexed
-   source artifact, including open, no-go, superseded, and retired routes.
-3. `release/` is curated. It contains the latest authoritative objects,
-   with explicit claim tiers, stable short paths, provenance hashes, and the
-   calculations available for each authority bundle.
+2. `archive/` is publication-safe and hash-preserving. It byte-mirrors ordinary
+   artifacts and keeps an exact SHA-256/size index for bulk diagnostics that
+   would make a normal Git clone impractical. Open, no-go, superseded, and
+   retired routes remain discoverable in the inventory at their declared tier.
+3. `release/` is curated and versioned. It preserves the 2026-07-12 A01-A62
+   Standard-Model baseline and adds a 2026-08-05 promoted-results layer, with
+   explicit claim tiers, stable short paths, provenance hashes, and paper-corpus
+   identity data.
 
 Publication of a result here does not change its epistemic status. In
 particular, profile replay is not relabeled as a no-knob prediction, and a
@@ -40,18 +43,20 @@ python verify.py
 
 The verifier independently recomputes the headline finite calculations and
 checks all curated hashes. Use `python verify.py --full-archive` to check every
-archived artifact. See `STATUS.md` for the scientific boundary and
+mirrored artifact and every hash-only index row. See `STATUS.md` for the scientific boundary and
 `REPRODUCIBILITY.md` for the complete rebuild procedure.
 
 ## Snapshot Contents
 
-- 16 configured source trees/documents;
-- 15,351 archived artifacts;
-- 10,921 detected numerical objects;
-- 62 current authority entries;
-- 553 files in the current authority bundles;
-- 28 short-path key results;
-- 12,284 machine-evidence catalog rows.
+- 22 configured source trees/documents;
+- 28,069 SHA-256-indexed artifacts;
+- 20,959 byte-mirrored artifacts and 7,110 hash-only bulk diagnostics;
+- 57,645 detected numerical objects;
+- all 99 configured authority entries indexed;
+- 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
+- 28 baseline short-path results plus 50 current promoted results;
+- a lock to 139 canonical papers and all 138 latest Zenodo records;
+- zero commercial-book artifacts in the public result archive.
 
 ## Build the exhaustive inventory
 
@@ -65,17 +70,33 @@ python tools/build_release.py
 
 The generated inventory is deterministic and includes SHA-256 hashes for every
 indexed artifact. Source repositories are pinned in
-`config/source_repositories.json`.
+`config/source_repositories.json`; public mirroring policy is explicit in
+`config/archive_policy.json`.
 
-The current census covers 16 sources, including all Git repositories under the
-calculation workspace, the loose foundation/fixed-point calculations, the
-simulation design, the book audit, and the standalone master corrigendum.
+The current census covers 22 sources, including the frozen SM baseline and the
+newer QM/QFT source proof, quantum-gravity cutsets, closure-dynamics language
+work, Eta9 execution packets, and unified-source theorem repository. Large
+exploratory trees remain exhaustively indexed where configured; only explicitly
+selected artifacts enter the promoted current layer.
 
 ## Current publication boundary
 
-The internally verified baseline is embedded renormalized-Standard-Model
+The preserved internally verified baseline is embedded renormalized-Standard-Model
 equivalence at the declared one-shared-physical-primitive/profile standard.
 Strict zero-primitive/no-knob derivation and unique observed-universe selection
 remain open. The finite internal spectrum source contract is closed at `10/10`,
 while the selected common determinant is proved to provide only a matching-scale
 translation rather than a nonuniversal gauge-coupling prediction.
+
+The August layer adds exact or explicitly conditional results in operational
+QM, free/formal QFT, projective HYM geometry, cohesive-superconnection language,
+Eta9 reductions, the A63-A99 SM authority extension, and the unified-source
+dependency chain. It does not promote
+the physical V3/W9 endpoint, the detecting meridian and period computation, the
+interacting nonperturbative QFT construction, or the unified-source hypothesis
+to closed physical theorems. See `release/current_snapshot.json` and `STATUS.md`.
+
+The public paper corpus is pinned by `release/paper_corpus_lock.json` to the
+`mtt-papers` commit whose 138 released PDFs exactly match the latest Zenodo
+records. The commercial book *The Universe Has a Bad Memory* is intentionally
+excluded from both public repositories.

@@ -1,0 +1,91 @@
+diff --git a/src/neogb/f4.c b/src/neogb/f4.c
+--- a/src/neogb/f4.c
++++ b/src/neogb/f4.c
+@@ -20,6 +20,75 @@
+ #include "f4.h"
+ #include "../msolve/streams.h"
+ 
++/* Optional research-only dump of newly derived F4 rows.  This is disabled
++ * unless MSOLVE_F4_DUMP names an output file.  The full internal exponent
++ * vector is retained so a separate checker can reconstruct every row. */
++static uint32_t f4_dump_coefficient(
++        const bs_t *bs,
++        const md_t *md,
++        const bl_t idx,
++        const len_t term
++        )
++{
++    switch (md->ff_bits) {
++        case 8:
++            return bs->cf_8[bs->hm[idx][COEFFS]][term];
++        case 16:
++            return bs->cf_16[bs->hm[idx][COEFFS]][term];
++        case 0:
++        case 32:
++        default:
++            return bs->cf_32[bs->hm[idx][COEFFS]][term];
++    }
++}
++
++static void dump_f4_new_rows(
++        const mat_t *mat,
++        const bs_t *bs,
++        const md_t *md,
++        const bl_t from,
++        const len_t count
++        )
++{
++    const char *path = getenv("MSOLVE_F4_DUMP");
++    if (path == NULL || path[0] == '\0') {
++        return;
++    }
++    const char *max_degree_text = getenv("MSOLVE_F4_DUMP_MAX_DEG");
++    if (max_degree_text != NULL
++            && max_degree_text[0] != '\0'
++            && mat->cd > strtol(max_degree_text, NULL, 10)) {
++        return;
++    }
++
++    FILE *file = fopen(path, "a");
++    if (file == NULL) {
++        return;
++    }
++    const ht_t *ht = bs->ht;
++    fprintf(file, "ROUND\t%d\t%d\t%u\t%u\t%u\t%u\t%u\n",
++            md->current_rd, mat->cd, from, count,
++            md->fc, ht->nv, ht->evl);
++    for (len_t i = 0; i < count; ++i) {
++        const bl_t idx = from + i;
++        const len_t length = bs->hm[idx][LENGTH];
++        const hm_t *monomials = bs->hm[idx] + OFFSET;
++        fprintf(file, "POLY\t%u\t%d\t%u\n",
++                idx, bs->hm[idx][DEG], length);
++        for (len_t j = 0; j < length; ++j) {
++            fprintf(file, "TERM\t%u", f4_dump_coefficient(bs, md, idx, j));
++            const exp_t *exponents = ht->ev[monomials[j]];
++            for (len_t k = 0; k < ht->evl; ++k) {
++                fprintf(file, "\t%u", exponents[k]);
++            }
++            fprintf(file, "\n");
++        }
++        fprintf(file, "ENDPOLY\n");
++    }
++    fprintf(file, "ENDROUND\n");
++    fclose(file);
++}
++
+ static void final_remove_redundant_elements(
+         bs_t *bs,
+         md_t *md,
+@@ -438,10 +507,12 @@ static int32_t compute_new_elements(
+     }
+     /* columns indices are mapped back to exponent hashes */
+     if (mat->np > 0) {
++        const bl_t dump_from = bs->ld;
+         convert_sparse_matrix_rows_to_basis_elements(
+                 -1, mat, bs, ht, sht, md);
++        dump_f4_new_rows(mat, bs, md, dump_from, md->np);
+     }
+     clean_hash_table(sht);
+     /* all rows in mat are now polynomials in the basis,
+      * so we do not need the rows anymore */

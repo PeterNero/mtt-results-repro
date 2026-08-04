@@ -142,6 +142,21 @@ def main() -> None:
     require("N_DW=3" in markdown, "domain-wall diagnostic missing")
     require("selected flux/threshold axion-current anomaly-matching map" in markdown, "strong-CP source guard missing")
     require("q=79/F/m1" in markdown, "retarded branch representative successor missing")
+    require("A125" in markdown, "q79 interval Picard-Lefschetz successor missing")
+    require("A126" in markdown, "q79 validated endpoint-beta successor missing")
+    require("finite flat of rank two" in markdown, "q79 finite-flat divisor theorem missing")
+    require("||beta(1)||_2>2.2500100575" in markdown, "q79 endpoint beta bound missing")
+    require("frozen selected-side `ell=0`" in markdown, "q79 selected-branch scope missing")
+    require("interval `8x92` period lattice" in markdown, "q79 next period-lattice gate missing")
+    require("period transition has determinant `-1`" in markdown, "q79 chart covariance theorem missing")
+    require("first apparent node is a chart artifact" in markdown, "q79 false-wall correction missing")
+    require("2.729845 -> 2.357980" in markdown, "q79 ell-zero continuation missing")
+    require("V_k=2*pi*i*t_*^k/sqrt(f_tt(t_*)/2)" in markdown, "q79 local vanishing state missing")
+    require("projective overlap `0.999999999999962`" in markdown, "q79 transported jump execution missing")
+    require("minimum strict-inclusion margin `6.385e-11`" in markdown, "q79 Krawczyk enclosure missing")
+    require("|V_0|>0.012334923056187106" in markdown, "q79 nonzero interval jump bound missing")
+    require("`2995` ACB integrals" in markdown, "q79 interval base lift missing")
+    require("Validated high-order selected-side endpoint beta transport" in markdown, "q79 endpoint transport guard missing")
 
     print(
         json.dumps(

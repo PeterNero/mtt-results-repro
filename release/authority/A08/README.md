@@ -11,6 +11,172 @@ C:\Users\nero_\Downloads\TEXPAPERS\18 Theta-Closure & Execution Program\_md_v3_c
 
 ## Current Status
 
+### R-only endpoint-fiber theorem (2026-07-20)
+
+The four inverse-root scalar charts now reduce exactly to two class-free
+15-variable, 14-cubic saturated `h/R` cores, one for each independent mirror
+space. The constant-pivot `y` chain reconstructs uniquely and the companion
+endpoint projects to `u2*u3 != 0`. This reduction is exact; the two global
+core unit-ideal questions remain open after bounded solver timeouts.
+
+In addition, one complete nonzero-`v` line in each of the four space/class
+charts is closed: at `u1=a=1`, all 400 fixed fibers return literal reduced
+Groebner basis `[1]`. This closes four of 40,000 endpoint lines and leaves
+39,996 lines unclassified. It is not a four-chart no-go theorem.
+
+Those same four lines are now closed at the stronger symbolic tier. Keeping
+`v` and `u3` as variables and imposing `v*u3=1` gives four 12-variable,
+13-row cubic ideals. Every ideal has literal reduced Groebner basis `[1]`
+over `F_101`, so the entire displayed line is empty over every extension of
+`F_101`, including its algebraic closure. This subsumes the 400 enumerated
+points but does not close any additional parameter line; 39,996 lines remain
+unclassified. The characteristic-zero and physical HYM/QG promotions remain
+open.
+
+The canonical space-5/class-1 triple fiber `(u1,a,v)=(1,1,1)` is now an
+exact unit ideal using ten recurrence rows and the six R-terminal rows only;
+the four D-terminal rows are unnecessary for this fiber. Direct and
+four-carrier msolve computations both return `[1]` over `F_101`.
+
+The earlier sparse elimination proved that ordinary-total-degree
+Nullstellensatz identities do not exist through degree 7:
+
+```text
+D=6: rank(A)=14831, rank([A|1])=14832
+D=7: rank(A)=58490, rank([A|1])=58491
+```
+
+The provenance layer is now closed for this fiber as well. An explicit
+175,084-term identity in the sixteen original selected rows verifies to `1`.
+Homogenized normal forms `NF(t^8)=t^8` and `NF(t^9)=0` prove that its maximum
+product degree nine is minimal. This remains a theorem for one displayed
+fiber, not yet the one-million-triple chart theorem or a physical HYM/QG
+promotion. See
+`proof_corpus/Q79_Ronly_Triple_Fiber_Explicit_Minimum_Degree9_v2.md`.
+The class-free reduction and four-line theorem are recorded in
+`proof_corpus/Q79_Ronly_ClassFree_Core_and_Representative_Lines_v1.md`.
+The symbolic-line strengthening is recorded in
+`proof_corpus/Q79_Ronly_Symbolic_V_Lines_v1.md`.
+The first nonunit fixed-`u1` R-only line is decoded as a doubled point and
+closed scheme-theoretically by an explicit D-terminal Bezout identity in
+`proof_corpus/Q79_Ronly_FixedU1_Exceptional_Line_D_Closure_v1.md`.
+
+The complete finite `u1=1` endpoint grid for mirror space 5 is now closed
+across both scalar square classes. One hundred canonical line packets certify
+10,000 fibers: 9,993 have literal R-only basis `[1]`, while the seven exact
+fallback fibers have literal full R/y/D basis `[1]`. The proved sign
+involution supplies the other 10,000 nonzero `(a,v)` fibers. This closes two
+of the 400 current `(space, scalar class, u1)` finite-cover slices, with zero
+new fit parameters. It is a theorem about the `F_101` endpoint grid, not a
+symbolic classification of extension-valued endpoints; the global chart
+accounting remains `138/140`. See
+`proof_corpus/Q79_Ronly_FixedU1_Space5_D_Augmented_Cover_v1.md`.
+
+The complementary space-6 computation is now complete as well. Its 10,000
+canonical fibers split into 9,996 literal R-only units and four literal full
+R/y/D fallback units. Combining the independently audited space results gives
+an exact `u1=1` theorem across all four inverse-root charts: 20,000 canonical
+fibers are `19,989 + 11`, and the sign involution supplies 40,000 excluded
+finite endpoint fibers. This closes 4/400 finite `(space,class,u1)` slices;
+it does not alter the global symbolic count `138/140`. See
+`proof_corpus/Q79_Ronly_FixedU1_AllSpaces_D_Augmented_Cover_v1.md`.
+
+An exact coordinate theorem now supplies the next acceleration. The 100
+canonical `(scalar class,a)` pairs biject with `u2 in F_101^*`, while
+`u3=a/v` and `v=a/u3` identify the corresponding Laurent lines. Since the
+selected R rows are independent of `v` and identical across scalar classes,
+each 100-fiber fixed line can be replaced exactly by one saturated symbolic
+`u3` solve. Per fixed nonzero `u1`, the workload contracts from 20,000 fixed
+fibers to 200 symbolic lines. This is a change-of-coordinates theorem, not an
+emptiness claim; see
+`proof_corpus/Q79_Ronly_U2_Laurent_Line_Acceleration_v1.md`.
+
+The first exact computation beyond `u1=1` now uses that acceleration. For
+space 5 at `u1=2`, the symbolic lines `u2=1,2,3` all have literal reduced
+basis `[1]`. They are the canonical lines `(class,a)=(1,1),(2,1),(2,13)`
+and close 300 canonical fixed fibers over `F_101`, with no D terminal and no
+fit parameter. The next space-5 line, `u2=4`, instead has an exact
+dimension-10 R-only quotient. A two-sided Laurent-coordinate transport to
+the canonical `(class,a)=(1,50)` line reconstructs its complete associative
+multiplication table, after which `D18` is a unit with determinant `95`.
+This closes the full R/`y`/D ideal over `F_101` and every extension. All
+space-5 lines `u2=5,...,20` are literal R-only units. In space 6, the lines
+`u2=1,...,13` and `u2=15,...,20` are literal units, while `u2=14` has a
+20-dimensional R-only quotient. A general finite-Groebner verifier checks
+all 3,003 Buchberger pairs, 210 basis products, and 8,000 associativity
+identities; all four `y` pivots are units and `D18` has determinant `1` and
+an explicit inverse. At `u2=21`, space 5 is a literal R-only unit, while
+space 6 has a 48-row reduced basis presenting a dimension-10 quotient. All
+1,128 Buchberger pairs, 55 basis products, and 1,000 associativity identities
+pass; all four `y` pivots are units and `D18` has determinant `84` with an
+explicit inverse. The reusable contiguous-prefix certifier therefore closes
+42/200 symbolic lines through `u2=21`. At `u2=22`, both spaces have literal
+reduced basis `[1]`. At `u2=23`, space 6 again has reduced basis `[1]`, while
+space 5 has a certified 20-dimensional finite quotient in which `D18` is a
+unit with determinant `1`. The certified prefix is therefore now 46/200
+symbolic lines. At `u2=24`, `u2=25`, `u2=26`, `u2=27`, and `u2=28`, both
+spaces have literal reduced basis `[1]`. A durable exact batch then computes
+all remaining `u2=29,...,100` lines in both spaces. Of those 144 lines, 138
+have literal reduced basis `[1]`; the six nonunit R-only lines are
+`(space,u2)=(5,31),(6,53),(6,59),(5,73),(5,75),(6,91)`. Exact finite-quotient
+reconstruction proves `D18` invertible on all six. The complete cover is
+therefore 200/200 symbolic lines, representing 20,000 canonical fixed fibers:
+190 literal R-only units and ten exact full R/`y`/D units.
+Every counted solver input, output, and log is hash-bound; the certificate
+also binds the `msolve 0.10.1` binary SHA256, verifies the recorded exact
+mode, and transitively validates every D-certificate artifact. See
+`proof_corpus/Q79_Ronly_U1_002_Contiguous_CrossSpace_Prefix_v1.md`.
+
+The linewise certificates are now glued by explicit Lagrange idempotents.
+For each space all 100 nonzero field elements are certified, so
+`P_s(u2)=product_(a=1)^100(u2-a)=u2^100-1`. The exact quotient decomposes as
+
+```text
+A_s/(J_s+(P_s)) ~= product_a A_s/(J_s+(u2-a)) = 0.
+```
+
+This proves closure of the complete selected nonzero finite `u2` torus in
+both spaces without a monolithic Groebner run. The legacy partial-CRT
+artifact name is retained for reproducibility, but its current status is the
+full nonzero-`u2` theorem. See
+`proof_corpus/Q79_Ronly_U1_002_Partial_CRT_Gluing_v1.md`.
+
+Four exceptional canonical lines are closed at the stronger symbolic-scheme
+tier. Their exact R-only quotient dimensions are `2, 6, 3, 6`; complete
+multiplication tables are reconstructed and checked for associativity, and a
+selected D row has respective nonzero multiplication determinants
+`24, 36, 45, 37`. Exact inverse vectors make every full R/y/D line ideal
+unit, without assuming locality or reducedness. The sign involution closes
+four partner lines, for eight symbolic lines in total. This strengthens the
+proof tier inside the already closed finite grid and does not change the
+`138/140` global chart count. See
+`proof_corpus/Q79_Ronly_Symbolic_Finite_Algebra_D_Closure_v1.md`.
+
+Version 2 adds the sole space-6/class-1 finite exception, the symbolic line
+`u1=1, a=47`. Its exact quotient has dimension six, passes all 216 basis
+associativity checks, and D18 has multiplication determinant `56` with an
+explicit inverse. The consolidated theorem now closes five canonical and five
+sign-partner lines over every extension of `F_101`; see
+`proof_corpus/Q79_Ronly_Symbolic_Finite_Algebra_D_Closure_v2.md`.
+
+Version 3 promotes all three newly exposed space-6/class-2 exceptions as
+well. Their exact quotient dimensions and selected D18 determinants are
+`(2,92)`, `(6,79)`, and `(1,26)` for `a=32,46,47`. The dimension-one case is
+the reduced-point algebra `F_101` and is now handled by the same general
+finite-algebra verifier. The consolidated theorem closes eight canonical and
+eight sign-partner lines over every extension of `F_101`; all four space-6
+finite exceptions are therefore symbolic-scheme closed. See
+`proof_corpus/Q79_Ronly_Symbolic_Finite_Algebra_D_Closure_v3.md`.
+
+The complete rowwise diagonal symmetry of all four inverse-root parents has
+also been classified. Exact exponent-difference ranks are `19/18/19` over
+`Q/F_2/F_5`; lifting through mod 4 and CRT leaves only the identity and weight
+50 on `v`. Thus the known `v -> -v` involution is the entire diagonal symmetry
+and every such action fixes `u1`. This rules out diagonal normalization of the
+remaining 99 nonzero `u1` values, while leaving nonlinear or generator-mixing
+intertwiners open. See
+`proof_corpus/Q79_Inverse_Root_Diagonal_Symmetry_NoGo_v1.md`.
+
 Closed by runnable audits:
 
 ```text

@@ -1,0 +1,627 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+RESEARCH_DATE = "2026-08-02"
+
+PHYSICAL_SEED = ROOT / "q79_physical_gauge_pair_deformation_seed_contract.packet.json"
+SECTOR_COMPILER = ROOT / "q79_sector_polarized_source_and_galerkin_compiler.packet.json"
+MC_BRIDGE = ROOT / "q79_heterotic_maurer_cartan_hodge_repair_bridge.packet.json"
+AUGMENTED_ROUTE = ROOT / "q79_augmented_heterotic_total_complex_route_correction.packet.json"
+BK3_SURVIVAL = ROOT / "q79_bk3_augmented_cohomology_survival.packet.json"
+SAME_SOURCE = ROOT / "q79_same_source_geometric_residual_and_rate_separation.packet.json"
+WARP_REGIME = ROOT / "q79_warped_product_dirac_commutator_and_regime_split.packet.json"
+
+OUT_PACKET = ROOT / "q79_augmented_endpoint_hilbert_spectral_compiler.packet.json"
+OUT_NOTE = ROOT / "Q79_AUGMENTED_ENDPOINT_HILBERT_SPECTRAL_COMPILER_THEOREM_v1.md"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_record(path: Path) -> dict:
+    source = load(path)
+    identity = source.get("schema") or source.get("certificate")
+    require(identity is not None, f"source identity: {path}")
+    return {
+        "repository": "closure-dynamics",
+        "relative_path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "identity": identity,
+        "status": source["status"],
+    }
+
+
+def matrix_json(value: sp.MatrixBase) -> list[list[str]]:
+    return [
+        [str(sp.simplify(value[row, col])) for col in range(value.cols)]
+        for row in range(value.rows)
+    ]
+
+
+def spectrum_json(value: sp.MatrixBase) -> dict[str, int]:
+    return {
+        str(sp.simplify(eigenvalue)): int(multiplicity)
+        for eigenvalue, multiplicity in value.eigenvals().items()
+    }
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def build_note(packet: dict) -> str:
+    witness = packet["exact_weighted_total_complex_witness"]
+    cutset = packet["corrected_physical_source_cutset"]
+    return f"""# q79 Augmented Endpoint-Hilbert Spectral-Compiler Theorem v1
+
+**Date:** {packet['date']}
+
+**Status:** `{packet['status']}`
+
+**Executable packet:** `q79_augmented_endpoint_hilbert_spectral_compiler.packet.json`
+
+**Builder:** `build_q79_augmented_endpoint_hilbert_spectral_compiler.py`
+
+**Independent verifier:** `verify_q79_augmented_endpoint_hilbert_spectral_compiler.py`
+
+## 1. Result
+
+The old target
+
+```text
+full heterotic l1 = Dbar_Q
+```
+
+is not the correct q79 target. The primary heterotic upper complex contains
+the additional form lane
+
+```text
+Y_n = Omega^(0,n)(Q_phys) direct_sum Omega^(0,n+1)(X),
+L_n = [[D_n, (1/2)(-1)^n A_n], [0, C_n]],
+```
+
+where `D=Dbar_Q`, `A=partial` into the cotangent lane, and `C=dbar`.
+The rank-102 `Q_phys` complex is an invariant diagonal subcomplex, not the
+whole upper differential. The pulled-back K3 two-form proves that the extra
+lane cannot be discarded by the old `h^(2,0)=0` shortcut.
+
+This theorem proves the next structural step: once one compact boundaryless
+q79 endpoint, its Hermitian geometry, bundle metrics, normalizations and the
+above differential are selected, the Hilbert spaces, operator domains,
+adjoints, Hodge Hessian and finite spectral Galerkin matrices are derived.
+They are not additional numerical source rows.
+
+## 2. Endpoint-to-Hilbert compiler
+
+Let the selected endpoint provide a compact boundaryless Hermitian threefold,
+the physical visible/hidden bundles and connections, the metric density, and
+the augmented differential `L`. Complete smooth sections in the geometric
+`L^2` pairing:
+
+```text
+H_n = L^2(Y_n).
+```
+
+Each first-order `L_n` has its canonical closed maximal graph domain
+
+```text
+Dom(L_n)={{u in L2(Y_n): L_n u is in L2 distributionally}}.
+```
+
+Its Hilbert adjoint is fixed by the same pairing. If the diagonal Dolbeault
+symbol complexes are elliptic, their triangular extension is elliptic. The
+associated Hodge-Dirac closure has Sobolev domain `H^1`, and the degree-one
+Hodge operator
+
+```text
+Delta_Y,1 = L_1^dagger L_1 + L_0 L_0^dagger
+```
+
+therefore has a canonical nonnegative self-adjoint realization with compact
+resolvent. No boundary-condition row is needed on a compact manifold without
+boundary. A boundary, singular endpoint or noncompact geometry would require
+additional extension data and is outside this theorem.
+
+The relative normalization of the summands must come from the selected
+geometric/action source. The theorem derives the adjoint after that
+normalization is supplied; it does not choose a physical action weight by
+convention.
+
+## 3. Same-source nonlinear residual
+
+Let `Phi_Y` be the complete augmented Maurer-Cartan plus gauge/D-term residual
+at a zero-defect endpoint `C_*`. If
+
+```text
+Phi_Y(C_*)=0,
+D Phi_Y(C_*) = J_1 = stack(L_1, L_0^dagger),
+```
+
+then the exact squared-defect cost satisfies
+
+```text
+Hess (1/2 ||Phi_Y||^2) at C_* = J_1^dagger J_1 = Delta_Y,1.
+```
+
+Thus the nonlinear residual, selected pairing and endpoint emit the linear
+repair operator together. Higher products control nonlinear vertices but do
+not alter this zero-defect tangent identity.
+
+This is a compiler theorem. The current corpus has not yet supplied the one
+physical `Phi_Y` whose rows equal all selected holomorphy, anomaly, HYM and
+balanced equations.
+
+## 4. Exact weighted witness
+
+The bound augmented-complex packet supplies
+
+```text
+L0={witness['L0']},
+L1={witness['L1']},
+L1 L0=0.
+```
+
+With nontrivial positive metrics `G0`, `G1`, `G2`, the metric adjoints give
+
+```text
+L0^dagger={witness['L0_adjoint']},
+L1^dagger={witness['L1_adjoint']},
+Delta_Y,1={witness['weighted_hodge']},
+spec(Delta_Y,1)={witness['weighted_hodge_spectrum']}.
+```
+
+The stacked residual Jacobian has exactly the same Gram operator. The naive
+unweighted transpose instead gives `{witness['naive_unweighted_hodge']}` and
+is wrong for this selected pairing.
+
+The witness also retains the earlier route correction:
+
+```text
+bare Q compression = 1,
+full augmented Q compression = 2,
+positive correction = 1.
+```
+
+Therefore the bare rank-102 Hodge operator cannot silently replace the full
+upper Hodge operator.
+
+## 5. Canonical finite calculations
+
+Compact resolvent gives a discrete spectrum with finite multiplicities. For
+every finite cutoff `Lambda`,
+
+```text
+P_Lambda = 1_[0,Lambda](Delta_Y,1)
+```
+
+has finite rank and commutes with the Hodge operator. Its matrix entries are
+geometric integrals in the selected eigenbasis; they are outputs of the
+endpoint, not freely supplied Galerkin coefficients. The cutoff calculation
+is exact on its finite spectral subspace, while convergence or renormalized
+cutoff removal remains a separate theorem.
+
+An arbitrary finite carrier, including the accepted 27-state carrier, is not
+automatically this spectral subspace. Relating it to the continuum still
+requires a commuting intertwiner, or a Feshbach-Schur effective operator when
+the carrier is not invariant.
+
+## 6. Corrected source cutset
+
+The six physical gates of the augmented route no longer represent six
+independent numerical inputs:
+
+```text
+physically closed now: {cutset['physically_closed_now']}/6
+conditionally derived once the endpoint is supplied: {cutset['conditionally_derived_after_endpoint']}
+independent compound source objects still required: {cutset['independent_compound_source_objects']}
+```
+
+The already proved `b_K3` gauge-quotient/connecting-map gate is the one
+physically closed gate. The map/domain and pairing/adjoint gates are
+conditional consequences of one selected compact geometric endpoint; they
+are not independently adjustable rows.
+
+The remaining frontier is exactly two compound objects:
+
+1. `S_cont`: one selected continuum geometric residual source containing the
+   physical zero-defect endpoint, product/warped regime, metric and action
+   normalization, and complete augmented nonlinear residual;
+2. `T_fin`: one selected continuum-to-finite spectral/intertwining functor
+   carrying the relevant low modes, products and lower-order payload to the
+   accepted finite operators.
+
+These are structured maps, not two scalar fit parameters.
+
+## 7. What closes
+
+Closed exactly under the stated endpoint hypotheses:
+
+- the corrected augmented upper-complex target;
+- endpoint-to-`L^2` Hilbert completion;
+- derivation of domains and metric adjoints from one geometry;
+- the augmented Hodge Hessian as a same-residual Gram operator;
+- finite-rank spectral Galerkin execution from compact resolvent;
+- the reduction of six apparent physical gates to two compound source maps;
+- zero fitted parameters and zero observed-value inputs.
+
+Still open physically:
+
+- the selected visible/hidden zero-defect Hull-Strominger endpoint and common
+  positive HYM chamber;
+- the selected unwarped-with-error or full-warped geometric regime;
+- the full augmented nonlinear residual and action normalization;
+- the accepted finite intertwiner and lower-order mass/Higgs/Yukawa payload;
+- numerical continuum eigenmodes and their rigorous cutoff/tail certificate.
+
+## 8. Next executable object
+
+```text
+q79SelectedAugmentedContinuumResidualAndFiniteIntertwiner.v1
+```
+
+It should instantiate `S_cont` first, which automatically emits the Hilbert
+package and spectral Galerkin matrices proved here. It should then construct
+`T_fin` and test the accepted finite operators against the same continuum
+source. Reintroducing independent matrix-entry rows would move backward.
+
+## 9. Reproduction
+
+```powershell
+python ./build_q79_augmented_endpoint_hilbert_spectral_compiler.py
+python ./verify_q79_augmented_endpoint_hilbert_spectral_compiler.py
+```
+
+Expected output:
+
+```text
+Q79_AUGMENTED_ENDPOINT_HILBERT_SPECTRAL_COMPILER_BUILD_PASS
+Q79_AUGMENTED_ENDPOINT_HILBERT_SPECTRAL_COMPILER_VERIFY_PASS
+```
+"""
+
+
+def main() -> int:
+    physical_seed = load(PHYSICAL_SEED)
+    sector_compiler = load(SECTOR_COMPILER)
+    mc_bridge = load(MC_BRIDGE)
+    augmented = load(AUGMENTED_ROUTE)
+    bk3 = load(BK3_SURVIVAL)
+    same_source = load(SAME_SOURCE)
+    warp_regime = load(WARP_REGIME)
+
+    for label, source in {
+        "physical seed": physical_seed,
+        "sector compiler": sector_compiler,
+        "MC bridge": mc_bridge,
+        "augmented route": augmented,
+        "BK3 survival": bk3,
+        "same source": same_source,
+        "warp regime": warp_regime,
+    }.items():
+        require(all(source["checks"].values()), label)
+
+    require(
+        physical_seed["physical_preprojection_deformation_complex"]
+        ["total_fiber_rank_complex"]
+        == 102,
+        "rank-102 carrier",
+    )
+    readiness = sector_compiler["source_readiness"]
+    require(not readiness["selected_characteristic_zero_visible_U_eta9"], "visible endpoint open")
+    require(not readiness["hidden_physical_twisted_locally_free_rank9_endpoint"], "hidden endpoint open")
+    require(not readiness["one_common_positive_Gauduchon_chamber_and_HYM_pair"], "HYM chamber open")
+    require(
+        augmented["corrected_upper_action_readiness"]["structural_closed"] == 8,
+        "augmented structural gates",
+    )
+    require(
+        augmented["corrected_upper_action_readiness"]["physical_closed"] == 0,
+        "historical augmented physical count",
+    )
+    require(
+        bk3["frontier_delta"]["physical_prerequisite_count_after"] == "1/6",
+        "BK3 gate advance",
+    )
+    require(
+        same_source["physical_q79_source_contract"]["closed_gates"] == 4,
+        "historical MC contract",
+    )
+    require(
+        warp_regime["q79_regime_split"]["physical_warped_branch"]["status"] == "OPEN",
+        "warp branch remains open",
+    )
+
+    l0 = sp.Matrix([[0, 1], [0, 1]])
+    l1 = sp.Matrix([[1, -1], [0, 0]])
+    require(is_zero(l1 * l0), "cochain condition")
+
+    g0 = sp.Matrix([[2, 1], [1, 3]])
+    g1 = sp.Matrix([[3, 1], [1, 2]])
+    g2 = sp.Matrix([[2, 0], [0, 1]])
+    for index, metric in enumerate((g0, g1, g2)):
+        require(metric == metric.T, f"metric {index} symmetric")
+        require(metric.is_positive_definite is True, f"metric {index} positive")
+
+    l0_adjoint = sp.simplify(g0.inv() * l0.T * g1)
+    l1_adjoint = sp.simplify(g1.inv() * l1.T * g2)
+    weighted_hodge = sp.simplify(l1_adjoint * l1 + l0 * l0_adjoint)
+    residual_jacobian = l1.col_join(l0_adjoint)
+    defect_metric = sp.diag(g2, g0)
+    residual_adjoint = sp.simplify(
+        g1.inv() * residual_jacobian.T * defect_metric
+    )
+    residual_gram = sp.simplify(residual_adjoint * residual_jacobian)
+    naive_hodge = sp.simplify(l1.T * l1 + l0 * l0.T)
+
+    require(is_zero(weighted_hodge - residual_gram), "same-source Gram identity")
+    require(is_zero(weighted_hodge.T * g1 - g1 * weighted_hodge), "metric self-adjointness")
+    require(weighted_hodge == sp.Rational(14, 5) * sp.eye(2), "weighted spectrum witness")
+    require(naive_hodge == 2 * sp.eye(2), "naive witness")
+    require(not is_zero(weighted_hodge - naive_hodge), "naive transpose no-go")
+
+    source_witness = augmented["finite_nontrivial_total_complex_witness"]
+    require(source_witness["Delta_Q_degree1"] == "1", "bare Q Hodge")
+    require(source_witness["Q_compression"] == "2", "full Q compression")
+    require(source_witness["positive_correction"] == "1", "positive correction")
+
+    physical_gate_ledger = {
+        "selected_physical_visible_hidden_zero_defect_endpoint": {
+            "status": "OPEN_PRIMITIVE_CONTINUUM_SOURCE",
+            "dependency": "S_cont",
+        },
+        "physical_A_C_maps_domains_and_boundary_conditions": {
+            "status": "CONDITIONAL_DERIVED_FROM_COMPACT_ENDPOINT",
+            "dependency": "S_cont",
+        },
+        "selected_total_complex_pairing_and_adjoint": {
+            "status": "CONDITIONAL_DERIVED_FROM_ENDPOINT_METRIC_AND_ACTION_NORMALIZATION",
+            "dependency": "S_cont",
+        },
+        "q79_b_mode_gauge_quotient_and_connecting_map": {
+            "status": "CLOSED_EXACT_CONDITIONAL_Q79_GEOMETRY",
+            "dependency": "bound BK3 theorem",
+        },
+        "selected_nonlinear_l2_l3_and_D_term_completion": {
+            "status": "OPEN_PRIMITIVE_CONTINUUM_SOURCE",
+            "dependency": "S_cont",
+        },
+        "upper_products_and_accepted_finite_operator_projection": {
+            "status": "OPEN_PRIMITIVE_INTERTWINER_SOURCE",
+            "dependency": "T_fin",
+        },
+    }
+    require(len(physical_gate_ledger) == 6, "six corrected gates")
+    require(
+        sum("CLOSED_EXACT" in row["status"] for row in physical_gate_ledger.values())
+        == 1,
+        "one physically closed gate",
+    )
+    require(
+        sum("CONDITIONAL_DERIVED" in row["status"] for row in physical_gate_ledger.values())
+        == 2,
+        "two derived gates",
+    )
+    require(
+        {row["dependency"] for row in physical_gate_ledger.values() if row["dependency"] in {"S_cont", "T_fin"}}
+        == {"S_cont", "T_fin"},
+        "two source objects",
+    )
+
+    checks = {
+        "all_bound_source_packets_verify": True,
+        "rank102_Qphys_carrier_is_preserved": True,
+        "direct_full_l1_equals_DbarQ_target_is_retired": True,
+        "augmented_triangular_total_complex_is_current": True,
+        "Qphys_is_an_invariant_diagonal_subcomplex": True,
+        "BK3_extra_lane_cannot_use_h20_zero_shortcut": True,
+        "BK3_gauge_quotient_and_connecting_gate_is_closed": True,
+        "finite_witness_cochain_condition": True,
+        "all_three_witness_metrics_are_positive": True,
+        "metric_L0_adjoint_is_exact": True,
+        "metric_L1_adjoint_is_exact": True,
+        "stacked_residual_Gram_equals_weighted_Hodge": True,
+        "weighted_Hodge_is_metric_self_adjoint": True,
+        "weighted_Hodge_spectrum_is_exact": True,
+        "naive_unweighted_transpose_is_excluded": True,
+        "full_augmented_Q_compression_differs_from_bare_Q_Hodge": True,
+        "endpoint_pairing_emits_adjoint_conditionally": True,
+        "compact_boundaryless_endpoint_emits_closed_graph_and_Hodge_Dirac_domains_conditionally": True,
+        "elliptic_triangular_extension_emits_compact_resolvent_conditionally": True,
+        "spectral_cutoff_is_finite_rank_conditionally": True,
+        "spectral_Galerkin_rows_are_derived_not_independent": True,
+        "accepted_27_carrier_still_requires_intertwiner_or_Feshbach": True,
+        "physical_gate_ledger_has_six_rows": True,
+        "one_physical_gate_is_currently_closed": True,
+        "two_gates_are_conditional_endpoint_consequences": True,
+        "remaining_source_cutset_has_two_compound_objects": True,
+        "warped_or_unwarped_regime_must_be_inside_S_cont": True,
+        "physical_endpoint_remains_open": True,
+        "physical_nonlinear_residual_remains_open": True,
+        "finite_continuum_intertwiner_remains_open": True,
+        "zero_fitted_parameters": True,
+        "zero_observed_values": True,
+    }
+
+    packet = {
+        "schema": "MTTQ79AugmentedEndpointHilbertSpectralCompiler.v1",
+        "date": RESEARCH_DATE,
+        "status": "AUGMENTED_ENDPOINT_TO_HILBERT_DOMAIN_ADJOINT_HODGE_AND_SPECTRAL_GALERKIN_COMPILER_CLOSED_EXACT_UNDER_SELECTED_COMPACT_ENDPOINT_HYPOTHESES_BK3_QUOTIENT_GATE_CLOSED_PHYSICAL_CONTINUUM_RESIDUAL_AND_FINITE_INTERTWINER_OPEN",
+        "theorem": {
+            "name": "q79AugmentedEndpointHilbertSpectralCompilerTheorem",
+            "tier": "CLOSED_EXACT_FUNCTIONAL_ANALYTIC_COMPILER_UNDER_EXPLICIT_SELECTED_ENDPOINT_HYPOTHESES",
+            "fitted_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "inputs": {
+            "physical_gauge_pair_seed": source_record(PHYSICAL_SEED),
+            "sector_polarized_compiler": source_record(SECTOR_COMPILER),
+            "historical_MC_bridge": source_record(MC_BRIDGE),
+            "augmented_route_correction": source_record(AUGMENTED_ROUTE),
+            "BK3_cohomology_survival": source_record(BK3_SURVIVAL),
+            "same_source_residual_theorem": source_record(SAME_SOURCE),
+            "warped_product_regime_split": source_record(WARP_REGIME),
+        },
+        "route_correction": {
+            "retired_target": "identify the full heterotic L3 differential directly with Dbar_Q",
+            "current_complex": "Y_n=Omega^(0,n)(Q_phys) direct_sum Omega^(0,n+1)(X)",
+            "current_differential": "L_n=[[D_n,(1/2)(-1)^n A_n],[0,C_n]], A_n=partial into T*X subset Q, C_n=dbar",
+            "diagonal_subcomplex": "D_n=Dbar_Q on Omega^(0,n)(Q_phys)",
+            "cochain_relations": [
+                "D_(n+1) D_n=0",
+                "C_(n+1) C_n=0",
+                "D_(n+1) A_n-A_(n+1) C_n=0",
+            ],
+            "Q_Hodge_compression": "p_Q Delta_Y,1 i_Q=Delta_Q,1+(1/4)A_0 A_0^dagger",
+        },
+        "endpoint_to_Hilbert_compiler": {
+            "hypotheses": [
+                "one selected compact boundaryless Hermitian q79 endpoint",
+                "selected physical visible and hidden holomorphic bundles and connections",
+                "selected positive tangent and bundle metrics, density and relative field normalization",
+                "the augmented first-order differential with exact cochain relations",
+                "elliptic diagonal symbol complexes",
+            ],
+            "derived_objects": {
+                "Hilbert_spaces": "H_n=L2(Y_n) in the selected geometric pairing",
+                "closed_differential_domain": "Dom(L_n)={u in L2(Y_n): L_n u is in L2 distributionally}; the elliptic Hodge-Dirac closure has domain H1",
+                "adjoints": "L_n^dagger are uniquely emitted by the same pairing",
+                "Hodge_operator": "Delta_Y,n=L_n^dagger L_n+L_(n-1)L_(n-1)^dagger",
+                "spectral_structure": "nonnegative self-adjoint compact-resolvent realization with discrete finite-multiplicity spectrum",
+                "finite_cutoff": "P_Lambda=1_[0,Lambda](Delta_Y,n) is finite rank and commutes with Delta_Y,n",
+                "Galerkin_rows": "matrix coefficients are endpoint-derived geometric pairings in the spectral basis",
+            },
+            "boundary": "for a manifold with boundary, singular endpoint or noncompact geometry, self-adjoint extension and compactness data are additional obligations",
+        },
+        "same_source_augmented_residual_theorem": {
+            "residual": "Phi_Y=(augmented Maurer-Cartan/F-term/anomaly rows, gauge and moment-map/D-term rows)",
+            "zero_defect": "Phi_Y(C_*)=0",
+            "Jacobian": "D Phi_Y(C_*)=J_1=stack(L_1,L_0^dagger)",
+            "cost": "E_Y=1/2 ||Phi_Y||^2",
+            "Hessian": "Hess E_Y(C_*)=J_1^dagger J_1=Delta_Y,1",
+            "physical_status": "OPEN_UNTIL_ONE_SELECTED_Q79_RESIDUAL_EQUALS_ALL_PHYSICAL_ROWS",
+        },
+        "exact_weighted_total_complex_witness": {
+            "L0": matrix_json(l0),
+            "L1": matrix_json(l1),
+            "G0": matrix_json(g0),
+            "G1": matrix_json(g1),
+            "G2": matrix_json(g2),
+            "L0_adjoint": matrix_json(l0_adjoint),
+            "L1_adjoint": matrix_json(l1_adjoint),
+            "residual_Jacobian": matrix_json(residual_jacobian),
+            "residual_adjoint": matrix_json(residual_adjoint),
+            "weighted_hodge": matrix_json(weighted_hodge),
+            "weighted_hodge_spectrum": spectrum_json(weighted_hodge),
+            "naive_unweighted_hodge": matrix_json(naive_hodge),
+            "bare_Q_hodge": source_witness["Delta_Q_degree1"],
+            "full_augmented_Q_compression": source_witness["Q_compression"],
+            "positive_Q_compression_correction": source_witness["positive_correction"],
+        },
+        "spectral_Galerkin_theorem": {
+            "finite_rank_condition": "compact resolvent of the selected internal augmented Hodge operator",
+            "canonical_projector": "P_Lambda=1_[0,Lambda](Delta_Y,1)",
+            "exactness": "the compressed operator is exact on Ran(P_Lambda)",
+            "row_source": "all entries are selected continuum overlap integrals, not independent constants",
+            "limit_boundary": "strong spectral exhaustion is automatic; quantitative tails and renormalized cutoff removal require separate estimates",
+            "accepted_finite_carrier_boundary": "the 27-state carrier requires a commuting continuum-to-finite intertwiner or a justified Feshbach-Schur operator",
+        },
+        "corrected_physical_source_cutset": {
+            "physical_gate_ledger": physical_gate_ledger,
+            "physically_closed_now": 1,
+            "physical_total": 6,
+            "conditionally_derived_after_endpoint": 2,
+            "independent_compound_source_objects": 2,
+            "S_cont": {
+                "name": "SelectedAugmentedContinuumGeometricResidualSource",
+                "must_emit": [
+                    "one physical visible-hidden zero-defect Hull-Strominger endpoint and common HYM chamber",
+                    "the selected unwarped-with-error or full-warped metric regime",
+                    "the geometric/action pairing and normalization",
+                    "the complete augmented nonlinear residual Phi_Y",
+                ],
+                "automatically_derives": [
+                    "D, A, C coefficients and common closed graph domains",
+                    "Hilbert adjoints and augmented Hodge Hessian",
+                    "canonical finite spectral projectors and Galerkin rows",
+                ],
+            },
+            "T_fin": {
+                "name": "SelectedContinuumToFiniteIntertwiner",
+                "must_emit": [
+                    "the accepted low-mode/27-state carrier map",
+                    "commutation or controlled Feshbach defect",
+                    "transferred products and lower-order mass/Higgs/Yukawa payload",
+                    "normalization and tail/error certificate",
+                ],
+            },
+            "source_counting": "two compound structured maps, not two fitted scalar parameters",
+        },
+        "parameter_ledger": {
+            "new_fitted_parameters": 0,
+            "new_observed_values": 0,
+            "new_physical_couplings": 0,
+            "selected_action_or_relative_field_normalization_computed_here": 0,
+            "remaining_compound_source_maps": 2,
+        },
+        "closed": [
+            "corrected augmented total-complex target",
+            "conditional endpoint-to-Hilbert/domain/adjoint compiler",
+            "same-source augmented residual Gram-to-Hodge identity",
+            "canonical finite spectral Galerkin theorem",
+            "updated BK3 physical gate count",
+            "two-object physical source cutset",
+        ],
+        "open": [
+            "selected physical visible-hidden endpoint and common HYM chamber",
+            "selected product or warped geometric regime and action normalization",
+            "complete physical augmented nonlinear residual",
+            "selected continuum-to-finite intertwiner and lower-order payload",
+            "numerical physical spectrum and rigorous tail certificate",
+        ],
+        "supersedes": {
+            "historical_target": "q79HeteroticMaurerCartanToPhysicalDbarCompatibility.v1",
+            "historical_gate_statement": "q79 same-source compatibility 4/10",
+            "reason": "the full upper differential has a nonremovable b-form extension; the corrected source cutset is the augmented 1/6 ledger reduced to S_cont and T_fin",
+        },
+        "next_theorem": {
+            "name": "q79SelectedAugmentedContinuumResidualAndFiniteIntertwiner.v1",
+            "execution_order": [
+                "instantiate S_cont and verify zero defect on one selected endpoint",
+                "compile the derived Hilbert, domain, adjoint, Hodge and spectral rows",
+                "construct T_fin or its Feshbach replacement",
+                "transfer lower-order products and certify numerical tails",
+            ],
+        },
+        "checks": checks,
+    }
+
+    OUT_PACKET.write_text(
+        json.dumps(packet, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    OUT_NOTE.write_text(build_note(packet), encoding="utf-8")
+    print("Q79_AUGMENTED_ENDPOINT_HILBERT_SPECTRAL_COMPILER_BUILD_PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

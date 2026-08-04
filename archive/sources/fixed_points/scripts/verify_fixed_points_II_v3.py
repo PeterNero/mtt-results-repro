@@ -37,7 +37,10 @@ def main() -> None:
         "Projected Fixed Points and Equilibria in a 10D Modal Model",
         "not counted as a seventh",
         "Strong commutation of vertical operators",
-        "possibly overlapping or nested",
+        "nested only if a concrete realization supplies bundle",
+        "Current q79 carrier",
+        "not globally ordered sheets",
+        "auxiliary\nLens--Nil model",
         "It is not the Lorentzian d'Alembertian",
         "stabilization parameters",
         "Projector commutation for the base-regularized model",
@@ -62,6 +65,7 @@ def main() -> None:
         "Projected fixed points are equilibria",
         "Assume $\\varepsilon>0$ and $-\\Delta_Y$ has a spectral gap",
         "three parallel internal bundles",
+        "possibly overlapping or nested",
     ]
     for item in forbidden:
         require(item not in text, f"obsolete FP II claim remains: {item}")
