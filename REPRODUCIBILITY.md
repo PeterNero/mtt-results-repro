@@ -39,7 +39,9 @@ dirty source tree is not mistaken for the named commit.
 
 - `inventory/artifacts.jsonl`: one SHA-256 row per configured source artifact.
 - `inventory/numerical_objects.jsonl`: detected JSON scalar-array objects.
-- `archive/sources/`: byte-preserving snapshots for publication-safe artifacts.
+- `archive/blobs/`: byte-preserving, content-addressed snapshots for
+  publication-safe artifacts; original paths remain in the inventory and map.
+- `archive/artifact_blob_map.jsonl`: source-path to short blob-path mapping.
 - `archive/hash_only_artifacts.jsonl`: exact SHA-256 and size rows for large raw
   diagnostics omitted from the Git mirror.
 - `release/authority/`: frozen A01-A62 baseline plus the A63-A99 authority

@@ -13,9 +13,10 @@ The repository has three deliberately separate layers:
    calculation script, audit, and detected numerical object from the pinned
    source repositories.
 2. `archive/` is publication-safe and hash-preserving. It byte-mirrors ordinary
-   artifacts and keeps an exact SHA-256/size index for bulk diagnostics that
-   would make a normal Git clone impractical. Open, no-go, superseded, and
-   retired routes remain discoverable in the inventory at their declared tier.
+   artifacts under short content-addressed paths and keeps an exact SHA-256/size
+   index for bulk diagnostics that would make a normal Git clone impractical.
+   Original source paths remain in the inventory and blob map. Open, no-go,
+   superseded, and retired routes remain discoverable at their declared tier.
 3. `release/` is curated and versioned. It preserves the 2026-07-12 A01-A62
    Standard-Model baseline and adds a 2026-08-05 promoted-results layer, with
    explicit claim tiers, stable short paths, provenance hashes, and paper-corpus

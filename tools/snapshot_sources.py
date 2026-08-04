@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "source_repositories.json"
 ARCHIVE_POLICY = ROOT / "config" / "archive_policy.json"
 INVENTORY = ROOT / "inventory"
-ARCHIVE = ROOT / "archive" / "sources"
+ARCHIVE = ROOT / "archive" / "blobs"
+LEGACY_ARCHIVE = ROOT / "archive" / "sources"
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -74,6 +75,29 @@ def copy_bytes(source: Path, destination: Path) -> None:
         shutil.copyfileobj(input_handle, output_handle, length=1024 * 1024)
 
 
+def blob_relative_path(digest: str) -> Path:
+    return Path(digest[:2]) / digest[2:]
+
+
+def remove_tree(root: Path) -> int:
+    """Remove a verified in-repository tree with Windows long-path support."""
+    resolved = root.resolve()
+    if ROOT.resolve() not in resolved.parents:
+        raise RuntimeError(f"unsafe archive cleanup path: {resolved}")
+    if not resolved.exists():
+        return 0
+    removed = 0
+    root_io = io_path(resolved)
+    for directory, directories, files in os.walk(root_io, topdown=False):
+        for name in files:
+            os.unlink(os.path.join(directory, name))
+            removed += 1
+        for name in directories:
+            os.rmdir(os.path.join(directory, name))
+    os.rmdir(root_io)
+    return removed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
@@ -109,10 +133,26 @@ def main() -> int:
         for artifact in artifacts
         if not decisions[(artifact["repo_id"], artifact["path"])][0]
     ]
+    blobs: dict[str, dict[str, Any]] = {}
+    artifact_blob_rows = []
+    for artifact in archived_artifacts:
+        existing = blobs.get(artifact["sha256"])
+        if existing is not None and existing["size_bytes"] != artifact["size_bytes"]:
+            raise RuntimeError(f"same hash with inconsistent size: {artifact['sha256']}")
+        blobs.setdefault(artifact["sha256"], artifact)
+        artifact_blob_rows.append(
+            {
+                "repo_id": artifact["repo_id"],
+                "path": artifact["path"],
+                "size_bytes": artifact["size_bytes"],
+                "sha256": artifact["sha256"],
+                "blob_path": f"archive/blobs/{blob_relative_path(artifact['sha256']).as_posix()}",
+            }
+        )
     expected_paths = {
-        (Path(artifact["repo_id"]) / Path(artifact["path"])).as_posix().casefold()
-        for artifact in archived_artifacts
+        blob_relative_path(digest).as_posix().casefold() for digest in blobs
     }
+    removed_legacy = remove_tree(LEGACY_ARCHIVE)
     removed_stale = 0
     if archive_root.exists():
         archive_io = io_path(archive_root)
@@ -131,14 +171,16 @@ def main() -> int:
                     pass
 
     copied = 0
-    copied_bytes = 0
+    unique_blob_bytes = 0
     reused = 0
     by_repo: Counter[str] = Counter()
     for artifact in archived_artifacts:
+        by_repo[artifact["repo_id"]] += 1
+    for digest, artifact in blobs.items():
         repo = repos[artifact["repo_id"]]
         source_base = (source_root / Path(repo["local_relative_path"])).resolve()
         source = source_base if source_base.is_file() else source_base / Path(artifact["path"])
-        destination = ARCHIVE / artifact["repo_id"] / Path(artifact["path"])
+        destination = ARCHIVE / blob_relative_path(digest)
         if not os.path.isfile(io_path(source)):
             raise FileNotFoundError(f"indexed source disappeared: {source}")
 
@@ -152,26 +194,30 @@ def main() -> int:
             copied += 1
         if actual_hash != artifact["sha256"]:
             raise RuntimeError(f"hash mismatch after copy: {destination}")
-        copied_bytes += artifact["size_bytes"]
-        by_repo[artifact["repo_id"]] += 1
+        unique_blob_bytes += artifact["size_bytes"]
 
     write_jsonl(ROOT / "archive" / "hash_only_artifacts.jsonl", hash_only_artifacts)
+    write_jsonl(ROOT / "archive" / "artifact_blob_map.jsonl", artifact_blob_rows)
     manifest = {
-        "schema": "MTTPublicSourceArchive.v2",
+        "schema": "MTTPublicSourceArchive.v3",
         "source_root_recorded_as": "<LOCAL_SOURCE_ROOT>",
         "artifact_count": len(archived_artifacts),
+        "unique_blob_count": len(blobs),
         "inventory_artifact_count": len(artifacts),
         "hash_only_artifact_count": len(hash_only_artifacts),
-        "total_bytes": copied_bytes,
+        "total_bytes": unique_blob_bytes,
+        "mirrored_artifact_bytes_before_deduplication": sum(row["size_bytes"] for row in archived_artifacts),
         "inventory_total_bytes": sum(row["size_bytes"] for row in artifacts),
         "hash_only_total_bytes": sum(row["size_bytes"] for row in hash_only_artifacts),
         "copied_this_run": copied,
         "reused_this_run": reused,
         "removed_stale_this_run": removed_stale,
+        "removed_legacy_source_paths_this_run": removed_legacy,
         "artifact_count_by_source": dict(sorted(by_repo.items())),
         "source_snapshots": snapshot["repositories"],
         "integrity_source": "inventory/artifacts.jsonl",
         "hash_only_index": "archive/hash_only_artifacts.jsonl",
+        "artifact_blob_map": "archive/artifact_blob_map.jsonl",
         "policy": {
             "bytes_preserved_exactly": True,
             "absolute_paths_inside_historical_files_rewritten": False,
@@ -180,6 +226,7 @@ def main() -> int:
             "max_default_artifact_bytes": archive_policy["max_default_artifact_bytes"],
             "always_archive_suffixes": archive_policy["always_archive_suffixes"],
             "always_hash_only_globs": archive_policy.get("always_hash_only_globs", []),
+            "content_addressed_short_paths": True,
         },
     }
     dump(ROOT / "archive" / "manifest.json", manifest)

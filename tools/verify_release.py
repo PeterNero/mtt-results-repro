@@ -132,6 +132,7 @@ def main() -> int:
     inventory_summary = load(ROOT / "inventory" / "summary.json")
     archive_manifest = load(ROOT / "archive" / "manifest.json")
     hash_only_rows = load_jsonl(ROOT / "archive" / "hash_only_artifacts.jsonl")
+    artifact_blob_rows = load_jsonl(ROOT / "archive" / "artifact_blob_map.jsonl")
     authority = load(RELEASE / "authority_manifest.json")
     results = load(RELEASE / "result_manifest.json")
     parameters = load(RELEASE / "parameter_ledger.json")
@@ -153,6 +154,19 @@ def main() -> int:
         and archive_manifest["hash_only_artifact_count"] == len(hash_only_rows),
         archived=archive_manifest["artifact_count"],
         hash_only=archive_manifest["hash_only_artifact_count"],
+    )
+    unique_blob_paths = {row["blob_path"] for row in artifact_blob_rows}
+    record(
+        "content_addressed_archive_map",
+        archive_manifest["schema"] == "MTTPublicSourceArchive.v3"
+        and len(artifact_blob_rows) == archive_manifest["artifact_count"]
+        and len(unique_blob_paths) == archive_manifest["unique_blob_count"]
+        and all(
+            row["blob_path"] == f"archive/blobs/{row['sha256'][:2]}/{row['sha256'][2:]}"
+            for row in artifact_blob_rows
+        ),
+        mapped_artifacts=len(artifact_blob_rows),
+        unique_blobs=len(unique_blob_paths),
     )
     record(
         "authority_chain_A01_A99",
@@ -442,10 +456,11 @@ def main() -> int:
         hash_only_index = {
             (row["repo_id"], row["path"]): row for row in hash_only_rows
         }
+        verified_blobs: dict[str, bool] = {}
         with (ROOT / "inventory" / "artifacts.jsonl").open("r", encoding="utf-8") as handle:
             for line in handle:
                 artifact = json.loads(line)
-                path = ROOT / "archive" / "sources" / artifact["repo_id"] / artifact["path"]
+                path = ROOT / "archive" / "blobs" / artifact["sha256"][:2] / artifact["sha256"][2:]
                 key = (artifact["repo_id"], artifact["path"])
                 hash_only = hash_only_index.get(key)
                 if hash_only is not None:
@@ -455,7 +470,11 @@ def main() -> int:
                         and not os.path.isfile(io_path(path))
                     )
                 else:
-                    valid = os.path.isfile(io_path(path)) and sha256(path) == artifact["sha256"]
+                    if artifact["sha256"] not in verified_blobs:
+                        verified_blobs[artifact["sha256"]] = (
+                            os.path.isfile(io_path(path)) and sha256(path) == artifact["sha256"]
+                        )
+                    valid = verified_blobs[artifact["sha256"]]
                 if not valid:
                     archive_hash_failures.append(f"{artifact['repo_id']}:{artifact['path']}")
         record("full_archive_hashes", not archive_hash_failures, failures=archive_hash_failures)

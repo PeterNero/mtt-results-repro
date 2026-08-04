@@ -11,7 +11,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "inventory"
-ARCHIVE = ROOT / "archive" / "sources"
+ARCHIVE = ROOT / "archive" / "blobs"
 RELEASE = ROOT / "release"
 CURRENT_RESULT_CONFIG = ROOT / "config" / "current_results.json"
 PAPER_CORPUS_LOCK = ROOT / "config" / "paper_corpus_lock.json"
@@ -188,6 +188,11 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in handle if line.strip()]
 
 
+def archive_blob_path(artifact: dict[str, Any]) -> Path:
+    digest = artifact["sha256"]
+    return ARCHIVE / digest[:2] / digest[2:]
+
+
 def dump(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
@@ -263,7 +268,7 @@ def companion_paths(authority: dict[str, Any], artifacts: list[dict[str, Any]]) 
         for artifact in frontier:
             if artifact["suffix"] != ".json":
                 continue
-            source = ARCHIVE / artifact["repo_id"] / Path(artifact["path"])
+            source = archive_blob_path(artifact)
             try:
                 payload = json.loads(source.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError, OSError):
@@ -304,8 +309,8 @@ def main() -> int:
         companions = companion_paths(authority, artifacts)
         bundle_rows = []
         for artifact in companions:
-            source = ARCHIVE / artifact["repo_id"] / Path(artifact["path"])
-            destination = RELEASE / "authority" / authority_id / Path(artifact["path"])
+            source = archive_blob_path(artifact)
+            destination = RELEASE / "authority" / authority_id / f"{artifact['sha256']}{artifact['suffix']}"
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
             bundle_rows.append(
@@ -362,7 +367,7 @@ def main() -> int:
                 "repo_id": artifact["repo_id"],
                 "source_path": artifact["path"],
                 "archive_available": archive_available,
-                "archive_path": f"archive/sources/{artifact['repo_id']}/{artifact['path']}" if archive_available else None,
+                "archive_path": archive_blob_path(artifact).relative_to(ROOT).as_posix() if archive_available else None,
                 "kind": artifact["kind"],
                 "sha256": artifact["sha256"],
                 "schema": artifact.get("schema"),
@@ -392,15 +397,15 @@ def main() -> int:
             raise RuntimeError(f"missing key result: {key_result['repo_id']} {key_result['path']}")
         if (artifact["repo_id"], artifact["path"]) in hash_only_keys:
             raise RuntimeError(f"selected result cannot be hash-only: {key_result['id']}")
-        source = ARCHIVE / artifact["repo_id"] / Path(artifact["path"])
-        destination = RELEASE / "results" / key_result["id"] / Path(artifact["path"]).name
+        source = archive_blob_path(artifact)
+        destination = RELEASE / "results" / key_result["id"] / f"artifact{artifact['suffix']}"
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         result_entries.append(
             {
                 **key_result,
                 "release_path": destination.relative_to(ROOT).as_posix(),
-                "archive_path": f"archive/sources/{artifact['repo_id']}/{artifact['path']}",
+                "archive_path": archive_blob_path(artifact).relative_to(ROOT).as_posix(),
                 "sha256": artifact["sha256"],
                 "historical_status": artifact.get("status"),
             }
@@ -419,11 +424,11 @@ def main() -> int:
     source_snapshot = json.loads(
         (INVENTORY / "source_repositories.json").read_text(encoding="utf-8")
     )
-    unified_frontier = json.loads(
-        (ARCHIVE / "unified_source" / "state/frontier.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    def archived_json(repo_id: str, path: str) -> dict[str, Any]:
+        artifact = artifact_index[(repo_id, path.lower())]
+        return json.loads(archive_blob_path(artifact).read_text(encoding="utf-8"))
+
+    unified_frontier = archived_json("unified_source", "state/frontier.json")
     dump(
         RELEASE / "current_snapshot.json",
         {
@@ -449,26 +454,17 @@ def main() -> int:
         },
     )
 
-    precision_source = json.loads(
-        (
-            ARCHIVE
-            / "sm_closure"
-            / "candidate_data/selected_multiloopcommonsourceprecisiontransport_or_officialjointlikelihood/smdr_multiloop_common_source_transport.raw.json"
-        ).read_text(encoding="utf-8")
+    precision_source = archived_json(
+        "sm_closure",
+        "candidate_data/selected_multiloopcommonsourceprecisiontransport_or_officialjointlikelihood/smdr_multiloop_common_source_transport.raw.json",
     )
-    pew_row = json.loads(
-        (
-            ARCHIVE
-            / "sm_closure"
-            / "candidate_data/selected_strictpewdenominatorselectiontheorem_or_directkpromotion/promoted_strict_pew_source_row.packet.json"
-        ).read_text(encoding="utf-8")
+    pew_row = archived_json(
+        "sm_closure",
+        "candidate_data/selected_strictpewdenominatorselectiontheorem_or_directkpromotion/promoted_strict_pew_source_row.packet.json",
     )
-    neutral_profile = json.loads(
-        (
-            ARCHIVE
-            / "sm_closure"
-            / "candidate_data/selected_neutraltwoprimitiveprofilevalueclosure/neutral_two_primitive_profile_values.packet.json"
-        ).read_text(encoding="utf-8")
+    neutral_profile = archived_json(
+        "sm_closure",
+        "candidate_data/selected_neutraltwoprimitiveprofilevalueclosure/neutral_two_primitive_profile_values.packet.json",
     )
     neutral_values = neutral_profile["calibrated_shape_and_scale"]
     dump(RELEASE / "parameter_ledger.json", {
