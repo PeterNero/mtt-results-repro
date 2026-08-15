@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Independently verify the complete G3BQ correction recursive return."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bq_correction_full_recursive_return.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def replay_divergence(
+    coordinates: sparse.csc_matrix,
+    source: str,
+    mld: Path,
+    macaulay: Any,
+    solver_io: Any,
+) -> sparse.csc_matrix:
+    transition = {
+        "H02": ("H11", 4),
+        "H11": ("H20", 3),
+    }[source]
+    target, factor_denominator = transition
+    factor_packet = load(mld / f"q79_eta9_original_jacobian_coordinate_factorization_{source}.packet.json")
+    factor_path = Path(factor_packet["inputs"]["factorization_binary"]["path"])
+    bind = __import__("bind_q79_eta9_original_jacobian_coordinate_factorization")
+    factor_header, factor_arrays = bind.read_factorization(factor_path)
+    quotient_units = int(factor_header["quotient_units"])
+    image_rank = int(factor_header["certified_image_rank"])
+    require(coordinates.shape[0] == int(factor_header["rows"]), f"{source} coordinate rows")
+
+    source_packet = load(mld / f"q79_eta9_original_jacobian_macaulay_{source}.packet.json")
+    target_packet = load(mld / f"q79_eta9_original_jacobian_macaulay_{target}.packet.json")
+    metadata: list[tuple[int, tuple[int, ...]]] = []
+    for block in source_packet["column_blocks"]:
+        generator = int(block["generator_index_one_based"]) - 1
+        multipliers = macaulay.monomials_of_cox_degree(
+            tuple(int(value) for value in block["coefficient_Cox_degree"])
+        )
+        require(len(metadata) == int(block["first_column"]), f"{source} block start")
+        metadata.extend((generator, exponent) for exponent in multipliers)
+        require(len(metadata) == int(block["past_last_column"]), f"{source} block stop")
+    selected_augmented = factor_arrays["selected_augmented_columns"]
+    selected_columns = selected_augmented[quotient_units:].astype(np.int64) - quotient_units
+    require(selected_columns.size == image_rank, f"{source} selected image rank")
+    selected_metadata = [metadata[int(column)] for column in selected_columns]
+
+    target_vectors = [
+        tuple(int(value) for value in exponent)
+        for exponent in target_packet["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target_vectors)}
+    factor = pow(factor_denominator, -1, PRIME)
+    rows: list[int] = []
+    columns: list[int] = []
+    values: list[int] = []
+    for rhs_column in range(coordinates.shape[1]):
+        result: dict[tuple[int, ...], int] = {}
+        for position in range(int(coordinates.indptr[rhs_column]), int(coordinates.indptr[rhs_column + 1])):
+            coordinate_row = int(coordinates.indices[position])
+            if coordinate_row < quotient_units:
+                continue
+            generator, multiplier = selected_metadata[coordinate_row - quotient_units]
+            exponent = multiplier[generator]
+            if exponent == 0:
+                continue
+            coefficient = int(coordinates.data[position]) * exponent * factor % PRIME
+            if coefficient == 0:
+                continue
+            derivative = list(multiplier)
+            derivative[generator] -= 1
+            key = tuple(derivative)
+            require(key in target_lookup, f"{source} derivative target")
+            result[key] = (result.get(key, 0) + coefficient) % PRIME
+        for exponent, coefficient in result.items():
+            if coefficient:
+                rows.append(target_lookup[exponent])
+                columns.append(rhs_column)
+                values.append(coefficient)
+    replay = sparse.csc_matrix(
+        (
+            np.asarray(values, dtype=np.uint8),
+            (np.asarray(rows, dtype=np.int32), np.asarray(columns, dtype=np.int32)),
+        ),
+        shape=(len(target_vectors), coordinates.shape[1]),
+        dtype=np.uint8,
+    )
+    replay.sum_duplicates()
+    replay.data %= PRIME
+    replay.eliminate_zeros()
+    return replay
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["schema"] == "mtt.unified-source.g3bq-correction-full-recursive-return.v1", "schema")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_full_recursive_H20_source_block as common
+    import assemble_q79_eta9_gauss_manin_strict_blocks as linear
+    import build_q79_eta9_original_jacobian_macaulay as macaulay
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    paths: dict[str, Path] = {}
+    for key, item in packet["inputs"].items():
+        paths[key] = verify_record(item, mld if key == "terminal_H20_divergence" else ROOT)
+    g3bm = load(paths["G3BM"])
+    require(all(g3bm["checks"].values()), "G3BM checks")
+    h11_packet = load(paths["recursive_H11_divergence"])
+    h20_packet = load(paths["recursive_H20_divergence"])
+    require(all(h11_packet["checks"].values()) and all(h20_packet["checks"].values()), "divergence packet checks")
+    require(h11_packet["source_Hodge_block"] == "H02" and h11_packet["target_Hodge_block"] == "H11", "H11 typing")
+    require(h20_packet["source_Hodge_block"] == "H11" and h20_packet["target_Hodge_block"] == "H20", "H20 typing")
+
+    h02, h02_q, h02_image = solver_io.read_coordinates(paths["H02_coordinates"])
+    h11, h11_q, h11_image = solver_io.read_coordinates(paths["H11_coordinates"])
+    h20, h20_q, h20_image = solver_io.read_coordinates(paths["H20_coordinates"])
+    require(h02.shape == (42706, 248) and (h02_q, h02_image) == (248, 42458), "H02 shape")
+    require(h11.shape == (5439, 248) and (h11_q, h11_image) == (1013, 4426), "H11 shape")
+    require(h20.shape == (282, 248) and (h20_q, h20_image) == (248, 34), "H20 shape")
+
+    for log_key in ("H02_solver_log", "H11_solver_log", "H20_solver_log"):
+        text = paths[log_key].read_text(encoding="utf-8")
+        require("SUCCESS" in text and "rhs_columns=248" in text, f"{log_key} success")
+
+    h11_stored = sparse.load_npz(Path(h11_packet["lower_pole_ambient_RHS"]["NPZ"]["path"])).tocsc()
+    h20_stored = sparse.load_npz(Path(h20_packet["lower_pole_ambient_RHS"]["NPZ"]["path"])).tocsc()
+    h11_replay = replay_divergence(h02, "H02", mld, macaulay, solver_io)
+    h20_replay = replay_divergence(h11, "H11", mld, macaulay, solver_io)
+    require((h11_stored != h11_replay).nnz == 0, "H02 to H11 divergence replay")
+    require((h20_stored != h20_replay).nnz == 0, "H11 to H20 divergence replay")
+
+    h11_selected, _ = common.selected_source_matrix("H11")
+    h20_selected, _ = common.selected_source_matrix("H20")
+    h11_reconstruction = (h11_selected @ h11.astype(np.int32)).tocsc()
+    h11_reconstruction.data %= PRIME
+    h11_reconstruction.eliminate_zeros()
+    h20_reconstruction = (h20_selected @ h20.astype(np.int32)).tocsc()
+    h20_reconstruction.data %= PRIME
+    h20_reconstruction.eliminate_zeros()
+    require(common.exact_residual_nonzeros(h11_reconstruction, h11_stored) == 0, "H11 reconstruction")
+    require(common.exact_residual_nonzeros(h20_reconstruction, h20_stored) == 0, "H20 reconstruction")
+
+    first_record = g3bm["H02_first_normal_form_block"]["binary"]
+    first_path = verify_record(first_record)
+    first = np.fromfile(first_path, dtype=np.uint8).reshape(248, 248)
+    require(common.exact_residual_nonzeros(h02[:h02_q, :], sparse.csc_matrix(first.T)) == 0, "G3BM quotient replay")
+
+    full = sparse.vstack([h20[:h20_q, :], h11[:h11_q, :], h02[:h02_q, :]], format="csc")
+    full.data %= PRIME
+    full.eliminate_zeros()
+    full_record = packet["full_block"]
+    npz_path = verify_record(full_record["NPZ"])
+    dense_path = verify_record(full_record["dense_uint8"])
+    stored_full = sparse.load_npz(npz_path).tocsc()
+    require((stored_full != full).nnz == 0, "full sparse block")
+    dense = np.fromfile(dense_path, dtype=np.uint8).reshape(1509, 248)
+    require(np.array_equal(dense, full.toarray()), "full dense block")
+    rank, pivots = linear.echelon_pivot_columns(dense.T)
+    require(rank == int(full_record["rank_mod11"]) == 248, "full rank")
+    require(pivots == full_record["source_by_target_pivot_columns"], "full pivots")
+    require(full.nnz == int(full_record["nonzero_entries"]), "full nnz")
+    components = packet["exact_components"]
+    require(h02[:h02_q, :].nnz == int(components["H02_return"]["nonzero_entries"]), "H02 nnz")
+    require(h11[:h11_q, :].nnz == int(components["H11_lower_return"]["nonzero_entries"]), "H11 nnz")
+    require(h20[:h20_q, :].nnz == int(components["H20_lower_return"]["nonzero_entries"]), "H20 nnz")
+    print("UST.G3BQ correction full recursive return verifier: PASS")
+    print(
+        f"H02_nnz={h02[:h02_q, :].nnz} H11_nnz={h11[:h11_q, :].nnz} "
+        f"H20_nnz={h20[:h20_q, :].nnz} full_nnz={full.nnz} rank={rank}"
+    )
+
+
+if __name__ == "__main__":
+    main()

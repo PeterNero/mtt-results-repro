@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Verify the alternate split-prime H11 endpoint initializer."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as builder
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bn_h11_alternate_split_prime_initializer.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], repository: Path | None = None) -> Path:
+    path = (
+        repository / record["repository_relative_path"]
+        if repository is not None
+        else ROOT / record["path"]
+    )
+    require(path.is_file(), f"record path {path}")
+    require(sha256(path) == record["sha256"], f"record hash {path.name}")
+    require(path.stat().st_size == record["bytes"], f"record bytes {path.name}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bn-h11-alternate-split-prime-initializer.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "recorded checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    mld = runtime.resolve_mld()
+    paths: dict[str, Path] = {}
+    for name, record in packet["inputs"].items():
+        paths[name] = verify_record(record, mld if "repository_relative_path" in record else None)
+    update_path = verify_record(packet["endpoint_update"]["matrix"])
+    chart_path = verify_record(packet["endpoint_chart"]["binary"])
+    verify_record(packet["endpoint_chart"]["solver_log"])
+
+    g3bi = load(paths["G3BI"])
+    base_chart, prime, quotient_units, image_rank = builder.read_chart(paths["base_chart"])
+    require(prime == builder.PRIME and (quotient_units, image_rank) == (1013, 4426), "chart typing")
+    macaulay = load(paths["H11_Macaulay"])
+    factor = load(paths["H11_factorization"])
+    import sys
+
+    sys.path.insert(0, str(mld))
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    derivatives = builder.correction_derivatives(g3bi, exporter)
+    replay_update = builder.correction_update(macaulay, factor, derivatives)
+    stored_update = sparse.load_npz(update_path).tocsc()
+    require((stored_update != replay_update).nnz == 0, "correction update replay")
+    require(
+        stored_update.nnz == packet["endpoint_update"]["nonzero_entries"] == 18748,
+        "update nnz",
+    )
+    require(
+        np.count_nonzero(np.diff(stored_update.indptr))
+        == packet["endpoint_update"]["active_columns"],
+        "active columns",
+    )
+    expected_chart = (
+        base_chart.astype(np.uint64)
+        + sparse.hstack(
+            [
+                sparse.csc_matrix((5439, quotient_units), dtype=np.uint64),
+                stored_update.astype(np.uint64),
+            ],
+            format="csc",
+        )
+    ).tocsc()
+    expected_chart.data %= prime
+    expected_chart.eliminate_zeros()
+    stored_chart, stored_prime, stored_quotient, stored_image = builder.read_chart(chart_path)
+    require(
+        (stored_prime, stored_quotient, stored_image) == (prime, quotient_units, image_rank),
+        "endpoint chart header",
+    )
+    require((stored_chart != expected_chart).nnz == 0, "endpoint chart replay")
+    require(stored_chart.nnz == packet["endpoint_chart"]["nonzero_entries"], "endpoint nnz")
+
+    replay_log = ROOT / "evidence" / "ust_g3bn" / "H11.p21817.g5.G3BI_endpoint.verify.log"
+    command = [
+        "wsl",
+        runtime.wsl_path(paths["split_prime_solver"]),
+        "--chart",
+        runtime.wsl_path(chart_path),
+        "--rhs",
+        runtime.wsl_path(paths["determinant_RHS"]),
+        "--log",
+        runtime.wsl_path(replay_log),
+        "--determinant-only",
+    ]
+    completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = builder.parse_log(replay_log)
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(fields["STATUS"] == "SUCCESS", "replay factorization success")
+    require(determinant == packet["endpoint_chart"]["determinant_mod21817"] == 276, "determinant replay")
+    require(packet["theorem"]["tier"] == "CLOSED_EXACT_CHARACTERISTIC_ZERO_CHART_EXISTENCE", "theorem tier")
+    print("UST.G3BN H11 alternate split-prime initializer verifier: PASS")
+    print(f"p={prime} gamma={builder.GAMMA_ROOT} determinant={determinant} rank=5439/5439")
+
+
+if __name__ == "__main__":
+    main()

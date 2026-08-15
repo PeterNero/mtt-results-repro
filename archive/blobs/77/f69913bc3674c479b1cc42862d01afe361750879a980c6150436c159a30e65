@@ -1,0 +1,82 @@
+# UST.G3DI H02 Split-Algebra Kernel Relations Theorem v1
+
+## Status
+
+`CLOSED_EXACT_H02_SPLIT_ALGEBRA_1274_KERNEL_RELATIONS`
+
+G3DH proved that the selected H02 base-resolvent coupling has rank 4,748 at
+all six roots of one completely split prime. G3DI replaces that rank-only
+evidence with explicit relations.
+
+## Exact finite kernel
+
+At each root, exact sparse elimination selects the same 4,748 update columns
+and the same 1,274 dependent columns. For each dependent coordinate `j`, G3DI
+emits a normalized triangular relation
+
+```text
+e_j + sum_{i<j} n_ij e_i,
+```
+
+and reconstructs its complete 30,789-row bordered residual before accepting
+it. All 1,274 residuals vanish at every root. Unit coefficients in distinct
+dependent coordinates prove that these relations are independent.
+
+The six root values interpolate uniquely to a degree-less-than-six matrix
+
+```text
+N_split(gamma),  shape 6022 x 1274,
+```
+
+over
+
+```text
+F_21817[gamma]/(m_gamma)
+  = product of the six split field factors.
+```
+
+Evaluation of the interpolated matrix reproduces every root relation with
+zero mismatch. Therefore
+
+```text
+Q_split N_split = 0,
+rank(N_split) = 1274,
+rank(Q_split) = 6022 - 1274 = 4748.
+```
+
+An independent verifier also selects sixteen relations across the full
+range, solves their B89 core preimages with the separate exact chart solver,
+and obtains zero `W A_core^-1 U N` residual.
+
+## What Changed
+
+The finite H02 defect is no longer a numerical rank observation. Its complete
+dimension, normalization, selected/dependent coordinate partition and all
+relation coefficients are explicit and hash-bound over the split algebra.
+
+## Boundary
+
+Reduction modulo one rational prime is not an automatic lift to
+`Q(gamma)`. G3DI does not yet prove that the 1,274 relations survive in
+characteristic zero, and therefore does not yet close
+`rank_Q(gamma)(Q)=4748` or emit the second characteristic-zero Woodbury
+factorization.
+
+The sharp next theorem is a relation-lift theorem: compute the same normalized
+relations at independent split primes, reconstruct candidates with a proved
+bound, and verify the exact polynomial bordered identity over `Q(gamma)`.
+
+No Archimedean H02 value, evolving source contraction, path integration,
+integral marking, readout or `beta_C` decision is claimed.
+
+## Reproduction
+
+```powershell
+python build_ust_g3di_h02_split_algebra_kernel_relations.py
+python verify_ust_g3di_h02_split_algebra_kernel_relations.py
+```
+
+The packet is
+`state/ust_g3di_h02_split_algebra_kernel_relations.packet.json`; six exact
+kernel binaries and the interpolated power-basis archive are under
+`evidence/ust_g3di/`.

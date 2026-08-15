@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Independently verify the selected normalized-delta H02 source packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from sympy import Poly, sympify, symbols
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ca_selected_delta_correction_h02_source.packet.json"
+PRIME = 21817
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    repository = Path(record.get("repository_path", default_repository))
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_verified(record: dict[str, Any], default_repository: Path = ROOT) -> dict[str, Any]:
+    return json.loads(verify_record(record, default_repository).read_text(encoding="utf-8"))
+
+
+def cox_degree(exponent: tuple[int, ...]) -> tuple[int, int, int]:
+    x, y, z, w, t0, t1, t2, u, v, s = exponent
+    return (
+        x + y + z + 3 * w - 6 * u - 9 * s,
+        t0 + t1 + t2 - 3 * v - s,
+        u + v + s,
+    )
+
+
+def source_terms(
+    g3bi: dict[str, Any], pdelta: dict[str, Any]
+) -> list[tuple[tuple[int, ...], tuple[Fraction, ...]]]:
+    x, y, z, w = symbols("x y z w")
+    polynomial = Poly(
+        sympify(pdelta["residue_polynomial"]["expanded"], locals={"x": x, "y": y, "z": z, "w": w}),
+        x,
+        y,
+        z,
+        w,
+    )
+    p_terms = [
+        (tuple(int(value) for value in exponent), Fraction(int(value.p), int(value.q)))
+        for exponent, value in polynomial.terms()
+    ]
+    require(len(p_terms) == 27, "P_delta terms")
+    fixed = (0, 0, 0, 0, 1, 1, 1, 1, 1, 0)
+    combined: dict[tuple[int, ...], list[Fraction]] = {}
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        section = tuple(int(value) for value in row["source_monomial"]) + (
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        coordinates = [Fraction(int(value)) for value in row["correction_gamma_coordinates"]]
+        for p_exponent, p_coefficient in p_terms:
+            exponent = tuple(
+                a + b + c
+                for a, b, c in zip(
+                    p_exponent + (0, 0, 0, 0, 0, 0), section, fixed, strict=True
+                )
+            )
+            values = combined.setdefault(exponent, [Fraction(0) for _ in range(6)])
+            for degree, coordinate in enumerate(coordinates):
+                values[degree] += p_coefficient * coordinate
+    result = [
+        (exponent, tuple(values))
+        for exponent, values in sorted(combined.items())
+        if any(values)
+    ]
+    require(len(result) == 100, "collected source terms")
+    require(all(cox_degree(exponent) == (9, 1, 2) for exponent, _ in result), "degree")
+    return result
+
+
+def evaluate(
+    terms: list[tuple[tuple[int, ...], tuple[Fraction, ...]]],
+    target_lookup: dict[tuple[int, ...], int],
+    root: int,
+) -> sparse.csc_matrix:
+    rows = []
+    data = []
+    for exponent, coordinates in terms:
+        row = target_lookup.get(exponent)
+        require(row is not None, "ambient source coordinate")
+        value = 0
+        for coordinate in reversed(coordinates):
+            residue = (
+                coordinate.numerator
+                * pow(coordinate.denominator % PRIME, -1, PRIME)
+            ) % PRIME
+            value = (value * root + residue) % PRIME
+        if value:
+            rows.append(row)
+            data.append(value)
+    return sparse.csc_matrix(
+        (
+            np.asarray(data, dtype=np.uint32),
+            (np.asarray(rows, dtype=np.int32), np.zeros(len(rows), dtype=np.int32)),
+        ),
+        shape=(42706, 1),
+    )
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(
+        packet["schema"] == "mtt.unified-source.g3ca-selected-delta-correction-h02-source.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+
+    inputs = packet["inputs"]
+    g3bi = load_verified(inputs["G3BI"])
+    load_verified(inputs["G3BJ"])
+    load_verified(inputs["G3BR"])
+    g3bt = load_verified(inputs["G3BT"])
+    g3bz = load_verified(inputs["G3BZ"])
+    pdelta = load_verified(inputs["P_delta"])
+    affine = load_verified(inputs["affine_source_equation"])
+    load_verified(inputs["B103"])
+    macaulay = load_verified(inputs["H02_Macaulay"])
+    verify_record(inputs["split_prime_solver"], mld)
+    require(g3bz["affine_path_update"]["exact_rank_over_Q_gamma"] == 6022, "path rank")
+    require("u*v*P_delta" in affine["relative_residue_source"]["formula"], "source formula")
+
+    terms = source_terms(g3bi, pdelta)
+    exact_payload = json.loads(
+        verify_record(packet["selected_source"]["exact_polynomial"]).read_text(encoding="ascii")
+    )
+    require(exact_payload["term_count_after_collection"] == len(terms) == 100, "term count")
+    for stored, (exponent, coordinates) in zip(exact_payload["terms"], terms, strict=True):
+        require(stored["exponent"] == list(exponent), "stored exponent")
+        require(
+            [Fraction(value) for value in stored["gamma_coordinates_ascending"]]
+            == list(coordinates),
+            "stored coefficients",
+        )
+
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    roots = [int(value) for value in g3bt["field"]["roots_of_selected_sextic"]]
+    root_vectors = []
+    total_residual = 0
+    for row in packet["root_solves"]:
+        root = int(row["gamma_root"])
+        require(root == roots[len(root_vectors)], "root order")
+        source = evaluate(terms, target_lookup, root)
+        chart = split_io.as_scipy(
+            arithmetic.read_csc(verify_record(row["endpoint_chart"]), b"MTTSPC1\0", 6)
+        )
+        stored_rhs = split_io.as_scipy(
+            arithmetic.read_csc(verify_record(row["RHS"]), b"MTTSRH1\0", 4)
+        )
+        solution = split_io.as_scipy(
+            arithmetic.read_csc(verify_record(row["solution"]), b"MTTSCO1\0", 6)
+        )
+        verify_record(row["solver_log"])
+        require((stored_rhs != source).nnz == 0, "source replay")
+        residual = split_io.residual_nonzeros(chart, solution, source, PRIME)
+        require(residual == row["residual_nonzeros"] == 0, "solve residual")
+        quotient = solution[:248, :].toarray().reshape(248).astype(np.uint32)
+        require(np.count_nonzero(quotient) == row["quotient_nonzero_entries"] == 248, "dense quotient")
+        root_vectors.append(quotient)
+        total_residual += residual
+
+    root_matrix = np.stack(root_vectors, axis=1)
+    stored_root_matrix = np.load(
+        verify_record(packet["selected_source"]["root_values"]), allow_pickle=False
+    )
+    require(np.array_equal(root_matrix, stored_root_matrix), "stored root vectors")
+    lagrange = np.asarray(g3bt["field"]["lagrange_rows_root_to_power_basis"], dtype=np.uint64)
+    power = (root_matrix.astype(np.uint64) @ lagrange % PRIME).astype(np.uint32)
+    stored_power = np.load(
+        verify_record(packet["selected_source"]["power_basis_coordinates"]),
+        allow_pickle=False,
+    )
+    require(np.array_equal(power, stored_power), "power-basis tensor")
+    require(power.shape == (248, 6) and np.count_nonzero(power) == 1488, "dense power basis")
+    for root_index, root in enumerate(roots):
+        value = np.zeros(248, dtype=np.uint64)
+        for degree in reversed(range(6)):
+            value = (value * root + power[:, degree]) % PRIME
+        require(np.array_equal(value.astype(np.uint32), root_matrix[:, root_index]), "interpolation")
+
+    print("UST.G3CA selected normalized-delta H02 source verifier: PASS")
+    print(
+        f"exact_terms={len(terms)} roots={len(roots)} quotient_shape=248x6 "
+        f"power_nnz={np.count_nonzero(power)} residual={total_residual}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Emit exact identities underlying the G3AO elliptic-bidual reductions."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "state" / "ust_g3ao_elliptic_bidual_identity.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def build_packet() -> dict[str, object]:
+    L = sp.Matrix([[1, 1, 1], [0, 1, 7], [0, 3, 7]])
+    adjoint_transpose = L.adjugate().T
+    expected_adjoint_transpose = sp.Matrix(
+        [[-14, 0, 0], [-4, 7, -3], [6, -7, 1]]
+    )
+    require(L.det() == -14, "elliptic transport determinant")
+    require(adjoint_transpose == expected_adjoint_transpose, "adjugate transpose")
+    require((L.det() % 101) != 0, "transport is a unit modulo 101")
+
+    X, Y, Z = sp.symbols("X Y Z")
+    fermat = X**3 + Y**3 + Z**3
+    dual_on_tangent = (
+        X**12
+        + Y**12
+        + Z**12
+        - 2 * (X**6 * Y**6 + X**6 * Z**6 + Y**6 * Z**6)
+    )
+    complementary_factors = (
+        (X**3 - Y**3 - Z**3)
+        * (X**3 - Y**3 + Z**3)
+        * (X**3 + Y**3 - Z**3)
+    )
+    require(
+        sp.expand(dual_on_tangent - fermat * complementary_factors) == 0,
+        "dual sextic vanishes on Fermat tangent covectors",
+    )
+
+    common = X**3 * Y**3 * Z**3
+    q = (
+        X**4 * (X**6 - Y**6 - Z**6),
+        Y**4 * (Y**6 - X**6 - Z**6),
+        Z**4 * (Z**6 - X**6 - Y**6),
+    )
+    bidual_remainders = (
+        X**4 * (X**3 - Y**3 - Z**3),
+        -Y**4 * (X**3 - Y**3 + Z**3),
+        -Z**4 * (X**3 + Y**3 - Z**3),
+    )
+    coordinates = (X, Y, Z)
+    for index in range(3):
+        require(
+            sp.expand(q[index] - 2 * coordinates[index] * common)
+            == sp.expand(fermat * bidual_remainders[index]),
+            f"bidual contact identity {index}",
+        )
+
+    all_nonzero_cusp_matrix = sp.Matrix(
+        [[1, -1, -1], [-1, 1, -1], [-1, -1, 1]]
+    )
+    require(all_nonzero_cusp_matrix.det() == -4, "no all-nonzero dual cusp")
+    require((all_nonzero_cusp_matrix.det() % 101) != 0, "cusp matrix unit mod 101")
+
+    a0, a1, a2 = sp.symbols("a0 a1 a2")
+    dual = (
+        a0**6
+        + a1**6
+        + a2**6
+        - 2 * (a0**3 * a1**3 + a0**3 * a2**3 + a1**3 * a2**3)
+    )
+    dual_q = (
+        a0**2 * (a0**3 - a1**3 - a2**3),
+        a1**2 * (a1**3 - a0**3 - a2**3),
+        a2**2 * (a2**3 - a0**3 - a1**3),
+    )
+    cusp_ideals = (
+        (a0, a1**3 - a2**3),
+        (a1, a0**3 - a2**3),
+        (a2, a0**3 - a1**3),
+    )
+    for index, generators in enumerate(cusp_ideals):
+        basis = sp.groebner(generators, a0, a1, a2, order="grevlex")
+        require(basis.reduce(dual)[1] == 0, f"cusp family {index} lies on dual")
+        require(
+            all(basis.reduce(value)[1] == 0 for value in dual_q),
+            f"cusp family {index} is singular",
+        )
+
+    B0, B1, B2 = sp.symbols("B0 B1 B2")
+    transformed_covector = adjoint_transpose * sp.Matrix([B0, B1, B2])
+    require(
+        list(transformed_covector)
+        == [
+            -14 * B0,
+            -4 * B0 + 7 * B1 - 3 * B2,
+            6 * B0 - 7 * B1 + B2,
+        ],
+        "covector transport used by elimination scripts",
+    )
+    Q0, Q1, Q2 = sp.symbols("Q0 Q1 Q2")
+    contact = adjoint_transpose.T * sp.Matrix([Q0, Q1, Q2])
+    require(
+        list(contact)
+        == [
+            -14 * Q0 - 4 * Q1 + 6 * Q2,
+            7 * Q1 - 7 * Q2,
+            -3 * Q1 + Q2,
+        ],
+        "chain-rule contact transport used by elimination scripts",
+    )
+
+    checks = {
+        "elliptic_coordinate_transport_has_determinant_minus_14": True,
+        "transport_and_cusp_matrices_are_units_modulo_101": True,
+        "adjugate_transpose_covector_formula_is_exact": True,
+        "Fermat_tangent_covectors_lie_on_the_displayed_dual_sextic": True,
+        "the_dual_gradient_recovers_the_primal_contact_off_the_cusps": True,
+        "the_dual_singular_locus_is_the_three_coordinate_cusp_families": True,
+        "the_chain_rule_gives_the_displayed_t_contact_coordinates": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    return {
+        "schema": "mtt.unified-source.g3ao-elliptic-bidual-identity.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AO.BIDUAL",
+        "status": "CLOSED_EXACT_SYMBOLIC_ELLIPTIC_BIDUAL_IDENTITY",
+        "elliptic_transport": {
+            "matrix": [[int(value) for value in row] for row in L.tolist()],
+            "determinant": int(L.det()),
+            "adjugate_transpose": [
+                [int(value) for value in row]
+                for row in adjoint_transpose.tolist()
+            ],
+        },
+        "dual_sextic": (
+            "a0^6+a1^6+a2^6-2*(a0^3*a1^3+a0^3*a2^3+a1^3*a2^3)"
+        ),
+        "cusp_cover": [
+            "a0=0 and a1^3=a2^3",
+            "a1=0 and a0^3=a2^3",
+            "a2=0 and a0^3=a1^3",
+        ],
+        "checks": checks,
+        "guardrails": {
+            "claims_any_selected_toric_orbit_is_empty": False,
+            "claims_characteristic_zero_endpoint_selection": False,
+            "claims_beta_C_is_computed": False,
+        },
+    }
+
+
+def main() -> None:
+    packet = build_packet()
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AO elliptic bidual identities: PASS")
+
+
+if __name__ == "__main__":
+    main()

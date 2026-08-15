@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Independent verification of the G3BD direct Deligne decision compiler."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+from fractions import Fraction
+from pathlib import Path
+
+import build_ust_g3bd_sparse_deligne_quotient_decision as builder
+import run_ust_g3bd_sparse_deligne_quotient_decision as runner
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bd_sparse_deligne_quotient.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def expect_rejection(callable_, label: str) -> None:
+    try:
+        callable_()
+    except AssertionError:
+        return
+    raise AssertionError(label)
+
+
+def absolutize_data_records(payload: dict) -> None:
+    payload["B_sweep"]["path"] = str(builder.STATE / payload["B_sweep"]["path"])
+    for record in payload["period_columns"]:
+        record["path"] = str(builder.STATE / record["path"])
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bd-sparse-deligne-quotient-decision.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_TWO_SIDED_SPARSE_DELIGNE_QUOTIENT_COMPILER_PRODUCTION_VALUES_OPEN",
+        "G3BD packet",
+    )
+    require(all(packet["checks"].values()), "G3BD checks")
+    require(not any(packet["guardrails"].values()), "G3BD guardrails")
+    require(
+        runner.multiply_exact_complex_interval(
+            (Fraction(2), Fraction(3)),
+            (Fraction(5), Fraction(5), Fraction(7), Fraction(7)),
+        )
+        == (Fraction(-11), Fraction(-11), Fraction(29), Fraction(29)),
+        "exact complex interval multiplication",
+    )
+    require(
+        runner.multiply_exact_complex_interval(
+            (Fraction(0), Fraction(1)),
+            (Fraction(1), Fraction(2), Fraction(3), Fraction(4)),
+        )
+        == (Fraction(-4), Fraction(-3), Fraction(1), Fraction(2)),
+        "nonzero-radius complex interval multiplication",
+    )
+    for name, path in (("G3BC", builder.G3BC), ("G3AR_contract", builder.G3AR), ("normalized_B_sweep_theorem", builder.NORMALIZED)):
+        require(packet["inputs"][name]["sha256"] == builder.sha256(path), f"{name} hash")
+
+    zero = load(builder.ZERO_OUTPUT)
+    nonzero = load(builder.NONZERO_OUTPUT)
+    character = load(builder.CHARACTER_OUTPUT)
+    require(
+        zero["branch"] == runner.ZERO_BRANCH
+        and zero["status"] == "ZERO_DELIGNE_CLASS_CERTIFIED_EXACT_INTEGER_PERIOD_MEMBERSHIP"
+        and zero["certificate"]["zero_residual_coordinate_count"] == 248,
+        "zero fixture",
+    )
+    require(
+        nonzero["branch"] == runner.NONZERO_BRANCH
+        and nonzero["status"] == "NONZERO_DELIGNE_CLASS_CERTIFIED_FULL_LATTICE_SEPARATION"
+        and nonzero["certificate"]["deciding_interval"]["real"]["lower"] == [1, 1]
+        and nonzero["certificate"]["deciding_interval"]["real"]["upper"] == [1, 1],
+        "nonzero fixture",
+    )
+    require(
+        character["branch"] == runner.CHARACTER_BRANCH
+        and character["status"] == "NONZERO_DELIGNE_CLASS_CERTIFIED_DUAL_LATTICE_CHARACTER"
+        and character["certificate"]["deciding_real_character_interval"]["lower"] == [1, 2]
+        and character["certificate"]["deciding_real_character_interval"]["upper"] == [1, 2]
+        and character["certificate"]["dual_character_period_pairings"][0]["lower"] == [1, 1],
+        "dual-character fixture",
+    )
+
+    with tempfile.TemporaryDirectory() as directory:
+        temporary = Path(directory)
+        replay_zero = runner.execute(builder.ZERO_INPUT, temporary / "zero.json", allow_test_only=True)
+        replay_nonzero = runner.execute(builder.NONZERO_INPUT, temporary / "nonzero.json", allow_test_only=True)
+        replay_character = runner.execute(builder.CHARACTER_INPUT, temporary / "character.json", allow_test_only=True)
+        require(replay_zero["status"] == zero["status"], "zero replay")
+        require(replay_nonzero["status"] == nonzero["status"], "nonzero replay")
+        require(replay_character["status"] == character["status"], "character replay")
+
+        tampered_payload = load(builder.ZERO_INPUT)
+        absolutize_data_records(tampered_payload)
+        decision_record = tampered_payload["decision_certificate"]
+        decision_path = builder.STATE / decision_record["path"]
+        tampered_decision = load(decision_path)
+        tampered_decision["integer_coefficients"] = [3, -1]
+        tampered_decision_path = temporary / "bad-zero-decision.json"
+        tampered_decision_path.write_text(json.dumps(tampered_decision, indent=2) + "\n", encoding="utf-8")
+        tampered_payload["decision_certificate"] = {
+            "path": str(tampered_decision_path),
+            "sha256": builder.sha256(tampered_decision_path),
+        }
+        tampered_payload_path = temporary / "bad-zero-payload.json"
+        tampered_payload_path.write_text(json.dumps(tampered_payload, indent=2) + "\n", encoding="utf-8")
+        expect_rejection(
+            lambda: runner.execute(tampered_payload_path, temporary / "bad-zero-output.json", allow_test_only=True),
+            "false zero witness accepted",
+        )
+
+        nonzero_payload = load(builder.NONZERO_INPUT)
+        absolutize_data_records(nonzero_payload)
+        nonzero_decision_path = builder.STATE / nonzero_payload["decision_certificate"]["path"]
+        nonzero_decision = load(nonzero_decision_path)
+        scope_path = builder.STATE / nonzero_decision["scope_certificate"]["path"]
+        bad_scope = load(scope_path)
+        bad_scope["coverage_tier"] = "INCOMPLETE_PERIOD_SAMPLE"
+        bad_scope_path = temporary / "bad-scope.json"
+        bad_scope_path.write_text(json.dumps(bad_scope, indent=2) + "\n", encoding="utf-8")
+        nonzero_decision["scope_certificate"] = {
+            "path": str(bad_scope_path),
+            "sha256": builder.sha256(bad_scope_path),
+        }
+        bad_decision_path = temporary / "bad-nonzero-decision.json"
+        bad_decision_path.write_text(json.dumps(nonzero_decision, indent=2) + "\n", encoding="utf-8")
+        nonzero_payload["decision_certificate"] = {
+            "path": str(bad_decision_path),
+            "sha256": builder.sha256(bad_decision_path),
+        }
+        bad_payload_path = temporary / "bad-nonzero-payload.json"
+        bad_payload_path.write_text(json.dumps(nonzero_payload, indent=2) + "\n", encoding="utf-8")
+        expect_rejection(
+            lambda: runner.execute(bad_payload_path, temporary / "bad-nonzero-output.json", allow_test_only=True),
+            "incomplete annihilator scope accepted",
+        )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BD"]["state"]
+        == "closed_exact_two_sided_sparse_deligne_compiler_production_values_open"
+        and gates["UST.G3BD"]["depends_on"] == ["UST.G3BC", "B.ETA9.02"],
+        "G3BD frontier gate",
+    )
+    require(
+        "integer membership" in frontier["frontier_delta_g3bd"]
+        and "annihilat" in frontier["frontier_delta_g3bd"],
+        "G3BD frontier",
+    )
+    theorem = (ROOT / "UST_G3BD_SPARSE_DELIGNE_QUOTIENT_DECISION_THEOREM_v1.md").read_text(encoding="utf-8")
+    require(
+        "integer period membership" in theorem
+        and "full-lattice-annihilator" in theorem
+        and "dual-lattice-character" in theorem
+        and "None of these branches requires G3AU" in theorem,
+        "G3BD theorem",
+    )
+    print("UST.G3BD sparse Deligne quotient decision: PASS membership and dual-character compiler")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Certify the hardest full-support G3AO vs chart by bidual elimination."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "vs_dual"
+LABEL = "B_xyzw__T_t0t1t2__I_vs"
+ITEM = (direct.BASE, direct.ELLIPTIC, ("v", "s"))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_script(polynomials: dict[str, str], algorithm: str) -> str:
+    return f'''// UST.G3AO full-support vs elliptic-bidual certificate.
+// Smooth dual contacts are eliminated to the base; dual cusps retain t.
+ring source=(101,g),(x,y,z,w,t0,t1,t2),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly E={direct.ELLIPTIC_POLYNOMIAL};
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly C_reduced=(A0)*t0+(A0+A1+3*A2)*t1+(A0+7*A1+7*A2)*t2;
+poly B_ambient={direct.AMBIENT_GAUGE};
+poly C=C_reduced+K*B_ambient;
+poly B0=diff(C,t0);
+poly B1=diff(C,t1);
+poly B2=diff(C,t2);
+poly dual0=-14*B0;
+poly dual1=-4*B0+7*B1-3*B2;
+poly dual2=6*B0-7*B1+B2;
+poly dualSextic=dual0^6+dual1^6+dual2^6
+  -2*(dual0^3*dual1^3+dual0^3*dual2^3+dual1^3*dual2^3);
+poly q0=dual0^2*(dual0^3-dual1^3-dual2^3);
+poly q1=dual1^2*(dual1^3-dual0^3-dual2^3);
+poly q2=dual2^2*(dual2^3-dual0^3-dual1^3);
+poly contact0=-14*q0-4*q1+6*q2;
+poly contact1=7*q1-7*q2;
+poly contact2=-3*q1+q2;
+poly baseResponseY=contact0*diff(B0,y)+contact1*diff(B1,y)+contact2*diff(B2,y);
+poly baseResponseZ=contact0*diff(B0,z)+contact1*diff(B1,z)+contact2*diff(B2,z);
+poly baseResponseW=contact0*diff(B0,w)+contact1*diff(B1,w)+contact2*diff(B2,w);
+ideal smoothDualLocus=dualSextic,baseResponseY,baseResponseZ,baseResponseW;
+poly ellipticMinor=diff(E,t1)*diff(C,t2)-diff(E,t2)*diff(C,t1);
+ideal singularDualLocus=E,C,diff(C,y),diff(C,z),diff(C,w),ellipticMinor,
+  contact0,contact1,contact2;
+ring smoothOrbit=(101,g),(y,z,w,orbitInv),dp;
+minpoly={polynomials["minpoly"]};
+map smoothMap=source,1,y,z,w,1,1,1;
+ideal smoothRestricted=smoothMap(smoothDualLocus),orbitInv*(y*z*w)-1;
+ideal smoothBasis={algorithm}(smoothRestricted);
+int smoothEmpty=(size(smoothBasis)==1 && smoothBasis[1]==1);
+print("G3AO_VS_BIDUAL_SMOOTH_EMPTY="+string(smoothEmpty));
+setring source;
+ring cuspOrbit=(101,g),(y,z,w,t1,t2,orbitInv),dp;
+minpoly={polynomials["minpoly"]};
+map cuspMap=source,1,y,z,w,1,t1,t2;
+ideal cuspRestricted=cuspMap(singularDualLocus),orbitInv*(y*z*w*t1*t2)-1;
+ideal cuspBasis={algorithm}(cuspRestricted);
+int cuspEmpty=(size(cuspBasis)==1 && cuspBasis[1]==1);
+print("G3AO_VS_BIDUAL_CUSP_EMPTY="+string(cuspEmpty));
+quit;
+'''
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=3600)
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="std")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    require(direct.label(*ITEM) == LABEL, "selected full-support label")
+    polynomials = direct.selected_polynomials()
+    source_hash = sha256(direct.SOURCE)
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    script = CAMPAIGN / f"{LABEL}.{args.algorithm}.sing"
+    output = CAMPAIGN / f"{LABEL}.{args.algorithm}.singular.out"
+    packet_path = CAMPAIGN / f"{LABEL}.{args.algorithm}.packet.json"
+    script.write_text(make_script(polynomials, args.algorithm), encoding="ascii")
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            singular_command(ROOT, script),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        captured = error.stdout or b""
+        raw = (
+            captured.decode("utf-8", errors="replace")
+            if isinstance(captured, bytes)
+            else captured
+        )
+        returncode = 124
+    output.write_text(raw, encoding="utf-8")
+    elapsed = time.time() - started
+    passed = (
+        not timed_out
+        and returncode == 0
+        and "G3AO_VS_BIDUAL_SMOOTH_EMPTY=1" in raw
+        and "G3AO_VS_BIDUAL_CUSP_EMPTY=1" in raw
+    )
+    packet = {
+        "schema": "mtt.unified-source.g3ao-selected-cayley-toric-orbit-vs-dual.v1",
+        "label": LABEL,
+        "source_sha256": source_hash,
+        "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+        "supports": {
+            "base": list(direct.BASE),
+            "elliptic": list(direct.ELLIPTIC),
+            "Cayley_fiber": ["v", "s"],
+        },
+        "script": {
+            "path": str(script.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(script),
+        },
+        "output": {
+            "path": str(output.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(output),
+        },
+        "algorithm": f"vs_dual_{args.algorithm}",
+        "certificate_method": "vs_elliptic_bidual_contact_and_cusp_necessary_loci",
+        "proof_scope": {
+            "the_full_triangular_C_coefficient_covector_is_retained": True,
+            "the_elliptic_multiplier_equations_force_the_transformed_Fermat_dual_sextic": True,
+            "biduality_recovers_the_same_primal_contact_point_at_every_smooth_dual_covector": True,
+            "the_three_base_derivatives_are_tested_at_that_same_contact_point": True,
+            "the_singular_dual_chart_retains_the_original_elliptic_and_base_critical_equations": True,
+            "the_smooth_and_cusp_loci_cover_every_original_full_support_vs_critical_point": True,
+            "unit_saturated_smooth_and_cusp_ideals_prove_the_original_orbit_locus_empty": passed,
+            "a_nonunit_smooth_or_cusp_ideal_would_be_inconclusive": True,
+        },
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "passed": passed,
+    }
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(f"{LABEL}: {'PASS' if passed else 'INCONCLUSIVE'} ({elapsed:.1f}s)")
+    if not passed:
+        raise SystemExit(returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

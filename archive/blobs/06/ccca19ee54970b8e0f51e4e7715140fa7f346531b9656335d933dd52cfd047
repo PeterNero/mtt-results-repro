@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Verify UST.G3T K-class, qutrit determinant and balanced transform rows."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3t_support_wide_slope_balanced_qutrit.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    loaded: dict[str, dict] = {}
+    for key, source in packet["inputs"].items():
+        path = ROOT / source["path"]
+        require(sha256(path) == source["sha256"], f"input hash {key}")
+        loaded[key] = load(path)
+    return loaded
+
+
+def verify_support_reduction(packet: dict, inputs: dict[str, dict]) -> None:
+    reduction = packet["support_wide_reduction"]
+    g3r = inputs["local_G3R_packet"]
+    require(reduction["support_neighborhood"] == "A=E_B x E_f", "support neighborhood")
+    require(reduction["off_support_block"] == "N^3", "off-support block")
+    require("Qdual*N" in reduction["old_support_block"], "old support block")
+    require(reduction["new_support_block"].endswith("locally N^3"), "balanced block")
+    require(reduction["same_on_punctured_normal_neighborhood"], "punctured identity")
+    require(reduction["original_boundary_clutching_retained"], "boundary clutching")
+    require(reduction["global_holomorphic_balanced_mutation_constructed"], "global mutation")
+    require(g3r["uniform_WIT0"]["off_support_inputs"] == [[1, 3]] * 3, "G3R off-support binding")
+
+
+def verify_k_class(packet: dict, inputs: dict[str, dict]) -> None:
+    cert = packet["K_class_certificate"]
+    require(cert["old_rank"] == cert["new_rank"] == 3, "rank equality")
+    require(cert["old_determinant"] == cert["new_determinant"] == "N^3", "determinant equality")
+
+    # In K0(E), rank and determinant determine the class. The extension gives
+    # [M]=[P]+[N], with P=L^-1*N and R=L*N.
+    old_line_exponents = [(1, 1), (-1, 1), (0, 1)]  # powers of (L,N)
+    new_line_exponents = [(0, 1), (0, 1), (0, 1)]
+    old_det = tuple(sum(row[i] for row in old_line_exponents) for i in range(2))
+    new_det = tuple(sum(row[i] for row in new_line_exponents) for i in range(2))
+    require(old_det == new_det == (0, 3), "line determinant arithmetic")
+    require(cert["fiber_K0_equal"], "fiber K0")
+    require(cert["support_lines_pulled_from_elliptic_factor"], "support pullback")
+    require(cert["vertical_degree_two_classes_square_zero"], "vertical square")
+    require(cert["support_even_K_group_torsion_free"], "support K torsion")
+    require(cert["support_integral_K0_equal"], "integral support K0")
+    require(cert["global_boundary_clutching_unchanged"], "global clutching")
+    require(cert["selected_global_K_class_preserved"], "global K class")
+    require(cert["selected_integral_k_lift"] == 0, "integral lift")
+    require(
+        cert["free_rows"] == inputs["local_G3R_packet"]["selected_class_binding"]["free_rows"],
+        "free rows",
+    )
+
+
+def verify_two_twists_and_determinant(packet: dict) -> None:
+    descent = packet["two_twist_descent"]
+    require(descent["alpha_intermediate_on_J_preserved"], "alpha intermediate")
+    require(descent["sigma_projective_action_on_cover_preserved"], "sigma action")
+    require(descent["tau_projective_output_on_Y_constructed"], "tau output")
+    require(not descent["alpha_sigma_tau_identified"], "twists conflated")
+    require(descent["det_X"] == descent["det_Z"] == 1, "qutrit determinants")
+    require(
+        descent["central_rank9_determinant_exponent"] % descent["central_phase_order"] == 0,
+        "central determinant exponent",
+    )
+    require(descent["central_determinant"] == 1, "central determinant")
+
+    determinant = packet["holomorphic_determinant"]
+    require(determinant["local_SU9_lifts"], "SU9 lifts")
+    require(determinant["overlap_determinants_one"], "overlap determinants")
+    require(determinant["qutrit_generator_determinants_one"], "generator determinants")
+    require(determinant["central_sigma_determinant_one_at_rank9"], "sigma determinant")
+    require(determinant["holomorphic_P39_reduction_constructed"], "P39 reduction")
+
+
+def corrected_output(source: list[int]) -> tuple[int, Fraction]:
+    rank, degree = source
+    return degree, Fraction(-rank, 1) + Fraction(degree, 3)
+
+
+def verify_balanced_transform(packet: dict, inputs: dict[str, dict]) -> None:
+    transform = packet["balanced_transform"]
+    outputs = [corrected_output(source) for source in transform["source_factors"]]
+    declared = [(rank, Fraction(degree, 1)) for rank, degree in transform["B_corrected_factors"]]
+    require(outputs == declared == [(3, Fraction(0))] * 3, "corrected factors")
+    require(transform["FM_factors"] == [[3, -1]] * 3, "FM factors")
+    require(transform["each_FM_factor_stable_before_B_shift"], "FM stability")
+    require(transform["B_shift_preserves_twisted_stability"], "B stability")
+    require(transform["each_corrected_factor_stable"], "corrected stability")
+    require(transform["rank9_relative_polystability"], "relative polystability")
+    require(not transform["remaining_positive_HN_piece"], "positive HN piece")
+    require(transform["G3D_mode"] == "finite_stable_orbit", "G3D mode")
+    require(transform["twist_order"] == 3, "twist order")
+    require(transform["H_square"] == 2, "H square")
+    gap = Fraction(transform["H_square"], transform["twist_order"])
+    require(gap == Fraction(transform["fiber_gap"]) == Fraction(2, 3), "fiber gap")
+    require(
+        inputs["local_G3D_packet"]["stability_compiler"]["hidden_conservative_twisted_gap"]
+        == "2/3",
+        "G3D gap binding",
+    )
+
+
+def verify_boundary(packet: dict) -> None:
+    remaining = packet["remaining_G3D_rows"]
+    for key in (
+        "physical_factor_support_packet_emitted",
+        "factor_support_reduced_certified",
+        "factor_support_irreducible_certified",
+        "mu1_upper_bound_emitted",
+        "common_rational_t_selected",
+        "target_HYM_closed",
+    ):
+        require(not remaining[key], key)
+
+    scope = packet["scope"]
+    require(scope["G3R_local_free_object_retained_as_intermediate"], "G3R object")
+    require(scope["G3R_unbalanced_physical_presentation_retired"], "G3R HN route")
+    require(scope["G3S_balance_condition_satisfied"], "G3S condition")
+    require(scope["support_wide_mutation_closed"], "support mutation")
+    require(scope["relative_polystability_closed"], "polystability")
+    require(scope["holomorphic_P39_reduction_closed"], "P39 scope")
+    require(not scope["pointwise_Bianchi_closed"], "Bianchi overclaimed")
+    require(not scope["same_source_visible_V3_closed"], "visible overclaimed")
+    require(not scope["B_HS_01_closed"], "B.HS.01 overclaimed")
+    require(not scope["UST_G3_closed"], "G3 overclaimed")
+    require(packet["continuous_fit_parameters"] == 0, "continuous fit")
+    require(packet["observed_inputs"] == 0, "observed inputs")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    require(
+        packet["schema"] == "mtt.unified-source.q79-support-wide-slope-balanced-qutrit.v1",
+        "schema",
+    )
+    require(packet["theorem_id"] == "UST.G3T", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_SUPPORT_WIDE_BALANCED_MUTATION_RELATIVE_POLYSTABILITY_HOLOMORPHIC_P39_MU1_HYM_BIANCHI_OPEN",
+        "status",
+    )
+    inputs = verify_inputs(packet)
+    verify_support_reduction(packet, inputs)
+    verify_k_class(packet, inputs)
+    verify_two_twists_and_determinant(packet)
+    verify_balanced_transform(packet, inputs)
+    verify_boundary(packet)
+
+    print("UST.G3T support-wide slope-balanced qutrit promotion: PASS")
+    print("support block -> N tensor C3_sigma with selected K-class retained")
+    print("three corrected rank-three factors: stable degree zero")
+    print("rank-nine target: relatively polystable, fiber gap 2/3")
+    print("holomorphic P(3,9) determinant reduction: closed")
+    print("remaining G3D rows: factor support and mu1 upper bound")
+    print("downstream G3U: direct stability retires the hidden support row; only mu1 remains")
+
+
+if __name__ == "__main__":
+    main()

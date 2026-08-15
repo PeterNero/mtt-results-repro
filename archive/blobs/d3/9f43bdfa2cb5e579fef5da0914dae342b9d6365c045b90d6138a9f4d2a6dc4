@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Independently verify UST.G3AK from its finite-field matrix artifact."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import verify_ust_g3ad_fixed_fq_second_h_graph_obstruction as arithmetic
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3ak_full_graph_incidence_normal_decomposition.packet.json"
+G3AD_PATH = ROOT / "state" / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json"
+G3AG_PATH = ROOT / "state" / "ust_g3ag_three_graph_joint_coefficient_lift.packet.json"
+P = 101
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def add(left, right):
+    return arithmetic.qadd(left, right, P)
+
+
+def neg(value):
+    return arithmetic.qneg(value, P)
+
+
+def sub(left, right):
+    return arithmetic.qsub(left, right, P)
+
+
+def mul(left, right, relation):
+    return arithmetic.qmul(left, right, relation, P)
+
+
+def inverse(value, relation, degree):
+    result = arithmetic.qpow(value, P**degree - 2, relation, P)
+    require(mul(value, result, relation) == arithmetic.qone(degree), "field inverse")
+    return result
+
+
+def rref(matrix, relation, degree):
+    zero = arithmetic.qzero(degree)
+    work = [list(row) for row in matrix]
+    column_count = len(work[0]) if work else 0
+    require(all(len(row) == column_count for row in work), "rectangular matrix")
+    pivots = []
+    pivot_row = 0
+    for column in range(column_count):
+        selected = next(
+            (row for row in range(pivot_row, len(work)) if work[row][column] != zero),
+            None,
+        )
+        if selected is None:
+            continue
+        work[pivot_row], work[selected] = work[selected], work[pivot_row]
+        inv = inverse(work[pivot_row][column], relation, degree)
+        work[pivot_row] = [mul(value, inv, relation) for value in work[pivot_row]]
+        for row in range(len(work)):
+            if row == pivot_row or work[row][column] == zero:
+                continue
+            factor = work[row][column]
+            work[row] = [
+                sub(value, mul(factor, pivot_value, relation))
+                for value, pivot_value in zip(work[row], work[pivot_row])
+            ]
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == len(work):
+            break
+    return work, pivots
+
+
+def matrix_vector(matrix, vector, relation, degree):
+    zero = arithmetic.qzero(degree)
+    result = []
+    for row in matrix:
+        value = zero
+        for entry, coordinate in zip(row, vector):
+            value = add(value, mul(entry, coordinate, relation))
+        result.append(value)
+    return result
+
+
+def transpose(columns):
+    return [list(row) for row in zip(*columns)]
+
+
+def kernel_basis(reduced, pivots, degree):
+    zero = arithmetic.qzero(degree)
+    one = arithmetic.qone(degree)
+    pivot_set = set(pivots)
+    free = [index for index in range(len(reduced[0])) if index not in pivot_set]
+    vectors = []
+    for free_column in free:
+        vector = [zero] * len(reduced[0])
+        vector[free_column] = one
+        for row, pivot_column in enumerate(pivots):
+            vector[pivot_column] = neg(reduced[row][free_column])
+        vectors.append(vector)
+    return free, vectors
+
+
+def polynomial_multiply(left, right, relation, degree):
+    zero = arithmetic.qzero(degree)
+    result = {}
+    for left_exponent, left_value in left.items():
+        for right_exponent, right_value in right.items():
+            exponent = tuple(a + b for a, b in zip(left_exponent, right_exponent))
+            value = add(result.get(exponent, zero), mul(left_value, right_value, relation))
+            if value == zero:
+                result.pop(exponent, None)
+            else:
+                result[exponent] = value
+    return result
+
+
+def homogeneous_monomials(degree):
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree, -1, -1)
+        for y_power in range(degree - x_power, -1, -1)
+    ]
+
+
+def main() -> None:
+    packet = json.loads(PACKET_PATH.read_text(encoding="ascii"))
+    g3ad = json.loads(G3AD_PATH.read_text(encoding="utf-8"))
+    g3ag = json.loads(G3AG_PATH.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AK", "theorem id")
+    for key, value in packet["inputs"].items():
+        path = ROOT / value["path"]
+        require(path.is_file() and sha256(path) == value["sha256"], f"input hash {key}")
+
+    field = packet["residue_field"]
+    relation = tuple(int(value) for value in field["gamma_relation_coefficients_ascending"])
+    degree = int(field["extension_degree"])
+    require(field["prime"] == P and degree == 6 and len(relation) == 7, "selected field")
+    zero = arithmetic.qzero(degree)
+    one = arithmetic.qone(degree)
+
+    certificate = packet["incidence_certificate"]
+    artifact = certificate["matrix_artifact"]
+    matrix_path = ROOT / artifact["path"]
+    raw = matrix_path.read_bytes()
+    require(sha256(matrix_path) == artifact["sha256"], "matrix artifact hash")
+    require(len(raw) == artifact["bytes"] == 168 * 249 * degree, "matrix byte count")
+    offset = 0
+    matrix = []
+    serialized = []
+    for _ in range(168):
+        row = []
+        serialized_row = []
+        for _ in range(249):
+            value = tuple(raw[offset : offset + degree])
+            offset += degree
+            row.append(value)
+            serialized_row.append(list(value))
+        matrix.append(row)
+        serialized.append(serialized_row)
+    require(offset == len(raw), "matrix artifact fully consumed")
+    require(canonical_hash(serialized) == certificate["matrix_sha256"], "matrix canonical hash")
+    require(certificate["matrix_sha256"] == g3ag["simultaneous_linear_system"]["stacked_matrix_sha256"], "G3AG matrix identity")
+
+    reduced, pivots = rref(matrix, relation, degree)
+    require(pivots == certificate["pivot_columns_zero_based"], "incidence pivots")
+    require(len(pivots) == certificate["rank"] == 126, "incidence rank")
+    free, canonical_kernel = kernel_basis(reduced, pivots, degree)
+    require(free == certificate["free_columns_zero_based"] and len(free) == 123, "kernel columns")
+    require(
+        canonical_hash([[list(value) for value in vector] for vector in canonical_kernel])
+        == certificate["canonical_kernel_basis_sha256"],
+        "kernel basis hash",
+    )
+
+    basis = g3ag["simultaneous_linear_system"]["column_basis"]
+    require(len(basis) == 249, "coefficient basis")
+    coefficient_lookup = {
+        (
+            int(row["target_coordinate"]),
+            str(row["basis_kind"]),
+            tuple(int(value) for value in row["powers_xyz"]),
+        ): arithmetic.qelement(row["gamma_coefficients_ascending"], P, degree)
+        for row in g3ad["fixed_FQ"]["nonzero_gamma_rows"]
+    }
+    selected_member = [
+        coefficient_lookup.get(
+            (
+                int(row["target_coordinate"]),
+                str(row["basis_kind"]),
+                tuple(int(value) for value in row["powers_xyz"]),
+            ),
+            zero,
+        )
+        for row in basis
+    ]
+    require(all(value == zero for value in matrix_vector(matrix, selected_member, relation, degree)), "F0 in kernel")
+    frame_packet = packet["full_graph_preserving_frame"]
+    require(canonical_hash([list(value) for value in selected_member]) == frame_packet["selected_member_sha256"], "F0 hash")
+
+    union_source = packet["selected_graph_union"]
+    first_r = arithmetic.qelement(union_source["first_H_r_gamma_coordinates"], P, degree)
+    first_w = arithmetic.qelement(union_source["first_H_w_gamma_coordinates"], P, degree)
+    second_r = arithmetic.qelement(union_source["second_H_r_gamma_coordinates"], P, degree)
+    second_w = arithmetic.qelement(union_source["second_H_w_gamma_coordinates"], P, degree)
+    first_line = {(0, 0, 1): one, (1, 0, 0): neg(first_r), (0, 1, 0): neg(first_w)}
+    second_line = {(0, 0, 1): one, (1, 0, 0): neg(second_r), (0, 1, 0): neg(second_w)}
+    quartic = {
+        (4, 0, 0): arithmetic.qelement((8,), P, degree),
+        (2, 1, 1): arithmetic.qelement((8,), P, degree),
+        (1, 3, 0): arithmetic.qelement((8,), P, degree),
+        (1, 0, 3): arithmetic.qelement((-3,), P, degree),
+        (0, 2, 2): arithmetic.qelement((8,), P, degree),
+    }
+    union = polynomial_multiply(
+        polynomial_multiply(first_line, second_line, relation, degree),
+        quartic,
+        relation,
+        degree,
+    )
+    emitted_union = {
+        tuple(row["powers_xyz"]): arithmetic.qelement(row["gamma_coefficients"], P, degree)
+        for row in union_source["union_terms"]
+    }
+    require(union == emitted_union and all(sum(exponent) == 6 for exponent in union), "union polynomial")
+
+    basis_lookup = {
+        (
+            int(row["target_coordinate"]),
+            str(row["basis_kind"]),
+            tuple(int(value) for value in row["powers_xyz"]),
+        ): index
+        for index, row in enumerate(basis)
+    }
+    principal = []
+    for target in range(3):
+        for monomial in homogeneous_monomials(3):
+            vector = [zero] * 249
+            for exponent, coefficient in union.items():
+                output = tuple(a + b for a, b in zip(exponent, monomial))
+                vector[basis_lookup[(target, "base_degree9", output)]] = coefficient
+            principal.append(vector)
+        vector = [zero] * 249
+        for exponent, coefficient in union.items():
+            vector[basis_lookup[(target, "K3_sheet_times_degree6", exponent)]] = coefficient
+        principal.append(vector)
+    require(len(principal) == 33, "principal directions")
+    require(
+        canonical_hash([[list(value) for value in vector] for vector in principal])
+        == packet["principal_slice"]["columns_sha256"],
+        "principal slice hash",
+    )
+    require(
+        all(all(value == zero for value in matrix_vector(matrix, vector, relation, degree)) for vector in principal),
+        "principal slice in kernel",
+    )
+
+    free_coordinates = [[vector[index] for index in free] for vector in [selected_member] + principal]
+    _, base_pivots = rref(free_coordinates, relation, degree)
+    require(len(base_pivots) == 34, "F0 plus principal rank")
+    extra_positions = [index for index in range(123) if index not in set(base_pivots)]
+    require(extra_positions == frame_packet["extra_kernel_basis_positions_zero_based"], "extra positions")
+    require([free[index] for index in extra_positions] == frame_packet["extra_kernel_free_columns_zero_based"], "extra free columns")
+    extra = [canonical_kernel[index] for index in extra_positions]
+    tangent = principal + extra
+    kernel_frame = [selected_member] + tangent
+    _, kernel_pivots = rref(transpose(kernel_frame), relation, degree)
+    require(len(tangent) == 122 and len(extra) == 89 and len(kernel_pivots) == 123, "full projective tangent")
+    require(
+        canonical_hash([[list(value) for value in vector] for vector in tangent])
+        == frame_packet["projective_tangent_frame_sha256"],
+        "tangent frame hash",
+    )
+    require(
+        canonical_hash([[list(value) for value in vector] for vector in kernel_frame])
+        == frame_packet["kernel_frame_sha256"],
+        "kernel frame hash",
+    )
+
+    complement = []
+    for column in pivots:
+        vector = [zero] * 249
+        vector[column] = one
+        complement.append(vector)
+    _, full_pivots = rref(transpose(kernel_frame + complement), relation, degree)
+    require(len(full_pivots) == 249, "full source frame")
+    normal = packet["exact_normal_sequence"]
+    require(
+        frame_packet["affine_kernel_rank"] == 123
+        and frame_packet["projective_tangent_rank"] == 122
+        and frame_packet["principal_tangent_rank"] == 33
+        and frame_packet["additional_tangent_rank"] == 89
+        and normal["true_incidence_normal_rank"] == 126
+        and 215 == 89 + 126,
+        "dimension ledger",
+    )
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    print("UST.G3AK full graph-incidence decomposition: PASS")
+    print("rank(K)=123; rank(T_projective)=122=33+89")
+    print("old quotient 215=89 omitted tangent +126 true normal")
+    print("beta_C and carrier-specific Deligne transport remain OPEN")
+
+
+if __name__ == "__main__":
+    main()

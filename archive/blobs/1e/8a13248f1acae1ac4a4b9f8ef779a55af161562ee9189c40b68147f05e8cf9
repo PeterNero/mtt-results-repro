@@ -1,0 +1,85 @@
+# UST.G3DA: H11 Archimedean Reduced-Coupling Theorem
+
+## Status
+
+`CLOSED_CERTIFIED_FULL_H11_REDUCED_COUPLING_ON_ONE_CONJUGATE_ARCHIMEDEAN_PAIR`
+
+This is a strict advance on `B.ETA9.01` and `B.ETA9.02`. It does not yet close either blocker.
+
+## Exact Corridor
+
+The G3CX source-observation corridor has 394 components and dimension 2786. Its off-diagonal structure is exactly:
+
+```text
+392 singleton rows  -> 1710 core       392 nonzeros
+684 core rows       -> 392 singletons  10803 nonzeros
+684 core rows       -> 1710 core       17077 nonzeros
+```
+
+There are no singleton-to-singleton blocks in this corridor. This makes the characteristic-zero solve a selected three-stage computation rather than a generic 4426-dimensional inversion.
+
+## Theorem
+
+On canonical Archimedean embedding 4, load the G3CZ enclosure for the 1710 core and propagate all 740 G3CX-active source columns through the 392 scalar equations and the 684 core. Then:
+
+- all `392 * 740 = 290080` scalar residual balls contain zero;
+- all `684 * 740 = 506160` core-449 residual balls contain zero;
+- contraction with the exact path factor `W` emits
+
+```text
+Q_active = W A0^(-1) U in C^(988 x 740);
+```
+
+- the omitted 248 columns vanish identically over `Q(gamma)` by G3CX;
+- the G3CY row and column selections extract
+
+```text
+T_Q = Q[R,C] in C^(710 x 710).
+```
+
+The directed-rounding determinant ball of `T_Q` excludes zero. This numerical result agrees with the independent exact reason for invertibility: G3CY proved that the same minor is a nonzero element over `Q(gamma)`, and every field embedding is injective.
+
+All coefficients are rational polynomials in `gamma`, so complex conjugation carries the complete result to canonical embedding 5.
+
+## Consequence
+
+On embeddings 4 and 5, the formerly formal second Woodbury data are now actual certified values:
+
+```text
+U_Q = Q[:,C]
+T_Q = Q[R,C]
+W_Q = Q[R,:]
+```
+
+The persisted archive stores the 740 nonzero columns. The 248 omitted columns of `W_Q` are exact zeros, not truncations.
+
+This closes characteristic-zero value evaluation of the H11 reduced coupling on one conjugate embedding pair. It does not yet solve the parameter-dependent kernel
+
+```text
+T_Q + a W_Q S^(-1) U_Q,
+```
+
+and it does not yet supply the evolving selected source.
+
+## Boundaries
+
+G3DA does not:
+
+- execute the other complex pair or the two real embeddings;
+- choose a physical embedding;
+- solve the 710-dimensional path-dependent system;
+- evaluate `x0 = A0^(-1)b(a)`;
+- integrate the selected path;
+- prove integral marking or `beta_C`;
+- close the Hull-Strominger endpoint theorem.
+
+## Next Object
+
+Evaluate `S(gamma)` and the selected source on embeddings 4/5, solve the 710-dimensional path kernel with balls, and compare its base and first derivative with G3CT. The same G3CZ/G3DA calculation must then be run on the remaining embedding orbits.
+
+## Reproduction
+
+```powershell
+python build_ust_g3da_h11_archimedean_reduced_coupling.py --precision 192 --root-bits 160 --maxprec 1024
+python verify_ust_g3da_h11_archimedean_reduced_coupling.py
+```

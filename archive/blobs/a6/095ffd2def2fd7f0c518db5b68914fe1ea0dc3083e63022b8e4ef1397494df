@@ -1,0 +1,202 @@
+# UST.G3AI: Selected Second-H Marked-Map All-Orders Descent Theorem
+
+## Status
+
+`CLOSED_EXACT_ALL_ORDERS_SELECTED_SECOND_H_MARKED_MAP_OVER_ORIGINAL_UNRAMIFIED_DVR`
+
+The five surplus rows in the selected second-H marked-map compiler are no
+longer an all-orders obstruction. The proof does not guess a polynomial
+syzygy and does not extrapolate from the computation through `101^6`.
+Instead, it combines:
+
+1. an explicit unit Hensel chart for eight coefficient equations; and
+2. the independently established Hesse-Hurwitz cover after finite base
+   extension.
+
+Uniqueness on the Hensel chart descends the full thirteen-row cover to the
+original unramified cubic DVR.
+
+## 1. Base and Selected Identity
+
+Let
+
+```text
+O = Z_101[alpha]/(alpha^3+12alpha^2+69alpha+31).
+```
+
+The second-H source curve exists uniquely over `O`. Its selected residue map
+is represented by monic cubics `Q`, `R`, `S`, a cubic `P`, and scalars
+`lambda`, `k`, satisfying
+
+```text
+h = u Q R,
+Q(P^3+16Q^3) = lambda h S^2,
+k^2 = -3 lambda.
+```
+
+The residue resultants and leading coefficients are nonzero. Consequently,
+the monic `Q,R` factorization and the normalized marked-map chart remain open
+under integral deformation.
+
+Write the thirteen coefficients of
+
+\[
+ E(x)=Q(P^3+16Q^3)-\lambda hS^2
+\]
+
+as `E_0,...,E_12`. With `S_3=1`, the eight unknowns are
+
+```text
+(P0,P1,P2,P3,S0,S1,S2,lambda).
+```
+
+## 2. The Unit Eight-Row Chart
+
+The verifier reconstructs the complete `13 x 8` derivative over
+`F_101(alpha)`. The first eight rows, `E_0,...,E_7`, already form a square
+full-rank subsystem. Their determinant is
+
+\[
+ \delta=73+52\alpha+83\alpha^2.
+\]
+
+Its inverse and norm are
+
+```text
+delta^(-1) = 56+76 alpha+13 alpha^2,
+Norm(delta) = 57 mod 101.
+```
+
+Thus `delta` is a unit. Multivariate Hensel gives one and only one normalized
+solution
+
+\[
+ \widehat x\in O^8
+\]
+
+of `E_0=...=E_7=0` reducing to the selected residue map.
+
+This is stronger than the previous statement that the full rectangular
+Jacobian has rank eight: it identifies a concrete square subsystem to which
+the uniqueness form of Hensel's lemma applies.
+
+## 3. Hurwitz Existence and Descent
+
+The locked Hesse-Hurwitz theorem proves that, after a finite completed
+integral extension `O'/O`, the same source curve carries a marked
+degree-three cover to the Fermat elliptic factor. This uses the `a=0`
+Hesse-pair construction. The Fermat factor is distinguished from the
+ordinary complementary factor, and the selected origin and sign fix the
+marking.
+
+The normalized degree-three Hurwitz family is algebraic and representable.
+Because all selected resultants, leading terms, `lambda`, and `k` are units in
+the residue fiber, the lifted cover lies in the same open
+`P,Q,S,lambda` chart. Its coordinate vector `x'` therefore satisfies all
+thirteen equations over `O'` and reduces to the selected B53 point.
+
+Now compare two solutions over `O'`:
+
+```text
+x_hat tensor O'  solves E0,...,E7 and reduces to B53;
+x'               solves E0,...,E12 and reduces to B53.
+```
+
+The determinant remains a unit after base change, so Hensel uniqueness over
+`O'` gives
+
+\[
+ x'=\widehat x\otimes_O O'.
+\]
+
+It follows that `E_8,...,E_12` vanish on `x_hat` after extension to `O'`.
+The map `O -> O'` is injective, hence those five values already vanish in
+`O`. Finally, `2k` is a unit, so the selected root of
+`k^2=-3 lambda` also lifts uniquely.
+
+Therefore the full selected marked map exists through every `101`-adic order
+over the original unramified DVR. The finite extension is used as an
+existence witness in the descent proof; it is not needed as the final
+coefficient field.
+
+## 4. Theorem
+
+**Selected Second-H Marked-Map All-Orders Descent Theorem.** The selected
+second-H residue map admits a unique normalized all-orders lift
+`(P,Q,R,S,lambda,k)` over `O`. All thirteen coefficients of
+
+\[
+ Q(P^3+16Q^3)-\lambda hS^2
+\]
+
+vanish. In particular, the five rows not used in the square Hensel subsystem
+vanish identically on the selected formal branch.
+
+**Proof.** Coprime Hensel factorization first gives the unique monic `Q,R`
+lift. The explicit determinant calculation makes `E_0,...,E_7` an etale
+Hensel chart and produces a unique base solution. The independently proved
+Hesse-Hurwitz cover supplies a full thirteen-row point on the same chart
+after finite base extension. Uniqueness identifies the two points after base
+change, and faithful descent kills the five remaining rows over `O`. The unit
+derivative `2k` lifts the selected Fermat sign. QED.
+
+## 5. Consequence for UST.G3AH
+
+The formal-map hypothesis in `UST.G3AH` is now discharged:
+
+```text
+first-H map                 formal
+second-H map                formal by UST.G3AI
+4H map                      algebraic, hence formal after completion
+three graph maps            formal over one common finite extension
+eta9 incidence map          surjective
+eta9 coefficient kernel     free of rank 123
+all-orders graph member     exists
+```
+
+Thus both the graph-map and coefficient-lift walls are closed. No further
+`249`-variable higher-digit search is required.
+
+## 6. What Remains Open
+
+This theorem does not:
+
+- print an infinite digit list or a global number-field formula;
+- give a universal syzygy valid on every component of the coefficient
+  scheme;
+- select one of the 123 coefficient-kernel directions physically;
+- prove that the previously frozen number-field member `C_Q` is the same
+  graph-Prym member;
+- select a smooth characteristic-zero member and evaluate `beta_C` on that
+  same member;
+- construct the twisted visible bundle, HYM connection, or
+  Hull-Strominger endpoint.
+
+`UST.G3AJ` subsequently proves that the selected residue coefficient ball
+contains a smooth finite-flat rank-three graph-Prym member. The remaining
+nonduplicative target is the explicit analytic selection problem:
+
+```text
+emit/select a member of the formal graph-Prym residue ball
+  -> calculate beta_C on that member
+  -> promote the algebraic Prym line to the twisted visible V3.
+```
+
+## 7. Primary Mathematics
+
+- Martin Djukanovic, *Families of (3,3)-split Jacobians*,
+  <https://arxiv.org/abs/1811.10075>.
+- Jan Christian Rohde, *Short equations for the genus 2 covers of degree 3
+  of an elliptic curve*, <https://arxiv.org/abs/math/0503412>.
+
+These sources provide the Hesse-pair cover and the representable normalized
+Hurwitz family. The unit determinant, selected branch identification, and
+descent calculation are specific to the q79 data.
+
+## 8. Reproduction
+
+```text
+python build_ust_g3ai_second_h_marked_map_all_orders.py
+python verify_ust_g3ai_second_h_marked_map_all_orders.py
+python verify.py
+```

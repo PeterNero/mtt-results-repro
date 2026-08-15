@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Independently replay the canonical finite G3FP middle differential."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fp/H02.component20.canonical_d2_source.json"
+EXPECTED_STATUS = "CLOSED_EXACT_48_FIBER_CANONICAL_D2_SOURCE_QGAMMA_GEOMETRIC_LIFT_OPEN"
+EXPECTED_SHAPES = {12: (12, 1), 13: (24, 1), 16: (207, 40), 17: (328, 7)}
+EXPECTED_KERNELS = {11: 0, 12: 1, 13: 4, 14: 9, 15: 16, 16: 65, 17: 163, 18: 292}
+F1_BLOCKS = ((11, 4), (14, 15), (15, 11))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound path exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def f1_keys(degree: int) -> list[tuple[int, int, tuple[int, int, int]]]:
+    return [
+        (shift, generator, exponent)
+        for shift, count in F1_BLOCKS
+        if degree >= shift
+        for generator in range(count)
+        for exponent in graded.homogeneous_exponents(degree - shift)
+    ]
+
+
+def d1(generators: dict[int, np.ndarray], degree: int, prime: int) -> np.ndarray:
+    blocks = [
+        graded.multiply_space(generators[shift], shift, degree, prime)
+        for shift, _ in F1_BLOCKS
+        if degree >= shift
+    ]
+    return (
+        np.concatenate(blocks, axis=1) % prime
+        if blocks
+        else np.zeros((len(graded.homogeneous_exponents(degree)), 0), dtype=np.int64)
+    )
+
+
+def lift(
+    vectors: np.ndarray, source_degree: int, target_degree: int, prime: int
+) -> np.ndarray:
+    source = f1_keys(source_degree)
+    target = f1_keys(target_degree)
+    lookup = {key: row for row, key in enumerate(target)}
+    multipliers = graded.homogeneous_exponents(target_degree - source_degree)
+    result = np.zeros(
+        (len(target), vectors.shape[1] * len(multipliers)), dtype=np.int64
+    )
+    for column in range(vectors.shape[1]):
+        for multiplier_index, multiplier in enumerate(multipliers):
+            output = column * len(multipliers) + multiplier_index
+            for row, (shift, generator, exponent) in enumerate(source):
+                product = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                result[lookup[(shift, generator, product)], output] = vectors[row, column]
+    return result % prime
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fp.h02.component20.canonical-d2-source.v1", "schema")
+    require(packet["status"] == EXPECTED_STATUS, "status")
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    bound_path(packet["inputs"]["G3FN"])
+    bound_path(packet["inputs"]["G3FO"])
+    split_paths = [bound_path(row) for row in packet["inputs"]["split_prime_packets"]]
+    arrays_path = bound_path(packet["campaign"]["artifact"])
+    require(tuple(split_paths) == conic.SPLIT_PACKETS, "split packet order")
+
+    arrays = np.load(arrays_path)
+    primes = tuple(int(value) for value in arrays["primes"])
+    require(primes == conic.EXPECTED_PRIMES, "prime order")
+    stored = {
+        degree: arrays[f"degree{degree}_values"].astype(np.int64)
+        for degree in EXPECTED_SHAPES
+    }
+    for degree, shape in EXPECTED_SHAPES.items():
+        require(stored[degree].shape == (8, 6, *shape), f"degree{degree} stored shape")
+
+    replayed_residues: list[np.ndarray] = []
+    checked = 0
+    for prime_index, packet_path in enumerate(split_paths):
+        split = conic.load(packet_path)
+        prime = int(split["field"]["prime"])
+        roots = tuple(int(value) for value in split["field"]["roots"])
+        rows = {int(row["gamma_root"]): row for row in split["root_kernels"]}
+        for root_index, root in enumerate(roots):
+            generators, _, _ = g3fe.extract_fiber(
+                ROOT / rows[root]["kernel"]["path"], prime
+            )
+            columns = {
+                degree: stored[degree][prime_index, root_index] % prime
+                for degree in EXPECTED_SHAPES
+            }
+            for degree, value in columns.items():
+                require(
+                    np.count_nonzero(d1(generators, degree, prime) @ value % prime) == 0,
+                    f"native complex identity degree{degree}",
+                )
+                rank, pivot_rows, _ = graded.rref(value.T, prime)
+                require(rank == value.shape[1], f"native rank degree{degree}")
+                pivots = np.asarray(pivot_rows, dtype=np.int64)
+                require(
+                    np.array_equal(value[pivots, :], np.eye(rank, dtype=np.int64)),
+                    f"canonical chart degree{degree}",
+                )
+
+            for target_degree, expected_kernel in EXPECTED_KERNELS.items():
+                source = d1(generators, target_degree, prime)
+                source_rank, _, _ = graded.rref(source, prime)
+                kernel_dimension = source.shape[1] - source_rank
+                require(kernel_dimension == expected_kernel, "kernel dimension")
+                blocks = [
+                    lift(columns[degree], degree, target_degree, prime)
+                    for degree in EXPECTED_SHAPES
+                    if degree <= target_degree
+                ]
+                image = (
+                    np.concatenate(blocks, axis=1)
+                    if blocks
+                    else np.zeros((source.shape[1], 0), dtype=np.int64)
+                )
+                image_rank, _, _ = graded.rref(image, prime)
+                require(image_rank == kernel_dimension, f"exactness degree{target_degree}")
+                require(
+                    np.count_nonzero(source @ image % prime) == 0,
+                    f"lifted complex identity degree{target_degree}",
+                )
+            checked += 1
+
+        coefficients = [
+            g3fe.interpolate(stored[degree][prime_index], roots, prime).ravel()
+            for degree in EXPECTED_SHAPES
+        ]
+        replayed_residues.append(np.concatenate(coefficients))
+        print(f"G3FP verify p={prime}: six canonical d2 fibers PASS", flush=True)
+
+    require(checked == 48, "all fibers checked")
+    residues = np.stack(replayed_residues)
+    require(np.array_equal(residues, arrays["power_basis_residues"]), "residue replay")
+    audit = g3fe.reconstruction_audit(residues, primes)
+    require(
+        audit["coefficients"] == 63672
+        and audit["holdout_passes"] == packet["numeric_promotion_audit"]["holdout_passes"]
+        and audit["passing_nontrivial_coefficients"] == 0,
+        "promotion audit replay",
+    )
+    print(
+        "UST.G3FP independent replay: PASS fibers=48 d2_columns=49 "
+        "exact_through_degree18",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

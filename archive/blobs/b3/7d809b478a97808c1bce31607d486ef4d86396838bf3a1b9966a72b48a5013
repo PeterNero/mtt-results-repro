@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Certify the full-support G3AO vs chart away from K=0.
+
+The complementary K=0 locus is covered by the structural uvs smooth/cusp
+necessary-locus certificate. Saturating by K here isolates the only new part
+of the vs chart.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+import run_ust_g3ao_selected_cayley_toric_vs_dual_elimination as vs_dual
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "vs_off_k"
+LABEL = vs_dual.LABEL
+ITEM = vs_dual.ITEM
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_script(polynomials: dict[str, str], algorithm: str) -> str:
+    script = vs_dual.make_script(polynomials, algorithm)
+    script = script.replace(
+        "// Smooth dual contacts are eliminated to the base; dual cusps retain t.",
+        "// The K-nonzero smooth and cusp loci are the only new part after uvs closure.",
+    )
+    script = script.replace(
+        "ideal smoothRestricted=smoothMap(smoothDualLocus),orbitInv*(y*z*w)-1;",
+        "ideal smoothRestricted=smoothMap(smoothDualLocus),orbitInv*(y*z*w*smoothMap(K))-1;",
+    )
+    script = script.replace(
+        "ideal cuspRestricted=cuspMap(singularDualLocus),orbitInv*(y*z*w*t1*t2)-1;",
+        "ideal cuspRestricted=cuspMap(singularDualLocus),orbitInv*(y*z*w*t1*t2*cuspMap(K))-1;",
+    )
+    require("smoothMap(K)" in script and "cuspMap(K)" in script, "K saturation")
+    return script
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=3600)
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="std")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    require(direct.label(*ITEM) == LABEL, "selected full-support label")
+    polynomials = direct.selected_polynomials()
+    source_hash = sha256(direct.SOURCE)
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    script = CAMPAIGN / f"{LABEL}.{args.algorithm}.sing"
+    output = CAMPAIGN / f"{LABEL}.{args.algorithm}.singular.out"
+    packet_path = CAMPAIGN / f"{LABEL}.{args.algorithm}.packet.json"
+    script.write_text(make_script(polynomials, args.algorithm), encoding="ascii")
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            singular_command(ROOT, script),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        captured = error.stdout or b""
+        raw = (
+            captured.decode("utf-8", errors="replace")
+            if isinstance(captured, bytes)
+            else captured
+        )
+        returncode = 124
+    output.write_text(raw, encoding="utf-8")
+    elapsed = time.time() - started
+    passed = (
+        not timed_out
+        and returncode == 0
+        and "G3AO_VS_BIDUAL_SMOOTH_EMPTY=1" in raw
+        and "G3AO_VS_BIDUAL_CUSP_EMPTY=1" in raw
+    )
+    packet = {
+        "schema": "mtt.unified-source.g3ao-selected-cayley-toric-orbit-vs-off-k.v1",
+        "label": LABEL,
+        "source_sha256": source_hash,
+        "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+        "supports": {
+            "base": list(direct.BASE),
+            "elliptic": list(direct.ELLIPTIC),
+            "Cayley_fiber": ["v", "s"],
+        },
+        "script": {
+            "path": str(script.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(script),
+        },
+        "output": {
+            "path": str(output.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(output),
+        },
+        "algorithm": f"vs_off_k_{args.algorithm}",
+        "certificate_method": "vs_off_K_bidual_smooth_and_cusp_loci",
+        "proof_scope": {
+            "the_full_triangular_C_coefficient_covector_is_retained": True,
+            "the_K_nonzero_locus_is_selected_by_exact_saturation": True,
+            "biduality_recovers_the_same_primal_contact_on_the_smooth_dual": True,
+            "the_singular_dual_chart_retains_the_original_critical_equations": True,
+            "unit_saturated_smooth_and_cusp_ideals_prove_the_off_K_vs_locus_empty": passed,
+            "the_complementary_K_zero_locus_is_not_claimed_by_this_packet": True,
+            "a_nonunit_smooth_or_cusp_ideal_would_be_inconclusive": True,
+        },
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "passed": passed,
+    }
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(f"{LABEL}: {'PASS' if passed else 'INCONCLUSIVE'} OFF K ({elapsed:.1f}s)")
+    if not passed:
+        raise SystemExit(returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

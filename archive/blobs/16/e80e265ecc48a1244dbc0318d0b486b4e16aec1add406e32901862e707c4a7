@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Adopt the verified Hilbert-certified fiber-two result as canonical G3AP."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "state" / "ust_g3ap_selected_cayley_fiber2_hilbert_certified.packet.json"
+VERIFIER = ROOT / "verify_ust_g3ap_selected_cayley_fiber2_hilbert_certified.py"
+OUT = ROOT / "state" / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    subprocess.run([sys.executable, str(VERIFIER)], cwd=ROOT, check=True)
+    source = json.loads(SOURCE.read_text(encoding="ascii"))
+    require(source["status"] == "CLOSED_EXACT_SELECTED_F1016_FIBER2_HILBERT_CERTIFIED_TOP_DIMENSION_ONE", "source status")
+    require(all(source["checks"].values()) and not any(source["guardrails"].values()), "source scope")
+    top = source["ordinary_top_piece"]
+    require(top["enumerated_monomials"] == 174865 and top["dimension"] == 1 and top["basis"] == ["w^12*t2^4*s^2"], "top line")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP",
+        "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+        "inputs": {"fiber2_hilbert_certified_top": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SOURCE)}},
+        "leading_ideal": {
+            "method": "selected_source_std_of_untrusted_Hilbert_guided_candidate_through_degree_44",
+            "module_generator_count": source["execution"]["original_module_generator_count"],
+            "basis_size": source["execution"]["certified_basis_size_through_bound"],
+            "scalar_degree_bound": 44,
+            "bounded_module_cache": source["execution"]["certified_cache"],
+            "full_ten_variable_standard_basis_claimed": False,
+        },
+        "ordinary_top_piece": top,
+        "checks": {
+            "selected_fiber2_Hilbert_candidate_is_independently_certified": True,
+            "all_39_original_generators_reduce_to_the_recomputed_basis": True,
+            "all_174865_Cox_degree_18_2_2_monomials_are_enumerated": True,
+            "the_selected_ordinary_top_piece_has_dimension_one": True,
+            "its_unique_basis_is_w12_t2_4_s2": True,
+            "predecessor_data_is_acceleration_only_and_not_selected_evidence": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_toric_R1_survival_without_G3AO": False,
+            "claims_characteristic_zero_rank_promotion": False,
+            "claims_beta_C_is_computed": False,
+        },
+        "theorem": {
+            "name": "selectedCayleyOrdinaryTopDimensionByCertifiedHilbertCandidateTheorem",
+            "tier": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_ONE",
+            "statement": "For the selected F_101^6 Cayley member, independently recomputing std on the untrusted Hilbert-guided fiber-two candidate and reducing all 39 original generators leaves exactly w^12*t2^4*s^2 among all 174,865 target monomials.",
+        },
+        "next_required_object": "Execute the principal and direct Schur response blocks over this same certified module.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AP Hilbert-certified fiber-two result adopted as canonical top dimension one")
+
+
+if __name__ == "__main__":
+    main()

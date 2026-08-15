@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Independently replay the G3CQ defect convolution and correction divergence."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cq_selected_source_transform_defect.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "build_q79_eta9_toric_return_stage1_chunk.py").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def verify_record(record: dict[str, Any], repository: Path | None = None) -> Path:
+    if "path" in record:
+        path = ROOT / record["path"]
+    else:
+        require(repository is not None, "external repository")
+        path = repository / record["repository_relative_path"]
+    require(path.is_file(), f"record path {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record bytes {path.name}")
+    require(sha256(path) == record["sha256"], f"record hash {path.name}")
+    return path
+
+
+def polynomial(rows: list[dict[str, Any]]) -> dict[tuple[int, ...], int]:
+    return {
+        tuple(int(value) for value in row["exponent"]): int(row["coefficient_mod11"]) % PRIME
+        for row in rows
+        if int(row["coefficient_mod11"]) % PRIME
+    }
+
+
+def derivative(poly: dict[tuple[int, ...], int], variable: int) -> dict[tuple[int, ...], int]:
+    result: dict[tuple[int, ...], int] = {}
+    for exponent, coefficient in poly.items():
+        power = exponent[variable]
+        if power == 0:
+            continue
+        target = list(exponent)
+        target[variable] -= 1
+        key = tuple(target)
+        result[key] = (result.get(key, 0) + coefficient * power) % PRIME
+        if result[key] == 0:
+            del result[key]
+    return result
+
+
+def main() -> None:
+    packet = load(PACKET)
+    mld = resolve_mld()
+    sys.path.insert(0, str(mld))
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    require(packet["theorem_id"] == "UST.G3CQ", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    for record in packet["inputs"].values():
+        verify_record(record, mld)
+    for section in (
+        packet["division_multipliers"],
+        packet["composed_quotient_defect"],
+        packet["selected_first_order_coefficient_correction"],
+    ):
+        for value in section.values():
+            if isinstance(value, dict) and "sha256" in value:
+                verify_record(value)
+    for value in packet["H02_return_correction"].values():
+        if isinstance(value, dict) and "sha256" in value:
+            verify_record(value)
+    verify_record(packet["execution"]["script"])
+    output_path = verify_record(packet["execution"]["output"])
+    output = output_path.read_text(encoding="utf-8")
+    for marker in (
+        "G3CQ_SOURCE_DIVISION_RESIDUAL_ZERO=1",
+        "G3CQ_DEFECT_REDUCTION_RESIDUAL_ZERO=1",
+        "G3CQ_SELECTED_RECONSTRUCTION_ZERO=1",
+        "G3CQ_CORRECTION_COEFFICIENT_DEGREES_OK=1",
+        "G3CQ_CORRECTION_RETURN_DEGREE_OK=1",
+        "G3CQ_PASS",
+    ):
+        require(marker in output, marker)
+
+    g3cn = load(ROOT / packet["inputs"]["G3CN"]["path"])
+    schedule = load(mld / packet["inputs"]["schedule"]["repository_relative_path"])
+    quotient_jets: list[dict[tuple[int, ...], int]] = [dict() for _ in range(225)]
+    for group, summary in zip(schedule["groups_in_selected_order"], g3cn["groups"], strict=True):
+        start = int(group["selected_column_start"])
+        stop = int(group["selected_column_stop"])
+        quotient_rows = int(group["standard_monomial_quotient_dimension"])
+        if quotient_rows == 0 or int(summary["first_jet_quotient_nonzero_entries"]) == 0:
+            continue
+        coordinates_path = verify_record(summary["artifacts"]["first_jet_coordinates"])
+        coordinates, read_quotient_rows, _ = solver_io.read_coordinates(coordinates_path)
+        require(read_quotient_rows == quotient_rows, "quotient split")
+        quotient = coordinates[:quotient_rows, :].tocsc()
+        basis = [tuple(int(value) for value in row) for row in group["quotient_standard_exponent_vectors"]]
+        for local_column in range(stop - start):
+            column = quotient.getcol(local_column)
+            quotient_jets[start + local_column] = {
+                basis[int(row)]: int(value) % PRIME
+                for row, value in zip(column.indices, column.data, strict=True)
+                if int(value) % PRIME
+            }
+    require(sum(len(row) for row in quotient_jets) == 15211, "quotient jet count")
+
+    ls_payload = load(ROOT / packet["division_multipliers"]["json"]["path"])
+    ls_rows = [polynomial(row) for row in ls_payload["rows"]]
+    require(len(ls_rows) == 225, "LS rows")
+    recomposed: defaultdict[tuple[int, ...], int] = defaultdict(int)
+    for quotient, multiplier in zip(quotient_jets, ls_rows, strict=True):
+        for left_exp, left_coefficient in quotient.items():
+            for right_exp, right_coefficient in multiplier.items():
+                exponent = tuple(left + right for left, right in zip(left_exp, right_exp, strict=True))
+                recomposed[exponent] = (recomposed[exponent] + left_coefficient * right_coefficient) % PRIME
+    recomposed = defaultdict(int, {key: value for key, value in recomposed.items() if value})
+    defect_payload = load(ROOT / packet["composed_quotient_defect"]["json"]["path"])
+    defect = polynomial(defect_payload["terms"])
+    require(dict(recomposed) == defect and len(defect) == 705, "defect replay")
+
+    correction_payload = load(ROOT / packet["selected_first_order_coefficient_correction"]["json"]["path"])
+    correction_rows = [polynomial(row["terms"]) for row in correction_payload["rows_in_original_variable_order"]]
+    require(len(correction_rows) == 10, "ten correction rows")
+    replay_return: dict[tuple[int, ...], int] = {}
+    for variable, row in enumerate(correction_rows):
+        for exponent, value in derivative(row, variable).items():
+            replay_return[exponent] = (replay_return.get(exponent, 0) - value) % PRIME
+            if replay_return[exponent] == 0:
+                del replay_return[exponent]
+    return_payload = load(ROOT / packet["H02_return_correction"]["ambient_json"]["path"])
+    ambient_return = polynomial(return_payload["terms"])
+    require(replay_return == ambient_return and len(ambient_return) == 11222, "minus divergence replay")
+
+    h02_macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json")
+    ambient_basis = [tuple(int(value) for value in row) for row in h02_macaulay["target_monomial_basis"]["exponent_vectors"]]
+    ambient_lookup = {exponent: index for index, exponent in enumerate(ambient_basis)}
+    expected_rhs = sparse.csc_matrix(
+        (
+            np.asarray(list(ambient_return.values()), dtype=np.uint8),
+            (
+                np.asarray([ambient_lookup[exponent] for exponent in ambient_return], dtype=np.int32),
+                np.zeros(len(ambient_return), dtype=np.int32),
+            ),
+        ),
+        shape=(42706, 1),
+        dtype=np.uint8,
+    )
+    rhs = sparse.load_npz(ROOT / packet["H02_return_correction"]["ambient_scipy_NPZ"]["path"]).tocsc()
+    require((expected_rhs != rhs).nnz == 0, "ambient RHS replay")
+
+    b103 = load(mld / packet["inputs"]["B103"]["repository_relative_path"])
+    h02 = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    normal_payload = load(ROOT / packet["H02_return_correction"]["normal_form_json"]["path"])
+    normal = polynomial(normal_payload["terms"])
+    lookup = {tuple(int(value) for value in row): index for index, row in enumerate(h02["basis_exponent_vectors"])}
+    vector = np.zeros(248, dtype=np.uint8)
+    for exponent, coefficient in normal.items():
+        vector[lookup[exponent]] = coefficient
+    stored = np.fromfile(ROOT / packet["H02_return_correction"]["normal_form_binary_uint8"]["path"], dtype=np.uint8)
+    require(np.array_equal(vector, stored), "H02 normal vector replay")
+
+    print("UST.G3CQ selected-source transform defect verification: PASS")
+    print(
+        f"defect_terms={len(defect)} correction_terms={sum(len(row) for row in correction_rows)} "
+        f"return_terms={len(ambient_return)} H02_nnz={np.count_nonzero(stored)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

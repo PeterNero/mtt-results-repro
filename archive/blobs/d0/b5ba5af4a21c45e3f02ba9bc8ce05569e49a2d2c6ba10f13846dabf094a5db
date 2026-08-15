@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Independently replay the exact G3BV GF(11) calibration."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import build_ust_g3bt_h02_endpoint_action_one_split_prime as action
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bv_h02_endpoint_gf11_calibration.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    repository = Path(record.get("repository_path", default_repository))
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_verified(record: dict[str, Any], default_repository: Path = ROOT) -> dict[str, Any]:
+    return json.loads(verify_record(record, default_repository).read_text(encoding="utf-8"))
+
+
+def evaluate(coefficients: list[int], value: int, prime: int) -> int:
+    result = 0
+    for coefficient in reversed(coefficients):
+        result = (result * value + coefficient) % prime
+    return result
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"] == "mtt.unified-source.g3bv-h02-endpoint-gf11-calibration.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    prime = int(packet["field"]["prime"])
+    root = int(packet["field"]["gamma_root"])
+    require((prime, root) == (11, 3), "calibration field")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    inputs = packet["inputs"]
+    g3bi = load_verified(inputs["G3BI"])
+    g3bk = load_verified(inputs["G3BK"])
+    g3bu = load_verified(inputs["G3BU"])
+    macaulay = load_verified(inputs["H02_Macaulay"], mld)
+    csc = load_verified(inputs["H02_CSC"], mld)
+    factor = load_verified(inputs["H02_factorization"], mld)
+    load_verified(inputs["three_block_oracle"], mld)
+    base_packet = load_verified(inputs["base"], mld)
+    global_f0 = load_verified(inputs["global_F0"], mld)
+    b89 = load_verified(inputs["B89"], mld)
+    solver = verify_record(inputs["split_prime_solver"], mld)
+
+    minpoly = [
+        int(value)
+        for value in g3bk["correction_direction"]["minimal_polynomial_coefficients_ascending"]
+    ]
+    require(evaluate(minpoly, root, prime) == 0, "selected sextic root")
+    generators0, _, _ = oracle.exact_generators(base_packet, global_f0, b89)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = [int(value) for value in csc["binary"]["quotient_unit_rows"]]
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    exact_chart, construction = action.endpoint_chart(
+        prime,
+        root,
+        g3bi,
+        macaulay,
+        factor,
+        quotient_rows,
+        descriptors,
+        generators0,
+        target_lookup,
+        oracle,
+        exporter,
+    )
+    require(construction == packet["endpoint_chart"]["construction"], "construction metrics")
+    chart_path = verify_record(packet["endpoint_chart"]["binary"])
+    rhs_path = verify_record(packet["endpoint_chart"]["unit_RHS"])
+    verify_record(packet["endpoint_chart"]["calibration_log"])
+    stored_chart, chart_prime, quotient_units, image_rank = initializer.read_chart(chart_path)
+    require(
+        (chart_prime, quotient_units, image_rank)
+        == (prime, action.QUOTIENT_UNITS, action.IMAGE_RANK),
+        "chart header",
+    )
+    require((stored_chart != exact_chart).nnz == 0, "exact endpoint chart")
+
+    with tempfile.TemporaryDirectory(dir=chart_path.parent, prefix="verify-g3bv-") as directory:
+        replay_log = Path(directory) / "factorization.log"
+        command = [
+            "wsl",
+            runtime.wsl_path(solver),
+            "--chart",
+            runtime.wsl_path(chart_path),
+            "--rhs",
+            runtime.wsl_path(rhs_path),
+            "--log",
+            runtime.wsl_path(replay_log),
+            "--determinant-only",
+        ]
+        completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+        transcript = completed.stdout + completed.stderr
+        require(completed.returncode != 0, "GF11 endpoint must be singular")
+        match = re.search(
+            r"(?:selected chart became dependent at column|dependent selected chart column) (\d+)",
+            transcript,
+        )
+        require(match is not None, f"dependent-column certificate: {transcript}")
+        dependent_column = int(match.group(1))
+
+    endpoint = packet["endpoint_chart"]
+    require(endpoint["calibration_status"] == "SINGULAR_EXACT_DEPENDENT_COLUMN", "singular status")
+    require(dependent_column == int(endpoint["dependent_column"]) == 42384, "dependent column")
+    require(int(endpoint["determinant_mod11"]) == 0, "exact zero determinant")
+    candidates = [int(value) for value in g3bu["CRT"]["full_signed_coefficient_candidates"]]
+    candidate_value = evaluate(candidates, root, prime)
+    alias = packet["CRT_alias_test"]
+    require(candidates == [int(value) for value in alias["eight_prime_centered_coefficients"]], "candidate vector")
+    require(candidate_value == int(alias["candidate_evaluation_mod11_at_gamma3"]) == 2, "candidate evaluation")
+    require(int(alias["exact_endpoint_determinant_mod11_at_gamma3"]) == 0, "exact endpoint value")
+    require(alias["matches"] is False and candidate_value != 0, "CRT alias rejection")
+
+    print("UST.G3BV H02 endpoint GF11 calibration verifier: PASS")
+    print(
+        f"field=GF({prime}) gamma={root} dependent_column={dependent_column} "
+        f"exact_det=0 centered_CRT_eval={candidate_value}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,110 @@
+// Independent Givaro replay of an F_101^6 sparse-matrix quotient functional.
+
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include <givaro/extension.h>
+#include <givaro/givpoly1.h>
+#include <givaro/modular.h>
+
+int main(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "usage: ust_f1016_sparse_functional_check MATRIX FUNCTIONAL\n";
+        return 64;
+    }
+
+    using BaseField = Givaro::Modular<int64_t>;
+    using PolynomialDomain = Givaro::Poly1Dom<BaseField, Givaro::Dense>;
+    using Field = Givaro::Extension<BaseField>;
+    BaseField base(101);
+    PolynomialDomain polynomials(base, "g");
+    PolynomialDomain::Element minpoly;
+    polynomials.init(minpoly, Givaro::Degree(6));
+    const int64_t coefficients[7] = {64, 16, 33, 44, 89, 24, 1};
+    for (std::size_t index = 0; index < 7; ++index) {
+        base.init(minpoly[index], coefficients[index]);
+    }
+    Field field(polynomials, minpoly);
+
+    std::ifstream matrix(argv[1]);
+    std::size_t rows = 0;
+    std::size_t columns = 0;
+    std::size_t nonzeros = 0;
+    if (!matrix || !(matrix >> rows >> columns >> nonzeros) || rows == 0 || columns == 0) {
+        std::cerr << "invalid sparse matrix\n";
+        return 65;
+    }
+
+    std::ifstream vector_input(argv[2]);
+    std::size_t width = 0;
+    if (!vector_input || !(vector_input >> width) || width != columns) {
+        std::cerr << "invalid functional width\n";
+        return 65;
+    }
+    std::vector<Field::Element> functional(columns);
+    std::size_t nonzero_functional = 0;
+    for (std::size_t index = 0; index < columns; ++index) {
+        Givaro::Integer packed;
+        if (!(vector_input >> packed)) {
+            std::cerr << "incomplete functional\n";
+            return 65;
+        }
+        field.init(functional[index], packed);
+        if (!field.isZero(functional[index])) {
+            ++nonzero_functional;
+        }
+    }
+    Givaro::Integer extra;
+    if (vector_input >> extra || nonzero_functional == 0) {
+        std::cerr << "invalid functional payload\n";
+        return 65;
+    }
+
+    Field::Element dot;
+    Field::Element value;
+    Field::Element product;
+    field.init(dot, 0);
+    std::size_t current_row = 0;
+    for (std::size_t index = 0; index < nonzeros; ++index) {
+        std::size_t row = 0;
+        std::size_t column = 0;
+        Givaro::Integer packed;
+        if (!(matrix >> row >> column >> packed) || row == 0 || column == 0 ||
+            row > rows || column > columns || row < current_row) {
+            std::cerr << "invalid sparse entry at index " << index << "\n";
+            return 65;
+        }
+        if (current_row != 0 && row != current_row) {
+            if (!field.isZero(dot)) {
+                std::cerr << "nonzero functional pairing at row " << current_row << "\n";
+                return 1;
+            }
+            field.init(dot, 0);
+        }
+        current_row = row;
+        field.init(value, packed);
+        field.mul(product, value, functional[column - 1]);
+        field.addin(dot, product);
+    }
+    if (current_row != 0 && !field.isZero(dot)) {
+        std::cerr << "nonzero functional pairing at row " << current_row << "\n";
+        return 1;
+    }
+    std::size_t extra_row = 0;
+    std::size_t extra_column = 0;
+    Givaro::Integer extra_packed;
+    if (matrix >> extra_row >> extra_column >> extra_packed) {
+        std::cerr << "matrix entries exceed declared nonzeros\n";
+        return 65;
+    }
+
+    std::cout << "EXACT_F1016_FUNCTIONAL_REPLAY rows=" << rows
+              << " columns=" << columns << " nonzeros=" << nonzeros
+              << " annihilated_rows=" << rows
+              << " nonzero_functional=" << nonzero_functional
+              << " status=PASS\n";
+    return 0;
+}

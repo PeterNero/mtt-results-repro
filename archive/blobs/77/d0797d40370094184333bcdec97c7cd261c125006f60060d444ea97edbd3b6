@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Certify the P_delta socle kernel and exclude the direct selected source span."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import probe_ust_g3fy_selected_degree21_source_span as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3fy"
+ARRAYS = EVIDENCE / "H02.component20.pdelta_socle_kernel_source.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.pdelta_socle_kernel_source.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path, *, repository: Path = ROOT) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def hilbert_dimension(degree: int) -> int:
+    """Coefficient of (1-t^5)^3/(1-t)^3 for a plane-sextic Jacobian CI."""
+    result = 0
+    for chosen in range(4):
+        shifted = degree - 5 * chosen
+        if shifted < 0:
+            continue
+        result += (-1) ** chosen * sp.binomial(3, chosen) * sp.binomial(
+            shifted + 2, 2
+        )
+    return int(result)
+
+
+def selected_polynomials() -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    sp.Poly,
+    sp.Poly,
+    sp.Poly,
+    sp.Poly,
+]:
+    base = runtime.load(runtime.BASE)
+    pdelta_packet = runtime.load(runtime.PDELTA)
+    g3bi = runtime.load(runtime.G3BI)
+    x, y, z = sp.symbols("x y z")
+    variables = (x, y, z)
+    local = {"x": x, "y": y, "z": z}
+    sextic = sp.Poly(
+        sp.sympify(
+            base["explicit_K3"]["F6_equals_G3_squared_plus_Q2_H4"],
+            locals=local,
+        ),
+        *variables,
+        domain=sp.QQ,
+    )
+    g3 = sp.Poly(
+        sp.sympify(base["explicit_K3"]["G3"], locals=local),
+        *variables,
+        domain=sp.QQ,
+    )
+    h4 = sp.Poly(
+        sp.sympify(base["explicit_K3"]["H4"], locals=local),
+        *variables,
+        domain=sp.QQ,
+    )
+    pdelta = sp.Poly(
+        sp.sympify(
+            pdelta_packet["residue_polynomial"]["expanded"], locals=local
+        ),
+        *variables,
+        domain=sp.QQ,
+    )
+    return base, pdelta_packet, g3bi, sextic, g3, h4, pdelta
+
+
+def main() -> None:
+    base, pdelta_packet, g3bi, sextic, g3_polynomial, h4_polynomial, pdelta_polynomial = (
+        selected_polynomials()
+    )
+    require(base["checks"]["plane_branch_sextic_is_projectively_smooth"], "smooth sextic")
+    require(pdelta_packet["checks"]["selected_delta_has_nonzero_square"], "Pdelta square")
+    require((hilbert_dimension(6), hilbert_dimension(12)) == (19, 1), "Hilbert dimensions")
+
+    g3fr = np.load(runtime.G3FR, allow_pickle=False)
+    prime = int(g3fr["primes"][0])
+    gamma = int(g3fr["roots"][0, 0])
+    require((prime, gamma) == (21817, 5), "anchor fiber")
+    kernel18, profile = runtime.pdelta_kernel(
+        sextic, pdelta_polynomial, prime
+    )
+    require(profile["kernel_dimension"] == 18, "finite kernel dimension")
+
+    x, y, z = sextic.gens
+    variables = (x, y, z)
+    q = runtime.polynomial_vector(sp.Poly(x * z - y**2, *variables), 2, prime)
+    g3 = runtime.polynomial_vector(g3_polynomial, 3, prime)
+    h4 = runtime.polynomial_vector(h4_polynomial, 4, prime)
+    pdelta = runtime.polynomial_vector(pdelta_polynomial, 6, prime)
+    factors = runtime.selected_degree12_factors(q, g3, h4, pdelta, prime)
+    require(len(factors) == 11, "selected degree12 factor count")
+
+    target = g3fr["degree15_primitives"][0, 0].astype(np.int64) % prime
+    require(graded.rref(target, prime)[0] == 18, "target primitive rank")
+    _, _, target_annihilator = graded.rref(
+        target.T, prime, emit_nullspace=True
+    )
+    require(
+        target_annihilator is not None and target_annihilator.shape == (136, 118),
+        "target annihilator",
+    )
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+
+    raw_ranks = np.zeros((3, 2), dtype=np.int16)
+    for theta in range(3):
+        a_theta = runtime.evaluate_selected_form(
+            coefficient_vectors, theta, gamma, prime
+        )
+        raw = np.stack(
+            [
+                runtime.product(
+                    kernel18[:, column], 6, a_theta, 9, prime
+                )
+                for column in range(18)
+            ],
+            axis=1,
+        )
+        raw_ranks[theta] = (
+            graded.rref(raw, prime)[0],
+            graded.rref(np.concatenate((raw, target), axis=1), prime)[0],
+        )
+    require(np.array_equal(raw_ranks, np.tile([18, 36], (3, 1))), "raw multiplication no-go")
+
+    source_labels: list[str] = []
+    source21_rows: list[np.ndarray] = []
+    for theta in range(3):
+        a_theta = runtime.evaluate_selected_form(
+            coefficient_vectors, theta, gamma, prime
+        )
+        for label, factor in factors.items():
+            source_labels.append(f"A{theta}*{label}")
+            source21_rows.append(runtime.product(factor, 12, a_theta, 9, prime))
+    require(len(source_labels) == 33, "selected source count")
+
+    candidate_ranks = np.zeros((2, 33), dtype=np.int16)
+    joint_ranks = np.zeros((2, 33), dtype=np.int16)
+    obstruction_ranks = np.zeros(2, dtype=np.int16)
+    obstruction_nullities = np.zeros(2, dtype=np.int16)
+    for convention, ordinary in enumerate((False, True)):
+        candidates = [
+            runtime.contract(kernel18, source21, prime, ordinary=ordinary)
+            for source21 in source21_rows
+        ]
+        for source, candidate in enumerate(candidates):
+            candidate_ranks[convention, source] = graded.rref(candidate, prime)[0]
+            joint_ranks[convention, source] = graded.rref(
+                np.concatenate((candidate, target), axis=1), prime
+            )[0]
+        obstruction = np.stack(
+            [
+                (target_annihilator.T @ candidate % prime).reshape(-1)
+                for candidate in candidates
+            ],
+            axis=1,
+        )
+        obstruction_ranks[convention] = graded.rref(obstruction, prime)[0]
+        obstruction_nullities[convention] = 33 - obstruction_ranks[convention]
+    require(np.array_equal(obstruction_ranks, [33, 33]), "full obstruction ranks")
+    require(np.array_equal(obstruction_nullities, [0, 0]), "zero common-source nullities")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ARRAYS,
+        prime=np.asarray([prime], dtype=np.uint32),
+        gamma=np.asarray([gamma], dtype=np.uint32),
+        degree6_exponents=np.asarray(graded.homogeneous_exponents(6), dtype=np.int16),
+        pdelta_kernel_degree6=kernel18.astype(np.uint32),
+        target_primitive_degree15=target.astype(np.uint32),
+        selected_degree12_factor_labels=np.asarray(list(factors), dtype="U40"),
+        selected_degree21_source_labels=np.asarray(source_labels, dtype="U48"),
+        raw_multiplication_ranks=raw_ranks,
+        candidate_ranks=candidate_ranks,
+        joint_ranks_with_selected_primitive15=joint_ranks,
+        target_containment_obstruction_ranks=obstruction_ranks,
+        target_containment_obstruction_nullities=obstruction_nullities,
+    )
+
+    packet = {
+        "schema": "ust.g3fy.h02.component20.pdelta-socle-kernel-source.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FY",
+        "status": "CLOSED_EXACT_PDELTA_SOCLE_KERNEL_SELECTED_POLYNOMIAL_APOLAR_FAMILY_EXCLUDED_RESIDUE_DESCENT_OPEN",
+        "inputs": {
+            "q79_K3_base": {
+                "repository": runtime.BASE.parent.parent.parent.name,
+                **record(runtime.BASE, repository=runtime.BASE.parent.parent.parent),
+            },
+            "q79_Pdelta": {
+                "repository": runtime.PDELTA.parent.parent.name,
+                **record(runtime.PDELTA, repository=runtime.PDELTA.parent.parent),
+            },
+            "G3BI": record(runtime.G3BI),
+            "G3FR": record(runtime.G3FR),
+        },
+        "characteristic_zero_socle_kernel": {
+            "ring": "R=Q[x,y,z]/(F6_x,F6_y,F6_z)",
+            "smoothness_input": "the selected plane sextic F6 is projectively smooth",
+            "complete_intersection_degrees": [5, 5, 5],
+            "Hilbert_series": "(1-t^5)^3/(1-t)^3",
+            "R6_dimension": hilbert_dimension(6),
+            "R12_dimension": hilbert_dimension(12),
+            "Pdelta_degree": 6,
+            "Pdelta_square_nonzero_input": "[Pdelta]^2=(2/375)[ordinary Hessian socle] != 0",
+            "multiplication": "mu_Pdelta:R6->R12",
+            "multiplication_rank": 1,
+            "kernel_dimension": 18,
+            "proof": (
+                "R12 is one-dimensional. The certified nonzero class [Pdelta]^2 "
+                "lies in the image, so mu_Pdelta is nonzero and hence has rank1. "
+                "Rank-nullity on dim(R6)=19 gives dim ker(mu_Pdelta)=18."
+            ),
+        },
+        "good_reduction_witness": {
+            "prime": prime,
+            "gamma_root": gamma,
+            **profile,
+            "artifact": record(ARRAYS),
+        },
+        "selected_source_family_audit": {
+            "kernel_carrier": "ker(mu_Pdelta) subset R6",
+            "target": "the selected G3FR 18-dimensional primitive degree15 plane",
+            "raw_sources": "A_theta*ker(mu_Pdelta), theta=0,1,2",
+            "raw_candidate_and_joint_ranks": raw_ranks.tolist(),
+            "degree12_factor_algebra": "all monomials of degree12 in q(deg2),G3(deg3),H4(deg4),Pdelta(deg6)",
+            "degree12_factors": list(factors),
+            "degree21_sources": source_labels,
+            "apolar_conventions": ["divided_power", "ordinary_differential"],
+            "target_containment_obstruction_ranks": obstruction_ranks.tolist(),
+            "target_containment_obstruction_nullities": obstruction_nullities.tolist(),
+            "conclusion": (
+                "At the exact p=21817, gamma=5 anchor chart, no nonzero common "
+                "linear combination of the 33 selected degree21 sources sends the "
+                "entire Pdelta-kernel basis into the selected primitive15 plane "
+                "under either standard contraction convention."
+            ),
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "checks": {
+            "the_selected_plane_sextic_is_smooth": True,
+            "the_plane_sextic_Jacobian_ring_has_dimensions_R6_19_and_R12_1": True,
+            "Pdelta_square_is_nonzero_in_the_socle": True,
+            "mu_Pdelta_has_rank1_and_kernel_dimension18_over_characteristic_zero": True,
+            "the_good_reduction_emits_an_explicit18_dimensional_kernel": True,
+            "all_three_raw_multiplication_candidates_are_disjoint_from_the_selected_lane": True,
+            "the_selected_degree12_factor_algebra_has11_monomials": True,
+            "both33_column_target_containment_obstructions_have_full_rank": True,
+            "neither_standard_contraction_has_a_nonzero_common_source_solution": True,
+        },
+        "guardrails": {
+            "identifies_the_Pdelta_kernel_with_the_G3FR_primitive15_lane": False,
+            "claims_Pdelta_can_be_cancelled_on_R6": False,
+            "claims_the_anchor_good_reduction_excludes_every_possible_Qgamma_derived_map": False,
+            "claims_the_residue_projection_or_connection_term_has_been_constructed": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fyPdeltaSocleKernelSourceTheorem",
+            "tier": "CLOSED_EXACT_SOCLE_KERNEL_AND_SELECTED_DIRECT_SOURCE_FAMILY_EXCLUSION",
+            "statement": (
+                "For the selected smooth plane sextic, multiplication by the exact "
+                "degree-six residue Pdelta from R6 to the one-dimensional socle R12 "
+                "has rank1 and an exact 18-dimensional kernel. This explains the "
+                "otherwise striking 18-count without identifying that kernel with "
+                "the selected G3FR primitive lane. At the exact anchor reduction, "
+                "raw multiplication and the full 33-source polynomial family under "
+                "both standard apolar conventions fail the selected target-containment "
+                "test. Therefore the missing compiler must contain additional residue, "
+                "connection, or derived-projection data."
+            ),
+        },
+        "next_required_object": (
+            "Construct the canonical residue/connection projection that acts between "
+            "the Pdelta socle kernel and the G3FR inverse-system lane. Its definition "
+            "must use data absent from polynomial multiplication and ordinary/divided "
+            "apolar contraction, then replay the 18-plane over held-out split fibers."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FY Pdelta socle kernel source: PASS "
+        "R6=19 R12=1 kernel=18 source_obstructions=33,33"
+    )
+
+
+if __name__ == "__main__":
+    main()

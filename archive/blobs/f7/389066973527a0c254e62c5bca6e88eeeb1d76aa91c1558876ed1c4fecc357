@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""Continue an exact direct G3AP SBA cache with ``qslimgb``.
+
+The route re-adds the selected 39 relations and 165 target-external
+boundaries after loading a hash-bound SBA cache.  It supplies no Hilbert
+series.  Its result remains candidate evidence until the ordinary target
+certifier reconstructs provenance and the complete lower/upper squeeze.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_hedge as sba
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_warm_hilbert_hedge as warm
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+ENGINE = "sba_warm_qslimgb"
+TARGET_SCALAR_DEGREE = warm.TARGET_SCALAR_DEGREE
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def paths(label: str) -> dict[str, Path]:
+    stem = (
+        "ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_"
+        f"{label}_{ENGINE}"
+    )
+    return {
+        "script": STATE / f"{stem}.sing",
+        "output": STATE / f"{stem}.singular.out",
+        "module_cache": STATE / f"{stem}_degree328.ssi",
+        "packet": STATE / f"{stem}.packet.json",
+    }
+
+
+def marker(label: str) -> str:
+    return f"G3AP_F2_HMAJORDIRECTLTRUNCSBAWARMQSLIMGB_{label.upper()}"
+
+
+def candidate_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    seed_cache: Path,
+    module_cache: Path,
+) -> str:
+    script = warm.candidate_script(
+        source,
+        label,
+        order,
+        seed_cache,
+        module_cache,
+        [1],
+    )
+    old_tag = warm.marker(label)
+    script = script.replace(old_tag, marker(label))
+    script = script.replace("bigintvec truncatedHilbert=1;\n", "")
+    script = script.replace(
+        "module G=std(Warm,truncatedHilbert,selectedWeights);",
+        'LIB("standard.lib");\nmodule G=qslimgb(Warm);',
+    )
+    require("truncatedHilbert" not in script, "no Hilbert input")
+    require(script.count("module G=qslimgb(Warm);") == 1, "one qslimgb call")
+    return script
+
+
+def parse_module(raw: str, label: str):
+    return fiber2.parse_leaders(
+        raw.replace(f"{marker(label)}_", "G3AP_F2_")
+    )
+
+
+def record(path: Path) -> dict[str, object]:
+    return warm.record(path)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(permuted.PERMUTATIONS), required=True)
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    label = args.permutation
+    order = permuted.PERMUTATIONS[label]
+    old_to_new, new_to_old = permuted.position_maps(order)
+    route = paths(label)
+    seed = sba.paths(label)
+    source = SOURCE.read_text(encoding="ascii")
+
+    require(seed["script"].is_file(), "SBA seed script")
+    require(seed["output"].is_file(), "SBA seed output")
+    require(seed["module_cache"].is_file(), "SBA seed cache")
+    require(
+        seed["script"].read_text(encoding="ascii")
+        == sba.candidate_script(source, label, order, seed["module_cache"]),
+        "SBA seed script reconstruction",
+    )
+    seed_raw = seed["output"].read_text(encoding="utf-8")
+    require(
+        f"{sba.marker(label)}_LEADER_EXPORT_PASS" in seed_raw
+        and not any(line.lstrip().startswith("?") for line in seed_raw.splitlines()),
+        "SBA seed execution",
+    )
+    seed_module = sba.parse_module(seed_raw, label)
+    route["script"].write_text(
+        candidate_script(
+            source,
+            label,
+            order,
+            seed["module_cache"],
+            route["module_cache"],
+        ),
+        encoding="ascii",
+    )
+    if args.emit_only:
+        print(
+            f"emitted {route['script'].relative_to(ROOT)} "
+            f"SBA_seed={len(seed_module)}"
+        )
+        return
+
+    route["module_cache"].unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, route["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    raw = completed.stdout
+    route["output"].write_text(raw, encoding="utf-8")
+    tag = marker(label)
+    require(completed.returncode == 0, "SBA-warm qslimgb execution")
+    require(
+        not any(line.lstrip().startswith("?") for line in raw.splitlines()),
+        "SBA-warm qslimgb Singular errors",
+    )
+    require(f"{tag}_LEADER_EXPORT_PASS" in raw, "completion marker")
+    require(
+        route["module_cache"].is_file()
+        and route["module_cache"].stat().st_size > 0,
+        "candidate module cache",
+    )
+    module_new = parse_module(raw, label)
+    module_old = [
+        (new_to_old[component], exponent) for component, exponent in module_new
+    ]
+    standards, sectors = fiber2.enumerate_target(module_old)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    closed_candidate = len(standards) == 1
+
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-sba-warm-qslimgb-candidate.v1",
+        "date": "2026-08-10",
+        "status": (
+            "CANDIDATE_REQUIRES_INDEPENDENT_HMAJOR_DIRECT_LTRUNC_SBA_WARM_QSLIMGB_CERTIFICATION"
+            if closed_candidate
+            else "DIAGNOSTIC_EXACT_SELECTED_SOURCE_EXECUTION_NOT_G3AP_CLOSURE"
+        ),
+        "candidate_engine": ENGINE,
+        "permutation": {
+            "label": label,
+            "old_components_in_new_position_order": list(order),
+            "old_to_new": {str(key): value for key, value in old_to_new.items()},
+            "new_to_old": {str(key): value for key, value in new_to_old.items()},
+            "new_position_shifts": list(warm.direct.mapped_shifts(order)),
+            "is_degree_preserving_module_isomorphism": True,
+        },
+        "inputs": {
+            "selected_source": record(SOURCE),
+            "exact_selected_source_SBA_warm_start": {
+                "script": record(seed["script"]),
+                "output": record(seed["output"]),
+                "module_cache": {
+                    **record(seed["module_cache"]),
+                    "bytes": seed["module_cache"].stat().st_size,
+                },
+                "reduction_set_size": len(seed_module),
+            },
+        },
+        "regrading": {
+            "Cox_functional": "9H+L",
+            "base_weights": list(warm.direct.BASE_WEIGHTS),
+            "component_shifts_old_order": list(warm.direct.COMPONENT_SHIFTS),
+            "target_scalar_degree": TARGET_SCALAR_DEGREE,
+        },
+        "truncation": {
+            "kind": "componentwise_L_boundary_plus_H_major_scalar_bound",
+            "L_boundary_generator_count": 165,
+            "explicit_H_boundary_generator_count": 0,
+            "target_Cox_piece_of_boundary_submodule_is_zero": True,
+            "one_H_step_exits_the_scalar_bound_in_every_component": True,
+        },
+        "execution": {
+            "engine": "Singular qslimgb continued from an exact selected-source SBA cache without a Hilbert premise",
+            "script": record(route["script"]),
+            "output": record(route["output"]),
+            "elapsed_seconds": time.time() - started,
+            "selected_module_generator_count": 39,
+            "truncation_generator_count": 165,
+            "SBA_warm_start_size": len(seed_module),
+            "candidate_basis_size_through_bound": len(module_new),
+            "candidate_module_cache": {
+                **record(route["module_cache"]),
+                "bytes": route["module_cache"].stat().st_size,
+                "computational_scalar_bound": TARGET_SCALAR_DEGREE,
+                "valid_for_Cox_degree": [18, 2, 2],
+                "is_full_standard_basis": False,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "candidate_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "weighted_scalar_degree": TARGET_SCALAR_DEGREE,
+            "enumerated_monomials": total,
+            "standards_left_by_candidate_leading_module": len(standards),
+            "dimension_if_certified": 1 if closed_candidate else None,
+            "standard_old_component": standards[0][0] if closed_candidate else None,
+            "standard_new_component": (
+                old_to_new[standards[0][0]] if closed_candidate else None
+            ),
+            "standard_exponent": list(standards[0][1]) if closed_candidate else None,
+            "sector_diagnostics": sectors,
+        },
+        "guardrails": {
+            "claims_candidate_process_success_is_a_proof": False,
+            "claims_SBA_cache_without_hash_bound_provenance": False,
+            "claims_qslimgb_result_is_independently_certified": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Independently reconstruct the selected module, SBA seed provenance, "
+            "qslimgb result, 9H+L grading and complete target squeeze."
+            if closed_candidate
+            else "Use the exact diagnostic to choose the next target-completion route."
+        ),
+    }
+    route["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"G3AP direct H-major SBA-warm qslimgb ({label}): PASS "
+        f"seed={len(seed_module)} module={len(module_new)} "
+        f"standards={len(standards)} certification="
+        f"{'OPEN' if closed_candidate else 'NOT_APPLICABLE'}"
+    )
+
+
+if __name__ == "__main__":
+    main()

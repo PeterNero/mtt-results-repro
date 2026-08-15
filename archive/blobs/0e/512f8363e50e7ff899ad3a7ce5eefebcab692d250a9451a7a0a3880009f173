@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Verify every completed fresh-prime component-16 residual witness."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3eu"
+CUTSET = EVIDENCE / "H02.component16.omitted_rows.txt"
+KERNEL = ROOT / "evidence/ust_g3et/H02.component16.exact_kernel.recovered.nfk"
+NATIVE = ROOT / "native/ust_nf_kernel_modular_cutset.c"
+OUTPUT = EVIDENCE / "H02.component16.modular_residual_campaign.json"
+NAME = re.compile(r"H02\.component16\.residual_mod_p(?P<prime>\d+)_g(?P<gamma>\d+)\.nmr")
+MINIMAL = (64, 16, 33, 44, 89, 24, 1)
+RELATIONS = 21
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def is_prime(value: int) -> bool:
+    if value < 2:
+        return False
+    divisor = 2
+    while divisor * divisor <= value:
+        if value % divisor == 0:
+            return False
+        divisor += 1 if divisor == 2 else 2
+    return True
+
+
+def rank_mod(matrix: list[list[int]], prime: int) -> tuple[int, list[int], list[int]]:
+    work = [[value % prime for value in row] for row in matrix]
+    labels = list(range(len(work)))
+    rank = 0
+    pivot_rows: list[int] = []
+    pivot_columns: list[int] = []
+    for column in range(RELATIONS):
+        pivot = next((row for row in range(rank, len(work)) if work[row][column]), None)
+        if pivot is None:
+            continue
+        work[rank], work[pivot] = work[pivot], work[rank]
+        labels[rank], labels[pivot] = labels[pivot], labels[rank]
+        inverse = pow(work[rank][column], -1, prime)
+        work[rank] = [value * inverse % prime for value in work[rank]]
+        for row in range(rank + 1, len(work)):
+            factor = work[row][column]
+            if factor:
+                work[row] = [
+                    (value - factor * pivot_value) % prime
+                    for value, pivot_value in zip(work[row], work[rank], strict=True)
+                ]
+        pivot_rows.append(labels[rank])
+        pivot_columns.append(column)
+        rank += 1
+    require(all(value == 0 for row in work[rank:] for value in row), "rank zero tail")
+    return rank, pivot_rows, pivot_columns
+
+
+def load(path: Path, cutset: list[int]) -> dict[str, object]:
+    match = NAME.fullmatch(path.name)
+    require(match is not None, "witness filename")
+    filename_prime = int(match.group("prime"))
+    filename_gamma = int(match.group("gamma"))
+    with path.open("r", encoding="ascii") as handle:
+        rows, relations, prime, gamma, native_rank, nonzero_slots = map(
+            int, handle.readline().split()
+        )
+        require((rows, relations) == (len(cutset), RELATIONS), "witness shape")
+        require((prime, gamma) == (filename_prime, filename_gamma), "filename specialization")
+        source_rows: list[int] = []
+        matrix = [[0] * RELATIONS for _ in range(rows)]
+        lines = 0
+        for line in handle:
+            source_row_one, relation_one, value = map(int, line.split())
+            row = lines // RELATIONS
+            relation = lines % RELATIONS
+            require(row < rows and relation_one - 1 == relation, "entry order")
+            if relation == 0:
+                source_rows.append(source_row_one - 1)
+            else:
+                require(source_rows[row] == source_row_one - 1, "source grouping")
+            require(0 <= value < prime, "canonical residue")
+            matrix[row][relation] = value
+            lines += 1
+    require(lines == rows * RELATIONS and source_rows == cutset, "witness completeness")
+    require(is_prime(prime), "prime modulus")
+    require(
+        sum(coefficient * pow(gamma, degree, prime) for degree, coefficient in enumerate(MINIMAL)) % prime == 0,
+        "minimal-polynomial root",
+    )
+    independent_rank, pivots, pivot_columns = rank_mod(matrix, prime)
+    require(independent_rank == native_rank, "native/independent rank")
+    require(sum(value != 0 for row in matrix for value in row) == nonzero_slots, "nonzero slots")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+        "prime": prime,
+        "gamma": gamma,
+        "rank": native_rank,
+        "nonzero_slots": nonzero_slots,
+        "pivot_source_rows_zero_based": [source_rows[index] for index in pivots],
+        "pivot_columns_zero_based": pivot_columns,
+    }
+
+
+def main() -> None:
+    values = [int(value) for value in CUTSET.read_text(encoding="ascii").split()]
+    cutset = [value - 1 for value in values[1:]]
+    require(values[0] == len(cutset) == 38, "cutset")
+    paths = sorted(
+        path for path in EVIDENCE.glob("H02.component16.residual_mod_p*_g*.nmr")
+        if NAME.fullmatch(path.name)
+    )
+    require(bool(paths), "completed modular witnesses")
+    witnesses = [load(path, cutset) for path in paths]
+    ranks = [int(witness["rank"]) for witness in witnesses]
+    payload = {
+        "schema": "ust.g3eu.h02.component16.modular-residual-campaign.v1",
+        "date": "2026-08-14",
+        "kernel": KERNEL.relative_to(ROOT).as_posix(),
+        "kernel_size_bytes": KERNEL.stat().st_size,
+        "native_source": NATIVE.relative_to(ROOT).as_posix(),
+        "native_source_sha256": sha256(NATIVE),
+        "cutset": CUTSET.relative_to(ROOT).as_posix(),
+        "cutset_sha256": sha256(CUTSET),
+        "witnesses": witnesses,
+        "ranks": ranks,
+        "rank_min": min(ranks),
+        "rank_max": max(ranks),
+        "exact_residual_rank_lower_bound": max(ranks),
+        "exact_residual_rank_upper_bound_from_columns": RELATIONS,
+        "claim_boundary": (
+            "Fresh good specializations prove only the displayed characteristic-zero "
+            "rank lower bound unless one reaches the 21-column upper bound. A smaller "
+            "common rank does not prove an exact upper bound."
+        ),
+    }
+    OUTPUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3EU modular residual campaign: PASS "
+        f"witnesses={len(witnesses)} ranks={ranks} exact_lower={max(ranks)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

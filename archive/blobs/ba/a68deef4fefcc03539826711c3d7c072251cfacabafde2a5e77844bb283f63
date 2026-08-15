@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Verify the exact setup of every H-major/L-truncated G3AP route."""
+
+from __future__ import annotations
+
+import math
+import re
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_std_hedge as route
+import run_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_hedge as ltrunc
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def cumulative_h_monomials(maximum: int) -> int:
+    return sum(
+        sum(math.comb(degree - 3 * w_power + 2, 2) for w_power in range(degree // 3 + 1))
+        for degree in range(maximum + 1)
+    )
+
+
+def main() -> None:
+    route.validate_grading()
+    source = route.SOURCE.read_text(encoding="ascii")
+    selected_old = qring.derivative_generators()
+    truncators_old = ltrunc.truncation_generators()
+    require(len(selected_old) == 21, "selected generator count")
+    require(len(truncators_old) == 165, "L-boundary count")
+
+    target_by_old = {
+        component: (h_degree, l_degree)
+        for component, _, (h_degree, l_degree), _ in fiber2.COMPONENTS
+    }
+    box_counts = []
+    for old_component, (target_h, target_l) in target_by_old.items():
+        shift = route.COMPONENT_SHIFTS[old_component - 1]
+        maximum_h_under_bound = (route.TARGET_SCALAR_DEGREE - shift) // route.H_WEIGHT
+        for h_degree in range(maximum_h_under_bound + 2):
+            for l_degree in range(target_l + 1):
+                under_bound = (
+                    route.H_WEIGHT * h_degree
+                    + route.L_WEIGHT * l_degree
+                    + shift
+                    <= route.TARGET_SCALAR_DEGREE
+                )
+                require(
+                    under_bound == (h_degree <= target_h),
+                    f"component {old_component} bounded cone equals divisor box",
+                )
+        box_counts.append(
+            cumulative_h_monomials(target_h) * math.comb(target_l + 3, 3)
+        )
+    require(sum(box_counts) == 3769310, "complete target divisor-box count")
+    for label, order in permuted.PERMUTATIONS.items():
+        old_to_new, _ = permuted.position_maps(order)
+        generated = route.mapped_generators(order)
+        expected = [
+            permuted.map_components(value, old_to_new)
+            for value in selected_old + truncators_old
+        ]
+        require(generated == expected and len(generated) == 186, f"{label} mapped module")
+        require(
+            route.mapped_shifts(order)
+            == tuple(route.COMPONENT_SHIFTS[old - 1] for old in order),
+            f"{label} shifts",
+        )
+        for engine in route.ENGINES:
+            script = route.candidate_script(
+                source,
+                label,
+                order,
+                route.paths(label, engine)["base_cache"],
+                route.paths(label, engine)["module_cache"],
+                engine,
+                [1] if engine == "hilbert" else None,
+            )
+            require(route.HMAJOR_MODULE_RING in script, f"{label}/{engine} H-major ring")
+            require(
+                f"degBound={route.TARGET_SCALAR_DEGREE};" in script,
+                f"{label}/{engine} bound",
+            )
+            expected_engine = (
+                "module G=std(MT,truncatedHilbert,selectedWeights);"
+                if engine == "hilbert"
+                else f"module G={engine}(MT);"
+            )
+            require(expected_engine in script, f"{label}/{engine} engine")
+            require(
+                ("LIB(\"standard.lib\");" in script) == (engine == "qslimgb"),
+                f"{label}/{engine} sparse library identity",
+            )
+            require(
+                ("bigintvec truncatedHilbert=1;" in script)
+                == (engine == "hilbert"),
+                f"{label}/{engine} Hilbert identity",
+            )
+            require(
+                ("truncatedHilbert" in script) == (engine == "hilbert"),
+                f"{label}/{engine} Hilbert-hint scope",
+            )
+            require(
+                script.count("ideal GI=std(I0);") == 1,
+                f"{label}/{engine} reconstructed base",
+            )
+            shifts_match = re.search(r"intvec componentShifts=([^;]+);", script)
+            require(shifts_match is not None, f"{label}/{engine} script shifts")
+            require(
+                tuple(int(value) for value in shifts_match.group(1).split(","))
+                == route.mapped_shifts(order),
+                f"{label}/{engine} script shift identity",
+            )
+        for old_component, (h_degree, l_degree) in target_by_old.items():
+            shift = route.COMPONENT_SHIFTS[old_component - 1]
+            require(
+                route.H_WEIGHT * h_degree + route.L_WEIGHT * l_degree + shift
+                == route.TARGET_SCALAR_DEGREE,
+                f"{label} component {old_component} target degree",
+            )
+            require(
+                route.H_WEIGHT * (h_degree + 1) + shift
+                > route.TARGET_SCALAR_DEGREE,
+                f"{label} component {old_component} H exclusion",
+            )
+
+    print(
+        "UST.G3AP H-major/L-truncated routes: PASS "
+        "routes=4 engines=3 selected=21 truncators=165 "
+        "box=3769310 scalar=9H+L"
+    )
+
+
+if __name__ == "__main__":
+    main()

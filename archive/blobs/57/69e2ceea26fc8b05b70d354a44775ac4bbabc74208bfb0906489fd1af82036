@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Search for an exact finite-field no-splitting-line certificate.
+
+For each affine chart of the dual projective plane, restrict the selected
+q79 branch sextic to the corresponding line and ask whether the resulting
+binary sextic is the square of a binary cubic.  A unit Groebner basis over
+an algebraic closure of F_p proves that the chart is empty.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+from time import perf_counter
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def branch_sextic(x: sp.Symbol, y: sp.Symbol, z: sp.Symbol) -> sp.Expr:
+    return (
+        4 * x**6
+        + 7 * x**5 * z
+        - 3 * x**4 * y**2
+        - 6 * x**4 * y * z
+        - 4 * x**4 * z**2
+        + 6 * x**3 * y**3
+        - 5 * x**3 * y**2 * z
+        + 6 * x**3 * y * z**2
+        - 3 * x**3 * z**3
+        + 2 * x**2 * y**4
+        + 3 * x**2 * y**3 * z
+        + 2 * x**2 * y**2 * z**2
+        + 10 * x**2 * y * z**3
+        + 10 * x**2 * z**4
+        - x * y**5
+        - x * y**4 * z
+        - 7 * x * y**3 * z**2
+        - 8 * x * y**2 * z**3
+        - 9 * x * y * z**4
+        - 2 * x * z**5
+        + 2 * y**6
+        + y**5 * z
+        + 4 * y**4 * z**2
+        + y**3 * z**3
+        + 2 * y**2 * z**4
+        + 4 * y * z**5
+        + z**6
+    )
+
+
+def chart_equations(chart: str) -> tuple[list[sp.Expr], tuple[sp.Symbol, ...]]:
+    x, y, z = sp.symbols("x y z")
+    a, b, c0, c1, c2, c3 = sp.symbols("a b c0 c1 c2 c3")
+    f6 = branch_sextic(x, y, z)
+
+    if chart == "z":
+        u, v = x, y
+        restricted = sp.expand(f6.subs(z, a * x + b * y))
+    elif chart == "y":
+        u, v = x, z
+        restricted = sp.expand(f6.subs(y, a * x + b * z))
+    elif chart == "x":
+        u, v = y, z
+        restricted = sp.expand(f6.subs(x, a * y + b * z))
+    else:
+        raise ValueError(f"unknown chart: {chart}")
+
+    cubic = c0 * u**3 + c1 * u**2 * v + c2 * u * v**2 + c3 * v**3
+    difference = sp.Poly(sp.expand(restricted - cubic**2), u, v)
+    equations = [difference.coeff_monomial(u ** (6 - index) * v**index) for index in range(7)]
+    return equations, (c0, c1, c2, c3, a, b)
+
+
+def certify_chart(chart: str, prime: int) -> tuple[dict[str, object], float]:
+    equations, variables = chart_equations(chart)
+    started = perf_counter()
+    basis = sp.groebner(equations, *variables, modulus=prime, order="grevlex")
+    elapsed = perf_counter() - started
+    unit = len(basis.polys) == 1 and basis.polys[0].as_expr() == 1
+    row = {
+        "chart": chart,
+        "prime": prime,
+        "equations": len(equations),
+        "variables": [str(variable) for variable in variables],
+        "basis_length": len(basis.polys),
+        "reduced_groebner_basis": [str(poly.as_expr()) for poly in basis.polys],
+        "unit_ideal": unit,
+    }
+    return row, elapsed
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prime", type=int, default=5)
+    parser.add_argument("--packet", type=Path)
+    args = parser.parse_args()
+
+    require(sp.isprime(args.prime), "modulus must be prime")
+    require(args.prime not in {2, 3}, "use a characteristic other than two or three")
+    certified = [certify_chart(chart, args.prime) for chart in ("x", "y", "z")]
+    rows = [row for row, _ in certified]
+    all_unit = all(bool(row["unit_ideal"]) for row in rows)
+    x, y, z = sp.symbols("x y z")
+    polynomial = str(sp.Poly(branch_sextic(x, y, z), x, y, z).as_expr())
+    packet = {
+        "schema": "mtt.unified-source.q79-no-splitting-line-certificate.v1",
+        "theorem_id": "UST.G3F.K3.NO_SPLITTING_LINE",
+        "state": "CLOSED_EXACT_BY_PROJECTIVE_SPECIALIZATION_AND_UNIT_GROEBNER_BASES",
+        "prime": args.prime,
+        "branch_sextic_sha256": hashlib.sha256(polynomial.encode("ascii")).hexdigest(),
+        "projective_cover": [
+            "x=a*y+b*z",
+            "y=a*x+b*z",
+            "z=a*x+b*y",
+        ],
+        "charts": rows,
+        "all_three_dual_plane_charts_are_empty": all_unit,
+        "characteristic_zero_conclusion": (
+            "The projective incidence of a line and a binary cubic whose square "
+            "is the restricted branch sextic has empty F5bar fiber. Proper "
+            "specialization therefore excludes a characteristic-zero splitting line."
+        ),
+        "continuous_fit_parameters": 0,
+    }
+    if args.packet:
+        args.packet.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(packet, indent=2))
+    for row, elapsed in certified:
+        print(f"{row['chart']}-chart exact Groebner time: {elapsed:.3f}s")
+    require(all_unit, "at least one line chart has a square-restriction solution")
+
+
+if __name__ == "__main__":
+    main()

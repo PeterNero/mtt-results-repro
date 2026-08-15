@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Independent replay of the UST.G3GM arithmetic correction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+import build_ust_g3ga_component20_second_jet_qgamma_promotion as campaign
+import build_ust_g3gg_component20_second_jet_fixed_minor_source as fixed_minor
+import probe_ust_g3ga_extra_split_prime_full_rank as border_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state/ust_g3gm_prime_arithmetic_compatibility_correction.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def checked(record: dict[str, object]) -> Path:
+    path = ROOT / str(record["path"])
+    require(path.is_file(), f"artifact exists: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"artifact size: {path}")
+    require(sha256(path) == record["sha256"], f"artifact hash: {path}")
+    return path
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(packet["theorem_id"] == "UST.G3GM", "theorem id")
+    for record in packet["inputs"].values():
+        checked(record)
+    fresh = packet["corrected_fresh_anchor"]
+    kernel_path = checked(fresh["kernel"])
+    checked(fresh["border"])
+    checked(fresh["kernel_log"])
+    source_path = checked(fresh["source"])
+    arrays_path = checked(packet["artifact"])
+
+    old = kernel_io.read_kernel(ROOT / packet["inputs"]["archived_kernel"]["path"])
+    new = kernel_io.read_kernel(kernel_path)
+    require((old["prime"], new["prime"]) == (21817, 79903), "kernel primes")
+    require(len(old["selected"]) == len(new["selected"]) == 4748, "selected count")
+    require(len(old["dependent"]) == len(new["dependent"]) == 1274, "dependent count")
+    require(np.array_equal(old["selected"], new["selected"]), "selected chart equality")
+    require(np.array_equal(old["dependent"], new["dependent"]), "dependent chart equality")
+
+    arrays = np.load(arrays_path, allow_pickle=False)
+    require(int(arrays["legacy_old_border_mismatch_entries"][0]) > 0, "legacy mismatch")
+    require(int(arrays["corrected_old_border_mismatch_entries"][0]) == 0, "corrected mismatch")
+    require(
+        np.array_equal(arrays["corrected_fresh_profile"], [4748, 1274]),
+        "corrected profile",
+    )
+
+    g3bi = campaign.load(campaign.second_jet.G3BI)
+    context = campaign.full_kernel_context(g3bi)
+    corrected_old = border_runtime.border_matrix(21817, 5, context)
+    archived_old, prime, _, _ = initializer.read_chart(
+        ROOT / packet["inputs"]["archived_border"]["path"]
+    )
+    require(prime == 21817, "archived prime")
+    difference = campaign.normalize_at_prime(
+        corrected_old - archived_old.astype(np.uint32), 21817
+    )
+    require(difference.nnz == 0, "independent corrected border replay")
+
+    source = np.load(source_path, allow_pickle=False)["source_coefficient"].astype(
+        np.int64
+    )
+    g3fx = np.load(campaign.second_jet.G3FX, allow_pickle=False)
+    generators, _, _ = campaign.interpolation.extract_fiber(kernel_path, 79903)
+    forms9 = tuple(
+        campaign.source_runtime.evaluate_selected_form(
+            g3bi["selected_source"]["coefficient_vectors"], theta, 12863, 79903
+        )
+        for theta in range(3)
+    )
+    operator = fixed_minor.source_operator(
+        generators[11],
+        campaign.second_jet.evaluate_coordinates(
+            g3fx["D7_gamma_coordinates"], 12863, 79903
+        ),
+        campaign.second_jet.evaluate_coordinates(
+            g3fx["B6_gamma_coordinates"], 12863, 79903
+        ),
+        forms9,
+        79903,
+    )
+    rank, rows, _ = fixed_minor.graded.rref(operator.T, 79903)
+    square = fixed_minor.chart_matrix(operator, 79903)
+    determinant = fixed_minor.determinant_mod(square, 79903)
+    rhs = np.zeros(132, dtype=np.int64)
+    rhs[-1] = 1
+    require(rank == 115 and tuple(rows) == fixed_minor.OPERATOR_ROWS, "operator chart")
+    require(determinant == fresh["fixed_minor_determinant"], "fixed determinant")
+    require(np.array_equal(square @ source % 79903, rhs), "fixed source replay")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    print(
+        "UST.G3GM independent verification: PASS "
+        f"profile=4748/1274 legacy_mismatch={packet['diagnosis']['legacy_replay_at_p21817_gamma5_mismatch_entries']} "
+        f"fixed_minor={determinant}"
+    )
+
+
+if __name__ == "__main__":
+    main()

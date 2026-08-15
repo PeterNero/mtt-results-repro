@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Verify the UST.G3AH formal coefficient-kernel theorem packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3ah_formal_coefficient_kernel.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AH", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_CONDITIONAL_FORMAL_COEFFICIENT_LIFT_GRAPH_MAP_FORMALITY_OPEN",
+        "status",
+    )
+    source_lock = packet["inputs"]["local_G3AG_packet"]
+    source_path = ROOT / source_lock["path"]
+    require(source_path.is_file(), "G3AG source")
+    require(sha256(source_path) == source_lock["sha256"], "G3AG source hash")
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    require(source["theorem_id"] == "UST.G3AG", "G3AG theorem")
+    require(
+        source["simultaneous_linear_system"]["three_graph_stacked_rank"] == 126,
+        "G3AG rank",
+    )
+
+    geometry = packet["geometric_rank_calculation"]
+    require(geometry["K3_polarization_square"] == 2, "H square")
+    h0_o9h = 2 + (9 * 9 * 2) // 2
+    require(h0_o9h == geometry["h0_O_K3_9H"] == 83, "O9H rank")
+    require(3 * h0_o9h == geometry["three_coefficient_source_rank"] == 249, "source rank")
+    expected = [
+        ("first_H", 1, 2, 3, 18, 9, 27, 2, 26),
+        ("second_H", 1, 2, 3, 18, 9, 27, 2, 26),
+        ("four_H", 4, 17, 6, 72, 18, 90, 32, 74),
+    ]
+    rows = geometry["component_target_rows"]
+    require(len(rows) == 3, "component count")
+    for row, values in zip(rows, expected):
+        label, multiple, genus, map_degree, coefficient_degree, target_degree, total, canonical, h0 = values
+        require(row["label"] == label, f"{label} label")
+        require(row["genus"] == genus, f"{label} genus")
+        require(row["map_degree_to_E"] == map_degree, f"{label} map degree")
+        require(row["degree_O9H_on_curve"] == coefficient_degree, f"{label} coefficient degree")
+        require(row["degree_pullback_OE_3O"] == target_degree, f"{label} target degree")
+        require(row["total_target_line_degree"] == total, f"{label} total degree")
+        require(row["canonical_degree"] == canonical, f"{label} canonical degree")
+        require(total > canonical and row["H1_vanishes"] is True, f"{label} H1")
+        require(total + 1 - genus == row["H0_rank_by_Riemann_Roch"] == h0, f"{label} RR")
+        require(coefficient_degree == 9 * multiple * 2, f"{label} intersection degree")
+    target_rank = sum(row["H0_rank_by_Riemann_Roch"] for row in rows)
+    require(target_rank == geometry["disjoint_graph_target_rank"] == 126, "target rank")
+    require(geometry["G3AG_special_fiber_rank"] == target_rank, "surjective reduction")
+    require(249 - target_rank == geometry["formal_kernel_rank"] == 123, "kernel rank")
+
+    algebra = packet["formal_algebra"]
+    require(algebra["source_module"] == "O^249", "source module")
+    require(algebra["target_module"] == "O^126", "target module")
+    require(algebra["special_fiber_rank"] == 126, "special rank")
+    require(algebra["no_higher_coefficient_obstruction"] is True, "coefficient obstruction")
+    require("surjective" in algebra["nakayama_conclusion"], "Nakayama conclusion")
+    require("rank 123" in algebra["kernel_conclusion"], "kernel conclusion")
+
+    frontier = packet["frontier_delta"]
+    require(frontier["coefficient_side_all_orders_obstruction_removed"] is True, "frontier advance")
+    require(frontier["repeated_higher_digit_249_coefficient_search_required"] is False, "no repeated search")
+    require(frontier["second_H_marked_map_formal_all_orders_proved"] is False, "map overreach")
+    require(frontier["beta_C_computed"] is False, "beta overreach")
+    scope = packet["scope"]
+    require(scope["unconditional_without_formal_graph_map_lifts"] is False, "conditional scope")
+    require(scope["proves_second_H_marked_map_all_orders"] is False, "map scope")
+    for label, value in packet["guardrails"].items():
+        require(value is False, f"guardrail violated: {label}")
+
+    print("UST.G3AH formal coefficient kernel: PASS")
+    print("Riemann-Roch target ranks: 26 + 26 + 74 = 126")
+    print("G3AG special-fiber map is surjective onto the full geometric target")
+    print("Nakayama/base change: coefficient kernel is free rank 123 and lifts to all orders")
+    print("G3AH condition: second-H formal map; discharged downstream by G3AI")
+
+
+if __name__ == "__main__":
+    main()

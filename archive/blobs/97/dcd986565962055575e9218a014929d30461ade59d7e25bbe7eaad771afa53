@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Localize component 20's finite relations and emit its selected-chart RHS."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import probe_ust_g3bl_endpoint_chart_unit as chart_runtime
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import load
+from probe_ust_g3ek_component16_cohomological_source import evaluate_sparse, rank_mod
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3ew"
+OUTPUT = EVIDENCE / "H02.component20.finite_source_localization.json"
+RHS = EVIDENCE / "H02.component20.observed_action.rhs.bin"
+INDICES = EVIDENCE / "H02.component20.finite_source_indices.npz"
+
+PRIME = 21817
+GAMMA = 5
+AMBIENT_DIMENSION = 42706
+COMPLEMENT_DIMENSION = 42458
+COMPONENT = 20
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+RELATIONS = 100
+EXPECTED_SOURCE_COMPONENTS = (0, 1, 2, 3, 4, 6, 9, 10, 11, 12, 13, 14, 16, 19, 20)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    g3bw = load(ROOT / "state/ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json")
+    g3de = load(ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json")
+    g3di = load(ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json")
+    g3dx = load(ROOT / "state/ust_g3dx_h02_prefix_structural_gap_localization.packet.json")
+    require(all(all(packet["checks"].values()) for packet in (g3bw, g3de, g3di, g3dx)), "inputs")
+
+    component = g3dx["prefix_gap_localization"]["component_rows"][COMPONENT]
+    require(
+        (
+            component["coordinate_start"],
+            component["coordinate_past"],
+            component["dimension"],
+            component["finite_rank_increment"],
+            component["structural_rank_increment"],
+            component["gap_increment"],
+        )
+        == (COMPONENT_START, COMPONENT_PAST, 136, 36, 136, 100),
+        "component-20 ledger",
+    )
+
+    root_kernel = next(row for row in g3di["root_kernels"] if int(row["gamma_root"]) == GAMMA)
+    kernel = kernel_runtime.read_kernel(ROOT / root_kernel["kernel"]["path"])
+    dependent = kernel["dependent"].astype(np.int32)
+    relation_indices = np.flatnonzero(
+        (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+    ).astype(np.int32)
+    dependent_coordinates = dependent[relation_indices]
+    require(relation_indices.size == RELATIONS, "component-20 relation count")
+    require(
+        np.array_equal(dependent_coordinates, np.arange(DEPENDENT_START, DEPENDENT_PAST)),
+        "component-20 contiguous dependent run",
+    )
+    relations = kernel["matrix"][:, relation_indices].tocsc().astype(np.int64)
+    source_support = np.unique(relations.nonzero()[0]).astype(np.int32)
+    boundaries = [
+        (int(row["coordinate_start"]), int(row["coordinate_past"]))
+        for row in g3dx["prefix_gap_localization"]["component_rows"]
+    ]
+    source_components = sorted(
+        {
+            component_index
+            for coordinate in source_support
+            for component_index, (start, past) in enumerate(boundaries)
+            if start <= int(coordinate) < past
+        }
+    )
+    require(tuple(source_components) == EXPECTED_SOURCE_COMPONENTS, "source components")
+    require(source_support.size == 2523, "source support")
+    require(relations.nnz == 242388, "relation nonzeros")
+
+    source_lookup = {int(coordinate): local for local, coordinate in enumerate(source_support)}
+    dependent_local = [source_lookup[int(coordinate)] for coordinate in dependent_coordinates]
+    selected_vectors = relations[source_support, :].toarray().astype(np.int64) % PRIME
+    projection_rank = rank_mod(selected_vectors[dependent_local, :])
+    require(projection_rank == RELATIONS, "dependent-coordinate projection rank")
+
+    u_coefficients = [
+        sparse.load_npz(ROOT / row["path"]).tocsc().astype(np.int64)
+        for row in g3de["factorization"]["U_gamma_coefficients"]
+    ]
+    update = evaluate_sparse(u_coefficients)
+    observed = (update @ relations).tocsc()
+    observed.data %= PRIME
+    observed.eliminate_zeros()
+    require(observed.shape == (COMPLEMENT_DIMENSION, RELATIONS), "observed shape")
+
+    dm = np.load(ROOT / g3bw["DM_reduction"]["arrays"]["path"], allow_pickle=False)
+    complement_rows = dm["complement_rows"].astype(np.int32)
+    require(complement_rows.size == COMPLEMENT_DIMENSION, "complement rows")
+    observed_coo = observed.tocoo()
+    rhs = sparse.csc_matrix(
+        (
+            (-observed_coo.data.astype(np.int64)) % PRIME,
+            (complement_rows[observed_coo.row], observed_coo.col),
+        ),
+        shape=(AMBIENT_DIMENSION, RELATIONS),
+    )
+    rhs.sum_duplicates()
+    rhs.data %= PRIME
+    rhs.eliminate_zeros()
+
+    mld = chart_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    exporter.write_rhs(
+        RHS,
+        PRIME,
+        AMBIENT_DIMENSION,
+        rhs.indptr.astype(np.uint64).tolist(),
+        rhs.indices.astype(np.uint32).tolist(),
+        rhs.data.astype(np.uint32).tolist(),
+    )
+    np.savez_compressed(
+        INDICES,
+        relation_indices=relation_indices,
+        dependent_coordinates=dependent_coordinates,
+        source_support=source_support,
+        dependent_local_columns=np.asarray(dependent_local, dtype=np.int32),
+        selected_vectors_mod21817_gamma5=selected_vectors.astype(np.uint16),
+    )
+
+    packet = {
+        "schema": "ust.g3ew.h02.component20.finite-source-localization.v1",
+        "date": "2026-08-14",
+        "status": "CLOSED_FINITE_COMPONENT20_SOURCE_LOCALIZATION_EXACT_LIFT_OPEN",
+        "field": {
+            "prime": PRIME,
+            "gamma": GAMMA,
+            "use": "support discovery and selected-chart RHS only",
+        },
+        "component": {
+            "index": COMPONENT,
+            "coordinate_interval": [COMPONENT_START, COMPONENT_PAST],
+            "dimension": 136,
+            "finite_rank": 36,
+            "finite_nullity": RELATIONS,
+            "structural_rank": 136,
+            "structural_minus_finite_gap": RELATIONS,
+        },
+        "relation_source": {
+            "dependent_interval": [DEPENDENT_START, DEPENDENT_PAST],
+            "relations": RELATIONS,
+            "relation_nonzeros": int(relations.nnz),
+            "source_coordinates": int(source_support.size),
+            "source_components": source_components,
+            "dependent_projection_rank": projection_rank,
+        },
+        "selected_chart_rhs": {
+            "shape": [AMBIENT_DIMENSION, RELATIONS],
+            "nonzeros": int(rhs.nnz),
+            "observed_complement_nonzeros": int(observed.nnz),
+            "rhs": record(RHS),
+            "indices": record(INDICES),
+        },
+        "checks": {
+            "component20_is_the_next100_unit_positive_gap": True,
+            "the100_dependent_coordinates_form_one_contiguous_run": True,
+            "the2523_coordinate_source_support_is_exact_at_the_proof_fiber": True,
+            "the_source_spans15_ordered_components": True,
+            "the_dependent_projection_has_rank100": True,
+            "the_selected_chart_rhs_is_emitted": True,
+        },
+        "guardrails": {
+            "claims_characteristic_zero_component20_kernel": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Solve this 100-column RHS in the selected chart, extract lift and quotient "
+            "support, rebuild the corresponding presentation over Q(gamma), and require "
+            "literal exact kernel replay before changing the global H02 interval."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    OUTPUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3EW component20 finite source localization: PASS "
+        f"relations={RELATIONS} source={source_support.size} components={len(source_components)} "
+        f"rhs_nnz={rhs.nnz}"
+    )
+
+
+if __name__ == "__main__":
+    main()

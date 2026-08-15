@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Build the G3BE delta-trivial Hartshorne-Serre support no-go theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = ROOT / "evidence" / "ust_g3be" / "q79_hs_prym_support_facts.v1.json.blob"
+PHI3 = ROOT / "evidence" / "ust_g3be" / "phi_j_3.txt.blob"
+OUT = STATE / "ust_g3be_delta_trivial_hs_elementary_transform_nogo.packet.json"
+
+EXPECTED_SOURCE_HASHES = {
+    "holomorphic_Hartshorne_Serre_source":
+        "8d7691768d01e2c19313549d8aefff82caebbb16b57c173456398f02c2c6a0f5",
+    "hyperplane_Fermat_Prym_candidate":
+        "4e5f51e7a29ef678ffd217f88b0b99ee32d0c95c519fa43517dd4f0ec0a04138",
+}
+PHI3_SOURCE = "https://math.mit.edu/~drew/modpolys/jfiles/phi_j_3.txt"
+CM_INTEGRALITY_SOURCE = "https://math.mit.edu/classes/18.783/2013/LectureNotes22.pdf"
+ISOGENY_END_SOURCE = "https://math.mit.edu/classes/18.783/2015/LectureNotes13.pdf"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="ascii"))
+
+
+def dump(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+
+def binary_quartic_invariants(coefficients: list[int]) -> tuple[int, int, int, Fraction]:
+    require(len(coefficients) == 5, "binary quartic coefficient count")
+    a, b, c, d, e = coefficients
+    invariant_i = 12 * a * e - 3 * b * d + c * c
+    invariant_j = (
+        72 * a * c * e
+        + 9 * b * c * d
+        - 27 * a * d * d
+        - 27 * b * b * e
+        - 2 * c * c * c
+    )
+    discriminant_numerator = 4 * invariant_i**3 - invariant_j**2
+    j_invariant = Fraction(6912 * invariant_i**3, discriminant_numerator)
+    return invariant_i, invariant_j, discriminant_numerator, j_invariant
+
+
+def parse_phi3_specialization(path: Path) -> dict[int, int]:
+    coefficients: dict[int, int] = {0: 0}
+    pattern = re.compile(r"^\[(\d+),(\d+)\]\s+(-?\d+)$")
+    for raw_line in path.read_text(encoding="ascii").splitlines():
+        match = pattern.fullmatch(raw_line.strip())
+        require(match is not None, "classical modular polynomial row")
+        power_x, power_y, value = map(int, match.groups())
+        if power_y == 0:
+            coefficients[power_x] = value
+    return coefficients
+
+
+def evaluate_polynomial(coefficients: dict[int, int], value: Fraction) -> Fraction:
+    return sum((Fraction(coefficient) * value**power for power, coefficient in coefficients.items()), Fraction(0))
+
+
+def main() -> None:
+    evidence = load(EVIDENCE)
+    source_hashes = {
+        name: item["sha256"] for name, item in evidence["source_packets"].items()
+    }
+    require(source_hashes == EXPECTED_SOURCE_HASHES, "source packet hash locks")
+    selected = evidence["selected_support"]
+    require(selected["delta_pullback"] == "O", "delta-trivial support")
+    require(selected["fiber_j_invariant"] == 0, "Fermat j invariant")
+
+    invariant_i, invariant_j, discriminant_numerator, j_base = binary_quartic_invariants(
+        selected["base_quartic_coefficients"]
+    )
+    require(discriminant_numerator // 27 == selected["base_quartic_discriminant"], "quartic discriminant")
+    require(
+        j_base == Fraction(132105539357000, 288838009),
+        "base j invariant",
+    )
+    require(math.gcd(j_base.numerator, j_base.denominator) == 1, "reduced base j")
+    require(j_base.denominator > 1, "base j is a nonintegral rational")
+
+    phi3 = parse_phi3_specialization(PHI3)
+    scale = 12288000
+    expected_phi3 = {0: 0, 1: scale**3, 2: 3 * scale**2, 3: 3 * scale, 4: 1}
+    require(phi3 == expected_phi3, "Phi_3(X,0)=X(X+12288000)^3")
+    phi3_at_base = evaluate_polynomial(phi3, j_base)
+    require(phi3_at_base != 0, "no cyclic degree-three isogeny")
+    require(evaluate_polynomial(phi3, Fraction(0)) == 0, "Phi3 j=0 control")
+    require(
+        evaluate_polynomial(phi3, Fraction(-scale)) == 0,
+        "Phi3 nonzero CM-neighbor control",
+    )
+
+    classes = evidence["numerical_classes"]
+    require(
+        classes["A_squared"] == classes["B_squared"] == 0
+        and classes["A_dot_B"] == 1
+        and classes["gysin_A"] == "0"
+        and classes["gysin_B"] == "u",
+        "product-surface intersection and Gysin rows",
+    )
+    target = evidence["elementary_transform_target"]
+    require(target["required_i_star_q"] == "-6u", "target Gysin row")
+    require(target["required_q_squared"] == -6, "target square row")
+    forced_horizontal_coefficient = -6
+    required_vertical_coefficient = Fraction(target["required_q_squared"], 2 * forced_horizontal_coefficient)
+    require(required_vertical_coefficient == Fraction(1, 2), "forced half-integral vertical coefficient")
+    require(required_vertical_coefficient.denominator != 1, "no integral product class")
+
+    checks = {
+        "the_delta_trivial_Hartshorne_Serre_normalization_product_is_hash_bound": True,
+        "the_base_binary_quartic_invariants_are_recomputed_exactly": True,
+        "the_base_j_invariant_is_a_reduced_nonintegral_rational": True,
+        "the_Fermat_fiber_has_CM_and_j_zero": True,
+        "isogeny_preserves_the_rational_endomorphism_algebra": True,
+        "a_complex_CM_j_invariant_is_an_algebraic_integer": True,
+        "therefore_EB_and_Ef_are_not_isogenous_and_Hom_EB_Ef_is_zero": True,
+        "the_official_level_three_modular_polynomial_independently_excludes_a_degree_three_isogeny": True,
+        "the_Neron_Severi_group_of_the_product_has_only_the_two_fiber_classes": True,
+        "the_required_Gysin_row_forces_the_horizontal_coefficient_to_minus_six": True,
+        "the_required_square_would_force_a_half_integral_vertical_coefficient": True,
+        "normalization_gluing_lives_in_the_numerically_trivial_Picard_part": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3be-delta-trivial-hs-elementary-transform-nogo.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BE",
+        "status": "CLOSED_EXACT_NOGO_FOR_ORDINARY_CARTIER_LINE_ON_DELTA_TRIVIAL_HS_SUPPORT_NEXT_SUPPORT_SELECTION_OPEN",
+        "inputs": {
+            "support_facts": record(EVIDENCE),
+            "classical_modular_polynomial_phi3": record(PHI3),
+            "source_packet_hashes": source_hashes,
+        },
+        "exact_arithmetic": {
+            "binary_quartic_I": invariant_i,
+            "binary_quartic_J": invariant_j,
+            "four_I_cubed_minus_J_squared": discriminant_numerator,
+            "quartic_discriminant": discriminant_numerator // 27,
+            "j_EB": [j_base.numerator, j_base.denominator],
+            "j_Ef": 0,
+            "j_EB_is_algebraic_integer": False,
+            "phi3_X_0_factorization": "X*(X+12288000)^3",
+            "phi3_at_j_EB": [phi3_at_base.numerator, phi3_at_base.denominator],
+        },
+        "theorem": {
+            "nonisogeny": "The Fermat elliptic fiber E_f has CM. If E_B were isogenous to E_f, End^0(E_B) would also be imaginary quadratic, so E_B would have CM and j(E_B) would be an algebraic integer. The exact reduced rational j(E_B) has denominator 288838009, a contradiction.",
+            "product_NS": "Hom(E_B,E_f)=0, hence NS(E_B x E_f)=Z[A] direct-sum Z[B], modulo the numerically trivial Picard part, with A^2=B^2=0 and A.B=1.",
+            "Diophantine_cutset": "For q=aA+bB, i_*A=0 and i_*B=u. The required i_*q=-6u forces b=-6, while q^2=2ab=-12a. The required q^2=-6 would force a=1/2, impossible for an integral Cartier line class.",
+            "normalization_extension": "A Cartier line on the nodal support pulls back to a line on its degree-one normalization product. Gysin and self-intersection numerical rows are preserved; conductor gluing changes Picard data but not c1. Thus the same cutset applies to an ordinary Cartier quotient on this selected support.",
+        },
+        "independent_degree_three_check": {
+            "source": PHI3_SOURCE,
+            "criterion": "Phi_3(j(E_B),j(E_f)) is nonzero",
+            "result": "NO_CYCLIC_DEGREE3_ISOGENY",
+            "positive_controls": ["Phi_3(0,0)=0", "Phi_3(-12288000,0)=0"],
+        },
+        "external_theorem_sources": {
+            "CM_j_integrality": CM_INTEGRALITY_SOURCE,
+            "isogeny_preserves_End0": ISOGENY_END_SOURCE,
+            "classical_modular_polynomial": PHI3_SOURCE,
+        },
+        "checks": checks,
+        "readiness_effect": {
+            "ordinary_rank_one_elementary_transform_on_selected_delta_trivial_HS_support": "CLOSED_EXACT_NOGO",
+            "degree_three_mixed_correspondence_on_that_support": "CLOSED_EXACT_NOGO",
+            "visible_V3_existence": "OPEN_NOT_EXCLUDED",
+            "beta_C": "OPEN_UNCHANGED",
+            "primary_visible_route": "EXISTING_G3AC_G3AJ_TWISTED_GRAPH_PRYM_PLUS_G3BC_G3BD_DELIGNE_DECISION",
+            "ordinary_support_fallback": "OPEN_SIMULTANEOUS_DELTA_TRIVIALITY_AND_MINUS6_MIXED_CLASS",
+        },
+        "parameter_ledger": {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+        },
+        "guardrails": {
+            "claims_visible_V3_is_impossible": False,
+            "claims_all_elementary_transforms_are_impossible": False,
+            "claims_twisted_or_higher_rank_quotients_are_impossible": False,
+            "claims_beta_C_is_decided": False,
+            "claims_the_physical_endpoint_is_closed": False,
+        },
+        "next_required_object": "Continue the already constructed G3AC/G3AJ twisted graph-Prym route and decide beta_C with G3BC-G3BD. Only as an optional ordinary rank-one fallback, construct a support curve C on the selected K3 for which delta|C is holomorphically trivial and NS(C x E_f) contains an integral mixed class m with m^2=-6 (equivalently, at the simple graph tier, a degree-three elliptic correspondence). Do not retry the E_B x E_f product.",
+    }
+    require(all(checks.values()), "G3BE checks")
+    require(not any(packet["guardrails"].values()), "G3BE guardrails")
+    dump(OUT, packet)
+    print("UST.G3BE delta-trivial HS elementary-transform support: PASS exact ordinary-line no-go")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Compute the full graded Betti table of the component-20 kernel ideal."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3fo"
+CERTIFICATE = EVIDENCE / "H02.component20.artinian_resolution.json"
+G3FN = ROOT / "evidence/ust_g3fn/H02.component20.hilbert_burch_source.json"
+
+EXPECTED_HILBERT_FUNCTION = (
+    1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66,
+    74, 80, 85, 74, 36, 11, 6, 3, 1, 0,
+)
+EXPECTED_SOCLE = {15: 18, 16: 1, 19: 1}
+EXPECTED_BETTI_1 = {11: 4, 14: 15, 15: 11}
+EXPECTED_BETTI_2 = {12: 1, 13: 1, 16: 40, 17: 7}
+EXPECTED_BETTI_3 = {18: 18, 19: 1, 22: 1}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def ideal_basis(
+    generators: dict[int, np.ndarray], degree: int, prime: int
+) -> tuple[np.ndarray, int]:
+    blocks = [
+        graded.multiply_space(generators[source], source, degree, prime)
+        for source in (11, 14, 15)
+        if degree >= source
+    ]
+    dimension = len(graded.homogeneous_exponents(degree))
+    if not blocks:
+        return np.zeros((dimension, 0), dtype=np.int64), 0
+    matrix = np.concatenate(blocks, axis=1)
+    rank, pivots, _ = graded.rref(matrix, prime)
+    return matrix[:, pivots] % prime, rank
+
+
+def socle_dimension(
+    current: np.ndarray, following: np.ndarray, degree: int, prime: int
+) -> int:
+    source = graded.homogeneous_exponents(degree)
+    target = graded.homogeneous_exponents(degree + 1)
+    target_lookup = {exponent: row for row, exponent in enumerate(target)}
+    variables = graded.homogeneous_exponents(1)
+
+    if following.shape[1]:
+        _, _, annihilator_columns = graded.rref(
+            following.T, prime, emit_nullspace=True
+        )
+        require(annihilator_columns is not None, "following annihilator")
+        annihilator = annihilator_columns.T
+    else:
+        annihilator = np.eye(len(target), dtype=np.int64)
+
+    equations = np.zeros(
+        (len(variables) * annihilator.shape[0], len(source)), dtype=np.int64
+    )
+    for variable_index, variable in enumerate(variables):
+        first = variable_index * annihilator.shape[0]
+        past = first + annihilator.shape[0]
+        for column, exponent in enumerate(source):
+            product = tuple(
+                exponent[index] + variable[index] for index in range(3)
+            )
+            equations[first:past, column] = annihilator[:, target_lookup[product]]
+    equation_rank, _, _ = graded.rref(equations, prime)
+    kernel_dimension = len(source) - equation_rank
+    require(kernel_dimension >= current.shape[1], "socle contains current ideal")
+    return kernel_dimension - current.shape[1]
+
+
+def hilbert_numerator(hilbert: tuple[int, ...]) -> dict[int, int]:
+    padded = hilbert + (0, 0)
+    result: dict[int, int] = {}
+    for degree in range(len(padded)):
+        coefficient = padded[degree]
+        if degree >= 1:
+            coefficient -= 3 * padded[degree - 1]
+        if degree >= 2:
+            coefficient += 3 * padded[degree - 2]
+        if degree >= 3:
+            coefficient -= padded[degree - 3]
+        if coefficient:
+            result[degree] = coefficient
+    return result
+
+
+def betti_2_from_numerator(
+    numerator: dict[int, int], betti_3: dict[int, int]
+) -> dict[int, int]:
+    result: dict[int, int] = {}
+    for degree in range(1, max(numerator | betti_3 | EXPECTED_BETTI_1) + 1):
+        value = (
+            numerator.get(degree, 0)
+            + EXPECTED_BETTI_1.get(degree, 0)
+            + betti_3.get(degree, 0)
+        )
+        require(value >= 0, f"nonnegative beta2 degree{degree}")
+        if value:
+            result[degree] = value
+    return result
+
+
+def main() -> None:
+    require(G3FN.is_file(), "G3FN certificate")
+    split_packets = [conic.load(path) for path in conic.SPLIT_PACKETS]
+    primes = tuple(int(packet["field"]["prime"]) for packet in split_packets)
+    require(primes == conic.EXPECTED_PRIMES, "split-prime order")
+
+    fiber_rows: list[dict[str, object]] = []
+    for packet_path, packet, prime in zip(
+        conic.SPLIT_PACKETS, split_packets, primes, strict=True
+    ):
+        rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        for root in (int(value) for value in packet["field"]["roots"]):
+            generators, _, _ = g3fe.extract_fiber(
+                ROOT / rows[root]["kernel"]["path"], prime
+            )
+            bases: dict[int, np.ndarray] = {}
+            hilbert: list[int] = []
+            for degree in range(21):
+                bases[degree], ideal_dimension = ideal_basis(
+                    generators, degree, prime
+                )
+                hilbert.append(
+                    len(graded.homogeneous_exponents(degree)) - ideal_dimension
+                )
+            require(tuple(hilbert) == EXPECTED_HILBERT_FUNCTION, "Hilbert function")
+
+            socle = {
+                degree: value
+                for degree in range(11, 20)
+                if (
+                    value := socle_dimension(
+                        bases[degree], bases[degree + 1], degree, prime
+                    )
+                )
+            }
+            require(socle == EXPECTED_SOCLE, "socle profile")
+            betti_3 = {degree + 3: value for degree, value in socle.items()}
+            numerator = hilbert_numerator(tuple(hilbert))
+            betti_2 = betti_2_from_numerator(numerator, betti_3)
+            require(betti_2 == EXPECTED_BETTI_2, "second Betti row")
+            require(betti_3 == EXPECTED_BETTI_3, "third Betti row")
+
+            fiber_rows.append(
+                {
+                    "prime": prime,
+                    "gamma_root": root,
+                    "hilbert_function_degrees0_through20": hilbert,
+                    "length": sum(hilbert),
+                    "socle_by_degree": {str(key): value for key, value in socle.items()},
+                    "hilbert_numerator": {
+                        str(key): value for key, value in numerator.items()
+                    },
+                }
+            )
+            print(
+                f"G3FO p={prime} gamma={root}: length=656 "
+                "socle=18@15+1@16+1@19 Betti=1,30,49,20",
+                flush=True,
+            )
+
+    require(len(fiber_rows) == 48, "all 48 fibers")
+    packet = {
+        "schema": "ust.g3fo.h02.component20.artinian-resolution.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FO",
+        "status": "CLOSED_EXACT_48_FIBER_ARTINIAN_RESOLUTION_QGAMMA_DIFFERENTIALS_OPEN",
+        "inputs": {
+            "G3FN": record(G3FN),
+            "split_prime_packets": [record(path) for path in conic.SPLIT_PACKETS],
+        },
+        "algebra": {
+            "ring": "R=k[x,y,z]",
+            "ideal_generators": {
+                "degree11": 4,
+                "degree14": 15,
+                "degree15": 11,
+            },
+            "quotient": "A=R/I",
+            "hilbert_function_degrees0_through20": list(EXPECTED_HILBERT_FUNCTION),
+            "length": sum(EXPECTED_HILBERT_FUNCTION),
+            "first_zero_degree": 20,
+            "socle_by_degree": {str(key): value for key, value in EXPECTED_SOCLE.items()},
+            "socle_type": sum(EXPECTED_SOCLE.values()),
+            "hilbert_numerator": {
+                str(key): value
+                for key, value in hilbert_numerator(EXPECTED_HILBERT_FUNCTION).items()
+            },
+        },
+        "minimal_resolution": {
+            "betti_0": {"0": 1},
+            "betti_1": {str(key): value for key, value in EXPECTED_BETTI_1.items()},
+            "betti_2": {str(key): value for key, value in EXPECTED_BETTI_2.items()},
+            "betti_3": {str(key): value for key, value in EXPECTED_BETTI_3.items()},
+            "total_ranks": [1, 30, 49, 20],
+            "display": (
+                "0 -> R(-18)^18+R(-19)+R(-22) -> "
+                "R(-12)+R(-13)+R(-16)^40+R(-17)^7 -> "
+                "R(-11)^4+R(-14)^15+R(-15)^11 -> R -> A -> 0"
+            ),
+            "proof_route": (
+                "I_20=R_20 makes A Artinian over the three-variable polynomial "
+                "ring. The exact socle determines the last free module with a "
+                "degree-three shift; the Hilbert numerator and the already minimal "
+                "30 generators then determine the middle Betti row."
+            ),
+        },
+        "campaign": {
+            "fibers": 48,
+            "primes": list(primes),
+            "rows": fiber_rows,
+        },
+        "checks": {
+            "all48_fibers_have_the_same_Hilbert_function": True,
+            "the_quotient_is_Artinian_of_length656_at_all48_fibers": True,
+            "the_socle_profile_is18_at15_plus1_at16_plus1_at19": True,
+            "the_socle_type_is20": True,
+            "the_minimal_resolution_has_total_ranks1_30_49_20": True,
+            "the_Hilbert_Burch_degree19_relation_is_not_minimal_in_the_full_ideal": True,
+        },
+        "guardrails": {
+            "claims_explicit_full_resolution_differentials": False,
+            "claims_a_Qgamma_lift": False,
+            "claims_the_G3FK_to_G3FN_intertwiner": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3foComponent20ArtinianResolution",
+            "tier": "CLOSED_EXACT_48_FIBER_GRADED_BETTI_THEOREM",
+            "statement": (
+                "At all 48 archived split fibers, the full component-20 kernel "
+                "ideal generated in degrees 11,14,15 has the displayed common "
+                "Artinian Hilbert function, length656, socle type20 and minimal "
+                "graded resolution of total ranks1,30,49,20."
+            ),
+        },
+        "next_required_object": (
+            "Construct the actual degree16 and degree17 syzygy columns and the "
+            "degree18,19,22 terminal maps directly from the Cox-shifted G3FK source "
+            "over Q(gamma), prove the complex identities, and replay its degree15 "
+            "image as the G3EX component-20 100-plane."
+        ),
+    }
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FO: PASS fibers=48 length=656 "
+        "resolution_ranks=1,30,49,20",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

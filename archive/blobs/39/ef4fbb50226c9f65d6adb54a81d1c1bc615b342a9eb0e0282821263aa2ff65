@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""Replay the UST.G3AE first-order joint graph/coefficient lift."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import verify_ust_g3ad_fixed_fq_second_h_graph_obstruction as arithmetic
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3ae_second_h_joint_coefficient_lift.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def monomials(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree, -1, -1)
+        for y_power in range(degree - x_power, -1, -1)
+    ]
+
+
+def coefficient_basis() -> list[dict[str, object]]:
+    return [
+        {
+            "target_coordinate": coordinate,
+            "basis_kind": kind,
+            "powers_xyz": list(powers),
+        }
+        for coordinate in range(3)
+        for kind, degree in (
+            ("base_degree9", 9),
+            ("K3_sheet_times_degree6", 6),
+        )
+        for powers in monomials(degree)
+    ]
+
+
+def field_inverse(value, relation, prime):
+    inverse = arithmetic.qpow(value, prime ** (len(relation) - 1) - 2, relation, prime)
+    require(
+        arithmetic.qmul(value, inverse, relation, prime)
+        == arithmetic.qone(len(relation) - 1),
+        "finite-field inverse",
+    )
+    return inverse
+
+
+def graph_values(source_packet, relation, modulus):
+    degree = len(relation) - 1
+    graph = source_packet["selected_second_H_graph"]
+    cubic = graph["cubic_mod1012_data"]
+    alpha = arithmetic.qelement(
+        source_packet["completion_ring"]["alpha_hensel_lift_gamma_coordinates_mod1012"],
+        modulus,
+        degree,
+    )
+
+    def embed(rows):
+        return arithmetic.qeval(rows, alpha, relation, modulus)
+
+    return {
+        "source": {
+            name: embed(rows)
+            for name, rows in cubic["source_coordinates_mod1012_in_alpha_basis"].items()
+        },
+        "P": [embed(row) for row in cubic["P_mod1012_in_alpha_basis"]],
+        "Q": [embed(row) for row in cubic["Q_mod1012_in_alpha_basis"]],
+        "S": [embed(row) for row in cubic["S_mod1012_in_alpha_basis"]],
+        "k": embed(cubic["Fermat_k_mod1012_in_alpha_basis"]),
+        "h": [
+            arithmetic.qelement(row, modulus, degree)
+            for row in graph["line_sextic_mod1012_in_gamma_basis"]
+        ],
+    }
+
+
+def target_coordinates(data, relation, modulus, one, zero):
+    degree = len(relation) - 1
+    q_squared = arithmetic.ppow(data["Q"], 2, relation, modulus, one, zero)
+    even = arithmetic.pscale(
+        q_squared,
+        arithmetic.qelement((12,), modulus, degree),
+        relation,
+        modulus,
+        zero,
+    )
+    odd = arithmetic.pscale(data["S"], data["k"], relation, modulus, zero)
+    third = arithmetic.pscale(
+        arithmetic.pmul(data["P"], data["Q"], relation, modulus, zero),
+        arithmetic.qelement((6,), modulus, degree),
+        relation,
+        modulus,
+        zero,
+    )
+    return [(even, arithmetic.pneg(odd, modulus, zero)), (even, odd), (third, [zero])]
+
+
+def basis_column(basis, data, targets, relation, modulus, one, zero):
+    monomial = arithmetic.restrict_monomial(
+        basis["powers_xyz"],
+        data["source"]["r"],
+        data["source"]["w"],
+        relation,
+        modulus,
+        one,
+        zero,
+    )
+    if basis["basis_kind"] == "base_degree9":
+        component = (monomial, [zero])
+    else:
+        require(basis["basis_kind"] == "K3_sheet_times_degree6", "basis kind")
+        component = ([zero], monomial)
+    even, odd = arithmetic.multiply_sheet_pairs(
+        component,
+        targets[basis["target_coordinate"]],
+        data["h"],
+        relation,
+        modulus,
+        zero,
+    )
+    return arithmetic.ppad(even, 16, zero) + arithmetic.ppad(odd, 16, zero)
+
+
+def rref(matrix, rhs, relation, prime, zero):
+    augmented = [list(row) + [value] for row, value in zip(matrix, rhs)]
+    pivot_columns = []
+    pivot_row = 0
+    for column in range(len(matrix[0])):
+        selected = next(
+            (row for row in range(pivot_row, len(augmented)) if augmented[row][column] != zero),
+            None,
+        )
+        if selected is None:
+            continue
+        augmented[pivot_row], augmented[selected] = augmented[selected], augmented[pivot_row]
+        inverse = field_inverse(augmented[pivot_row][column], relation, prime)
+        augmented[pivot_row] = [
+            arithmetic.qmul(value, inverse, relation, prime)
+            for value in augmented[pivot_row]
+        ]
+        for row in range(len(augmented)):
+            if row == pivot_row or augmented[row][column] == zero:
+                continue
+            factor = augmented[row][column]
+            augmented[row] = [
+                arithmetic.qsub(
+                    value,
+                    arithmetic.qmul(factor, pivot_value, relation, prime),
+                    prime,
+                )
+                for value, pivot_value in zip(augmented[row], augmented[pivot_row])
+            ]
+        pivot_columns.append(column)
+        pivot_row += 1
+        if pivot_row == len(augmented):
+            break
+    for row in augmented:
+        if all(value == zero for value in row[:-1]):
+            require(row[-1] == zero, "consistent augmented system")
+    solution = [zero] * len(matrix[0])
+    for row, column in enumerate(pivot_columns):
+        solution[column] = augmented[row][-1]
+    return solution, pivot_columns
+
+
+def matrix_vector(matrix, vector, relation, modulus, zero):
+    output = []
+    for row in matrix:
+        value = zero
+        for entry, coefficient in zip(row, vector):
+            value = arithmetic.qadd(
+                value,
+                arithmetic.qmul(entry, coefficient, relation, modulus),
+                modulus,
+            )
+        output.append(value)
+    return output
+
+
+def main() -> None:
+    packet = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AE", "theorem id")
+    source_lock = packet["inputs"]["local_G3AD_packet"]
+    source_path = ROOT / source_lock["path"]
+    require(source_path.is_file(), "G3AD source packet")
+    require(sha256(source_path) == source_lock["sha256"], "G3AD source hash")
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    require(source["theorem_id"] == "UST.G3AD", "G3AD theorem id")
+
+    relation = tuple(source["completion_ring"]["gamma_relation_coefficients_ascending"])
+    prime = source["completion_ring"]["prime"]
+    degree = len(relation) - 1
+    zero = arithmetic.qzero(degree)
+    one = arithmetic.qone(degree)
+    basis = coefficient_basis()
+    system = packet["linear_system"]
+    require(system["column_basis"] == basis, "coefficient basis order")
+    require(system["shape"] == [32, 249], "linear-system shape")
+
+    data = graph_values(source, relation, prime)
+    targets = target_coordinates(data, relation, prime, one, zero)
+    columns = [
+        basis_column(row, data, targets, relation, prime, one, zero)
+        for row in basis
+    ]
+    matrix = [
+        [columns[column][row] for column in range(len(columns))]
+        for row in range(32)
+    ]
+    matrix_serialized = [[list(value) for value in row] for row in matrix]
+    require(canonical_hash(matrix_serialized) == system["matrix_sha256"], "matrix hash")
+
+    obstruction = [
+        arithmetic.qelement(row["gamma_coefficients_mod101"], prime, degree)
+        for row in source["restriction_test"]["first_order_rows"]
+    ]
+    rhs = [arithmetic.qneg(value, prime) for value in obstruction]
+    require(canonical_hash([list(value) for value in rhs]) == system["rhs_sha256"], "rhs hash")
+    canonical_solution, pivots = rref(matrix, rhs, relation, prime, zero)
+    require(pivots == system["pivot_columns"], "pivot columns")
+    require(len(pivots) == system["rank"] == 26, "restriction rank")
+    require(system["nullity"] == 249 - 26 == 223, "restriction nullity")
+
+    emitted_solution = [zero] * 249
+    for row in packet["canonical_correction"]["sparse_rows"]:
+        index = row["coefficient_index"]
+        require({key: row[key] for key in ("target_coordinate", "basis_kind", "powers_xyz")} == basis[index], "sparse basis row")
+        require(emitted_solution[index] == zero, "unique sparse index")
+        emitted_solution[index] = arithmetic.qelement(
+            row["gamma_coefficients_mod101"], prime, degree
+        )
+    require(emitted_solution == canonical_solution, "canonical RREF solution")
+    require(
+        canonical_hash([list(value) for value in emitted_solution])
+        == packet["canonical_correction"]["full_solution_sha256"],
+        "solution hash",
+    )
+    require(
+        matrix_vector(matrix, emitted_solution, relation, prime, zero) == rhs,
+        "matrix correction equation",
+    )
+    require(
+        sum(value != zero for value in emitted_solution)
+        == packet["canonical_correction"]["nonzero_coefficient_count"]
+        == 26,
+        "sparse correction count",
+    )
+
+    modulus = source["completion_ring"]["modulus"]
+    zero2 = arithmetic.qzero(degree)
+    one2 = arithmetic.qone(degree)
+    data2 = graph_values(source, relation, modulus)
+    targets2 = target_coordinates(data2, relation, modulus, one2, zero2)
+    original_by_key = {
+        (
+            row["target_coordinate"],
+            row["basis_kind"],
+            tuple(row["powers_xyz"]),
+        ): arithmetic.qelement(row["gamma_coefficients_ascending"], modulus, degree)
+        for row in source["fixed_FQ"]["nonzero_gamma_rows"]
+    }
+    components = [([zero2], [zero2]) for _ in range(3)]
+    for index, basis_row in enumerate(basis):
+        key = (
+            basis_row["target_coordinate"],
+            basis_row["basis_kind"],
+            tuple(basis_row["powers_xyz"]),
+        )
+        coefficient = original_by_key.get(key, zero2)
+        correction = arithmetic.qscale(
+            arithmetic.qelement(emitted_solution[index], modulus, degree),
+            prime,
+            modulus,
+        )
+        coefficient = arithmetic.qadd(coefficient, correction, modulus)
+        monomial = arithmetic.restrict_monomial(
+            basis_row["powers_xyz"],
+            data2["source"]["r"],
+            data2["source"]["w"],
+            relation,
+            modulus,
+            one2,
+            zero2,
+        )
+        restricted = arithmetic.pscale(
+            monomial, coefficient, relation, modulus, zero2
+        )
+        coordinate = basis_row["target_coordinate"]
+        even, odd = components[coordinate]
+        if basis_row["basis_kind"] == "base_degree9":
+            even = arithmetic.padd(even, restricted, modulus, zero2)
+        else:
+            odd = arithmetic.padd(odd, restricted, modulus, zero2)
+        components[coordinate] = (even, odd)
+
+    restriction = ([zero2], [zero2])
+    for component, target in zip(components, targets2):
+        contribution = arithmetic.multiply_sheet_pairs(
+            component, target, data2["h"], relation, modulus, zero2
+        )
+        restriction = (
+            arithmetic.padd(restriction[0], contribution[0], modulus, zero2),
+            arithmetic.padd(restriction[1], contribution[1], modulus, zero2),
+        )
+    require(
+        all(
+            value == zero2
+            for value in arithmetic.ppad(restriction[0], 16, zero2)
+            + arithmetic.ppad(restriction[1], 16, zero2)
+        ),
+        "corrected restriction modulo 101^2",
+    )
+
+    result = packet["joint_lift_result"]
+    require(result["restriction_zero_mod1012"] is True, "joint-lift result")
+    frontier = packet["frontier_delta"]
+    require(frontier["fixed_FQ_route_remains_retired"] is True, "fixed route reopened")
+    require(frontier["second_H_joint_graph_coefficient_lift_exists_mod1012"] is True, "constructive lift")
+    require(frontier["all_three_graph_joint_lift_constructed"] is False, "three-graph overreach")
+    require(frontier["beta_C_computed"] is False, "beta_C overreach")
+    scope = packet["scope"]
+    require(scope["canonical_relative_to_displayed_basis_not_intrinsic_MTT_selection"] is True, "selection scope")
+    require(scope["proves_convergence_to_characteristic_zero"] is False, "convergence overreach")
+    require(scope["preserves_first_H_or_4H_graphs"] is False, "other-graph overreach")
+    require(scope["constructs_visible_V3_HYM"] is False, "physical overreach")
+    for name, value in packet["guardrails"].items():
+        require(value is False, f"guardrail violated: {name}")
+
+    print("UST.G3AE second-H joint coefficient lift: PASS")
+    print("restriction derivative: rank 26, nullity 223")
+    print("canonical correction: 26 nonzero coefficients")
+    print("selected second-H restriction modulo 101^2: ZERO")
+    print("open: simultaneous three-graph lift, convergence, beta_C and visible HYM")
+
+
+if __name__ == "__main__":
+    main()

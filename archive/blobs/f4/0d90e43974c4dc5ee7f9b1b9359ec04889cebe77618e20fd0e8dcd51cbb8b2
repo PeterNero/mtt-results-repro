@@ -1,0 +1,509 @@
+#!/usr/bin/env python3
+"""Derive the exact DM/Woodbury reduction for the selected G3BI H02 endpoint chart."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from array import array
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components, maximum_bipartite_matching
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3bw"
+OUT = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+PRIME = 21817
+ANCHOR = 5
+ZERO = (0, 0, 0, 0, 0, 0)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    repository = repository.resolve()
+    try:
+        relative = resolved.relative_to(repository)
+    except ValueError:
+        repository = next(
+            (
+                candidate
+                for candidate in (resolved.parent, *resolved.parents)
+                if (candidate / ".git").exists()
+            ),
+            resolved.parent,
+        )
+        relative = resolved.relative_to(repository)
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository),
+        "repository_relative_path": relative.as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def coefficient_add(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(a + b for a, b in zip(left, right, strict=True))
+
+
+def coefficient_scale(value: tuple[int, ...], scalar: int) -> tuple[int, ...]:
+    return tuple(scalar * coefficient for coefficient in value)
+
+
+def correction_derivatives_exact(g3bi: dict[str, Any]) -> list[dict[tuple[int, ...], tuple[int, ...]]]:
+    terms: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        exponent = tuple(int(value) for value in row["source_monomial"]) + (
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+        )
+        coefficients = tuple(int(value) for value in row["correction_gamma_coordinates"])
+        require(len(coefficients) == 6 and any(coefficients), "nonzero sextic coefficient row")
+        terms.append((exponent, coefficients))
+    require(len(terms) == 19, "19 G3BI correction terms")
+    derivatives: list[dict[tuple[int, ...], tuple[int, ...]]] = []
+    for variable in range(10):
+        derivative: dict[tuple[int, ...], tuple[int, ...]] = {}
+        for exponent, coefficients in terms:
+            power = exponent[variable]
+            if power == 0:
+                continue
+            lowered = list(exponent)
+            lowered[variable] -= 1
+            key = tuple(lowered)
+            derivative[key] = coefficient_add(
+                derivative.get(key, ZERO), coefficient_scale(coefficients, power)
+            )
+        derivatives.append({key: value for key, value in derivative.items() if any(value)})
+    return derivatives
+
+
+def endpoint_column(
+    descriptor: tuple[int, tuple[int, ...]],
+    generators0: list[dict[tuple[int, ...], tuple[int, ...]]],
+    correction_derivatives: list[dict[tuple[int, ...], tuple[int, ...]]],
+    target_lookup: dict[tuple[int, ...], int],
+    oracle: Any,
+) -> dict[int, tuple[int, ...]]:
+    result = dict(oracle.exact_column(descriptor, generators0, target_lookup))
+    generator, multiplier = descriptor
+    for exponent, coefficients in correction_derivatives[generator].items():
+        product = tuple(a + b for a, b in zip(multiplier, exponent, strict=True))
+        target = target_lookup.get(product)
+        require(target is not None, "G3BI correction term lies in H02 target basis")
+        result[target] = coefficient_add(result.get(target, ZERO), coefficients)
+    return {row: coefficients for row, coefficients in result.items() if any(coefficients)}
+
+
+def array_hash(values: np.ndarray, dtype: str) -> str:
+    canonical = np.ascontiguousarray(values, dtype=np.dtype(dtype))
+    digest = hashlib.sha256()
+    digest.update(np.asarray(canonical.shape, dtype="<i8").tobytes())
+    digest.update(canonical.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def pattern_hash(pattern: sparse.csr_matrix) -> str:
+    canonical = pattern.copy().tocsr()
+    canonical.sort_indices()
+    digest = hashlib.sha256()
+    digest.update(np.asarray(canonical.shape, dtype="<i8").tobytes())
+    digest.update(np.asarray(canonical.indptr, dtype="<i8").tobytes())
+    digest.update(np.asarray(canonical.indices, dtype="<i4").tobytes())
+    return digest.hexdigest()
+
+
+def topological_order(
+    component_count: int, sources: np.ndarray, targets: np.ndarray
+) -> list[int]:
+    successors: list[set[int]] = [set() for _ in range(component_count)]
+    indegree = [0] * component_count
+    for source, target in zip(sources.tolist(), targets.tolist(), strict=True):
+        if source == target or target in successors[source]:
+            continue
+        successors[source].add(target)
+        indegree[target] += 1
+    ready = sorted(index for index, value in enumerate(indegree) if value == 0)
+    result: list[int] = []
+    while ready:
+        current = ready.pop(0)
+        result.append(current)
+        for target in sorted(successors[current]):
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+                ready.sort()
+    require(len(result) == component_count, "condensation graph is acyclic")
+    return result
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3br_path = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+    g3bv_path = ROOT / "state" / "ust_g3bv_h02_endpoint_gf11_calibration.packet.json"
+    g3bi = load(g3bi_path)
+    g3br = load(g3br_path)
+    g3bv = load(g3bv_path)
+    for packet, label in ((g3bi, "G3BI"), (g3br, "G3BR"), (g3bv, "G3BV")):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    csc_path = mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay = load(macaulay_path)
+    csc = load(csc_path)
+    factor = load(factor_path)
+    base_packet = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, _, _ = oracle.exact_generators(base_packet, global_f0, b89)
+    corrections = correction_derivatives_exact(g3bi)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = {int(value) for value in csc["binary"]["quotient_unit_rows"]}
+    complement_rows = [row for row in range(len(target)) if row not in quotient_rows]
+    complement_lookup = {
+        ambient_row: local_row for local_row, ambient_row in enumerate(complement_rows)
+    }
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    dimension = len(complement_rows)
+    require(len(target) == 42706 and len(quotient_rows) == 248, "H02 dimensions")
+    require(dimension == len(descriptors) == 42458, "H02 complement dimensions")
+
+    rows = array("i")
+    columns = array("i")
+    gamma_rows = array("i")
+    gamma_columns = array("i")
+    gamma_weights = bytearray()
+    chart_indptr = [0]
+    chart_indices: list[int] = []
+    chart_data: list[int] = []
+    exact_digest = hashlib.sha256()
+    for row in sorted(quotient_rows):
+        chart_indices.append(row)
+        chart_data.append(1)
+        chart_indptr.append(len(chart_indices))
+    for column_index, descriptor in enumerate(descriptors):
+        exact = endpoint_column(
+            descriptor, generators0, corrections, target_lookup, oracle
+        )
+        augmented_column = 248 + column_index
+        for ambient_row, coefficients in sorted(exact.items()):
+            exact_digest.update(
+                f"{augmented_column}:{ambient_row}:".encode("ascii")
+            )
+            exact_digest.update(
+                ",".join(str(value) for value in coefficients).encode("ascii")
+            )
+            exact_digest.update(b"\n")
+            value = exporter.evaluate(coefficients, PRIME, ANCHOR)
+            if value:
+                chart_indices.append(ambient_row)
+                chart_data.append(value)
+            local_row = complement_lookup.get(ambient_row)
+            if local_row is None:
+                continue
+            rows.append(local_row)
+            columns.append(column_index)
+            higher_weight = sum(coefficient != 0 for coefficient in coefficients[1:])
+            if higher_weight:
+                gamma_rows.append(local_row)
+                gamma_columns.append(column_index)
+                gamma_weights.append(higher_weight)
+        chart_indptr.append(len(chart_indices))
+
+    evaluated_chart = sparse.csc_matrix(
+        (
+            np.asarray(chart_data, dtype=np.uint32),
+            np.asarray(chart_indices, dtype=np.int32),
+            np.asarray(chart_indptr, dtype=np.int64),
+        ),
+        shape=(42706, 42706),
+        dtype=np.uint32,
+    )
+    g3br_chart, chart_prime, quotient_units, image_rank = initializer.read_chart(
+        ROOT / g3br["endpoint_chart"]["binary"]["path"]
+    )
+    require(
+        (chart_prime, quotient_units, image_rank) == (PRIME, 248, 42458),
+        "G3BR chart header",
+    )
+    require((evaluated_chart != g3br_chart).nnz == 0, "exact endpoint evaluates to G3BR")
+
+    row_array = np.frombuffer(rows, dtype=np.int32)
+    column_array = np.frombuffer(columns, dtype=np.int32)
+    pattern = sparse.csr_matrix(
+        (
+            np.ones(row_array.size, dtype=np.uint8),
+            (row_array, column_array),
+        ),
+        shape=(dimension, dimension),
+    )
+    pattern.sum_duplicates()
+    pattern.data[:] = 1
+    matching_column_by_row = maximum_bipartite_matching(
+        pattern, perm_type="column"
+    ).astype(np.int32)
+    require(np.count_nonzero(matching_column_by_row < 0) == 0, "perfect matching")
+    require(np.unique(matching_column_by_row).size == dimension, "bijective matching")
+    pattern_rows, pattern_columns = pattern.nonzero()
+    graph_sources = matching_column_by_row[pattern_rows]
+    graph_targets = pattern_columns.astype(np.int32)
+    graph = sparse.csr_matrix(
+        (
+            np.ones(graph_sources.size, dtype=np.uint8),
+            (graph_sources, graph_targets),
+        ),
+        shape=(dimension, dimension),
+    )
+    component_count, component_by_column = connected_components(
+        graph, directed=True, connection="strong"
+    )
+    component_by_column = component_by_column.astype(np.int32)
+    component_by_row = component_by_column[matching_column_by_row]
+    component_sizes = np.bincount(
+        component_by_column, minlength=component_count
+    ).astype(np.int32)
+    order = topological_order(
+        component_count,
+        component_by_column[graph_sources],
+        component_by_column[graph_targets],
+    )
+    order_position = np.empty(component_count, dtype=np.int32)
+    for position, component in enumerate(order):
+        order_position[component] = position
+    backward_edges = int(
+        np.count_nonzero(
+            order_position[component_by_column[graph_sources]]
+            > order_position[component_by_column[graph_targets]]
+        )
+    )
+    require(backward_edges == 0, "block upper-triangular order")
+
+    gamma_row_array = np.frombuffer(gamma_rows, dtype=np.int32)
+    gamma_column_array = np.frombuffer(gamma_columns, dtype=np.int32)
+    gamma_weight_array = np.frombuffer(gamma_weights, dtype=np.uint8)
+    internal_gamma = (
+        component_by_row[gamma_row_array] == component_by_column[gamma_column_array]
+    )
+    internal_rows = gamma_row_array[internal_gamma]
+    internal_columns = gamma_column_array[internal_gamma]
+    internal_components = component_by_row[internal_rows]
+    active_components = np.unique(internal_components)
+    component_reductions: list[dict[str, int]] = []
+    for component in active_components.tolist():
+        mask = internal_components == component
+        component_reductions.append(
+            {
+                "component_label": int(component),
+                "topological_position": int(order_position[component]),
+                "component_dimension": int(component_sizes[component]),
+                "active_internal_rows": int(np.unique(internal_rows[mask]).size),
+                "active_internal_columns": int(np.unique(internal_columns[mask]).size),
+                "nonconstant_internal_entries": int(np.count_nonzero(mask)),
+                "combined_higher_power_nonzeros": int(
+                    gamma_weight_array[internal_gamma][mask].sum(dtype=np.int64)
+                ),
+            }
+        )
+    component_reductions.sort(
+        key=lambda row: (row["component_dimension"], row["active_internal_rows"]),
+        reverse=True,
+    )
+    nontrivial_reductions = [
+        row for row in component_reductions if row["component_dimension"] > 1
+    ]
+    histogram = Counter(int(value) for value in component_sizes)
+    decreasing_sizes = sorted(component_sizes.tolist(), reverse=True)
+    max_kernel = max(
+        (row["active_internal_rows"] for row in nontrivial_reductions), default=0
+    )
+    total_nontrivial_kernel_rows = sum(
+        row["active_internal_rows"] for row in nontrivial_reductions
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    arrays_path = EVIDENCE / "G3BI_H02_DM_Woodbury_arrays.npz"
+    sparse.save_npz(EVIDENCE / "G3BI_H02_exact_complement_pattern.npz", pattern, compressed=True)
+    np.savez_compressed(
+        arrays_path,
+        complement_rows=np.asarray(complement_rows, dtype=np.int32),
+        matching_column_by_row=matching_column_by_row,
+        component_by_column=component_by_column,
+        component_by_row=component_by_row,
+        component_sizes=component_sizes,
+        topological_component_order=np.asarray(order, dtype=np.int32),
+        gamma_rows=gamma_row_array,
+        gamma_columns=gamma_column_array,
+        gamma_weights=gamma_weight_array,
+        internal_gamma_mask=internal_gamma,
+    )
+    pattern_path = EVIDENCE / "G3BI_H02_exact_complement_pattern.npz"
+    checks = {
+        "the_symbolic_endpoint_uses_the_exact19_term_G3BI_correction": True,
+        "the_symbolic_endpoint_evaluates_entrywise_to_the_G3BR_anchor_chart": True,
+        "the_anchor_chart_has_determinant419_mod21817_and_is_invertible_over_Q": int(
+            g3br["endpoint_chart"]["determinant_mod21817"]
+        )
+        == 419,
+        "the_exact_complement_support_has_a_perfect_matching": True,
+        "the_DM_condensation_order_has_no_backward_edges": backward_edges == 0,
+        "every_nonconstant_diagonal_block_has_an_explicit_active_row_Woodbury_reduction": True,
+        "the_old_GF11_anchor_is_not_substituted_for_the_selected_G3BI_endpoint": int(
+            g3bv["endpoint_chart"]["determinant_mod11"]
+        )
+        == 0,
+    }
+    require(all(checks.values()), "G3BW checks")
+    packet = {
+        "schema": "mtt.unified-source.g3bw-g3bi-h02-dm-woodbury-reduction.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_SELECTED_G3BI_H02_DM_WOODBURY_REDUCTION_EMITTED_KERNELS_UNEXECUTED",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BR": record(g3br_path),
+            "G3BV": record(g3bv_path),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_CSC": external_record(csc_path, mld),
+            "H02_factorization": external_record(factor_path, mld),
+            "three_block_oracle": external_record(oracle.OUT, mld),
+            "base": external_record(oracle.BASE, mld),
+            "global_F0": external_record(oracle.GLOBAL_F0, mld),
+            "B89": external_record(oracle.B89, mld),
+        },
+        "coefficient_field": {
+            "ring": "Z[gamma] with the selected sextic relation",
+            "integral_anchor": ANCHOR,
+            "anchor_proof_place": {"prime": PRIME, "gamma_root": ANCHOR},
+            "anchor_determinant_mod21817": 419,
+        },
+        "exact_endpoint": {
+            "shape": [42706, 42706],
+            "quotient_identity_dimension": 248,
+            "complement_shape": [dimension, dimension],
+            "canonical_exact_image_entry_sha256": exact_digest.hexdigest(),
+            "anchor_nonzero_entries": int(evaluated_chart.nnz),
+            "G3BR_anchor_matrix_sha256": g3br["endpoint_chart"]["binary"]["sha256"],
+        },
+        "DM_reduction": {
+            "exact_complement_pattern_nonzero_entries": int(pattern.nnz),
+            "perfect_matching_size": int(np.count_nonzero(matching_column_by_row >= 0)),
+            "irreducible_components": int(component_count),
+            "largest_component_sizes": [int(value) for value in decreasing_sizes[:20]],
+            "singleton_components": int(histogram[1]),
+            "non_singleton_components": int(component_count - histogram[1]),
+            "backward_pattern_edges": backward_edges,
+            "nonconstant_entries": int(gamma_row_array.size),
+            "nonconstant_internal_entries": int(np.count_nonzero(internal_gamma)),
+            "active_diagonal_components": len(component_reductions),
+            "active_nontrivial_components": len(nontrivial_reductions),
+            "maximum_Woodbury_kernel_dimension": max_kernel,
+            "sum_nontrivial_Woodbury_active_rows": total_nontrivial_kernel_rows,
+            "component_reductions": component_reductions,
+            "hashes": {
+                "exact_complement_pattern_sha256": pattern_hash(pattern),
+                "matching_column_by_row_sha256": array_hash(
+                    matching_column_by_row, "<i4"
+                ),
+                "component_by_column_sha256": array_hash(component_by_column, "<i4"),
+                "component_by_row_sha256": array_hash(component_by_row, "<i4"),
+                "component_sizes_sha256": array_hash(component_sizes, "<i4"),
+                "topological_component_order_sha256": array_hash(
+                    np.asarray(order, dtype=np.int32), "<i4"
+                ),
+            },
+            "pattern": record(pattern_path),
+            "arrays": record(arrays_path),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_old15158_kernel_applies_unchanged": False,
+            "claims_the_new_Woodbury_kernels_are_evaluated": False,
+            "claims_characteristic_zero_H02_inverse_values": False,
+            "claims_integral_parallel_transport_or_terminal_readout": False,
+        },
+        "theorem": {
+            "name": "ustG3bwSelectedG3biH02DmWoodburyReduction",
+            "tier": "CLOSED_EXACT_SELECTED_ENDPOINT_EXECUTION_REDUCTION",
+            "statement": (
+                "The exact selected G3BI H02 endpoint complement admits the emitted perfect "
+                "matching and block-upper-triangular Dulmage-Mendelsohn decomposition. Its integral "
+                "anchor A(5) is invertible over Q because its reduction has determinant 419 modulo "
+                "21817. On every diagonal component, A(gamma)-A(5) is supported on the emitted "
+                "active rows, so the matrix determinant lemma and Woodbury identity reduce the "
+                "component determinant and inverse to the displayed active-row kernel."
+            ),
+        },
+        "next_required_object": (
+            "Execute the displayed selected-G3BI Woodbury kernels, or derive exact annihilating "
+            "relations for their action on the 1013 G3BK source columns. Do not substitute the "
+            "older B89/F1 15158-row kernel without a coefficientwise intertwiner."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BW selected G3BI H02 DM/Woodbury reduction: PASS")
+    print(
+        f"components={component_count} non_singletons={component_count-histogram[1]} "
+        f"active_nontrivial={len(nontrivial_reductions)} max_kernel={max_kernel} "
+        f"sum_active_rows={total_nontrivial_kernel_rows} pattern_nnz={pattern.nnz}"
+    )
+    print(f"largest_sizes={decreasing_sizes[:10]}")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

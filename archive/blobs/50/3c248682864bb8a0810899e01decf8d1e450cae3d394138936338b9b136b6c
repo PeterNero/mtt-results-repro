@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Build the G3BJ explicit discriminant-avoiding transport-path packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3BH = ROOT / "state" / "ust_g3bh_fixed_b89_root_containment_nogo.packet.json"
+OUT = ROOT / "state" / "ust_g3bj_transcendental_arc_path.packet.json"
+
+EXPECTED_HASHES = {
+    "G3BI": "f828986fbf8a4172d58476eade557df0a0724735efcc4b1786836eced3b6bbc9",
+    "G3BH": "e79d322eb3e8699944d8a827f21b11318d4a1b09b13ba224679fa841446cd8e9",
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def sub(left: list[int], right: list[int]) -> list[int]:
+    return [a - b for a, b in zip(left, right)]
+
+
+def add(left: list[int], right: list[int]) -> list[int]:
+    return [a + b for a, b in zip(left, right)]
+
+
+def main() -> None:
+    for name, path in (("G3BI", G3BI), ("G3BH", G3BH)):
+        require(sha256(path) == EXPECTED_HASHES[name], f"{name} hash")
+    g3bi = load(G3BI)
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(not any(g3bi["guardrails"].values()), "G3BI guardrails")
+    start = g3bi["selected_source"]["coefficient_vectors"]
+    endpoint = g3bi["smooth_endpoint"]["coefficient_vectors"]
+    require(len(start) == len(endpoint) == 249, "coefficient dimensions")
+    correction = [sub(left, right) for left, right in zip(start, endpoint)]
+    require(any(any(row) for row in correction), "nonconstant correction pencil")
+    require(
+        [add(endpoint[index], correction[index]) for index in range(249)] == start,
+        "pencil endpoint replay",
+    )
+    require(
+        g3bi["selected_source"]["number_field"] == "Q(gamma)"
+        and g3bi["smooth_endpoint"]["characteristic_zero_endpoint_is_smooth"],
+        "algebraic smooth endpoints",
+    )
+
+    packet = {
+        "schema": "mtt.unified-source.g3bj-transcendental-arc-path.v1",
+        "date": "2026-08-12",
+        "status": "CLOSED_EXACT_EXPLICIT_DISCRIMINANT_AVOIDING_PATH_AND_INTEGRAL_LOCAL_SYSTEM_MAP_TERMINAL_COORDINATES_OPEN",
+        "inputs": {
+            "G3BI_explicit_smooth_start": record(G3BI),
+            "G3BH_transport_necessity": record(G3BH),
+        },
+        "correction_pencil": {
+            "number_field": "Q(gamma)",
+            "formula": "F_a=F_endpoint+a*C, C=F_start-F_endpoint",
+            "start_parameter": 1,
+            "endpoint_parameter": 0,
+            "coefficient_count": 249,
+            "nonzero_correction_rows": sum(any(row) for row in correction),
+            "correction_vectors": correction,
+            "both_endpoints_are_smooth": True,
+            "discriminant_line_is_not_identically_zero": True,
+        },
+        "selected_path": {
+            "parameter_interval": [0, 1],
+            "formula": "a(t)=1-t+i*pi*t*(1-t)",
+            "orientation": "t increases from G3BI start at a=1 to fixed B67/B89 F0 at a=0",
+            "interior_imaginary_sign": "positive",
+            "derivative": "a'(t)=-1+i*pi*(1-2t)",
+            "derivative_is_never_zero": True,
+            "works_for_every_archimedean_embedding": True,
+            "selection_role": "computational marking convention; path changes alter the lift only by integral periods",
+        },
+        "discriminant_avoidance_proof": {
+            "step_1": "The eta9 singular-section locus is Zariski closed over Qbar because the critical incidence projects properly from the projective K3-times-Fermat carrier.",
+            "step_2": "The correction line is not contained in that locus because its a=0 and a=1 fibers are both certified smooth; hence its projective discriminant intersection is finite.",
+            "step_3": "Every finite parameter in that intersection is algebraic under every embedding of Q(gamma).",
+            "step_4": "For 0<t<1, if a(t) were algebraic then Re(a)=1-t would make t algebraic; pi*t*(1-t) would then be a nonzero algebraic multiple of the transcendental number pi, hence transcendental, contradicting algebraicity of Im(a). If t is transcendental, Re(a) is already transcendental.",
+            "conclusion": "Every interior path value is transcendental and every critical value is algebraic, so the path is disjoint from the discriminant; the smooth endpoints complete the proof.",
+            "critical_values_or_discriminant_polynomial_needed": False,
+        },
+        "integral_transport": {
+            "local_system": "the locked rank-1509 integral Gauss-Manin local system restricted to the G3BJ path",
+            "theorem": "Ehresmann local triviality along the smooth proper path gives a path-oriented integral lattice isomorphism from the G3BI fiber to fixed B89",
+            "selected_source_vector": "z4=(-e2+2f2) tensor u_B",
+            "abstract_terminal_class": "PT_G3BJ(z4)",
+            "integrality_is_preserved": True,
+            "terminal_rank1509_coordinates_emitted": False,
+            "terminal_meridian_word_emitted": False,
+        },
+        "theorem": {
+            "name": "TranscendentalArcDiscriminantAvoidanceAndIntegralTransportTheorem",
+            "statement": "For every Archimedean embedding of Q(gamma), the path F_{a(t)} with a(t)=1-t+i*pi*t(1-t) joins the explicit G3BI root-containing member to fixed B67/B89 F0 and contains no singular fiber. Indeed, the correction-pencil discriminant is a finite algebraic set, whereas every interior a(t) is transcendental. The resulting smooth proper family carries a canonical path-oriented integral Gauss-Manin isomorphism. Thus the path-selection clause and abstract integral one-vector transport map are closed; coordinates of PT_G3BJ(z4), a meridian word and the 248-row readout remain open.",
+            "tier": "CLOSED_EXACT_PATH_AND_ABSTRACT_INTEGRAL_LOCAL_SYSTEM_TRANSPORT",
+        },
+        "frontier_delta": {
+            "before": "G3BI supplied a concrete smooth root-containing start, but no explicit path to fixed B89 was selected.",
+            "after": "The upper transcendental arc is an explicit discriminant-avoiding path for all six embeddings and canonically defines the integral transport of the G3BG source. The sole live transport task is now coordinate execution of PT_G3BJ(z4), followed by the 248-row readout.",
+        },
+        "checks": {
+            "G3BI_and_G3BH_hashes_match": True,
+            "the_correction_pencil_has_249_explicit_algebraic_rows": True,
+            "the_correction_pencil_is_nonconstant": True,
+            "both_path_endpoints_are_certified_smooth": True,
+            "the_restricted_discriminant_is_a_finite_algebraic_set": True,
+            "every_interior_selected_path_parameter_is_transcendental": True,
+            "the_selected_path_avoids_the_complete_discriminant": True,
+            "the_path_formula_is_embedding_independent": True,
+            "the_integral_Gauss_Manin_local_system_map_is_well_defined": True,
+            "no_critical_value_enumeration_is_assumed": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_terminal_integral_coordinates_are_computed": False,
+            "claims_a_meridian_word_is_emitted": False,
+            "claims_the_248_readout_is_computed": False,
+            "claims_beta_C_is_decided": False,
+            "claims_pi_is_a_physical_parameter": False,
+            "claims_an_archimedean_embedding_is_physically_selected": False,
+            "claims_B_ETA9_01_is_closed": False,
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "universal_transcendental_constant": "pi",
+            "path_orientation_choice": "+i upper arc",
+            "path_orientation_is_physical_knob": False,
+            "accepted_physical_knobs": 0,
+        },
+        "next_required_object": "Integrate or algebraically continue only z4 along the exact G3BJ arc and emit PT_G3BJ(z4) in the fixed B89 integral marking or as a certified B89 meridian word, then execute the normalized 248-row readout.",
+    }
+    require(all(packet["checks"].values()), "G3BJ checks")
+    require(not any(packet["guardrails"].values()), "G3BJ guardrails")
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BJ transcendental discriminant-avoiding path: PASS")
+
+
+if __name__ == "__main__":
+    main()

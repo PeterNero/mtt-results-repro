@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""Certify a direct 9H+L/L-truncated G3AP target squeeze."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+import build_ust_g3ap_hmajor_ltrunc_hilbert_hint as hint_builder
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_ordinary_top_lower_bound as lower
+import certify_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_candidate as common
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_hilbert_hedge as runner
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_hedge as sba_runner
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_warm_hilbert_hedge as warm_runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+LOWER_VERIFIER = ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_lower_bound.py"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file() and sha256(path) == record["sha256"], label)
+    return path
+
+
+RUNNERS = {
+    "hilbert": runner,
+    "sba": sba_runner,
+    "sba_warm_hilbert": warm_runner,
+}
+
+
+def certified_paths(label: str, candidate_engine: str = "hilbert") -> dict[str, Path]:
+    require(candidate_engine in RUNNERS, "candidate engine")
+    stem = (
+        "ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_"
+        f"{label}_{candidate_engine}_certified"
+    )
+    return {
+        "script": STATE / f"{stem}.sing",
+        "output": STATE / f"{stem}.singular.out",
+        "module_cache": STATE / f"{stem}_degree328.ssi",
+        "packet": STATE / f"{stem}.packet.json",
+    }
+
+
+def marker(label: str, candidate_engine: str = "hilbert") -> str:
+    require(candidate_engine in RUNNERS, "candidate engine")
+    return (
+        "G3AP_F2_HMAJORDIRECTLTRUNCCERT"
+        f"{candidate_engine.upper()}_{label.upper()}"
+    )
+
+
+def certification_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    candidate_module: Path,
+    output_module: Path,
+    candidate_engine: str = "hilbert",
+) -> str:
+    selected_runner = RUNNERS[candidate_engine]
+    old_to_new, _ = permuted.position_maps(order)
+    selected = runner.mapped_generators(order)[:39]
+    require(len(selected) == 39, "direct selected generators")
+    shifts = ",".join(str(value) for value in runner.mapped_shifts(order))
+    cox_h, cox_l = common.component_cox_shifts(order)
+    candidate = str(candidate_module.relative_to(ROOT)).replace("\\", "/")
+    output = str(output_module.relative_to(ROOT)).replace("\\", "/")
+    tag = marker(label, candidate_engine)
+    canonical_component = old_to_new[6]
+    return runner.base_prefix(source) + f'''LIB("multigrading.lib");
+option(noredTail);
+module M=
+  {',\n  '.join(selected)};
+intvec componentShifts={shifts};
+attrib(M,"isHomog",componentShifts);
+def cachedCandidate=read("ssi:r {candidate}");
+module G=cachedCandidate;
+print("{tag}_MODULE_CANDIDATE_IS_SB_ATTR="+string(attrib(G,"isSB")));
+intmat variableCoxWeights[2][7]=
+  1,1,1,3,0,0,0,
+  0,0,0,0,1,1,1;
+setBaseMultigrading(variableCoxWeights);
+intmat componentCoxShifts[2][6]=
+  {','.join(str(value) for value in cox_h)},
+  {','.join(str(value) for value in cox_l)};
+G=setModuleGrading(G,componentCoxShifts);
+int coxHomogeneous=isHomogeneous(G,"checkGens");
+print("{tag}_COX_HOMOGENEOUS="+string(coxHomogeneous));
+attrib(G,"isSB",1);
+int i; int badGeneratorRemainders=0;
+for (i=1;i<=size(M);i++)
+{{ if (reduce(M[i],G)!=0) {{ badGeneratorRemainders=badGeneratorRemainders+1; }} }}
+vector canonicalSocle=w^12*t2^4*gen({canonical_component});
+vector canonicalNormal=reduce(canonicalSocle,G);
+print("{tag}_BOUND="+string({selected_runner.TARGET_SCALAR_DEGREE}));
+print("{tag}_ORIGINAL_GENERATORS="+string(size(M)));
+print("{tag}_BAD_GENERATOR_REMAINDERS="+string(badGeneratorRemainders));
+print("{tag}_CANONICAL_NORMAL_ZERO="+string(canonicalNormal==0));
+print("{tag}_CANONICAL_NORMAL="+string(canonicalNormal));
+print("{tag}_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("{tag}_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("{tag}_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {output}",G);
+print("{tag}_PASS");
+quit;
+'''
+
+
+def parse_module(raw: str, label: str, candidate_engine: str = "hilbert"):
+    return fiber2.parse_leaders(
+        raw.replace(f"{marker(label, candidate_engine)}_", "G3AP_F2_")
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(permuted.PERMUTATIONS), required=True)
+    parser.add_argument(
+        "--candidate-engine", choices=tuple(RUNNERS), default="hilbert"
+    )
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    label = args.permutation
+    candidate_engine = args.candidate_engine
+    selected_runner = RUNNERS[candidate_engine]
+    order = permuted.PERMUTATIONS[label]
+    old_to_new, new_to_old = permuted.position_maps(order)
+    candidate_paths = selected_runner.paths(label)
+    output_paths = certified_paths(label, candidate_engine)
+
+    subprocess.run([sys.executable, str(LOWER_VERIFIER)], cwd=ROOT, check=True)
+    route_verifier = {
+        "hilbert": "verify_ust_g3ap_hmajor_direct_ltrunc_routes.py",
+        "sba": "verify_ust_g3ap_hmajor_direct_ltrunc_sba_routes.py",
+        "sba_warm_hilbert": "verify_ust_g3ap_hmajor_direct_ltrunc_sba_warm_hilbert_route.py",
+    }[candidate_engine]
+    subprocess.run([sys.executable, str(ROOT / route_verifier)], cwd=ROOT, check=True)
+    if candidate_engine in ("hilbert", "sba_warm_hilbert"):
+        subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3ap_hmajor_ltrunc_hilbert_hint.py"),
+            ],
+            cwd=ROOT,
+            check=True,
+        )
+    lower_packet = json.loads(lower.OUT.read_text(encoding="ascii"))
+    require(
+        lower_packet["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_AT_LEAST_ONE"
+        and all(lower_packet["checks"].values())
+        and not any(lower_packet["guardrails"].values()),
+        "selected lower bound",
+    )
+    require(candidate_paths["packet"].is_file(), "direct H-major candidate packet")
+    candidate = json.loads(candidate_paths["packet"].read_text(encoding="ascii"))
+    expected_identity = {
+        "hilbert": (
+            "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-hilbert-candidate.v1",
+            "CANDIDATE_REQUIRES_INDEPENDENT_HMAJOR_DIRECT_LTRUNC_CERTIFICATION",
+        ),
+        "sba": (
+            "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-sba-candidate.v1",
+            "CANDIDATE_REQUIRES_INDEPENDENT_HMAJOR_DIRECT_LTRUNC_SBA_CERTIFICATION",
+        ),
+        "sba_warm_hilbert": (
+            "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-sba-warm-hilbert-candidate.v1",
+            "CANDIDATE_REQUIRES_INDEPENDENT_HMAJOR_DIRECT_LTRUNC_SBA_WARM_HILBERT_CERTIFICATION",
+        ),
+    }[candidate_engine]
+    require(
+        (candidate["schema"], candidate["status"]) == expected_identity
+        and candidate["candidate_engine"] == candidate_engine,
+        "candidate identity",
+    )
+    require(
+        candidate["permutation"]["label"] == label
+        and tuple(candidate["permutation"]["old_components_in_new_position_order"])
+        == order,
+        "candidate permutation",
+    )
+    require(not any(candidate["guardrails"].values()), "candidate guardrails")
+    source_path = checked(candidate["inputs"]["selected_source"], "selected source")
+    hilbert_hint: list[int] | None = None
+    seed_module: Path | None = None
+    if candidate_engine in ("hilbert", "sba_warm_hilbert"):
+        hint_path = checked(
+            candidate["inputs"]["non_authoritative_hilbert_hint"], "Hilbert hint"
+        )
+        require(hint_path == hint_builder.PACKET, "canonical Hilbert hint")
+        _, hilbert_hint = hint_builder.load_hint()
+    else:
+        require(
+            "non_authoritative_hilbert_hint" not in candidate["inputs"],
+            "SBA has no Hilbert premise",
+        )
+    if candidate_engine == "sba_warm_hilbert":
+        seed_record = candidate["inputs"]["exact_selected_source_SBA_warm_start"]
+        seed_paths = sba_runner.paths(label)
+        seed_script = checked(seed_record["script"], "SBA warm-start script")
+        seed_output = checked(seed_record["output"], "SBA warm-start output")
+        seed_module = checked(seed_record["module_cache"], "SBA warm-start module")
+        require(
+            (seed_script, seed_output, seed_module)
+            == (seed_paths["script"], seed_paths["output"], seed_paths["module_cache"]),
+            "canonical SBA warm-start paths",
+        )
+        require(
+            seed_script.read_text(encoding="ascii")
+            == sba_runner.candidate_script(source_path.read_text(encoding="ascii"), label, order, seed_module),
+            "SBA warm-start script reconstruction",
+        )
+        seed_raw = seed_output.read_text(encoding="utf-8")
+        require(
+            f"{sba_runner.marker(label)}_LEADER_EXPORT_PASS" in seed_raw
+            and not any(line.lstrip().startswith("?") for line in seed_raw.splitlines()),
+            "SBA warm-start execution",
+        )
+        seed_basis = sba_runner.parse_module(seed_raw, label)
+        require(
+            len(seed_basis) == seed_record["reduction_set_size"]
+            == candidate["execution"]["SBA_warm_start_size"],
+            "SBA warm-start size",
+        )
+    candidate_module = checked(
+        candidate["execution"]["candidate_module_cache"], "candidate module"
+    )
+    candidate_script_path = checked(candidate["execution"]["script"], "candidate script")
+    candidate_output = checked(candidate["execution"]["output"], "candidate output")
+    source = source_path.read_text(encoding="ascii")
+    if candidate_engine == "hilbert":
+        expected_candidate_script = selected_runner.candidate_script(
+            source, label, order, candidate_module, hilbert_hint
+        )
+    elif candidate_engine == "sba":
+        expected_candidate_script = selected_runner.candidate_script(
+            source, label, order, candidate_module
+        )
+    else:
+        require(seed_module is not None and hilbert_hint is not None, "warm inputs")
+        expected_candidate_script = selected_runner.candidate_script(
+            source, label, order, seed_module, candidate_module, hilbert_hint
+        )
+    require(
+        candidate_script_path.read_text(encoding="ascii") == expected_candidate_script,
+        "candidate script reconstruction",
+    )
+    require(
+        f"{selected_runner.marker(label)}_LEADER_EXPORT_PASS"
+        in candidate_output.read_text(encoding="utf-8"),
+        "candidate execution marker",
+    )
+
+    output_paths["script"].write_text(
+        certification_script(
+            source,
+            label,
+            order,
+            candidate_module,
+            output_paths["module_cache"],
+            candidate_engine,
+        ),
+        encoding="ascii",
+    )
+    if args.emit_only:
+        print(f"emitted {output_paths['script'].relative_to(ROOT)}")
+        return
+    output_paths["module_cache"].unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, output_paths["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    output_paths["output"].write_text(completed.stdout, encoding="utf-8")
+    tag = marker(label, candidate_engine)
+    require(completed.returncode == 0, "direct H-major certification execution")
+    require(f"{tag}_PASS" in completed.stdout, "certification marker")
+    expected = {
+        f"{tag}_MODULE_CANDIDATE_IS_SB_ATTR": 0,
+        f"{tag}_COX_HOMOGENEOUS": 1,
+        f"{tag}_ORIGINAL_GENERATORS": 39,
+        f"{tag}_BAD_GENERATOR_REMAINDERS": 0,
+    }
+    for field, value in expected.items():
+        require(
+            re.search(rf"^{field}={value}$", completed.stdout, re.MULTILINE)
+            is not None,
+            field,
+        )
+    module_new = parse_module(completed.stdout, label, candidate_engine)
+    module_old = [(new_to_old[component], exponent) for component, exponent in module_new]
+    standards, sectors = fiber2.enumerate_target(module_old)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL and len(standards) == 1, "one-line target")
+    effective = common.effective_leader_count(module_old)
+    require(effective > 0, "target-effective reducers")
+    standard_old_component, standard_exponent = standards[0]
+    normal = re.search(rf"^{tag}_CANONICAL_NORMAL=(.+)$", completed.stdout, re.MULTILINE)
+    zero = re.search(rf"^{tag}_CANONICAL_NORMAL_ZERO=([01])$", completed.stdout, re.MULTILINE)
+    require(normal is not None and zero is not None, "canonical normal diagnostic")
+
+    packet_inputs = {
+        "candidate": {
+            "path": str(candidate_paths["packet"].relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(candidate_paths["packet"]),
+        },
+        "selected_source": {
+            "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(SOURCE),
+        },
+        "selected_ordinary_top_lower_bound": {
+            "path": str(lower.OUT.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(lower.OUT),
+        },
+    }
+    if candidate_engine in ("hilbert", "sba_warm_hilbert"):
+        packet_inputs["non_authoritative_hilbert_hint"] = candidate["inputs"][
+            "non_authoritative_hilbert_hint"
+        ]
+    if candidate_engine == "sba_warm_hilbert":
+        packet_inputs["exact_selected_source_SBA_warm_start"] = candidate["inputs"][
+            "exact_selected_source_SBA_warm_start"
+        ]
+
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-leading-squeeze-certified-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.FIBER2.HMAJOR-DIRECT-LTRUNC-LEADING-SQUEEZE.CERTIFIED",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_HMAJOR_DIRECT_LTRUNC_LEADING_SQUEEZE_TOP_DIMENSION_ONE",
+        "candidate_engine": candidate_engine,
+        "permutation": candidate["permutation"],
+        "inputs": packet_inputs,
+        "regrading": candidate["regrading"],
+        "truncation": candidate["truncation"],
+        "execution": {
+            "script": {
+                "path": str(output_paths["script"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(output_paths["script"]),
+            },
+            "output": {
+                "path": str(output_paths["output"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(output_paths["output"]),
+            },
+            "elapsed_seconds": time.time() - started,
+            "original_module_generator_count": 39,
+            "certified_reduction_set_size": len(module_new),
+            "target_effective_reducer_count": effective,
+            "certified_module_cache": {
+                "path": str(output_paths["module_cache"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(output_paths["module_cache"]),
+                "bytes": output_paths["module_cache"].stat().st_size,
+                "computational_scalar_bound": selected_runner.TARGET_SCALAR_DEGREE,
+                "valid_for_Cox_degree": [18, 2, 2],
+                "is_full_standard_basis": False,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "weighted_scalar_degree": selected_runner.TARGET_SCALAR_DEGREE,
+            "enumerated_monomials": total,
+            "dimension": 1,
+            "standard_old_component": standard_old_component,
+            "standard_new_component": old_to_new[standard_old_component],
+            "standard_exponent": list(standard_exponent),
+            "canonical_socle_old_component": 6,
+            "canonical_socle_new_component": old_to_new[6],
+            "canonical_socle_normal_form": normal.group(1).strip(),
+            "canonical_socle_normal_form_is_nonzero": zero.group(1) == "0",
+        },
+        "checks": {
+            "selected_source_is_hash_bound": True,
+            "component_permutation_is_an_exact_degree_preserving_module_isomorphism": True,
+            "the_39_generators_are_the_exact_fiber2_ordinary_Jacobian_module": True,
+            "candidate_reduction_set_is_Cox_bihomogeneous": True,
+            "all_39_selected_generators_reduce_to_zero": True,
+            "the_165_L_boundaries_have_zero_target_Cox_piece": True,
+            "the_9H_plus_L_bound_excludes_every_component_degree_above_target_H": True,
+            "every_target_effective_reducer_belongs_to_the_selected_untruncated_module": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "candidate_leading_submodule_leaves_at_most_one_target_class": True,
+            "selected_toric_residue_lower_bound_supplies_at_least_one_target_class": True,
+            "selected_ordinary_top_piece_has_dimension_one": True,
+            "predecessor_Hilbert_data_is_not_used_as_selected_source_evidence": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_candidate_cache_is_a_full_standard_basis": False,
+            "claims_global_equality_of_truncated_and_untruncated_modules": False,
+            "claims_scalar_prefix_coverage": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_promotion": False,
+        },
+        "next_required_object": "Adopt the direct H-major target reducer and execute G3AM/G3AN.",
+    }
+    output_paths["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"G3AP direct H-major/L-truncated squeeze ({label}/{candidate_engine}): PASS "
+        f"reducers={len(module_new)} effective={effective} "
+        f"standard={standards[0]} dimension=1"
+    )
+
+
+if __name__ == "__main__":
+    main()

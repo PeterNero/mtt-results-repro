@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Aggregate eight independently validated G3GI prime shards."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+
+HERE = Path(__file__).resolve().parent
+INPUT = HERE / "input" / "g3gi_full_catalecticant_input.npz"
+OUTPUTS = HERE / "outputs"
+CAMPAIGN = OUTPUTS / "campaign.json"
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def atomic_json(path: Path, payload: dict[str, object]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def main() -> None:
+    rows: list[dict[str, object]] = []
+    artifacts: list[dict[str, object]] = []
+    common_support = None
+    input_hash = sha256(INPUT)
+    for prime_index in range(8):
+        path = OUTPUTS / f"shard_{prime_index}.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not payload.get("accepted"):
+            raise AssertionError(f"unaccepted shard {prime_index}")
+        if payload["input_sha256"] != input_hash:
+            raise AssertionError(f"input hash shard {prime_index}")
+        artifacts.append(
+            {
+                "path": path.relative_to(HERE).as_posix(),
+                "sha256": sha256(path),
+                "bytes": path.stat().st_size,
+            }
+        )
+        for key, row in sorted(payload["completed"].items()):
+            if row["obstruction_rank"] != 244 or row["nullity"] != 9:
+                raise AssertionError(f"rank profile shard={prime_index} row={key}")
+            if row["induced_map_ranks"] != [0] * 9:
+                raise AssertionError(f"induced maps shard={prime_index} row={key}")
+            support = row["structural_zero_indices"]
+            if common_support is None:
+                common_support = support
+            elif support != common_support:
+                raise AssertionError(f"support shard={prime_index} row={key}")
+            rows.append(
+                {
+                    "prime_index": prime_index,
+                    "prime": payload["prime"],
+                    "row": key,
+                    **row,
+                }
+            )
+    if len(rows) != 96:
+        raise AssertionError("96 fiber-convention rows")
+    basis21 = exponents(21)
+    payload = {
+        "schema": "ust.g3gi.full-catalecticant-campaign.v1",
+        "input_sha256": input_hash,
+        "prime_shards": 8,
+        "fibers": 48,
+        "conventions": ["divided_power", "ordinary"],
+        "fiber_convention_rows": len(rows),
+        "source_dimension": 253,
+        "common_obstruction_rank": 244,
+        "common_nullity": 9,
+        "common_structural_zero_indices": common_support,
+        "common_structural_zero_exponents": [
+            list(basis21[index]) for index in common_support
+        ],
+        "all_admissible_sources_induce_zero": True,
+        "accepted": True,
+        "shards": artifacts,
+        "rows": rows,
+    }
+    atomic_json(CAMPAIGN, payload)
+    print(
+        "G3GI campaign aggregation PASS: fibers=48 conventions=2 "
+        "rank=244 nullity=9 admissible_maps=zero",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

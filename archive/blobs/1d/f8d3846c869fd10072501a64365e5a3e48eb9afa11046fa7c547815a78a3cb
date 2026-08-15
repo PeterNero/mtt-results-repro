@@ -1,0 +1,87 @@
+# UST.G3EU: H02 Component-16 Recovery-Basis Mismatch Audit Theorem
+
+## Statement
+
+Let `M16` be the exact `1238 x 1221` component-16 reduced presentation over
+`Q(gamma)`, and let `M1200` be the certified independent 1,200-row subsystem.
+The first checkpoint recovery is **not** a kernel of `M1200`.
+
+The interrupted FLINT serialization fixed 400 coordinate rows of a 21-column
+kernel basis. The rejected recovery completed those rows after imposing the
+identity on coordinates `986..1006`. Exact replay on the 400 selected
+complement equations and the 38 omitted equations gives:
+
+```text
+audited equations                 438
+defective equations               120
+defects inside M1200              101
+defects among the 38 omitted       19
+nonzero residual slots           2072
+```
+
+Because 101 certified subsystem equations fail literally over `Q(gamma)`, the
+archive is rejected before any residual-rank promotion.
+
+## Cause
+
+The two 21-element coordinate sets were conflated:
+
+```text
+incorrect imposed free set: 986,987,...,1006
+
+standard nullspace free set:
+1199,1200,1201,1202,1204,1205,...,1220
+```
+
+The first set is the finite relation-coordinate block retained by the G3EL
+reduction. It is a valid choice of free coordinates for constructing a new
+normalized kernel, but it is not the basis used by the already serialized
+FLINT checkpoint. Reusing the checkpoint while imposing that different
+identity basis overdetermined the reconstruction inconsistently.
+
+At the proof fiber `(p,gamma)=(21817,5)`, left-to-right elimination detects the
+second displayed set as the standard free-column profile. Its complementary
+800-coordinate block has rank 800 at that specialization, hence the selected
+exact minor is nonzero over `Q(gamma)` and supports a corrected recovery.
+
+## Rank-four campaign
+
+Four fresh omitted-row specializations of the rejected archive all had rank
+four. That observation remains a correct computation **about the rejected
+archive's 38-row slice**, but it is not a bound on the kernel of `M1200` and is
+not a component-16 rank theorem. G3EU therefore retires that campaign as a
+promotion source.
+
+This distinction is essential: repeated finite-field ranks can supply an exact
+lower bound only after the displayed vectors are first proved to lie in the
+kernel whose residual map is being studied.
+
+## Corrected route
+
+The corrected recovery must:
+
+1. preserve the 400 complete checkpoint coordinate rows;
+2. impose identity on the standard 21-column free profile;
+3. solve the certified complementary `800 x 800` system exactly;
+4. replay the other 400 selected equations literally;
+5. replay all 38 omitted equations;
+6. promote a residual rank only after steps 4 and 5 pass their stated checks.
+
+The corrected solve is a new candidate, not a repair by assertion. Until its
+full replay succeeds, component 16 remains at the previously certified finite
+rank 138 with characteristic-zero upper rank 159, and the global H02 interval
+remains `4748..5102`.
+
+## Evidence and verifier
+
+- `state/ust_g3eu_component16_recovery_basis_mismatch_audit.packet.json`
+- `build_ust_g3eu_component16_recovery_basis_mismatch_audit.py`
+- `evidence/ust_g3eu/rejected_free_basis/H02.component16.exact_residual_map.no_rank.nfr`
+- `evidence/ust_g3eu/rejected_free_basis/H02.component16.exact_audit_replay.stdout.log`
+
+## Claim boundary
+
+This theorem proves a recovery-basis no-go and identifies a certified corrected
+recovery system. It does not prove the corrected kernel, the characteristic-zero
+rank of component 16, global H02 rank equality, an evolving physical source, a
+Hull-Strominger endpoint, or a continuum-to-finite intertwiner.

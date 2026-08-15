@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Run exact msolve/F4 on the G3AO uvs smooth-primal incidence locus."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ao_selected_cayley_toric_uvs_primal_msolve_input as inputs
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_msolve_runtime import msolve_command, msolve_output_is_unit_ideal
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = inputs.CAMPAIGN
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--threads", type=int, default=2)
+    args = parser.parse_args()
+    require(args.timeout > 0 and 1 <= args.threads <= 16, "execution limits")
+    input_packet = json.loads(inputs.OUT.read_text(encoding="ascii"))
+    require(all(input_packet["checks"].values()), "input checks")
+    require(input_packet["source_sha256"] == sha256(direct.SOURCE), "selected source")
+    input_path = direct.CAMPAIGN / input_packet["input"]["path"]
+    require(input_path.is_file() and sha256(input_path) == input_packet["input"]["sha256"], "input")
+    output_path = CAMPAIGN / "smooth.msolve.out"
+    log_path = CAMPAIGN / "smooth.msolve.log"
+    packet_path = CAMPAIGN / "smooth.msolve.packet.json"
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            msolve_command(ROOT, input_path, output_path, threads=args.threads, verbosity=2),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        raw_log = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        captured = error.stdout or b""
+        raw_log = captured.decode("utf-8", errors="replace") if isinstance(captured, bytes) else captured
+        returncode = 124
+    log_path.write_text(raw_log, encoding="utf-8")
+    raw_output = output_path.read_text(encoding="utf-8") if output_path.is_file() else ""
+    unit_ideal = msolve_output_is_unit_ideal(raw_output)
+    elapsed = time.time() - started
+    passed = not timed_out and returncode == 0 and unit_ideal
+    packet = {
+        "schema": "mtt.unified-source.g3ao-uvs-smooth-primal-msolve.v1",
+        "label": direct.label(direct.BASE, direct.ELLIPTIC, ("u", "v", "s")),
+        "source_sha256": sha256(direct.SOURCE),
+        "input_packet": {
+            "path": str(inputs.OUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(inputs.OUT),
+        },
+        "backend": {
+            "name": "msolve",
+            "required_version": "0.9.4",
+            "linear_algebra": "exact_sparse_l2",
+            "threads": args.threads,
+            "probabilistic_linearization_used": False,
+        },
+        "output": {
+            "path": str(output_path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(output_path) if output_path.is_file() else None,
+        },
+        "log": {
+            "path": str(log_path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(log_path),
+        },
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "unit_ideal": unit_ideal,
+        "passed": passed,
+    }
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(f"G3AO uvs smooth-primal msolve: {'PASS' if passed else 'INCONCLUSIVE'} ({elapsed:.1f}s)")
+    if not passed:
+        raise SystemExit(returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

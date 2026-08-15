@@ -1,0 +1,82 @@
+# UST.G3AP Full-Source Complement-Reuse Lemma
+
+Date: 2026-08-11
+
+Status: `CLOSED_EXACT_ASSEMBLY_LEMMA_NOT_G3AP_RANK_CLOSURE`
+
+## Setting
+
+The selected target-Macaulay source has 92,979 distinct relation multiples and
+39,726 target coordinates.  Let `S_50000` be the hash-locked balanced source
+schedule already exported, and let `S_all` be the full source list recomputed
+from the selected derivatives and certified base standard monomials.  Define
+
+\[
+S_{\rm comp}=S_{\rm all}\setminus S_{50000}
+\]
+
+in the order induced from `S_all`.
+
+The exact recomputation gives
+
+\[
+|S_{\rm all}|=92{,}979,\qquad
+|S_{50000}|=50{,}000,\qquad
+|S_{\rm comp}|=42{,}979,
+\]
+
+with source hashes
+
+```text
+S_all    8aab05a00edf8a48bff455cfddd570f28e655b451525328117df350947a5b1ad
+S_50000  dbe22570f44ad41e3d5a15b06cde86ddb5550c646a04f60240a34f937757f122
+S_comp   1c79e14e523bfa701c8ce82c739ac4ace4084aeb7476f2cce0094d092949cfcb
+```
+
+## Lemma
+
+Suppose the already exported matrix body contains exactly the rows indexed by
+`S_50000`, and independently exported complement chunks contain exactly the
+rows indexed by `S_comp`.  Number the reused rows `1,...,50000` and the
+complement rows `50001,...,92979`, retaining all 39,726 target columns.  Then
+body concatenation emits a row permutation of the full selected Macaulay map.
+Consequently it has exactly the same row span, rank, minors and cokernel as the
+natural-order full map.
+
+## Proof
+
+The recomputed source lists are finite lists of distinct pairs consisting of a
+selected derivative-generator identifier and a certified standard multiplier
+exponent.  Set equality and cardinality prove
+
+\[
+S_{50000}\cap S_{\rm comp}=\varnothing,
+\qquad
+S_{50000}\cup S_{\rm comp}=S_{\rm all}.
+\]
+
+Every exported matrix row is the exact reduction of its indexed relation
+multiple into the common target-coordinate basis.  Concatenation changes only
+the order assigned to the source rows.  Thus the concatenated matrix is
+`P M_all` for a permutation matrix `P`.  Since `P` is invertible, left
+multiplication by `P` preserves row span and rank.  It also induces a bijection
+between nonzero row minors, while the target and cokernel are unchanged.
+
+No zero padding, fitted row, inferred coefficient or observed value is added.
+
+## Certification Boundary
+
+This lemma validates reuse and row ordering only. It does not itself establish
+G3AP. The following obligations were subsequently discharged by the canonical
+G3AP packet and
+`UST_G3AP_SELECTED_CAYLEY_ORDINARY_TOP_DIMENSION_ONE_THEOREM_v1.md`:
+
+1. every complement chunk is emitted and independently source-replayed;
+2. the union packet proves exact disjoint coverage of all 92,979 sources;
+3. exact elimination emits a nonzero 39,725-minor;
+4. an independent engine replays that minor;
+5. the normalized quotient functional annihilates all 92,979 rows; and
+6. the rank upper bound is combined with the selected nonzero R1 lower bound.
+
+All six now have hash-bound passing certificates. Their later completion does
+not widen the claim of this reuse lemma.

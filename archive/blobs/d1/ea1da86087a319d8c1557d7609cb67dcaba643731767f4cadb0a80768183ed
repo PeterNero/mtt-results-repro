@@ -1,0 +1,92 @@
+# UST.G3CA Selected Delta-Correction H02 Source
+
+## Status
+
+`CLOSED_EXACT_SELECTED_H02_SOURCE_CLASS_AND_ONE_SPLIT_PRIME_COORDINATES`
+
+## Theorem
+
+Let `C_section` be the 19-term G3BI deformation section obtained from the
+stored Cayley correction `s*C_section` by removing its single Cayley factor.
+With the normalized q79 splitting-conic polynomial `P_delta`, form
+
+```text
+S_delta = u*v*P_delta*(t0*t1*t2)*C_section.
+```
+
+The factors have Cox degrees
+
+```text
+deg(u*v*t0*t1*t2) = (0,0,2),
+deg(P_delta*C_section) = (9,1,0),
+```
+
+and direct termwise collection proves that every monomial of `S_delta` has
+Cox degree `(9,1,2)`. The exact representative has 100 nonzero monomials over
+`Q(gamma)` and lies in the frozen H02 Macaulay ambient basis.
+
+Reduce this representative through the selected corrected G3BI endpoint
+chart modulo `21,817`. At all six roots
+
+```text
+5, 1971, 6912, 10062, 10605, 14055
+```
+
+of the selected sextic, the `42,706`-row sparse solve has zero residual. Each
+solution emits a nonzero, in fact dense, 248-coordinate B103 H02 quotient
+vector. Lagrange interpolation across the six roots gives a complete
+`248 x 6` power-basis tensor modulo `21,817`; all 1,488 entries are nonzero,
+and evaluating the tensor back at every root reproduces the six solved
+vectors exactly.
+
+Consequently `S_delta` is a nonzero characteristic-zero H02 source class for
+the selected correction direction, and its full B103 quotient-coordinate
+reduction is known at one completely split good prime.
+
+## Source Typing
+
+The distinction between `C_section` and `s*C_section` is essential. G3BI
+stores the full Cayley correction `s*C_section`, while the affine-source
+formula uses the deformation section `dot F`, hence `C_section` before the
+path scalar is applied. Inserting the Cayley `s` a second time would change
+the Cox degree from `(9,1,2)` to `(0,0,3)` and would not define the H02 class
+proved here.
+
+Along G3BJ,
+
+```text
+F(a) = F_B89 + a*C_section,
+a(t) = 1-t+i*pi*t*(1-t),
+dot F(t) = a'(t)*C_section.
+```
+
+G3CA calculates the unscaled source associated with `C_section`; continuation
+to a path point supplies the scalar `a'(t)`.
+
+## Consequence
+
+The immediate source ambiguity is removed. G3BZ supplies the exact
+rank-6,022 selected path update, while G3CA supplies the actual one-vector
+H02 source on which that update must act. The next operator calculation is
+therefore a selected one-source resolvent/continuation problem, not a search
+over arbitrary H02 derivative columns.
+
+## Boundary
+
+This theorem does not reconstruct the 248 coordinates over `Q(gamma)`,
+produce a flat rank-1,509 relative-de-Rham lift along the full G3BJ path,
+identify the spectral trace-test row order with B103 coordinates, perform
+integral Gauss-Manin transport, or decide `beta_C`. Those remain separate
+promotion and frame-binding obligations.
+
+## Reproduction
+
+```powershell
+python build_ust_g3ca_selected_delta_correction_h02_source.py
+python verify_ust_g3ca_selected_delta_correction_h02_source.py
+```
+
+The packet is
+`state/ust_g3ca_selected_delta_correction_h02_source.packet.json`; the exact
+100-term representative, six sparse right-hand sides and solutions, and the
+two coordinate tensors are under `evidence/ust_g3ca/`.

@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Verify the G3AT/G3AU/G3AV frontier wiring without replaying heavy campaigns."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+WINDOWS_ABSOLUTE = re.compile(
+    r"[A-Za-z]:\\(?:Users|Windows|Program Files|ProgramData|Temp)\\",
+    re.IGNORECASE,
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_bound_input(record: dict, label: str) -> None:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"{label} exists")
+    require(sha256(path) == record["sha256"], f"{label} hash")
+
+
+def main() -> None:
+    frontier = load(STATE / "frontier.json")
+    g3at = load(STATE / "ust_g3at_polarized_primal_transport.packet.json")
+    g3au = load(STATE / "ust_g3au_adjoint_normal_first_obstruction.packet.json")
+    g3av = load(STATE / "ust_g3av_scale_free_b103_polarization.packet.json")
+
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(gates["UST.G3AT"]["state"].startswith("closed_exact_"), "G3AT closed")
+    require(gates["UST.G3AU"]["state"].startswith("closed_exact_"), "G3AU closed")
+    require(gates["UST.G3AV"]["state"].startswith("closed_exact_"), "G3AV closed")
+    require("UST.G3AT" in gates["UST.G3AV"]["depends_on"], "G3AV depends on G3AT")
+    require("UST.G3AV" in gates["UST.G3"]["depends_on"], "physical gate depends on G3AV")
+    require(gates["UST.G3"]["state"] == "blocked_upstream", "physical gate remains open")
+
+    require(g3at["theorem_id"] == "UST.G3AT", "G3AT packet")
+    require(g3au["theorem_id"] == "UST.G3AU", "G3AU packet")
+    require(g3av["theorem_id"] == "UST.G3AV", "G3AV packet")
+    require(
+        g3av["execution_reduction"]["total_top_coefficient_reductions"] == 4527,
+        "three polarization rows need 4527 reductions",
+    )
+    weights = g3av["Mavlyutov_cup_weights"]
+    require(
+        [weights["c_24"], weights["c_33"], weights["c_42"]]
+        == ["-1/48", "-1/36", "-1/48"],
+        "polarization block weights",
+    )
+    require(
+        g3at["execution_reduction"]["required_primal_terminal_ODEs"] == 3,
+        "three primal transports",
+    )
+    require(
+        g3au["adaptive_decision"][
+            "maximum_normal_rows_before_obstruction_or_survival"
+        ]
+        == 126,
+        "126-row normal-first bound",
+    )
+
+    for label, record in g3av["inputs"].items():
+        if label == "locked_B103_source_subset" or label == "primary_reference":
+            continue
+        verify_bound_input(record, label)
+
+    for flag in (
+        "claims_the_three_primal_transports_are_executed",
+        "claims_the4527_characteristic_zero_top_reductions_are_executed",
+        "claims_the_three_self_pairing_denominators_are_certified_nonzero",
+        "claims_integral_rank1509_meridian_coordinates",
+        "claims_the_248_period_image_or_beta_C",
+        "claims_the_Hull_Strominger_endpoint_is_closed",
+    ):
+        require(g3av["guardrails"][flag] is False, f"G3AV guardrail {flag}")
+
+    required_text = {
+        ROOT / "README.md": ("UST.G3AV", "4527"),
+        ROOT / "PLAN.md": ("UST.G3AV", "4527"),
+        ROOT / "HYPOTHESIS.md": ("UST.G3AV", "4527"),
+        ROOT / "docs" / "BRANCH_DECISION.md": ("G3AV", "4527"),
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md": ("G3AV", "1509"),
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md": ("G3AV", "4527"),
+    }
+    for path, needles in required_text.items():
+        text = path.read_text(encoding="utf-8")
+        require(all(needle in text for needle in needles), f"{path.name} G3AV integration")
+        require(WINDOWS_ABSOLUTE.search(text) is None, f"portable {path.name}")
+
+    delta = frontier["frontier_delta_g3av"]
+    require("dense 1509x1509 polarization matrix" in delta, "dense matrix removed")
+    require("remain to be executed" in delta, "execution boundary retained")
+
+    print(
+        "UST.G3AV frontier integration: PASS "
+        "3 primal transports + 4527 top reductions + <=126 normal rows"
+    )
+
+
+if __name__ == "__main__":
+    main()

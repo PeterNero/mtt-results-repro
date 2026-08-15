@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Run the component-20 core at every root of two split good primes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import struct
+import subprocess
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "evidence/ust_g3ez/H02.component20.unit_leaf_reduced.number_field.sms"
+SOURCE_PACKET = ROOT / "evidence/ust_g3ez/H02.component20.unit_leaf_reduction.json"
+RANK_SOURCE = ROOT / "ust_split_prime_sparse_rank.cpp"
+RANK_EXECUTABLE = ROOT / "state/ust_split_prime_sparse_rank"
+EVIDENCE = ROOT / "evidence/ust_g3fa"
+CERTIFICATE = EVIDENCE / "H02.component20.two_split_prime_rank_campaign.json"
+
+FIBERS = {
+    21817: (5, 1971, 6912, 10062, 10605, 14055),
+    33863: (3590, 4184, 6574, 9630, 19465, 24259),
+}
+MINIMAL = (64, 16, 33, 44, 89, 24, 1)
+ROWS = 5376
+COLUMNS = 5411
+STRUCTURAL_RANK = 5349
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def evaluate(values: tuple[int, ...], prime: int, gamma: int) -> int:
+    result = 0
+    for coefficient in reversed(values):
+        result = (result * gamma + coefficient) % prime
+    return result
+
+
+def parse_source() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    row_indices: list[int] = []
+    column_indices: list[int] = []
+    coefficients: list[list[int]] = []
+    with SOURCE.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require((rows, columns, degree, minimal) == (ROWS, COLUMNS, 6, MINIMAL), "source header")
+        for line in handle:
+            values = list(map(int, line.split()))
+            row_indices.append(values[0] - 1)
+            column_indices.append(values[1] - 1)
+            coefficients.append(values[2:])
+    require(len(coefficients) == declared, "declared source entries")
+    return (
+        np.asarray(row_indices, dtype=np.int32),
+        np.asarray(column_indices, dtype=np.int32),
+        np.asarray(coefficients, dtype=np.int64),
+    )
+
+
+def write_chart(
+    path: Path,
+    prime: int,
+    gamma: int,
+    row_indices: np.ndarray,
+    column_indices: np.ndarray,
+    coefficients: np.ndarray,
+) -> int:
+    values = np.zeros(coefficients.shape[0], dtype=np.int64)
+    for degree in range(5, -1, -1):
+        values = (values * gamma + coefficients[:, degree]) % prime
+    keep = values != 0
+    matrix = sparse.coo_matrix(
+        (
+            values[keep].astype(np.uint32),
+            (row_indices[keep], column_indices[keep]),
+        ),
+        shape=(ROWS, COLUMNS),
+    ).tocsc()
+    matrix.sum_duplicates()
+    matrix.data %= prime
+    matrix.eliminate_zeros()
+    with path.open("wb") as handle:
+        handle.write(b"MTTSPC1\0")
+        handle.write(struct.pack("<6Q", prime, ROWS, COLUMNS, matrix.nnz, 0, 0))
+        matrix.indptr.astype("<u8").tofile(handle)
+        matrix.indices.astype("<u4").tofile(handle)
+        matrix.data.astype("<u4").tofile(handle)
+    return int(matrix.nnz)
+
+
+def compile_rank_tool() -> None:
+    require(RANK_SOURCE.is_file(), "rank source")
+    if RANK_EXECUTABLE.is_file() and RANK_EXECUTABLE.stat().st_mtime_ns >= RANK_SOURCE.stat().st_mtime_ns:
+        return
+    command = [
+        "g++",
+        "-O3",
+        "-std=c++17",
+        runtime.wsl_path(RANK_SOURCE),
+        "-o",
+        runtime.wsl_path(RANK_EXECUTABLE),
+    ]
+    if os.name == "nt":
+        command = ["wsl", *command]
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    require(RANK_EXECUTABLE.is_file(), "compiled rank tool")
+
+
+def parse_log(path: Path) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for line in path.read_text(encoding="ascii").splitlines():
+        if line == "END_CERTIFICATE":
+            break
+        key, _, value = line.partition(" ")
+        fields[key] = value
+    return fields
+
+
+def run_rank(chart: Path, log: Path) -> tuple[dict[str, str], str]:
+    command = [
+        str(RANK_EXECUTABLE),
+        "--chart",
+        str(chart),
+        "--log",
+        str(log),
+        "--progress-seconds",
+        "10",
+    ]
+    if os.name == "nt":
+        command = [
+            "wsl",
+            runtime.wsl_path(RANK_EXECUTABLE),
+            "--chart",
+            runtime.wsl_path(chart),
+            "--log",
+            runtime.wsl_path(log),
+            "--progress-seconds",
+            "10",
+        ]
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = parse_log(log)
+    require(fields.get("STATUS") == "SUCCESS", "rank status")
+    return fields, completed.stdout.strip()
+
+
+def main() -> None:
+    source_packet = load(SOURCE_PACKET)
+    require(all(source_packet["checks"].values()), "source checks")
+    require(source_packet["output"]["shape"] == [ROWS, COLUMNS], "source packet shape")
+    require(source_packet["output"]["structural_rank"] == STRUCTURAL_RANK, "source structural rank")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    compile_rank_tool()
+    row_indices, column_indices, coefficients = parse_source()
+    fibers: list[dict[str, object]] = []
+    for prime, roots in FIBERS.items():
+        require(len(set(roots)) == 6, f"six distinct roots p={prime}")
+        for gamma in roots:
+            require(evaluate(MINIMAL, prime, gamma) == 0, f"minimal root p={prime} gamma={gamma}")
+            stem = f"H02.component20.p{prime}.g{gamma}"
+            chart = EVIDENCE / f"{stem}.chart.bin"
+            log = EVIDENCE / f"{stem}.rank.log"
+            nnz = write_chart(
+                chart, prime, gamma, row_indices, column_indices, coefficients
+            )
+            fields, stdout = run_rank(chart, log)
+            rank = int(fields["RANK"])
+            nullity = int(fields["NULLITY"])
+            require(int(fields["PRIME"]) == prime, "logged prime")
+            require(int(fields["ROWS"]) == ROWS, "logged rows")
+            require(int(fields["COLUMNS"]) == COLUMNS, "logged columns")
+            require(int(fields["NONZEROS"]) == nnz, "logged nonzeros")
+            require(rank + nullity == COLUMNS, "rank-nullity")
+            fibers.append(
+                {
+                    "prime": prime,
+                    "gamma_root": gamma,
+                    "nonzero_entries": nnz,
+                    "rank": rank,
+                    "nullity": nullity,
+                    "elapsed_seconds": float(fields["ELAPSED_SECONDS"]),
+                    "basis_terms": int(fields["BASIS_TERMS"]),
+                    "reductions": int(fields["REDUCTIONS"]),
+                    "maximum_working_terms": int(fields["MAXIMUM_WORKING_TERMS"]),
+                    "chart": record(chart),
+                    "rank_log": record(log),
+                    "stdout": stdout,
+                }
+            )
+            print(
+                f"G3FA p={prime} gamma={gamma}: rank={rank} "
+                f"nullity={nullity} elapsed={fields['ELAPSED_SECONDS']}s",
+                flush=True,
+            )
+
+    ranks = [int(row["rank"]) for row in fibers]
+    nullities = [int(row["nullity"]) for row in fibers]
+    maximum_modular_rank = max(ranks)
+    minimum_modular_nullity = min(nullities)
+    target_dimension = 100
+    target_not_refuted = maximum_modular_rank <= COLUMNS - target_dimension
+    common_profile = len(set(ranks)) == len(set(nullities)) == 1
+    status = (
+        "CLOSED_EXACT_COMPONENT20_TWO_SPLIT_PRIME_COMMON_RANK_PROFILE_CHARZERO_OPEN"
+        if common_profile
+        else "CLOSED_EXACT_COMPONENT20_SPECIALIZATION_VARIATION_CHARZERO_OPEN"
+    )
+    certificate = {
+        "schema": "ust.g3fa.h02.component20.two-split-prime-rank-campaign.v1",
+        "date": "2026-08-15",
+        "status": status,
+        "source_packet": record(SOURCE_PACKET),
+        "source_matrix": record(SOURCE),
+        "rank_tool_source": record(RANK_SOURCE),
+        "rank_tool_executable": record(RANK_EXECUTABLE),
+        "field": {
+            "minimal_polynomial_coefficients_ascending": list(MINIMAL),
+            "split_primes_and_roots": {str(prime): list(roots) for prime, roots in FIBERS.items()},
+        },
+        "campaign": {
+            "split_primes": len(FIBERS),
+            "fibers": len(fibers),
+            "results": fibers,
+            "rank_profile": ranks,
+            "nullity_profile": nullities,
+            "common_rank_profile": common_profile,
+            "maximum_modular_rank": maximum_modular_rank,
+            "minimum_modular_nullity": minimum_modular_nullity,
+        },
+        "characteristic_zero_consequences": {
+            "rank_lower_bound_from_good_reduction": maximum_modular_rank,
+            "rank_upper_bound_from_support_matching": STRUCTURAL_RANK,
+            "nullity_lower_bound_from_support_matching": COLUMNS - STRUCTURAL_RANK,
+            "nullity_upper_bound_from_good_reduction": minimum_modular_nullity,
+            "protected_target_dimension": target_dimension,
+            "the100_dimensional_target_is_not_refuted_by_these_good_reductions": target_not_refuted,
+            "the100_dimensional_target_is_proved_over_Qgamma": False,
+        },
+        "checks": {
+            "two_independent_completely_split_primes_are_executed": len(FIBERS) == 2,
+            "all_twelve_split_roots_are_executed": len(fibers) == 12,
+            "every_listed_gamma_is_a_root_of_the_selected_sextic": all(
+                evaluate(MINIMAL, int(row["prime"]), int(row["gamma_root"])) == 0
+                for row in fibers
+            ),
+            "every_native_rank_transcript_is_successful": all(
+                int(row["rank"]) + int(row["nullity"]) == COLUMNS for row in fibers
+            ),
+            "the_calibration_fiber_reproduces_rank5025": next(
+                row for row in fibers if row["prime"] == 21817 and row["gamma_root"] == 5
+            )["rank"] == 5025,
+            "the_characteristic_zero_interval_is_nonempty": maximum_modular_rank <= STRUCTURAL_RANK,
+        },
+        "guardrails": {
+            "claims_common_modular_rank_proves_characteristic_zero_rank": False,
+            "claims_the100_selected_vectors_lift_to_Qgamma": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Use the common dependent-column chart across both split primes to reconstruct "
+            "candidate protected kernel coefficients, prove a coefficient-height bound, "
+            "and replay the resulting 100 vectors literally over Q(gamma)."
+        ),
+    }
+    require(all(certificate["checks"].values()), "checks")
+    require(not any(certificate["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(certificate, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3FA component20 two-split-prime rank campaign: PASS "
+        f"profile={ranks} Qrank=[{maximum_modular_rank},{STRUCTURAL_RANK}]"
+    )
+
+
+if __name__ == "__main__":
+    main()

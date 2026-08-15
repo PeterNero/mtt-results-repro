@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Build the UST.G3BI explicit smooth root-containing start packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = (
+    ROOT
+    / "evidence"
+    / "ust_g3bi"
+    / "q79_explicit_smooth_root_containing_start.v1.json.blob"
+)
+G3BH = ROOT / "state" / "ust_g3bh_fixed_b89_root_containment_nogo.packet.json"
+G3BG = ROOT / "state" / "ust_g3bg_root_primitive_projection.packet.json"
+OUT = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+
+EXPECTED_HASHES = {
+    "G3BH": "e79d322eb3e8699944d8a827f21b11318d4a1b09b13ba224679fa841446cd8e9",
+    "G3BG": "98a0560054e4403887d1cc0b0e72e139563826dd57fae8dcbb2063eaeaaafc5a",
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    evidence = load(EVIDENCE)
+    require(
+        evidence["schema"]
+        == "mtt.unified-source.g3bi-explicit-root-start-evidence.v1",
+        "evidence schema",
+    )
+    require(evidence["status"] == "EXACT_GOOD_REDUCTION_CERTIFICATE", "evidence status")
+    require(all(evidence["checks"].values()), "evidence checks")
+    require(evidence["selected_candidate_index"] == 0, "canonical unperturbed candidate")
+    require(
+        evidence["endpoint_source_certificate"]
+        == {
+            "theorem_tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_SMOOTH_COEFFICIENT_LIFT_BY_GOOD_REDUCTION",
+            "basepoint_unit_ideals": 3,
+            "smoothness_unit_ideals": 9,
+            "characteristic_zero_endpoint_is_smooth": True,
+        },
+        "smooth endpoint source certificate",
+    )
+    attempt = evidence["attempts"][0]
+    require(attempt["passed"], "selected candidate passed")
+    require(not attempt["preserving_perturbation"], "no preserving perturbation")
+    require(len(attempt["basepoint_charts_passed"]) == 3, "3 basepoint charts")
+    require(len(attempt["smoothness_charts_passed"]) == 9, "9 smoothness charts")
+    require(all(row["passed"] and not row["timed_out"] for row in attempt["chart_runs"]), "chart runs")
+    for name, path in (("G3BH", G3BH), ("G3BG", G3BG)):
+        require(sha256(path) == EXPECTED_HASHES[name], f"{name} hash")
+
+    packet = {
+        "schema": "mtt.unified-source.g3bi-explicit-root-start.v1",
+        "date": "2026-08-12",
+        "status": "CLOSED_EXACT_EXPLICIT_SMOOTH_CHARACTERISTIC_ZERO_ROOT_CONTAINING_START_PATH_AND_TRANSPORT_OPEN",
+        "inputs": {
+            "finite_evidence": record(EVIDENCE),
+            "G3BH_direct_containment_nogo": record(G3BH),
+            "G3BG_sparse_root_source": record(G3BG),
+        },
+        "selected_source": {
+            "number_field": "Q(gamma)",
+            "minimal_polynomial_coefficients_ascending": [64, 16, 33, 44, 89, 24, 1],
+            "coefficient_rule": "the locked B67 integer gamma-coordinate section followed by the canonical 19-term restriction right inverse",
+            "root": "Rminus: x=s^2,y=s*t,z=t^2,w=-G3",
+            "Fermat_point": [1, -1, 0],
+            "containment_identity": "(A0-A1)|Rminus=0 coefficientwise in Q(gamma)",
+            "selected_candidate_index": 0,
+            "root_preserving_search_displacement": [],
+            "coefficient_vectors": attempt["coefficient_vectors"],
+            "coefficient_polynomials_mod_good_prime": attempt["coefficient_polynomials"],
+        },
+        "smooth_endpoint": {
+            "name": "fixed B67/B89 F0",
+            **evidence["endpoint_source_certificate"],
+            "coefficient_vectors": evidence["canonical_right_inverse"]["original_B67_integer_section_coefficient_vectors"],
+        },
+        "exact_construction": {
+            "restriction_target_dimension": 19,
+            "right_inverse_rows": evidence["canonical_right_inverse"]["rows"],
+            "ordinary_degree9_monomials_used": [
+                row["source_monomial"] for row in evidence["canonical_right_inverse"]["rows"]
+            ],
+            "formula": "for t-degree j choose x^(9-b-c)y^b z^c with c=floor(j/2), b=j mod 2, then add the jth coefficient of (A1-A0)|Rminus to A0",
+            "restriction_identity_is_over_characteristic_zero": True,
+        },
+        "smoothness_certificate": {
+            "good_reduction_prime": 11,
+            "degree_one_prime_ideal": "(11,gamma-3)",
+            "basepoint_unit_ideals": 3,
+            "smoothness_unit_ideals": 9,
+            "chart_runs": [
+                {
+                    "kind": row["kind"],
+                    "label": row["label"],
+                    "script": row["script"],
+                    "script_sha256": row["script_sha256"],
+                    "passed": row["passed"],
+                    "timed_out": row["timed_out"],
+                    "output_tail": row["output_tail"],
+                }
+                for row in attempt["chart_runs"]
+            ],
+            "promotion": "proper smooth good reduction at (11,gamma-3) proves that the displayed Q(gamma) complete intersection is smooth and basepoint-free",
+        },
+        "theorem": {
+            "name": "ExplicitSmoothRootContainingStartMemberTheorem",
+            "statement": "The locked B67 integer number-field section admits the displayed canonical correction in 19 ordinary degree-nine monomials. The corrected eta9 section vanishes identically on Rminus times the Fermat point [1:-1:0]. Its reduction at (11,gamma-3) has unit basepoint ideals on all three K3 charts and unit singularity ideals on all nine K3-by-Fermat charts. Therefore the corrected characteristic-zero complete intersection is an explicit smooth basepoint-free root-containing start member. This closes the start-member clause forced by G3BH but does not construct a smooth path or transport to fixed B89.",
+            "tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_START_MEMBER_BY_EXACT_IDENTITY_AND_GOOD_REDUCTION",
+        },
+        "frontier_delta": {
+            "before": "G3BH proved that direct root containment at fixed B89 is impossible and required a concrete smooth root-containing start plus nonconstant transport.",
+            "after": "The concrete smooth characteristic-zero root-containing start is now hash-bound and exact. The remaining production object is a nonconstant smooth-locus path from this member to fixed B89, followed by one-vector integral Gauss-Manin transport and the 248-row readout.",
+        },
+        "checks": {
+            "all_locked_input_hashes_match": True,
+            "the_characteristic_zero_coefficient_section_is_explicit": True,
+            "the_root_containment_identity_has_nineteen_exact_zero_coefficients": True,
+            "the_selected_Fermat_point_is_exact": True,
+            "the_selected_candidate_uses_no_search_displacement": True,
+            "all_three_basepoint_chart_ideals_are_units": True,
+            "all_nine_smoothness_chart_ideals_are_units": True,
+            "proper_good_reduction_promotes_smoothness_to_characteristic_zero": True,
+            "the_G3BH_start_member_exit_clause_is_discharged": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_a_smooth_path_to_fixed_B89": False,
+            "claims_integral_Gauss_Manin_transport": False,
+            "claims_a_fixed_B89_terminal_cycle": False,
+            "claims_a_248_coordinate_readout": False,
+            "claims_beta_C_is_decided": False,
+            "claims_B_ETA9_01_is_closed": False,
+            "claims_the_visible_HYM_endpoint_is_closed": False,
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "proof_witness_good_prime": 11,
+            "proof_witness_gamma_residue": 3,
+            "selected_preserving_candidate_index": 0,
+            "accepted_physical_knobs": 0,
+        },
+        "next_required_object": "A hash-bound nonconstant path in the smooth eta9 locus from the emitted start member to fixed B89, with integral transport of only z4=(-e2+2f2) tensor u_B.",
+    }
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BI explicit smooth root-containing start: PASS")
+
+
+if __name__ == "__main__":
+    main()

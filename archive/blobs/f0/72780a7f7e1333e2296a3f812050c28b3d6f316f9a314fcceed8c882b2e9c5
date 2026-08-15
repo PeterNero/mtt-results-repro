@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Independently verify UST.G3FD's graded component-20 reduction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fd/H02.component20.graded_kernel_generators.json"
+PRIME = 21817
+ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+PROFILE = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 11, 20, 46, 100)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound artifact exists: {path}")
+    require(sha256(path) == row["sha256"], f"bound artifact hash: {path.name}")
+    require(path.stat().st_size == row["bytes"], f"bound artifact size: {path.name}")
+    return path
+
+
+def exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def eliminate(
+    matrix: np.ndarray, prime: int, *, nullspace: bool = False
+) -> tuple[int, np.ndarray | None]:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    rows, columns = work.shape
+    pivot_row = 0
+    pivots: list[int] = []
+    for column in range(columns):
+        choices = np.flatnonzero(work[pivot_row:, column])
+        if choices.size == 0:
+            continue
+        selected = pivot_row + int(choices[0])
+        work[[pivot_row, selected]] = work[[selected, pivot_row]]
+        work[pivot_row] = (
+            work[pivot_row] * pow(int(work[pivot_row, column]), -1, prime)
+        ) % prime
+        for row in range(rows):
+            if row != pivot_row and work[row, column]:
+                work[row] = (
+                    work[row] - int(work[row, column]) * work[pivot_row]
+                ) % prime
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    if not nullspace:
+        return pivot_row, None
+    pivot_set = set(pivots)
+    free = [column for column in range(columns) if column not in pivot_set]
+    result = np.zeros((columns, len(free)), dtype=np.int64)
+    for local, column in enumerate(free):
+        result[column, local] = 1
+        for row, pivot in enumerate(pivots):
+            result[pivot, local] = (-work[row, column]) % prime
+    return pivot_row, result
+
+
+def ideal_dimension(annihilator: np.ndarray, degree: int) -> int:
+    basis15 = exponents(15)
+    lookup15 = {exponent: index for index, exponent in enumerate(basis15)}
+    basis = exponents(degree)
+    multipliers = exponents(15 - degree)
+    equations = np.empty((len(multipliers) * 36, len(basis)), dtype=np.int64)
+    for column, exponent in enumerate(basis):
+        for local, multiplier in enumerate(multipliers):
+            product = tuple(
+                exponent[index] + multiplier[index] for index in range(3)
+            )
+            equations[36 * local : 36 * (local + 1), column] = (
+                annihilator[:, lookup15[product]]
+            )
+    rank, _ = eliminate(equations, PRIME)
+    return len(basis) - rank
+
+
+def multiply(vectors: np.ndarray, source_degree: int, target_degree: int) -> np.ndarray:
+    source = exponents(source_degree)
+    target = exponents(target_degree)
+    lookup = {exponent: index for index, exponent in enumerate(target)}
+    columns: list[np.ndarray] = []
+    for vector in vectors.T:
+        for multiplier in exponents(target_degree - source_degree):
+            product = np.zeros(len(target), dtype=np.int64)
+            for row, exponent in enumerate(source):
+                shifted = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                product[lookup[shifted]] = vector[row]
+            columns.append(product % PRIME)
+    return np.stack(columns, axis=1) if columns else np.zeros((len(target), 0), dtype=np.int64)
+
+
+def evaluate(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.int64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fd.h02.component20.graded-kernel-generators.v1", "schema")
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    g3di_path = bound_path(packet["input"]["G3DI"])
+    generator_path = bound_path(packet["split_algebra_generators"]["artifact"])
+    g3di = json.loads(g3di_path.read_text(encoding="utf-8"))
+    require(all(g3di["checks"].values()), "G3DI checks")
+    root_rows = {int(row["gamma_root"]): row for row in g3di["root_kernels"]}
+    arrays = np.load(generator_path, allow_pickle=False)
+    require(tuple(arrays["roots"].astype(int)) == ROOTS, "stored roots")
+    coefficients = {
+        11: arrays["degree11_power_basis"].astype(np.int64),
+        14: arrays["degree14_power_basis"].astype(np.int64),
+        15: arrays["degree15_power_basis"].astype(np.int64),
+    }
+    require(
+        {degree: values.shape for degree, values in coefficients.items()}
+        == {11: (6, 78, 4), 14: (6, 120, 15), 15: (6, 136, 11)},
+        "generator shapes",
+    )
+
+    for root in ROOTS:
+        kernel_payload = kernel_runtime.read_kernel(
+            ROOT / root_rows[root]["kernel"]["path"]
+        )
+        dependent = kernel_payload["dependent"]
+        selected = np.flatnonzero((dependent >= 4363) & (dependent < 4463))
+        kernel = (
+            kernel_payload["matrix"][4327:4463, :][:, selected]
+            .toarray()
+            .astype(np.int64)
+            % PRIME
+        )
+        kernel_rank, annihilator_columns = eliminate(kernel.T, PRIME, nullspace=True)
+        require(kernel_rank == 100 and annihilator_columns is not None, "canonical kernel")
+        annihilator = annihilator_columns.T
+        profile = tuple(ideal_dimension(annihilator, degree) for degree in range(16))
+        require(profile == PROFILE, f"ideal profile gamma={root}")
+
+        generators = {degree: evaluate(values, root) for degree, values in coefficients.items()}
+        generated11_to14 = multiply(generators[11], 11, 14)
+        rank11_to14, _ = eliminate(generated11_to14, PRIME)
+        degree14 = np.concatenate((generated11_to14, generators[14]), axis=1)
+        rank14, _ = eliminate(degree14, PRIME)
+        require((rank11_to14, rank14) == (31, 46), f"degree14 minimality gamma={root}")
+
+        prior15 = np.concatenate(
+            (multiply(generators[11], 11, 15), multiply(generators[14], 14, 15)),
+            axis=1,
+        )
+        prior_rank, _ = eliminate(prior15, PRIME)
+        generated15 = np.concatenate((prior15, generators[15]), axis=1)
+        generated_rank, _ = eliminate(generated15, PRIME)
+        combined_rank, _ = eliminate(np.concatenate((generated15, kernel), axis=1), PRIME)
+        require(
+            (prior_rank, generated_rank, combined_rank) == (89, 100, 100),
+            f"degree15 generation gamma={root}",
+        )
+        print(
+            f"verify G3FD gamma={root}: profile={profile[11:]} "
+            "minimal=4+15+11 generated_rank=100",
+            flush=True,
+        )
+
+    reduction = packet["promotion_reduction"]
+    require(reduction["graded_generator_field_coefficients"] == 3608, "field coefficient count")
+    require(reduction["graded_generator_power_basis_scalars"] == 21648, "power-basis scalar count")
+    print("verify UST.G3FD component20 graded kernel generators: PASS")
+
+
+if __name__ == "__main__":
+    main()

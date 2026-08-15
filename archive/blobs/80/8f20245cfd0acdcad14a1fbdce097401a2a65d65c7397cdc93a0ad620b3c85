@@ -1,0 +1,123 @@
+# UST.G3EG: H02 Component-12 Adaptive Exactness Cutset Theorem
+
+**Status:** exact reduction closed; characteristic-zero promotion open
+**Coefficient field:** \(K=\mathbb Q(\gamma)\), with
+\[
+\gamma^6+24\gamma^5+89\gamma^4+44\gamma^3+33\gamma^2+16\gamma+64=0.
+\]
+
+## 1. Scope
+
+UST.G3EB reduced component-12 promotion to the exact nullity of a
+\(42706\times2113\) quotient-retaining presentation. UST.G3EG makes that
+object computationally tractable and audits three exactness routes. It proves
+the reductions below, but it does not yet prove that the remaining ten finite
+kernel directions exist over \(K\).
+
+## 2. Exact kernel-preserving contractions
+
+Four classes of pivots are performed symbolically over the integral
+power-basis representation of \(K\):
+
+| pivot class | count |
+|---|---:|
+| quotient-unit eliminations | 227 |
+| paired \(t_1/t_2\) common-\(v\) eliminations | 254 |
+| monic \(w^2-F_6\) eliminations | 676 |
+| remaining literal \(\pm1\) pivots | 85 |
+| **total** | **1,242** |
+
+Every pivot coefficient is a unit in the coefficient ring used by the
+presentation. Each row/column contraction is therefore an invertible
+elementary elimination and preserves the kernel dimension over \(K\).
+
+The first 1,157 pivots reduce the matrix to \(1324\times956\). The remaining
+85 reduce it to
+
+\[
+M_{12}^{\rm sat}\in K^{1239\times871}.
+\]
+
+At \((21817,\gamma-5)\), these matrices have ranks 946 and 861 respectively,
+so both retain finite nullity ten. The finite rank is evidence for the target;
+the exact elementary equivalence is the theorem proved here.
+
+## 3. High-precision split-algebra audit
+
+All six Hensel lifts of the six roots of the defining polynomial modulo 21817
+were carried to exponent 96, a modulus of 1,384 bits. For every embedding, the
+\(1324\times956\) reduced matrix has rank 946 and a ten-vector kernel with
+literal zero residual modulo the lifted prime power.
+
+This rules out a single-root accident to that precision. It remains a local
+\(p\)-adic statement and is not, by itself, a characteristic-zero kernel
+certificate.
+
+Unit-normalized rational reconstruction at exponents 64 and 96 stabilizes
+exactly 600 coefficients: 590 prescribed zeros and ten prescribed units. No
+nontrivial coefficient stabilizes. Thus direct coordinatewise reconstruction
+in that normalization is not a viable proof route at the current precision;
+the basis is determinant-sized.
+
+## 4. Exact replay of six-embedding lattice candidates
+
+The six embeddings must be combined before interpolation back to the power
+basis of \(K\). An adaptive lattice calculation does this and then evaluates
+every candidate literally in the exact \(1324\times956\) matrix. Its four
+audited rounds give:
+
+| samples | lattice dimension | coefficients over 500 bits | exact nonzero residual slots |
+|---:|---:|---:|---:|
+| 10 | 120 | 29,465 | 10,795 |
+| 15 | 150 | 21,344 | 9,378 |
+| 20 | 180 | 13,619 | 7,507 |
+| 25 | 210 | 1,843 | 3,279 |
+
+The monotone reduction is useful evidence that the embeddings carry a common
+algebraic object. The final residual is nevertheless nonzero. Accordingly no
+candidate is accepted as an element of \(\ker_K M_{12}\), and component-12
+rank 71 is not promoted.
+
+A direct fraction-free route is also mathematically valid, but after 490 of
+861 target pivots its coefficient height reached 104,650 bits. This records a
+performance boundary, not a failed theorem.
+
+## 5. Rank consequence and boundary
+
+The proven global statement remains
+
+\[
+\boxed{4748\le\operatorname{rank}_K Q\le5112.}
+\]
+
+If ten independent exact kernel vectors are eventually replayed with zero
+residual, component 12 will have rank 71 and the conditional interval will be
+\(4748..5102\). Until then, neither conclusion may be asserted.
+
+## 6. Reproducibility
+
+Run the guarded aggregate and its independent finite-rank replay:
+
+```text
+python build_ust_g3eg_h02_component12_adaptive_exactness_cutset.py
+python verify_ust_g3eg_h02_component12_adaptive_exactness_cutset.py
+```
+
+The packet is
+`state/ust_g3eg_h02_component12_adaptive_exactness_cutset.packet.json`.
+Exact reduction certificates are under `evidence/ust_g3ec/` and
+`evidence/ust_g3ed/`; the six-embedding audit is under `evidence/ust_g3ef/`.
+
+## 7. Remaining frontier
+
+There are now two legitimate exits:
+
+1. run the next 30-sample, 240-dimensional six-embedding stage using a
+   production LLL implementation, then
+   require ten independent vectors with literal zero replay;
+2. prove the ten-dimensional boundary class directly from the G3BI
+   restriction right inverse and the quotient-retaining truncated Koszul
+   complex.
+
+Neither route should modify the global interval before exact replay reaches
+zero.

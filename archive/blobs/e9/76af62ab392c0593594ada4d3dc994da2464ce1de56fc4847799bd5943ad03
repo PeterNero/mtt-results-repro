@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Independent checks for the G3BC dual replacement and executor."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import tempfile
+from fractions import Fraction
+from pathlib import Path
+
+import build_ust_g3bc_pairing_one_bezout_dual as builder
+import run_ust_g3bc_pairing_one_bezout_dual as runner
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bc_pairing_one_dual_replacement.packet.json"
+SYNTHETIC_INPUT = ROOT / "state" / "ust_g3bc_synthetic_bezout_dual.test-only.json"
+SYNTHETIC_OUTPUT = ROOT / "state" / "ust_g3bc_synthetic_bezout_dual.test-only.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def expect_rejection(function, label: str) -> None:
+    try:
+        function()
+    except AssertionError:
+        return
+    raise AssertionError(label)
+
+
+def real_point(interval: dict) -> Fraction:
+    low = Fraction(*interval["real"]["lower"])
+    high = Fraction(*interval["real"]["upper"])
+    require(low == high, "synthetic point interval")
+    return low
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bc-pairing-one-dual-replacement.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_PAIRING_ONE_DUAL_REPLACEMENT_AND_BEZOUT_COMPILER_INTEGRAL_RESIDUES_OPEN",
+        "G3BC packet",
+    )
+    require(all(packet["checks"].values()), "G3BC checks")
+    require(not any(packet["guardrails"].values()), "G3BC guardrails")
+    boundary = packet["normal_evaluator_boundary"]
+    require(
+        boundary["quotient_identity_is_not_coordinate_identity"]
+        and "N*F*Pi_C(k)=0" in boundary["G3AU_replacement_condition"]
+        and "same-lift" in boundary["G3AU_replacement_condition"],
+        "G3BC quotient/operator boundary",
+    )
+    for name, path in (
+        ("B87", builder.B87),
+        ("normalized_B_sweep", builder.NORMALIZED),
+        ("B89_residue_extraction", builder.EXTRACTION),
+    ):
+        require(
+            sha256(path) == builder.EXPECTED_HASHES[name]
+            and packet["inputs"][name]["sha256"] == builder.EXPECTED_HASHES[name],
+            f"{name} evidence lock",
+        )
+
+    b87 = load(builder.B87)
+    g3bb = load(builder.G3BB)
+    normalized = load(builder.NORMALIZED)
+    extraction = load(builder.EXTRACTION)
+    require(
+        b87["integral_index"]["positive_generator"] == 1
+        and b87["integral_index"]["selected_transgression_saturated"],
+        "unit pairing ideal replay",
+    )
+    require(g3bb["selected_target"]["forced_relation_defect"] == 1, "selected orientation replay")
+    require(
+        extraction["inputs"]["q79_eta9_B89_projective_lefschetz_certificate.packet.json"]["sha256"]
+        == builder.PENCIL_SHA256,
+        "B89 pencil replay",
+    )
+    require("Pi_C(v)" in normalized["rank248_readout"]["lift_change"], "period quotient replay")
+
+    payload = load(SYNTHETIC_INPUT)
+    expected = payload["expected"]
+    result = load(SYNTHETIC_OUTPUT)
+    residues = [row["integral_affine_pairing"] for row in payload["affine_residue_rows"]]
+    coefficients, prefix_length = runner.canonical_bezout_prefix(residues)
+    require(prefix_length == expected["canonical_prefix_length"] == 3, "canonical prefix")
+    require(coefficients == expected["coefficients"] == [-14, 7, 1], "canonical coefficients")
+    require(
+        sum(left * right for left, right in zip(coefficients, residues, strict=True))
+        == expected["relation_defect"]
+        == 1,
+        "independent Bezout replay",
+    )
+    require(math.gcd(*map(abs, coefficients)) == 1, "primitive coefficients")
+    require(
+        [row["coefficient"] for row in result["finite_meridian_combination"]] == coefficients,
+        "serialized combination",
+    )
+    period_rows = result["period_image"]["complex_interval_coordinates"]
+    require(
+        [real_point(period_rows[index]) for index in range(3)]
+        == list(map(Fraction, expected["period_image_first_three_real_coordinates"])),
+        "248-period combination replay",
+    )
+    require(result["period_image"]["coordinate_count"] == 248, "248 output")
+    require(result["test_only"] and not result["production_promotable"], "test nonpromotion")
+    require(not any(result["guardrails"].values()), "runner guardrails")
+
+    with tempfile.TemporaryDirectory() as directory:
+        temporary = Path(directory)
+        replay = temporary / "replay.packet.json"
+        recomputed = runner.execute(SYNTHETIC_INPUT, replay, allow_test_only=True)
+        require(
+            recomputed["finite_meridian_combination"] == result["finite_meridian_combination"]
+            and recomputed["period_image"] == result["period_image"],
+            "independent runner replay",
+        )
+        expect_rejection(
+            lambda: runner.execute(SYNTHETIC_INPUT, temporary / "forbidden.json"),
+            "test fixture accepted without explicit flag",
+        )
+
+        tampered_payload = load(SYNTHETIC_INPUT)
+        source_certificate = (
+            SYNTHETIC_INPUT.parent / tampered_payload["affine_residue_rows"][0]["certificate_path"]
+        ).resolve()
+        tampered_certificate = load(source_certificate)
+        tampered_certificate["normalization_tier"] = "GF11_ONLY_NOT_INTEGRAL"
+        tampered_certificate_path = temporary / "tampered.certificate.json"
+        tampered_certificate_path.write_text(
+            json.dumps(tampered_certificate, indent=2) + "\n", encoding="utf-8"
+        )
+        tampered_payload["affine_residue_rows"][0]["certificate_path"] = str(
+            tampered_certificate_path
+        )
+        tampered_payload["affine_residue_rows"][0]["certificate_sha256"] = sha256(
+            tampered_certificate_path
+        )
+        tampered_payload_path = temporary / "tampered.input.json"
+        tampered_payload_path.write_text(
+            json.dumps(tampered_payload, indent=2) + "\n", encoding="utf-8"
+        )
+        expect_rejection(
+            lambda: runner.execute(
+                tampered_payload_path, temporary / "tampered.output.json", allow_test_only=True
+            ),
+            "finite-field-only normalization accepted",
+        )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BC"]["state"]
+        == "closed_exact_pairing_one_dual_replacement_and_bezout_compiler_integral_residues_open"
+        and gates["UST.G3BC"]["depends_on"] == ["UST.G3BB", "B.ETA9.01"],
+        "G3BC frontier gate",
+    )
+    require(
+        "affine residue" in frontier["frontier_delta_g3bc"]
+        and "gcd" in frontier["next_action"].lower()
+        and "period shift" in frontier["frontier_delta_g3bc"]
+        and "same-lift" in frontier["next_action"],
+        "G3BC frontier",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BC" in document.read_text(encoding="utf-8"), f"G3BC integration {document.name}")
+    theorem_text = (ROOT / "UST_G3BC_PAIRING_ONE_DUAL_REPLACEMENT_AND_BEZOUT_MERIDIAN_THEOREM_v1.md").read_text(
+        encoding="utf-8"
+    )
+    require(
+        "quotient equality is not coordinate equality" in theorem_text
+        and "N F Pi_C(k)" in theorem_text
+        and "same-lift/common-frame" in theorem_text,
+        "G3BC theorem states the operator boundary",
+    )
+    print(
+        "UST.G3BC pairing-one dual replacement: PASS fixed-chain coordinates removed from beta prerequisite"
+    )
+
+
+if __name__ == "__main__":
+    main()

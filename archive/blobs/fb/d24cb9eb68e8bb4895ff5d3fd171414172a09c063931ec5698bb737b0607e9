@@ -1,0 +1,64 @@
+# UST.G3AP Selected Cayley Ordinary-Top Dimension-One Theorem
+
+## Statement
+
+Let `M` be the selected fiber-degree-two Cayley module over
+`F_101(gamma)`, with `gamma` satisfying the degree-six relation recorded in
+the canonical G3AL/G3AP packets. In Cox degree `(18,2,2)`, let
+
+```text
+T = (B/(K,E,C))_(18,2,2),
+```
+
+written in the 39,726-coordinate selected target basis, and let `S -> T` be
+the map of all 92,979 selected target-effective source multiples of the 21
+derivative generators. Then
+
+```text
+rank(S -> T) = 39,725,
+dim_F1016 coker(S -> T) = 1.
+```
+
+The canonical quotient class is represented by
+
+```text
+z^12*w^5*t1*t2^5*v*s.
+```
+
+## Proof certificate
+
+1. The full source verifier reconstructs all 92,979 rows from the selected
+   equations and checks their complete 39,726-coordinate target image.
+2. A square 39,725 minor extracted from the selected seven-chunk subcampaign
+   has nonzero packed determinant `748486604801`.
+3. `ust_f1016_givaro_map_pivot_replay.cpp` delegates every field inverse and
+   multiplication basis image to Givaro, then performs an independently
+   ordered sparse elimination. It obtains rank 39,725 and the same packed
+   determinant.
+4. The independently replayed quotient functional annihilates all 92,979
+   source rows, proving rank at most 39,725.
+5. `UST.G3AP.LOWER` proves the quotient is nonzero from selected toric
+   regularity and the unit top intersection `14301 = 60 mod 101`.
+
+The lower and upper bounds agree, so the quotient has dimension one.
+
+## Canonical artifacts
+
+- `state/ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json`
+- `state/ust_g3ap_selected_cayley_target_macaulay_full_reused.certified.packet.json`
+- `state/ust_g3ap_selected_cayley_target_macaulay_full_reused.packed-sms`
+- `state/ust_g3ap_selected_cayley_target_macaulay_incremental_rank_witness.latest.json`
+
+## Independent verification
+
+```powershell
+python verify_ust_g3ap_selected_cayley_target_macaulay_full_reused.py
+python certify_ust_g3ap_selected_cayley_target_macaulay_incremental_givaro_map_rank.py
+python verify_ust_g3ap_selected_cayley_ordinary_top_dimension.py
+```
+
+## Scope
+
+This is an exact selected finite-residue ordinary-top calculation. It does
+not claim an unrestricted standard basis, characteristic-zero response rank,
+the analytic `beta_C` value, or a Hull-Strominger endpoint.

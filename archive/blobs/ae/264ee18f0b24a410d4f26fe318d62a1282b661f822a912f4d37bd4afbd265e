@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Independent structural verification of UST.G3GF."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3gf/H02.global_rank_profile_correction.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, object]) -> Path:
+    path = ROOT / str(item["path"])
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size: {path}")
+    require(sha256(path) == item["sha256"], f"record hash: {path}")
+    return path
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3GF", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    for item in packet["inputs"].values():
+        if isinstance(item, list):
+            for record in item:
+                verify_record(record)
+        else:
+            verify_record(item)
+    arrays_path = verify_record(packet["audit"]["artifact"])
+    arrays = np.load(arrays_path, allow_pickle=False)
+    primes = arrays["primes"].astype(np.uint32)
+    gamma = arrays["gamma_roots"].astype(np.uint32)
+    rank = arrays["coupling_rank"].astype(np.uint16)
+    nullity = arrays["kernel_dimension"].astype(np.uint16)
+    tier = arrays["tier"]
+    component_rank = arrays["component20_plane_rank"].astype(np.uint16)
+    profile = arrays["component20_second_jet_profile"].astype(np.int16)
+    require(
+        primes.shape == gamma.shape == rank.shape == nullity.shape == tier.shape == (71,),
+        "fiber table shape",
+    )
+    require(np.unique(np.stack([primes, gamma], axis=1), axis=0).shape[0] == 71, "unique fibers")
+    require(np.all(rank.astype(np.int64) + nullity.astype(np.int64) == 6022), "rank-nullity")
+    old = tier == "original_rank_drop"
+    new = tier == "larger_prime"
+    require(int(np.count_nonzero(old)) == 48, "old count")
+    require(int(np.count_nonzero(new)) == 23, "new count")
+    require(np.all(rank[old] == 4748) and np.all(nullity[old] == 1274), "old profile")
+    require(np.all(rank[new] == 4752) and np.all(nullity[new] == 1270), "new profile")
+    for prime in (79903, 81359, 82963):
+        require(int(np.count_nonzero((primes == prime) & new)) == 6, "complete larger prime")
+    require(np.all(component_rank == 100), "component plane")
+    require(
+        np.all(profile == np.asarray([15, 5, 0, 33, 17, 1], dtype=np.int16)),
+        "second-jet profile",
+    )
+    consequence = packet["characteristic_zero_consequence"]
+    require(consequence["global_coupling_rank_lower_bound"] == int(np.max(rank)), "rank lower bound")
+    require(consequence["global_kernel_dimension_upper_bound"] == int(np.min(nullity)), "nullity upper bound")
+    require(consequence["old_equality_4748_1274_retired"], "old equality retired")
+    require(not consequence["equality_4752_1270_promoted"], "new equality remains open")
+    print(
+        "UST.G3GF independent verification: PASS "
+        "fibers=71 rank_Qgamma>=4752 nullity_Qgamma<=1270"
+    )
+
+
+if __name__ == "__main__":
+    main()

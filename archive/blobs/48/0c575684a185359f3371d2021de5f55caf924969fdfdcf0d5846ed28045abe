@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Prove the exact Q(gamma) rank of the selected affine H11 path update."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bz_g3bi_h02_exact_path_update_rank as ranker
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as endpoint
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cu"
+OUT = ROOT / "state" / "ust_g3cu_h11_exact_path_update_rank.packet.json"
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3BK = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+G3BN = ROOT / "state" / "ust_g3bn_h11_alternate_split_prime_initializer.packet.json"
+PRIME = 21817
+GAMMA_ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    path = path.resolve()
+    repository = repository.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi = load(G3BI)
+    g3bk = load(G3BK)
+    g3bn = load(G3BN)
+    for packet, label in ((g3bi, "G3BI"), (g3bk, "G3BK"), (g3bn, "G3BN")):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json"
+    csc_path = mld / "q79_eta9_original_jacobian_macaulay_H11_csc.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H11.packet.json"
+    macaulay = load(macaulay_path)
+    csc = load(csc_path)
+    factor = load(factor_path)
+    for packet, label in ((macaulay, "Macaulay"), (csc, "CSC"), (factor, "factor")):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = {int(value) for value in csc["binary"]["quotient_unit_rows"]}
+    complement_rows = np.asarray(
+        [row for row in range(len(target)) if row not in quotient_rows], dtype=np.int32
+    )
+    complement_lookup = {
+        int(ambient_row): local_row
+        for local_row, ambient_row in enumerate(complement_rows.tolist())
+    }
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"][
+            "selected_original_Jacobian_columns"
+        ]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    require(len(target) == 5439, "H11 ambient dimension")
+    require(len(quotient_rows) == 1013, "H11 quotient dimension")
+    require(len(descriptors) == complement_rows.size == 4426, "H11 complement")
+
+    corrections = endpoint.correction_derivatives_exact(g3bi)
+    coefficient_matrices = ranker.exact_coefficient_matrices(
+        descriptors, corrections, target_lookup, complement_lookup
+    )
+    pattern, reference_evaluation = ranker.exact_path_update(
+        descriptors, corrections, target_lookup, complement_lookup, GAMMA_ROOTS[0]
+    )
+    exact_matching = maximum_bipartite_matching(
+        pattern, perm_type="column"
+    ).astype(np.int32)
+    structural_upper = int(np.count_nonzero(exact_matching >= 0))
+
+    split_evaluations: dict[int, sparse.csr_matrix] = {}
+    split_components: dict[int, list[dict[str, int]]] = {}
+    split_ranks: dict[int, int] = {}
+    split_matching_bounds: dict[int, int] = {}
+    for gamma_root in GAMMA_ROOTS:
+        root_pattern, evaluated = ranker.exact_path_update(
+            descriptors, corrections, target_lookup, complement_lookup, gamma_root
+        )
+        require((root_pattern != pattern).nnz == 0, "root-independent support")
+        evaluated_pattern = evaluated.copy()
+        evaluated_pattern.data = np.ones(evaluated_pattern.nnz, dtype=np.uint8)
+        root_matching = maximum_bipartite_matching(
+            evaluated_pattern, perm_type="column"
+        )
+        split_matching_bounds[gamma_root] = int(np.count_nonzero(root_matching >= 0))
+        summaries, _, _ = ranker.component_rank_certificate(
+            evaluated, PRIME, select_minor=False
+        )
+        split_evaluations[gamma_root] = evaluated
+        split_components[gamma_root] = summaries
+        split_ranks[gamma_root] = sum(row["rank"] for row in summaries)
+
+    best_root = max(GAMMA_ROOTS, key=lambda root: split_ranks[root])
+    best_evaluation = split_evaluations[best_root]
+    best_components, minor_rows, minor_columns = ranker.component_rank_certificate(
+        best_evaluation, PRIME, select_minor=True
+    )
+    modular_lower = split_ranks[best_root]
+    defective_components = ranker.exact_defective_component_ranks(
+        coefficient_matrices,
+        best_evaluation,
+        g3bi["selected_source"]["minimal_polynomial_coefficients_ascending"],
+        best_components,
+    )
+    exact_defect = sum(
+        row["algebraic_defect_from_matching"] for row in defective_components
+    )
+    exact_rank = structural_upper - exact_defect
+    require(exact_rank == modular_lower == 988, "exact H11 path-update rank")
+
+    g3bn_update_path = ROOT / g3bn["endpoint_update"]["matrix"]["path"]
+    g3bn_update = sparse.load_npz(g3bn_update_path).tocsr()[complement_rows, :]
+    require(
+        (g3bn_update != reference_evaluation).nnz == 0,
+        "G3BN split-root update replay",
+    )
+
+    minor = best_evaluation[minor_rows, :][:, minor_columns].tocsc()
+    require(minor.shape == (exact_rank, exact_rank), "rank minor shape")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    arrays_path = EVIDENCE / "G3BI_H11_affine_path_update_rank_arrays.npz"
+    coefficient_paths = [
+        EVIDENCE / f"G3BI_H11_affine_path_update.gamma_degree{degree}.npz"
+        for degree in range(6)
+    ]
+    minor_path = EVIDENCE / "H11.G3BI.affine_path_update.rank_minor.chart.bin"
+    rhs_path = EVIDENCE / "H11.G3BI.affine_path_update.unit.rhs.bin"
+    log_path = EVIDENCE / "H11.G3BI.affine_path_update.rank_minor.log"
+    np.savez_compressed(
+        arrays_path,
+        complement_rows=complement_rows,
+        exact_matching_column_by_row=exact_matching,
+        gamma_roots=np.asarray(GAMMA_ROOTS, dtype=np.int32),
+        split_ranks=np.asarray(
+            [split_ranks[root] for root in GAMMA_ROOTS], dtype=np.int32
+        ),
+        minor_rows=minor_rows,
+        minor_columns=minor_columns,
+    )
+    for path, matrix in zip(coefficient_paths, coefficient_matrices, strict=True):
+        sparse.save_npz(path, matrix, compressed=True)
+    exporter.write_chart(
+        minor_path,
+        PRIME,
+        exact_rank,
+        0,
+        exact_rank,
+        minor.indptr.astype(np.uint64).tolist(),
+        minor.indices.astype(np.uint32).tolist(),
+        minor.data.astype(np.uint32).tolist(),
+    )
+    exporter.write_rhs(rhs_path, PRIME, exact_rank, [0, 1], [0], [1])
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    command = [
+        "wsl",
+        runtime.wsl_path(solver),
+        "--chart",
+        runtime.wsl_path(minor_path),
+        "--rhs",
+        runtime.wsl_path(rhs_path),
+        "--log",
+        runtime.wsl_path(log_path),
+        "--determinant-only",
+    ]
+    completed = subprocess.run(
+        command, cwd=mld, capture_output=True, text=True, check=False
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = initializer.parse_log(log_path)
+    require(fields.get("STATUS") == "SUCCESS", "minor determinant status")
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(determinant != 0, "nonzero rank minor")
+
+    expected_defects = sorted(
+        (row["rows"], row["columns"], row["structural_rank"], row["exact_Q_gamma_rank"])
+        for row in defective_components
+    )
+    require(
+        expected_defects
+        == sorted([(162, 198, 150, 147)] * 3 + [(108, 108, 96, 93)] * 3),
+        "six exact rank-defective components",
+    )
+    checks = {
+        "the_exact_Q_gamma_H11_affine_update_support_is_reconstructed": True,
+        "the_split_place_evaluation_matches_the_certified_G3BN_update": True,
+        "all_six_selected_split_roots_have_rank988": set(split_ranks.values()) == {988},
+        "the_exact_support_has_structural_rank_upper_bound1006": structural_upper == 1006,
+        "six_exact_components_each_have_algebraic_defect_three": len(defective_components) == 6
+        and all(row["algebraic_defect_from_matching"] == 3 for row in defective_components),
+        "the_rank_revealing988_minor_has_nonzero_split_determinant": determinant != 0,
+        "matching_upper_minus_exact_component_defects_equals_modular_lower": exact_rank
+        == modular_lower
+        == 988,
+        "no_path_action_integration_period_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CU checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3cu-h11-exact-path-update-rank.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CU",
+        "status": "CLOSED_EXACT_SELECTED_H11_AFFINE_PATH_UPDATE_RANK_988",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3BK": record(G3BK),
+            "G3BN": record(G3BN),
+            "G3BN_update": record(g3bn_update_path),
+            "H11_Macaulay": external_record(macaulay_path, mld),
+            "H11_CSC": external_record(csc_path, mld),
+            "H11_factorization": external_record(factor_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+        },
+        "affine_path_update": {
+            "family": "A_H11(a,gamma)=A_H11,B89(gamma)+a Delta_H11,C(gamma)",
+            "field": "Q(gamma)",
+            "shape": [4426, 4426],
+            "exact_polynomial_support_nonzeros": int(pattern.nnz),
+            "gamma_coefficient_nonzeros": [
+                int(matrix.nnz) for matrix in coefficient_matrices
+            ],
+            "structural_rank_upper_bound": structural_upper,
+            "split_root_matching_bounds": {
+                str(root): split_matching_bounds[root] for root in GAMMA_ROOTS
+            },
+            "split_root_algebraic_ranks": {
+                str(root): split_ranks[root] for root in GAMMA_ROOTS
+            },
+            "selected_rank_place": {"prime": PRIME, "gamma_root": best_root},
+            "selected_root_components": best_components,
+            "exact_number_field_defective_components": defective_components,
+            "exact_algebraic_defect_from_structural_matching": exact_defect,
+            "modular_rank_lower_bound": modular_lower,
+            "exact_rank_over_Q_gamma": exact_rank,
+            "selected_minor_shape": list(minor.shape),
+            "selected_minor_nonzero_entries": int(minor.nnz),
+            "selected_minor_determinant_mod21817": determinant,
+            "construction_arrays": record(arrays_path),
+            "exact_gamma_coefficient_matrices": [
+                record(path) for path in coefficient_paths
+            ],
+            "selected_minor": record(minor_path),
+            "unit_RHS": record(rhs_path),
+            "factorization_log": record(log_path),
+        },
+        "comparison": {
+            "previous_G3BK_mod11_rank_lower_bound": 982,
+            "previous_G3BK_structural_upper_bound": 1006,
+            "exact_selected_affine_path_update_rank": 988,
+            "universal_H11_chart_dimension": 4426,
+            "path_specific_Woodbury_dimension": 988,
+            "dimension_removed_from_universal_complement": 4426 - 988,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the988_dimensional_Woodbury_kernel_is_evaluated": False,
+            "claims_the_complete_H11_path_action_is_emitted": False,
+            "claims_integral_Gauss_Manin_transport": False,
+            "claims_terminal248_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3cuSelectedH11ExactAffinePathUpdateRank",
+            "tier": "CLOSED_EXACT_SELECTED_H11_PATH_UPDATE_RANK",
+            "statement": "For the selected correction pencil, the H11 complement update has exact rank 988 over Q(gamma). Exact-support matching gives rank at most 1006; number-field elimination proves that six components each lose three ranks, and a 988-square split-place minor is nonzero. Hence the selected H11 family update admits a path-specific Woodbury representation of minimal dimension 988.",
+        },
+        "frontier_delta": {
+            "before": "G3BK bounded the H11 correction update between modular rank 982 and structural rank 1006, so the size of a selected path kernel was unresolved.",
+            "after": "The exact selected H11 affine update rank is 988. The H11 path lane can now target a 988-dimensional Woodbury kernel rather than the 4426-dimensional complement, with no fitted parameters.",
+        },
+        "next_required_object": "Construct an explicit Q(gamma) rank factorization Delta_H11=U_H11 V_H11, apply the exact B89 H11 inverse to U_H11 and the evolving source, and evaluate the resulting 988-square Woodbury kernel with Arb along G3BJ. Validate at all split-root endpoints and against the G3CT first jet.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CU selected H11 affine path update rank: PASS")
+    print(
+        f"shape=4426x4426 support={pattern.nnz} structural={structural_upper} "
+        f"exact_rank={exact_rank} defect={exact_defect} minor_det={determinant}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

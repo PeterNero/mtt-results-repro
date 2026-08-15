@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""Certify the selected H11 action through the 1710-dimensional DM core."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_mat, acb_poly, arb, ctx
+from scipy import sparse
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3CV = ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json"
+G3CX = ROOT / "state" / "ust_g3cx_h11_dm_source_observation_corridor.packet.json"
+G3CY = ROOT / "state" / "ust_g3cy_h11_exact_base_resolvent_coupling_rank.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3cz"
+OUT = ROOT / "state" / "ust_g3cz_h11_core221_archimedean_action.packet.json"
+MINPOLY = [64, 16, 33, 44, 89, 24, 1]
+CORE_COMPONENT = 221
+CORE_DIMENSION = 1710
+SELECTED_CORE_COLUMNS = 499
+EMBEDDING_INDEX = 4
+CONJUGATE_INDEX = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def isolated_roots(root_bits: int, maxprec: int) -> list[acb]:
+    roots = acb_poly(MINPOLY).roots(
+        tol=arb(2) ** (-root_bits),
+        maxprec=maxprec,
+    )
+    require(len(roots) == 6, "six isolated roots")
+    roots = sorted(
+        roots,
+        key=lambda value: (float(value.real.mid()), float(value.imag.mid())),
+    )
+    require(
+        all(
+            not roots[left].overlaps(roots[right])
+            for left in range(6)
+            for right in range(left + 1, 6)
+        ),
+        "pairwise disjoint roots",
+    )
+    polynomial = acb_poly(MINPOLY)
+    require(all(polynomial(root).contains(0) for root in roots), "root residuals")
+    require(roots[CONJUGATE_INDEX].overlaps(roots[EMBEDDING_INDEX].conjugate()), "conjugate pair")
+    return roots
+
+
+def matrix_accuracy(matrix: acb_mat) -> dict[str, Any]:
+    entries = matrix.entries()
+    require(all(value.is_finite() for value in entries), "finite ball matrix")
+    accuracies = [int(value.rel_accuracy_bits()) for value in entries if not value.contains(0)]
+    return {
+        "entries": len(entries),
+        "entries_containing_zero": sum(value.contains(0) for value in entries),
+        "minimum_relative_accuracy_bits_away_from_zero": min(accuracies) if accuracies else 0,
+        "maximum_real_radius": str(max((value.real.rad() for value in entries), default=arb(0))),
+        "maximum_imaginary_radius": str(max((value.imag.rad() for value in entries), default=arb(0))),
+    }
+
+
+def widened_double_double(value: arb) -> tuple[float, float, float, arb]:
+    """Return a portable double-double interval that contains an Arb interval."""
+
+    midpoint = value.mid()
+    high = float(midpoint)
+    remainder = midpoint - arb(high)
+    low = float(remainder.mid())
+    center = arb(high) + arb(low)
+    radius_bound = abs(midpoint - center) + value.rad()
+    radius = math.nextafter(float(radius_bound), math.inf)
+    enclosure = center + arb(0, radius)
+    while not enclosure.contains(value):
+        radius = math.nextafter(radius, math.inf)
+        enclosure = center + arb(0, radius)
+    return high, low, radius, enclosure
+
+
+def persist_enclosure(
+    path: Path,
+    solution: acb_mat,
+    selected_positions: np.ndarray,
+    selected_columns: np.ndarray,
+    local_rows: np.ndarray,
+    ambient_rows: np.ndarray,
+) -> dict[str, Any]:
+    rows = solution.nrows()
+    columns = solution.ncols()
+    shape = (rows, columns)
+    real_high = np.empty(shape, dtype=np.float64)
+    real_low = np.empty(shape, dtype=np.float64)
+    real_radius = np.empty(shape, dtype=np.float64)
+    imag_high = np.empty(shape, dtype=np.float64)
+    imag_low = np.empty(shape, dtype=np.float64)
+    imag_radius = np.empty(shape, dtype=np.float64)
+    contained = 0
+    minimum_accuracy: int | None = None
+    for index, value in enumerate(solution.entries()):
+        row, column = divmod(index, columns)
+        rh, rl, rr, real_enclosure = widened_double_double(value.real)
+        ih, il, ir, imag_enclosure = widened_double_double(value.imag)
+        real_high[row, column] = rh
+        real_low[row, column] = rl
+        real_radius[row, column] = rr
+        imag_high[row, column] = ih
+        imag_low[row, column] = il
+        imag_radius[row, column] = ir
+        enclosure = acb(real_enclosure, imag_enclosure)
+        if enclosure.real.contains(value.real) and enclosure.imag.contains(value.imag):
+            contained += 1
+        if not enclosure.contains(0):
+            accuracy = int(enclosure.rel_accuracy_bits())
+            minimum_accuracy = accuracy if minimum_accuracy is None else min(minimum_accuracy, accuracy)
+    require(contained == rows * columns, "persisted enclosure contains every solution ball")
+    np.savez_compressed(
+        path,
+        selected_minor_column_positions=selected_positions.astype(np.int32),
+        selected_kernel_columns=selected_columns.astype(np.int32),
+        core_local_rows=local_rows.astype(np.int32),
+        core_ambient_rows=ambient_rows.astype(np.int32),
+        real_high=real_high,
+        real_low=real_low,
+        real_radius=real_radius,
+        imag_high=imag_high,
+        imag_low=imag_low,
+        imag_radius=imag_radius,
+    )
+    return {
+        "shape": list(shape),
+        "contained_solution_entries": contained,
+        "minimum_relative_accuracy_bits_away_from_zero": minimum_accuracy or 0,
+        "archive": record(path),
+        "format": "real/imag double-double centers plus outward float64 radii",
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--precision", type=int, default=192)
+    parser.add_argument("--root-bits", type=int, default=160)
+    parser.add_argument("--maxprec", type=int, default=1024)
+    args = parser.parse_args()
+    require(args.precision >= 160, "minimum precision")
+    require(args.root_bits >= 128, "minimum root isolation")
+    require(args.maxprec >= args.precision, "root maximum precision")
+    ctx.prec = args.precision
+
+    started = time.perf_counter()
+    g3cv = load(G3CV)
+    g3cx = load(G3CX)
+    g3cy = load(G3CY)
+    for packet, label in ((g3cv, "G3CV"), (g3cx, "G3CX"), (g3cy, "G3CY")):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    dm_path = mld / "q79_eta9_H11_Dulmage_Mendelsohn_decomposition.packet.json"
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H11.packet.json"
+    dm = load(dm_path)
+    macaulay = load(macaulay_path)
+    factor = load(factor_path)
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    for packet, label in (
+        (dm, "DM"),
+        (macaulay, "Macaulay"),
+        (factor, "factor"),
+        (base, "base"),
+        (global_f0, "global F0"),
+        (b89, "B89"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+    dm_arrays_path = mld / dm["Dulmage_Mendelsohn"]["arrays"]["path"]
+    dm_arrays = np.load(dm_arrays_path, allow_pickle=False)
+    complement_rows = dm_arrays["complement_ambient_rows"].astype(np.int32)
+    component_by_row = dm_arrays["component_by_complement_row"].astype(np.int32)
+    component_by_column = dm_arrays["component_by_image_column"].astype(np.int32)
+    local_rows = np.flatnonzero(component_by_row == CORE_COMPONENT).astype(np.int32)
+    global_columns = np.flatnonzero(component_by_column == CORE_COMPONENT).astype(np.int32)
+    ambient_rows = complement_rows[local_rows]
+    require(local_rows.size == global_columns.size == CORE_DIMENSION, "core221 dimension")
+
+    selected_archive = np.load(
+        ROOT / g3cy["rank_identity"]["certificate"]["path"], allow_pickle=False
+    )
+    minor_columns = selected_archive["Q_minor_columns"].astype(np.int32)
+    u_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr()
+        for item in g3cv["factorization"]["U_gamma_coefficients"]
+    ]
+    selected_positions: list[int] = []
+    for position, kernel_column in enumerate(minor_columns.tolist()):
+        rows = np.concatenate(
+            [matrix[:, kernel_column].nonzero()[0] for matrix in u_coefficients]
+        )
+        if rows.size and np.any(component_by_row[rows] == CORE_COMPONENT):
+            selected_positions.append(position)
+    selected_positions_array = np.asarray(selected_positions, dtype=np.int32)
+    selected_kernel_columns = minor_columns[selected_positions_array]
+    require(selected_kernel_columns.size == SELECTED_CORE_COLUMNS, "499 core221 sources")
+
+    roots = isolated_roots(args.root_bits, args.maxprec)
+    gamma = roots[EMBEDDING_INDEX]
+    powers = [acb(1)]
+    for _ in range(5):
+        powers.append(powers[-1] * gamma)
+
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    selected_original_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original_columns)
+    row_lookup = {
+        int(ambient_row): local_row
+        for local_row, ambient_row in enumerate(ambient_rows.tolist())
+    }
+    column_lookup = {
+        int(global_column): local_column
+        for local_column, global_column in enumerate(global_columns.tolist())
+    }
+
+    construction_started = time.perf_counter()
+    core = acb_mat(CORE_DIMENSION, CORE_DIMENSION)
+    core_nonzeros = 0
+    for global_column in global_columns.tolist():
+        exact_column = oracle.exact_column(
+            descriptors[global_column], generators0, target_lookup
+        )
+        local_column = column_lookup[global_column]
+        for ambient_row, coefficients in exact_column.items():
+            local_row = row_lookup.get(int(ambient_row))
+            if local_row is None:
+                continue
+            value = acb(0)
+            for coefficient in reversed(coefficients):
+                value = value * gamma + int(coefficient)
+            core[local_row, local_column] = value
+            core_nonzeros += 1
+    require(core_nonzeros == 106829, "core221 exact nonzeros")
+
+    rhs = acb_mat(CORE_DIMENSION, SELECTED_CORE_COLUMNS)
+    core_row_lookup = np.full(4426, -1, dtype=np.int32)
+    core_row_lookup[local_rows] = np.arange(CORE_DIMENSION, dtype=np.int32)
+    selected_column_lookup = np.full(988, -1, dtype=np.int32)
+    selected_column_lookup[selected_kernel_columns] = np.arange(
+        SELECTED_CORE_COLUMNS, dtype=np.int32
+    )
+    rhs_support: set[tuple[int, int]] = set()
+    for power, matrix in enumerate(u_coefficients):
+        submatrix = matrix[local_rows, :][:, selected_kernel_columns].tocoo()
+        for row, column, coefficient in zip(
+            submatrix.row.tolist(),
+            submatrix.col.tolist(),
+            submatrix.data.tolist(),
+            strict=True,
+        ):
+            rhs[row, column] = rhs[row, column] + int(coefficient) * powers[power]
+            rhs_support.add((int(row), int(column)))
+    construction_seconds = time.perf_counter() - construction_started
+    print(
+        f"G3CZ core built: n={CORE_DIMENSION} rhs={SELECTED_CORE_COLUMNS} "
+        f"A_nnz={core_nonzeros} B_support={len(rhs_support)} "
+        f"seconds={construction_seconds:.3f}",
+        flush=True,
+    )
+
+    solve_started = time.perf_counter()
+    solution = core.solve(rhs, algorithm="precond")
+    solve_seconds = time.perf_counter() - solve_started
+    solution_accuracy = matrix_accuracy(solution)
+    require(
+        int(solution_accuracy["minimum_relative_accuracy_bits_away_from_zero"]) >= 96,
+        "core solution accuracy",
+    )
+    print(
+        f"G3CZ certified solve complete: seconds={solve_seconds:.3f} "
+        f"accuracy={solution_accuracy['minimum_relative_accuracy_bits_away_from_zero']}",
+        flush=True,
+    )
+
+    residual_started = time.perf_counter()
+    residual = core * solution - rhs
+    residual_zero = sum(value.contains(0) for value in residual.entries())
+    require(
+        residual_zero == CORE_DIMENSION * SELECTED_CORE_COLUMNS,
+        "all core residual balls contain zero",
+    )
+    residual_seconds = time.perf_counter() - residual_started
+    print(
+        f"G3CZ residual replay complete: entries={residual_zero} "
+        f"seconds={residual_seconds:.3f}",
+        flush=True,
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    enclosure_path = EVIDENCE / "H11.core221.selected499.embedding4.p192.ddball.npz"
+    enclosure_started = time.perf_counter()
+    persisted = persist_enclosure(
+        enclosure_path,
+        solution,
+        selected_positions_array,
+        selected_kernel_columns,
+        local_rows,
+        ambient_rows,
+    )
+    enclosure_seconds = time.perf_counter() - enclosure_started
+    require(
+        int(persisted["minimum_relative_accuracy_bits_away_from_zero"]) >= 80,
+        "persisted enclosure accuracy",
+    )
+    sample_indices = sorted(
+        {
+            0,
+            SELECTED_CORE_COLUMNS - 1,
+            (CORE_DIMENSION // 2) * SELECTED_CORE_COLUMNS,
+            CORE_DIMENSION * SELECTED_CORE_COLUMNS - 1,
+        }
+    )
+    entries = solution.entries()
+    samples = [
+        {
+            "flat_index": index,
+            "core_row": index // SELECTED_CORE_COLUMNS,
+            "selected_core_column": index % SELECTED_CORE_COLUMNS,
+            "real_ball": entries[index].real.str(60, more=True),
+            "imag_ball": entries[index].imag.str(60, more=True),
+        }
+        for index in sample_indices
+    ]
+    checks = {
+        "G3CV_G3CX_and_G3CY_are_hash_bound_and_passing": True,
+        "the_selected710_minor_has_exactly499_sources_on_core221": selected_kernel_columns.size
+        == SELECTED_CORE_COLUMNS,
+        "the_exact1710_core_is_evaluated_from_the_B89_oracle": core_nonzeros == 106829,
+        "the_selected1710_by499_action_is_certified_by_Arb": all(
+            value.is_finite() for value in solution.entries()
+        ),
+        "all853290_residual_balls_contain_zero": residual_zero
+        == CORE_DIMENSION * SELECTED_CORE_COLUMNS,
+        "the_persisted_double_double_balls_contain_every_Arb_solution_entry": int(
+            persisted["contained_solution_entries"]
+        )
+        == CORE_DIMENSION * SELECTED_CORE_COLUMNS,
+        "the_conjugate_embedding_action_is_obtained_by_exact_field_conjugation": roots[
+            CONJUGATE_INDEX
+        ].overlaps(gamma.conjugate()),
+        "no_embedding_is_promoted_as_physical": True,
+        "no_observed_value_floating_point_or_fitted_parameter_is_used": True,
+    }
+    require(all(checks.values()), "G3CZ checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cz-h11-core221-archimedean-action.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CZ",
+        "status": "CLOSED_CERTIFIED_SELECTED_H11_CORE221_ACTION_ON_ONE_CONJUGATE_ARCHIMEDEAN_PAIR",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3CV": record(G3CV),
+            "G3CX": record(G3CX),
+            "G3CY": record(G3CY),
+            "H11_DM": external_record(dm_path, mld),
+            "H11_DM_arrays": external_record(dm_arrays_path, mld),
+            "H11_Macaulay": external_record(macaulay_path, mld),
+            "H11_factorization": external_record(factor_path, mld),
+            "B89_oracle": external_record(Path(oracle.__file__).resolve(), mld),
+            "implementation": record(Path(__file__).resolve()),
+        },
+        "field": {
+            "minimal_polynomial_ascending": MINPOLY,
+            "precision_bits": args.precision,
+            "root_isolation_bits": args.root_bits,
+            "evaluated_embedding_index": EMBEDDING_INDEX,
+            "evaluated_gamma_ball": str(gamma),
+            "conjugate_embedding_index": CONJUGATE_INDEX,
+            "conjugate_gamma_ball": str(roots[CONJUGATE_INDEX]),
+        },
+        "selected_action": {
+            "DM_component": CORE_COMPONENT,
+            "core_dimension": CORE_DIMENSION,
+            "exact_core_nonzero_entries": core_nonzeros,
+            "selected_minor_columns_total": int(minor_columns.size),
+            "selected_minor_columns_supported_on_core221": int(
+                selected_kernel_columns.size
+            ),
+            "right_hand_side_support_entries": len(rhs_support),
+            "solution_shape": [CORE_DIMENSION, SELECTED_CORE_COLUMNS],
+            "solution_accuracy": solution_accuracy,
+            "residual_entries_containing_zero": residual_zero,
+            "persisted_enclosure": persisted,
+            "samples": samples,
+        },
+        "timing_seconds": {
+            "input_and_exact_core_construction": construction_seconds,
+            "certified_Arb_solve": solve_seconds,
+            "residual_replay": residual_seconds,
+            "portable_enclosure_serialization": enclosure_seconds,
+            "total": time.perf_counter() - started,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_downstream684_core_or_scalar_DAG_is_executed": False,
+            "claims_the_full_Q_or_selected710_minor_is_materialized": False,
+            "claims_the_two_real_or_other_complex_embeddings_are_executed": False,
+            "claims_an_Archimedean_embedding_is_physically_selected": False,
+            "claims_x0_path_integration_integral_marking_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3czSelectedH11Core221ArchimedeanAction",
+            "tier": "CLOSED_CERTIFIED_SELECTED_LARGEST_CORE_ACTION_ON_A_CONJUGATE_PAIR",
+            "statement": "On canonical embedding 4 of the selected sextic field, the exact B89 H11 component 221 acts invertibly on all 499 selected G3CY minor columns supported on that component. Arb returns a finite 1710-by-499 complex-ball solution whose 853290 residual entries all contain zero. A portable widened double-double enclosure contains every certified solution entry. Since all matrix and source coefficients are rational polynomials in gamma, complex conjugation certifies the corresponding action on canonical embedding 5 without another numerical solve.",
+        },
+        "frontier_delta": {
+            "before": "G3CY selected the exact rank-710 second Woodbury coordinates, but no selected characteristic-zero action of the largest 1710-dimensional H11 DM core had been evaluated.",
+            "after": "The largest core action is now rigorously evaluated and persisted for all 499 selected columns that enter it on one conjugate Archimedean pair. The remaining work on that pair is downstream propagation through 279 scalar components and the 684 core, followed by assembly of the selected 710-square coupling.",
+        },
+        "next_required_object": "Load the persisted core221 enclosure, propagate the selected columns through the exact 279-singleton/684-core corridor, contract with the selected W rows, and emit the certified 710-square T_Q action on embeddings 4 and 5.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CZ H11 core221 Archimedean action: PASS")
+    print(
+        f"embedding_pair={EMBEDDING_INDEX},{CONJUGATE_INDEX} "
+        f"shape={CORE_DIMENSION}x{SELECTED_CORE_COLUMNS} "
+        f"residual_zero={residual_zero} archive={enclosure_path.name}",
+        flush=True,
+    )
+    print(f"packet_sha256={sha256(OUT)}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

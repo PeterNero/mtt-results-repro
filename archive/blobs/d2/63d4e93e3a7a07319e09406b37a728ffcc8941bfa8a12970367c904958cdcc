@@ -1,0 +1,172 @@
+# UST.G3EA: Exact H02 Component-9 Gradient-Elliptic Lift Theorem
+
+**Status:** closed at the exact characteristic-zero component-promotion tier
+**Coefficient field:** \(K=\mathbb Q(\gamma)\), with
+\[
+\gamma^6+24\gamma^5+89\gamma^4+44\gamma^3+33\gamma^2+16\gamma+64=0.
+\]
+
+## 1. Scope
+
+This theorem closes the 83-unit discrepancy in ordered H02 component 9. It does
+not prove that the full selected update matrix has rank 4748, select a physical
+source path, or close either eta-nine blocker.
+
+The input facts are:
+
+- component 9 has 335 selected update coordinates;
+- its finite good-reduction rank increment is 169;
+- the earlier structural estimate was 252;
+- the selected correction is \(sC=s t_0 C_0(x,y,z)\), with \(C_0\) homogeneous
+  of degree 9.
+
+## 2. The selected source presentation
+
+The 335 component-9 coordinates split exactly into
+
+\[
+8\,\partial_x\Phi\;\oplus\;195\,\partial_y\Phi
+\;\oplus\;132\,\partial_z\Phi.
+\]
+
+Let \(P_9\) denote this restricted multiplier space, and let
+\(T\in\operatorname{Sym}^{18}(K^3)\), whose dimension is 190. Define
+
+\[
+M_9(P_x,P_y,P_z,T)
+=C_{0,x}P_x+C_{0,y}P_y+C_{0,z}P_z-C_0T
+\in\operatorname{Sym}^{27}(K^3).
+\]
+
+Thus \(M_9\) is a \(406\times525\) matrix over \(K\). Its entries are emitted
+coefficient by coefficient in the power basis
+\(1,\gamma,\ldots,\gamma^5\). A deterministic sparse elimination directly in
+SymPy's exact algebraic-number field gives
+
+\[
+\operatorname{rank}_K M_9=359,
+\qquad
+\dim_K\ker M_9=525-359=166.
+\]
+
+This is not inferred from a finite-field rank. The finite computation is used
+later only for the opposite component-rank inequality.
+
+## 3. Source and lift
+
+Write
+
+\[
+E=t_0^3+t_1^3+t_2^3,
+\qquad
+\Phi=u(w^2-F_6)+vE+sF_{B89}.
+\]
+
+For \((P,T)\) in the presentation domain, define the update source \(N(P,T)\)
+by:
+
+1. placing \(P\) in component 9;
+2. placing one copy of \(T\) in component 0;
+3. placing one copy of \(T\) in component 3.
+
+The two earlier copies multiply the correction derivative \(C_0s\) by the
+selected \(t_2^3s\) and \(t_1^3s\) multipliers. Define the base-chart lift
+
+\[
+L(P,T)=-C_0T s^2
+\]
+
+in the \(\partial_v\Phi=E\) block. Direct coefficient expansion then gives
+
+\[
+A_0L+UN
+=\left(C_{0,x}P_x+C_{0,y}P_y+C_{0,z}P_z-C_0T\right)t_0^3s^2
+=\iota(M_9(P,T)).
+\]
+
+All six \(\gamma\)-coefficient matrices of this identity vanish after moving
+the right-hand side to the left. The lift uses 370 selected coordinates in the
+full 42,458-dimensional complement. It is therefore not restricted to the
+24,767-dimensional DM core.
+
+The correction has no \(v\)-derivative. Consequently the six Woodbury
+coefficient matrices satisfy
+
+\[
+WL=0.
+\]
+
+For every \(z\in\ker M_9\), it follows that
+
+\[
+A_0Lz+UNz=0,
+\qquad
+WLz=0.
+\]
+
+Hence all 166 presentation-kernel vectors promote to exact bordered-kernel
+vectors over \(K\).
+
+## 4. Independence in the component-9 quotient
+
+Projection of \(\ker M_9\) to its \(P\)-coordinate is injective. Indeed, if
+\(P=0\), then \(C_0T=0\). The polynomial ring \(K[x,y,z]\) is an integral
+domain and \(C_0\ne0\), so \(T=0\).
+
+The emitted certificate checks this algebraically through the leading term:
+the nonzero lexicographic leading monomial of \(C_0\) sends the 190 distinct
+degree-18 monomials to 190 distinct leading products. Thus the 166 exact
+relations remove 166 independent directions from the new 335-coordinate
+block. Therefore
+
+\[
+\Delta r_9\le335-166=169.
+\]
+
+Good reduction already supplied \(\Delta r_9\ge169\). The bounds meet:
+
+\[
+\boxed{\Delta r_9=169\text{ over }\mathbb Q(\gamma).}
+\]
+
+## 5. Global consequence
+
+UST.G3DZ gave the global interval
+
+\[
+4748\le r_Q\le5195.
+\]
+
+Replacing component 9's structural increment 252 by its exact increment 169
+lowers the upper endpoint by 83:
+
+\[
+\boxed{4748\le r_Q\le5112.}
+\]
+
+The unresolved global gap is therefore 364.
+
+## 6. Reproducibility
+
+Run:
+
+```text
+python build_ust_g3ea_h02_component9_gradient_elliptic_lift.py
+python verify_ust_g3ea_h02_component9_gradient_elliptic_lift.py
+```
+
+The builder emits the exact presentation, update source, lift, embedding,
+number-field input and rank transcript under `evidence/ust_g3ea/`. The packet
+is `state/ust_g3ea_h02_component9_gradient_elliptic_lift.packet.json`.
+
+## 7. Remaining frontier
+
+The next ordered positive gap is component 12:
+
+\[
+81-71=10.
+\]
+
+It should be tested for a source presentation that factors through the same
+selected \(C_0/E\) Cayley geometry. Later positive-gap components and the
+global telescoping argument remain open after that.

@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Independently verify UST.G3DD source-observation and 710-row archives."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_poly, arb, ctx
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3dd_h11_selected_710_affine_rhs.packet.json"
+H20_DIMENSION = 248
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checked(item: dict[str, Any]) -> Path:
+    path = ROOT / item["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"size {path.name}")
+    require(sha256(path) == item["sha256"], f"hash {path.name}")
+    return path
+
+
+def arrays(item: dict[str, Any]) -> dict[str, np.ndarray]:
+    path = checked(item)
+    with np.load(path, allow_pickle=False) as archive:
+        return {key: archive[key] for key in archive.files}
+
+
+def reconstruct(data: dict[str, np.ndarray], row: int, column: int) -> acb:
+    real = (
+        arb(float(data["real_high"][row, column]))
+        + arb(float(data["real_low"][row, column]))
+        + arb(0, float(data["real_radius"][row, column]))
+    )
+    imag = (
+        arb(float(data["imag_high"][row, column]))
+        + arb(float(data["imag_low"][row, column]))
+        + arb(0, float(data["imag_radius"][row, column]))
+    )
+    return acb(real, imag)
+
+
+def union_support(matrices: list[sparse.csr_matrix], row: int) -> list[int]:
+    result: set[int] = set()
+    for matrix in matrices:
+        result.update(int(value) for value in matrix[row, :].nonzero()[1].tolist())
+    return sorted(result)
+
+
+def evaluate_entry(
+    matrices: list[sparse.csr_matrix], row: int, column: int, powers: list[acb]
+) -> acb:
+    result = acb(0)
+    for power, matrix in enumerate(matrices):
+        coefficient = int(matrix[row, column])
+        if coefficient:
+            result += coefficient * powers[power]
+    return result
+
+
+def main() -> None:
+    ctx.prec = 256
+    packet = load(PACKET)
+    require(packet["theorem_id"] == "UST.G3DD", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    for item in packet["inputs"].values():
+        checked(item)
+
+    g3cv = load(ROOT / packet["inputs"]["G3CV"]["path"])
+    g3da = load(ROOT / packet["inputs"]["G3DA"]["path"])
+    g3dc = load(ROOT / packet["inputs"]["G3DC"]["path"])
+    base_x = arrays(g3dc["inverse_source_actions"]["A0_inverse_B89"]["archive"])
+    correction_x = arrays(g3dc["inverse_source_actions"]["A0_inverse_BC"]["archive"])
+    z_b89 = arrays(packet["first_source_observation"]["Z_B89"]["archive"])
+    z_correction = arrays(packet["first_source_observation"]["Z_C"]["archive"])
+    h_b89 = arrays(packet["selected_710_source"]["H_B89"]["archive"])
+    h_correction = arrays(packet["selected_710_source"]["H_C"]["archive"])
+    q_arrays = arrays(g3da["reduced_coupling"]["persisted_enclosure"]["archive"])
+
+    for data, shape, label in (
+        (z_b89, (988, 248), "Z_B89"),
+        (z_correction, (988, 248), "Z_C"),
+        (h_b89, (710, 248), "H_B89"),
+        (h_correction, (710, 248), "H_C"),
+    ):
+        require(data["real_high"].shape == shape, f"{label} shape")
+        require(np.array_equal(data["source_columns"], np.arange(248, dtype=np.int32)), f"{label} sources")
+
+    w_coefficients = [sparse.load_npz(checked(item)).tocsr() for item in g3cv["factorization"]["W_gamma_coefficients"]]
+    s_coefficients = [sparse.load_npz(checked(item)).tocsr() for item in g3cv["factorization"]["S_gamma_coefficients"]]
+    polynomial = acb_poly([64, 16, 33, 44, 89, 24, 1])
+    roots = sorted(
+        polynomial.roots(tol=arb(2) ** (-208), maxprec=1024),
+        key=lambda value: (float(value.real.mid()), float(value.imag.mid())),
+    )
+    require(len(roots) == 6 and roots[5].overlaps(roots[4].conjugate()), "root pair")
+    gamma = roots[4]
+    powers = [acb(1)]
+    for _ in range(5):
+        powers.append(powers[-1] * gamma)
+
+    first_residuals = 0
+    rows = [0, 1, 73, 199, 317, 493, 619, 777, 901, 987]
+    for family, (x_data, z_data) in enumerate(
+        ((base_x, z_b89), (correction_x, z_correction))
+    ):
+        for index, row in enumerate(rows):
+            source = (41 * index + 31 * family + 13) % H20_DIMENSION
+            left = acb(0)
+            for column in union_support(s_coefficients, row):
+                left += evaluate_entry(s_coefficients, row, column, powers) * reconstruct(
+                    z_data, column, source
+                )
+            right = acb(0)
+            for column in union_support(w_coefficients, row):
+                right += evaluate_entry(w_coefficients, row, column, powers) * reconstruct(
+                    x_data, column, source
+                )
+            require((left - right).contains(0), f"S/W residual family={family} row={row}")
+            first_residuals += 1
+
+    active_columns = q_arrays["active_kernel_columns"].astype(np.int32)
+    minor_rows = q_arrays["selected_minor_rows"].astype(np.int32)
+    require(active_columns.size == 740 and minor_rows.size == 710, "Q selected coordinates")
+    second_residuals = 0
+    selected_rows = [0, 1, 77, 155, 283, 419, 567, 709]
+    for family, (z_data, h_data) in enumerate(
+        ((z_b89, h_b89), (z_correction, h_correction))
+    ):
+        for index, selected_row in enumerate(selected_rows):
+            source = (53 * index + 19 * family + 5) % H20_DIMENSION
+            value = acb(0)
+            q_row = int(minor_rows[selected_row])
+            for active_position, coordinate in enumerate(active_columns.tolist()):
+                value += reconstruct(q_arrays, q_row, active_position) * reconstruct(
+                    z_data, int(coordinate), source
+                )
+            residual = reconstruct(h_data, selected_row, source) - value
+            require(residual.contains(0), f"H residual family={family} row={selected_row}")
+            second_residuals += 1
+
+    require(packet["first_source_observation"]["S_solve_residual_balls_containing_zero"] == 490048, "S residual count")
+    require(packet["selected_path_equation"]["selected_710_equation"] == "(T_Q+aR_Q)q=a^2*(H_B89+aH_C)c20(a)", "selected path equation")
+    require(
+        min(
+            packet["selected_710_source"]["H_B89"]["minimum_relative_accuracy_bits_away_from_zero"],
+            packet["selected_710_source"]["H_C"]["minimum_relative_accuracy_bits_away_from_zero"],
+        )
+        >= 20,
+        "portable H accuracy",
+    )
+    print("UST.G3DD independent archive verification: PASS")
+    print(
+        f"first_stage_residual_samples={first_residuals} second_stage_identity_samples={second_residuals} "
+        "selected_rhs_shape=710x248x2"
+    )
+
+
+if __name__ == "__main__":
+    main()

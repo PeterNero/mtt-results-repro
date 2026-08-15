@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Validate one completed G3GI isolated calculation shard."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+
+
+HERE = Path(__file__).resolve().parent
+INPUT = HERE / "input" / "g3gi_full_catalecticant_input.npz"
+OUTPUTS = HERE / "outputs"
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def atomic_json(path: Path, payload: dict[str, object]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prime-index", required=True, type=int)
+    arguments = parser.parse_args()
+    path = OUTPUTS / f"shard_{arguments.prime_index}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload["input_sha256"] != sha256(INPUT):
+        raise AssertionError("input hash")
+    if payload["prime_index"] != arguments.prime_index:
+        raise AssertionError("prime index")
+    completed = payload["completed"]
+    if len(completed) != 12:
+        raise AssertionError("twelve fiber/convention rows")
+    structural_support = None
+    for key, row in completed.items():
+        if row["obstruction_rank"] != 244 or row["nullity"] != 9:
+            raise AssertionError(f"rank profile {key}")
+        if row["induced_map_ranks"] != [0] * 9:
+            raise AssertionError(f"induced zero maps {key}")
+        if not row["all_admissible_sources_induce_zero"]:
+            raise AssertionError(f"zero source conclusion {key}")
+        support = row["structural_zero_indices"]
+        if structural_support is None:
+            structural_support = support
+        elif support != structural_support:
+            raise AssertionError(f"common structural support {key}")
+        if row["nullspace_supports"] != [[value] for value in support]:
+            raise AssertionError(f"nullspace equals structural zeros {key}")
+    payload["accepted"] = True
+    payload["validator"] = {
+        "name": "verify_shard.py",
+        "input_sha256": sha256(INPUT),
+        "structural_zero_indices": structural_support,
+        "checks": 12,
+    }
+    atomic_json(path, payload)
+    print(
+        f"G3GI shard verification PASS: prime_index={arguments.prime_index} "
+        "rows=12 rank=244 nullity=9 induced_maps=zero",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

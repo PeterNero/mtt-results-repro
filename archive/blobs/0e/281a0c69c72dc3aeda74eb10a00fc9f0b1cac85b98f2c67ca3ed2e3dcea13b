@@ -1,0 +1,690 @@
+#!/usr/bin/env python3
+"""Build the UST.G3AD fixed-F_Q / second-H graph compatibility test.
+
+The emitted packet is self-contained.  Upstream repositories are read only while
+building it; the canonical verifier replays the arithmetic from the packet.
+"""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Iterable
+
+
+ROOT = Path(__file__).resolve().parent
+MLD_ROOT = Path(
+    os.environ.get(
+        "MTT_MLD_ROOT",
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+    )
+)
+PROTO_ROOT = Path(
+    os.environ.get(
+        "MTT_PROTO_ROOT",
+        ROOT.parent / "mtt-protospinor-gr-response-proof",
+    )
+)
+
+GLOBAL_FQ = MLD_ROOT / "q79_eta9_global_f0_lift.packet.json"
+NUMBER_FIELD = MLD_ROOT / "q79_eta9_number_field_smooth_lift.packet.json"
+GRAPH_MAP = MLD_ROOT / "q79_primitive_h_marked_map_padic_compiler.packet.json"
+K3_BASE = (
+    PROTO_ROOT
+    / "certificates"
+    / "q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json"
+)
+G3AC = ROOT / "state" / "ust_g3ac_eta9_graph_prym_orbit.packet.json"
+OUT = ROOT / "state" / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json"
+
+P = 101
+MODULUS = P * P
+DEGREE = 6
+ALPHA_GAMMA_MOD_P = (23, 97, 74, 65, 33, 98)
+MU_GAMMA_MOD_P = (78, 5, 27, 36, 68, 3)
+SOURCE_GIT_BLOBS = {
+    "q79_eta9_global_f0_lift.packet.json": "64158d330bc95fb29488aab81438389e9005a12a",
+    "q79_eta9_number_field_smooth_lift.packet.json": "28b3242b60c85e77349f52290fca7068bb9bf764",
+    "q79_primitive_h_marked_map_padic_compiler.packet.json": "df24408bde414fc93217de03ad44eb5958d12155",
+    "q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json": "94ed5127f9f460ed7abe552f17d34965b63c8f5b",
+}
+
+Element = tuple[int, ...]
+Polynomial = list[Element]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def normalized_text_sha256(path: Path) -> str:
+    payload = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+class QuotientRing:
+    """(Z/mZ)[gamma]/M(gamma), with M monic of degree six."""
+
+    def __init__(self, modulus: int, relation: Iterable[int]):
+        self.modulus = modulus
+        self.relation = tuple(value % modulus for value in relation)
+        require(len(self.relation) == DEGREE + 1, "degree-six relation")
+        require(self.relation[-1] == 1, "monic relation")
+        self.zero = (0,) * DEGREE
+        self.one = (1,) + (0,) * (DEGREE - 1)
+        self.gamma = (0, 1) + (0,) * (DEGREE - 2)
+
+    def element(self, values: Iterable[int]) -> Element:
+        values = tuple(value % self.modulus for value in values)
+        require(len(values) <= DEGREE, "element degree below six")
+        return values + (0,) * (DEGREE - len(values))
+
+    def constant(self, value: int) -> Element:
+        return self.element((value,))
+
+    def add(self, left: Element, right: Element) -> Element:
+        return tuple((a + b) % self.modulus for a, b in zip(left, right))
+
+    def neg(self, value: Element) -> Element:
+        return tuple((-entry) % self.modulus for entry in value)
+
+    def sub(self, left: Element, right: Element) -> Element:
+        return self.add(left, self.neg(right))
+
+    def scale(self, value: Element, scalar: int) -> Element:
+        return tuple((scalar * entry) % self.modulus for entry in value)
+
+    def mul(self, left: Element, right: Element) -> Element:
+        work = [0] * (2 * DEGREE - 1)
+        for i, left_value in enumerate(left):
+            for j, right_value in enumerate(right):
+                work[i + j] = (
+                    work[i + j] + left_value * right_value
+                ) % self.modulus
+        for exponent in range(2 * DEGREE - 2, DEGREE - 1, -1):
+            coefficient = work[exponent] % self.modulus
+            if not coefficient:
+                continue
+            shift = exponent - DEGREE
+            for relation_exponent in range(DEGREE):
+                work[shift + relation_exponent] = (
+                    work[shift + relation_exponent]
+                    - coefficient * self.relation[relation_exponent]
+                ) % self.modulus
+        return tuple(entry % self.modulus for entry in work[:DEGREE])
+
+    def power(self, value: Element, exponent: int) -> Element:
+        require(exponent >= 0, "nonnegative exponent")
+        result = self.one
+        base = value
+        while exponent:
+            if exponent & 1:
+                result = self.mul(result, base)
+            base = self.mul(base, base)
+            exponent //= 2
+        return result
+
+    def evaluate(self, coefficients: Iterable[int], value: Element) -> Element:
+        result = self.zero
+        for coefficient in reversed(tuple(coefficients)):
+            result = self.add(self.mul(result, value), self.constant(coefficient))
+        return result
+
+    def inverse_field(self, value: Element) -> Element:
+        require(self.modulus == P, "field inversion only modulo p")
+        require(value != self.zero, "nonzero field element")
+        inverse = self.power(value, P**DEGREE - 2)
+        require(self.mul(value, inverse) == self.one, "field inverse")
+        return inverse
+
+
+def p_trim(values: Polynomial, ring: QuotientRing) -> Polynomial:
+    values = list(values)
+    while len(values) > 1 and values[-1] == ring.zero:
+        values.pop()
+    return values or [ring.zero]
+
+
+def p_pad(values: Polynomial, size: int, ring: QuotientRing) -> Polynomial:
+    return list(values) + [ring.zero] * max(0, size - len(values))
+
+
+def p_add(left: Polynomial, right: Polynomial, ring: QuotientRing) -> Polynomial:
+    size = max(len(left), len(right))
+    left = p_pad(left, size, ring)
+    right = p_pad(right, size, ring)
+    return p_trim([ring.add(a, b) for a, b in zip(left, right)], ring)
+
+
+def p_neg(value: Polynomial, ring: QuotientRing) -> Polynomial:
+    return p_trim([ring.neg(entry) for entry in value], ring)
+
+
+def p_sub(left: Polynomial, right: Polynomial, ring: QuotientRing) -> Polynomial:
+    return p_add(left, p_neg(right, ring), ring)
+
+
+def p_scale(value: Polynomial, scalar: Element, ring: QuotientRing) -> Polynomial:
+    return p_trim([ring.mul(entry, scalar) for entry in value], ring)
+
+
+def p_mul(left: Polynomial, right: Polynomial, ring: QuotientRing) -> Polynomial:
+    result = [ring.zero] * (len(left) + len(right) - 1)
+    for i, left_value in enumerate(left):
+        for j, right_value in enumerate(right):
+            result[i + j] = ring.add(
+                result[i + j], ring.mul(left_value, right_value)
+            )
+    return p_trim(result, ring)
+
+
+def p_power(value: Polynomial, exponent: int, ring: QuotientRing) -> Polynomial:
+    require(exponent >= 0, "nonnegative polynomial exponent")
+    result = [ring.one]
+    base = value
+    while exponent:
+        if exponent & 1:
+            result = p_mul(result, base, ring)
+        base = p_mul(base, base, ring)
+        exponent //= 2
+    return result
+
+
+def evaluate_expression(
+    expression: str, variables: dict[str, Polynomial], ring: QuotientRing
+) -> Polynomial:
+    """Evaluate the certificate's elementary polynomial expression safely."""
+
+    def visit(node: ast.AST) -> Polynomial:
+        if isinstance(node, ast.Expression):
+            return visit(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return [ring.constant(node.value)]
+        if isinstance(node, ast.Name):
+            require(node.id in variables, f"unknown polynomial variable {node.id}")
+            return variables[node.id]
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return p_neg(visit(node.operand), ring)
+        if isinstance(node, ast.BinOp):
+            left = visit(node.left)
+            if isinstance(node.op, ast.Pow):
+                require(
+                    isinstance(node.right, ast.Constant)
+                    and isinstance(node.right.value, int),
+                    "literal polynomial exponent",
+                )
+                return p_power(left, node.right.value, ring)
+            right = visit(node.right)
+            if isinstance(node.op, ast.Add):
+                return p_add(left, right, ring)
+            if isinstance(node.op, ast.Sub):
+                return p_sub(left, right, ring)
+            if isinstance(node.op, ast.Mult):
+                return p_mul(left, right, ring)
+        raise AssertionError(f"unsupported certificate expression: {ast.dump(node)}")
+
+    return visit(ast.parse(expression, mode="eval"))
+
+
+def alpha_polynomial(value: Element, ring: QuotientRing) -> Element:
+    return ring.add(
+        ring.add(ring.power(value, 3), ring.scale(ring.power(value, 2), 12)),
+        ring.add(ring.scale(value, 69), ring.constant(31)),
+    )
+
+
+def alpha_derivative(value: Element, ring: QuotientRing) -> Element:
+    return ring.add(
+        ring.add(ring.scale(ring.power(value, 2), 3), ring.scale(value, 24)),
+        ring.constant(69),
+    )
+
+
+def mu_polynomial(value: Element, ring: QuotientRing) -> Element:
+    return ring.add(ring.power(value, 2), ring.constant(3))
+
+
+def mu_derivative(value: Element, ring: QuotientRing) -> Element:
+    return ring.scale(value, 2)
+
+
+def hensel_root(
+    residue_coordinates: Iterable[int],
+    polynomial,
+    derivative,
+    ring_p: QuotientRing,
+    ring_p2: QuotientRing,
+) -> Element:
+    residue_coordinates = tuple(value % P for value in residue_coordinates)
+    residue_root = ring_p.element(residue_coordinates)
+    require(polynomial(residue_root, ring_p) == ring_p.zero, "residue root")
+    initial = ring_p2.element(residue_coordinates)
+    residual = polynomial(initial, ring_p2)
+    require(all(value % P == 0 for value in residual), "divisible Hensel residual")
+    quotient = ring_p.element((value // P) % P for value in residual)
+    derivative_residue = derivative(residue_root, ring_p)
+    correction = ring_p.neg(
+        ring_p.mul(quotient, ring_p.inverse_field(derivative_residue))
+    )
+    lifted = ring_p2.add(initial, ring_p2.scale(ring_p2.element(correction), P))
+    require(polynomial(lifted, ring_p2) == ring_p2.zero, "lifted root")
+    return lifted
+
+
+def embed_cubic(
+    coefficients: Iterable[int], alpha: Element, ring: QuotientRing
+) -> Element:
+    return ring.evaluate(tuple(coefficients), alpha)
+
+
+def finite_kmu_to_gamma_coordinates(
+    one_coefficients: Iterable[int],
+    mu_coefficients: Iterable[int],
+    alpha: Element,
+    mu: Element,
+    ring_p: QuotientRing,
+) -> Element:
+    one_part = embed_cubic(one_coefficients, alpha, ring_p)
+    mu_part = embed_cubic(mu_coefficients, alpha, ring_p)
+    return ring_p.add(one_part, ring_p.mul(mu, mu_part))
+
+
+def restrict_base_monomial(
+    powers_xyz: Iterable[int],
+    r_value: Element,
+    w_value: Element,
+    ring: QuotientRing,
+) -> Polynomial:
+    x_power, _y_power, z_power = tuple(powers_xyz)
+    x = [ring.zero, ring.one]
+    z = [w_value, r_value]
+    return p_mul(p_power(x, x_power, ring), p_power(z, z_power, ring), ring)
+
+
+def multiply_sheet_pairs(
+    left: tuple[Polynomial, Polynomial],
+    right: tuple[Polynomial, Polynomial],
+    h: Polynomial,
+    ring: QuotientRing,
+) -> tuple[Polynomial, Polynomial]:
+    left_even, left_odd = left
+    right_even, right_odd = right
+    even = p_add(
+        p_mul(left_even, right_even, ring),
+        p_mul(p_mul(left_odd, right_odd, ring), h, ring),
+        ring,
+    )
+    odd = p_add(
+        p_mul(left_even, right_odd, ring),
+        p_mul(left_odd, right_even, ring),
+        ring,
+    )
+    return even, odd
+
+
+def source_record(repository: str, path: Path) -> dict[str, str]:
+    require(path.name in SOURCE_GIT_BLOBS, "locked source Git blob")
+    return {
+        "repository": repository,
+        "source_path": path.name,
+        "sha256": normalized_text_sha256(path),
+        "git_blob": SOURCE_GIT_BLOBS[path.name],
+        "hash_convention": "UTF-8 bytes with CRLF normalized to LF (Git blob content)",
+    }
+
+
+def main() -> None:
+    global_fq = load(GLOBAL_FQ)
+    number_field = load(NUMBER_FIELD)
+    graph_map = load(GRAPH_MAP)
+    k3_base = load(K3_BASE)
+    g3ac = load(G3AC)
+
+    require(all(global_fq["checks"].values()), "global F_Q source checks")
+    require(all(number_field["checks"].values()), "number-field source checks")
+    require(all(graph_map["checks"].values()), "graph-map source checks")
+    require(all(k3_base["checks"].values()), "K3 base source checks")
+    require(g3ac["theorem_id"] == "UST.G3AC", "G3AC source")
+
+    relation = tuple(number_field["number_field"]["minimal_polynomial_coefficients_ascending"])
+    require(relation == (64, 16, 33, 44, 89, 24, 1), "selected gamma relation")
+    ring_p = QuotientRing(P, relation)
+    ring_p2 = QuotientRing(MODULUS, relation)
+
+    alpha_residue = ring_p.element(ALPHA_GAMMA_MOD_P)
+    mu_residue = ring_p.element(MU_GAMMA_MOD_P)
+    require(ring_p.add(alpha_residue, mu_residue) == ring_p.gamma, "gamma residue splitting")
+    alpha = hensel_root(
+        ALPHA_GAMMA_MOD_P,
+        alpha_polynomial,
+        alpha_derivative,
+        ring_p,
+        ring_p2,
+    )
+    mu = hensel_root(
+        MU_GAMMA_MOD_P,
+        mu_polynomial,
+        mu_derivative,
+        ring_p,
+        ring_p2,
+    )
+
+    final = graph_map["final_mod1016_data"]
+    source = {
+        name: embed_cubic(values, alpha, ring_p2)
+        for name, values in final["source_coordinates"].items()
+    }
+    r_value = source["r"]
+    w_value = source["w"]
+    p_values = [
+        embed_cubic(row, alpha, ring_p2)
+        for row in final["P_coefficients_ascending"]
+    ]
+    q_values = [
+        embed_cubic(row, alpha, ring_p2)
+        for row in final["Q_coefficients_ascending"]
+    ]
+    s_values = [
+        embed_cubic(row, alpha, ring_p2)
+        for row in final["S_coefficients_ascending"]
+    ]
+    lambda_value = embed_cubic(final["lambda"], alpha, ring_p2)
+    k_value = embed_cubic(final["Fermat_k"], alpha, ring_p2)
+
+    x = [ring_p2.zero, ring_p2.one]
+    one = [ring_p2.one]
+    z = [w_value, r_value]
+    f6_expression = k3_base["explicit_K3"]["F6_equals_G3_squared_plus_Q2_H4"]
+    h = evaluate_expression(
+        f6_expression,
+        {"x": x, "y": one, "z": z},
+        ring_p2,
+    )
+    require(len(h) == 7, "line sextic degree")
+
+    q_squared = p_power(q_values, 2, ring_p2)
+    q_cubed = p_power(q_values, 3, ring_p2)
+    p_cubed = p_power(p_values, 3, ring_p2)
+    map_left = p_mul(
+        q_values,
+        p_add(
+            p_cubed,
+            p_scale(q_cubed, ring_p2.constant(16), ring_p2),
+            ring_p2,
+        ),
+        ring_p2,
+    )
+    map_right = p_scale(
+        p_mul(h, p_power(s_values, 2, ring_p2), ring_p2),
+        lambda_value,
+        ring_p2,
+    )
+    require(p_sub(map_left, map_right, ring_p2) == [ring_p2.zero], "marked map identity mod p2")
+    require(
+        ring_p2.add(ring_p2.power(k_value, 2), ring_p2.scale(lambda_value, 3))
+        == ring_p2.zero,
+        "Fermat square-root identity mod p2",
+    )
+
+    sparse_rows = global_fq["eta9_equation"]["nonzero_sparse_spectral_rows"]
+    require(len(sparse_rows) == 214, "fixed F_Q sparse row count")
+    fixed_gamma_rows = []
+    components = [
+        ([ring_p2.zero], [ring_p2.zero]) for _ in range(3)
+    ]
+    for row in sparse_rows:
+        gamma_coordinates = finite_kmu_to_gamma_coordinates(
+            row["one"],
+            row["mu"],
+            alpha_residue,
+            mu_residue,
+            ring_p,
+        )
+        coefficient = ring_p2.element(gamma_coordinates)
+        restricted = p_scale(
+            restrict_base_monomial(
+                row["powers_xyz"], r_value, w_value, ring_p2
+            ),
+            coefficient,
+            ring_p2,
+        )
+        coordinate = int(row["target_coordinate"])
+        even, odd = components[coordinate]
+        if row["basis_kind"] == "base_degree9":
+            even = p_add(even, restricted, ring_p2)
+        elif row["basis_kind"] == "K3_sheet_times_degree6":
+            odd = p_add(odd, restricted, ring_p2)
+        else:
+            raise AssertionError("unknown F_Q basis kind")
+        components[coordinate] = (even, odd)
+        fixed_gamma_rows.append(
+            {
+                "target_coordinate": coordinate,
+                "basis_kind": row["basis_kind"],
+                "powers_xyz": row["powers_xyz"],
+                "one_coefficients_ascending": row["one"],
+                "mu_coefficients_ascending": row["mu"],
+                "gamma_coefficients_ascending": list(gamma_coordinates),
+            }
+        )
+
+    even_12q2 = p_scale(q_squared, ring_p2.constant(12), ring_p2)
+    odd_ks = p_scale(s_values, k_value, ring_p2)
+    fermat_coordinates = [
+        (even_12q2, p_neg(odd_ks, ring_p2)),
+        (even_12q2, odd_ks),
+        (p_scale(p_mul(p_values, q_values, ring_p2), ring_p2.constant(6), ring_p2), [ring_p2.zero]),
+    ]
+
+    restriction = ([ring_p2.zero], [ring_p2.zero])
+    for component, target_coordinate in zip(components, fermat_coordinates):
+        contribution = multiply_sheet_pairs(
+            component, target_coordinate, h, ring_p2
+        )
+        restriction = (
+            p_add(restriction[0], contribution[0], ring_p2),
+            p_add(restriction[1], contribution[1], ring_p2),
+        )
+
+    max_size = max(len(restriction[0]), len(restriction[1]))
+    require(max_size <= 16, "restricted section degree at most fifteen")
+    even = p_pad(restriction[0], 16, ring_p2)
+    odd = p_pad(restriction[1], 16, ring_p2)
+    require(
+        all(entry % P == 0 for value in even + odd for entry in value),
+        "special-fiber graph containment",
+    )
+
+    first_order_rows = []
+    for parity, values in (("even", even), ("odd", odd)):
+        for x_degree, value in enumerate(values):
+            quotient = [((entry // P) % P) for entry in value]
+            first_order_rows.append(
+                {
+                    "sheet_parity": parity,
+                    "x_degree": x_degree,
+                    "gamma_coefficients_mod101": quotient,
+                }
+            )
+    nonzero_rows = [
+        row
+        for row in first_order_rows
+        if any(row["gamma_coefficients_mod101"])
+    ]
+    require(nonzero_rows, "first-order obstruction must be nonzero")
+
+    embedded_graph_data = {
+        "source_coordinates_mod1012_in_gamma_basis": {
+            name: list(value) for name, value in source.items()
+        },
+        "P_mod1012_in_gamma_basis": [list(value) for value in p_values],
+        "Q_mod1012_in_gamma_basis": [list(value) for value in q_values],
+        "S_mod1012_in_gamma_basis": [list(value) for value in s_values],
+        "lambda_mod1012_in_gamma_basis": list(lambda_value),
+        "Fermat_k_mod1012_in_gamma_basis": list(k_value),
+    }
+    cubic_graph_data = {
+        "source_coordinates_mod1012_in_alpha_basis": {
+            name: [value % MODULUS for value in values]
+            for name, values in final["source_coordinates"].items()
+        },
+        "P_mod1012_in_alpha_basis": [
+            [value % MODULUS for value in row]
+            for row in final["P_coefficients_ascending"]
+        ],
+        "Q_mod1012_in_alpha_basis": [
+            [value % MODULUS for value in row]
+            for row in final["Q_coefficients_ascending"]
+        ],
+        "S_mod1012_in_alpha_basis": [
+            [value % MODULUS for value in row]
+            for row in final["S_coefficients_ascending"]
+        ],
+        "lambda_mod1012_in_alpha_basis": [
+            value % MODULUS for value in final["lambda"]
+        ],
+        "Fermat_k_mod1012_in_alpha_basis": [
+            value % MODULUS for value in final["Fermat_k"]
+        ],
+    }
+
+    packet = {
+        "schema": "mtt.unified-source.g3ad-fixed-fq-second-h-graph-obstruction.v1",
+        "theorem_id": "UST.G3AD",
+        "status": "CLOSED_EXACT_FIRST_ORDER_FIXED_FQ_SELECTED_SECOND_H_GRAPH_NOGO",
+        "inputs": {
+            "global_FQ": source_record("20 Mathematical Language Discovery Program", GLOBAL_FQ),
+            "number_field_lift": source_record("20 Mathematical Language Discovery Program", NUMBER_FIELD),
+            "second_H_graph_map": source_record("20 Mathematical Language Discovery Program", GRAPH_MAP),
+            "q79_K3_base": source_record("mtt-protospinor-gr-response-proof", K3_BASE),
+            "local_G3AC_packet": {
+                "path": "state/ust_g3ac_eta9_graph_prym_orbit.packet.json",
+                "sha256": sha256(G3AC),
+            },
+        },
+        "completion_ring": {
+            "prime": P,
+            "precision": 2,
+            "modulus": MODULUS,
+            "gamma_relation_coefficients_ascending": list(relation),
+            "residue_degree": DEGREE,
+            "alpha_residue_gamma_coordinates": list(ALPHA_GAMMA_MOD_P),
+            "mu_residue_gamma_coordinates": list(MU_GAMMA_MOD_P),
+            "alpha_hensel_lift_gamma_coordinates_mod1012": list(alpha),
+            "mu_hensel_lift_gamma_coordinates_mod1012": list(mu),
+            "alpha_plus_mu_minus_gamma_mod1012": list(
+                ring_p2.sub(ring_p2.add(alpha, mu), ring_p2.gamma)
+            ),
+            "alpha_cubic_zero_mod1012": True,
+            "mu_square_plus3_zero_mod1012": True,
+            "warning": (
+                "The integer-lift generator gamma is not identified with alpha+mu beyond the special fiber; "
+                "the cubic graph field is embedded by its unique selected Hensel root."
+            ),
+        },
+        "fixed_FQ": {
+            "formula": "F_Q=A0*T0+A1*T1+A2*T2",
+            "coefficient_lift_rule": "gamma-basis residues are lifted to representatives in [0,100]",
+            "nonzero_gamma_rows": fixed_gamma_rows,
+            "nonzero_gamma_row_count": len(fixed_gamma_rows),
+        },
+        "selected_second_H_graph": {
+            "line": "y=1, z=r*x+w",
+            "sheet_relation": "y_h^2=F6(x,1,r*x+w)",
+            "F6_integer_expression": f6_expression,
+            "line_sextic_mod1012_in_gamma_basis": [list(value) for value in h],
+            "Fermat_coordinates": {
+                "T0": "12Q^2-k*S*y_h",
+                "T1": "12Q^2+k*S*y_h",
+                "T2": "6P*Q",
+            },
+            "cubic_mod1012_data": cubic_graph_data,
+            "embedded_mod1012_data": embedded_graph_data,
+            "marked_map_identity_zero_mod1012": True,
+            "Fermat_square_root_identity_zero_mod1012": True,
+        },
+        "restriction_test": {
+            "special_fiber_restriction_zero_mod101": True,
+            "restricted_section_max_x_degree": max_size - 1,
+            "first_order_rows": first_order_rows,
+            "first_order_rows_sha256": canonical_hash(first_order_rows),
+            "nonzero_first_order_rows": nonzero_rows,
+            "nonzero_first_order_row_count": len(nonzero_rows),
+            "first_nonzero_row": nonzero_rows[0],
+            "restriction_zero_mod1012": False,
+        },
+        "theorem": {
+            "name": "FixedFQSelectedSecondHGraphFirstOrderObstructionTheorem",
+            "statement": (
+                "In the selected unramified completion at 101, embed the compatible second-H graph branch "
+                "by the Hensel lifts of alpha and its marked degree-three Fermat map. The fixed explicit "
+                "number-field lift F_Q restricts to zero modulo 101, but its displayed divided-by-101 "
+                "restriction is nonzero modulo 101. Hence this fixed F_Q does not contain that selected "
+                "101-adic graph lift, and it cannot be the same-member realization of the G3AC graph-Prym divisor."
+            ),
+            "tier": "CLOSED_EXACT_FINITE_RING_FIRST_ORDER_OBSTRUCTION",
+        },
+        "frontier_delta": {
+            "fixed_FQ_selected_second_H_graph_compatibility_decided": True,
+            "fixed_FQ_selected_second_H_graph_compatible": False,
+            "fixed_FQ_same_member_graph_prym_route_retired": True,
+            "existential_G3AC_graph_prym_family_affected": False,
+            "next_route": (
+                "Solve the eta9 coefficient and beta_C equations inside the irreducible 33-dimensional "
+                "graph-preserving family; do not continue the fixed-F_Q orbit as the visible Prym source."
+            ),
+        },
+        "scope": {
+            "excludes_only_the_fixed_integer_gamma_coefficient_lift": True,
+            "excludes_all_graph_preserving_eta9_members": False,
+            "proves_no_other_nonambient_Prym_class_on_fixed_FQ": False,
+            "selects_a_unique_graph_preserving_member": False,
+            "computes_beta_C": False,
+            "constructs_visible_V3_HYM": False,
+            "closes_B_ETA9_01": False,
+            "closes_B_ETA9_02": False,
+            "closes_B_HS_01": False,
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_physics_inputs": 0,
+        },
+        "guardrails": {
+            "claims_fixed_FQ_has_no_other_Prym_class": False,
+            "claims_all_graph_preserving_members_fail": False,
+            "claims_beta_C_is_decided": False,
+            "claims_visible_V3_is_constructed": False,
+            "claims_physical_Hull_Strominger_endpoint": False,
+            "uses_observed_physics_values": False,
+            "adds_fitted_parameter": False,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AD fixed-F_Q second-H graph obstruction: BUILT")
+    print(f"nonzero first-order rows: {len(nonzero_rows)}/32")
+    print(f"first row: {nonzero_rows[0]}")
+    print(f"packet: {OUT}")
+
+
+if __name__ == "__main__":
+    main()

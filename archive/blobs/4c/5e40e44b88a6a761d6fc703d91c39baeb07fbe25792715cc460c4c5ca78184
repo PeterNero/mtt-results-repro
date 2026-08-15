@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Screen fresh split primes for the full selected H02 coupling rank."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3dg_h02_split_place_full_coupling_rank as rank_runtime
+import build_ust_g3ft_component20_full_relation_height_campaign as height_campaign
+import build_ust_g3ga_component20_second_jet_qgamma_promotion as campaign
+import build_ust_g3bt_h02_endpoint_action_one_split_prime as endpoint_action
+
+
+ROOT = Path(__file__).resolve().parent
+CANDIDATES = tuple(list(height_campaign.FIBERS)[10:])
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def border_matrix(
+    prime: int, gamma: int, context: dict[str, object]
+) -> sparse.csc_matrix:
+    endpoint, _ = endpoint_action.endpoint_chart(
+        prime,
+        gamma,
+        context["g3bi"],
+        context["macaulay"],
+        context["factor"],
+        context["quotient_rows"],
+        context["descriptors"],
+        context["generators0"],
+        context["target_lookup"],
+        context["oracle"],
+        context["exporter"],
+    )
+    dm = context["dm"]
+    core_rows = context["core_rows"]
+    core_columns = context["core_columns"]
+    delta = campaign.evaluate_at_prime(context["delta_records"], gamma, prime)
+    u = campaign.evaluate_at_prime(context["u_records"], gamma, prime)
+    w = campaign.evaluate_at_prime(context["w_records"], gamma, prime)
+    base = campaign.normalize_at_prime(
+        endpoint[dm["complement_rows"], :][:, 248:] - delta, prime
+    )
+    a_core = campaign.normalize_at_prime(base[core_rows, :][:, core_columns], prime)
+    u_core = campaign.normalize_at_prime(u[core_rows, :], prime)
+    w_core = campaign.normalize_at_prime(w[:, core_columns], prime)
+    outside = np.ones(u.shape[0], dtype=bool)
+    outside[core_rows] = False
+    require(u[outside, :].nnz == 0, "U core support")
+    return campaign.normalize_at_prime(
+        sparse.bmat(
+            [
+                [a_core, u_core],
+                [
+                    w_core,
+                    sparse.csc_matrix(
+                        (campaign.UPDATE_DIMENSION, campaign.UPDATE_DIMENSION),
+                        dtype=np.uint32,
+                    ),
+                ],
+            ],
+            format="csc",
+        ),
+        prime,
+    )
+
+
+def main() -> None:
+    campaign.SCRATCH.mkdir(parents=True, exist_ok=True)
+    g3bi = campaign.second_jet.load(campaign.second_jet.G3BI)
+    context = campaign.full_kernel_context(g3bi)
+    rank_runtime.compile_rank_tool()
+    for prime in CANDIDATES:
+        gamma = height_campaign.FIBERS[prime][0]
+        border = border_matrix(prime, gamma, context)
+        chart = campaign.SCRATCH / f"preflight.p{prime}.g{gamma}.border.bin"
+        log = campaign.SCRATCH / f"preflight.p{prime}.g{gamma}.rank.log"
+        context["exporter"].write_chart(
+            chart,
+            prime,
+            border.shape[0],
+            0,
+            border.shape[0],
+            border.indptr.astype(np.uint64).tolist(),
+            border.indices.astype(np.uint32).tolist(),
+            border.data.astype(np.uint32).tolist(),
+        )
+        fields, _ = rank_runtime.run_rank(chart, log)
+        full_rank = int(fields["RANK"])
+        coupling_rank = full_rank - campaign.UPDATE_START
+        print(
+            f"G3GA preflight p={prime} gamma={gamma}: "
+            f"coupling_rank={coupling_rank} kernel={campaign.UPDATE_DIMENSION-coupling_rank}",
+            flush=True,
+        )
+        chart.unlink(missing_ok=True)
+        log.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    main()

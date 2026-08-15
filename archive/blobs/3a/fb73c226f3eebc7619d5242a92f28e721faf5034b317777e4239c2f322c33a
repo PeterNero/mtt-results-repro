@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Independently replay the G3DI finite split-algebra kernel certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3de_h02_fraction_free_path_woodbury as woodbury
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3DH = ROOT / "state" / "ust_g3dh_h02_all_split_roots_coupling_rank.packet.json"
+PRIME = 21817
+ROOT_VALUE = 14055
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checked_path(record: dict[str, Any]) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    value = matrix.tocsc().astype(np.int64)
+    value.sum_duplicates()
+    value.data %= PRIME
+    value.eliminate_zeros()
+    return value.astype(np.uint32)
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    g3de = json.loads(G3DE.read_text(encoding="ascii"))
+    g3dh = json.loads(G3DH.read_text(encoding="ascii"))
+    require(all(packet["checks"].values()), "packet checks")
+    require(all(g3de["checks"].values()) and all(g3dh["checks"].values()), "input checks")
+    selection_path = checked_path(packet["split_algebra_kernel"]["selection"])
+    power_path = checked_path(packet["split_algebra_kernel"]["power_basis_coefficients"])
+    selection = np.load(selection_path, allow_pickle=False)
+    selected = selection["selected_update_columns"].astype(np.int32)
+    dependent = selection["dependent_update_columns"].astype(np.int32)
+    require(selected.size == 4748 and dependent.size == 1274, "selection dimensions")
+    require(np.intersect1d(selected, dependent).size == 0, "selection partition")
+    require(np.array_equal(np.sort(np.concatenate((selected, dependent))), np.arange(6022)), "complete selection partition")
+
+    coefficients = np.load(power_path, allow_pickle=False)["coefficients"]
+    require(coefficients.shape == (6, 6022, 1274), "power-basis shape")
+    kernel_payloads: list[dict[str, Any]] = []
+    mismatches = 0
+    for index, row in enumerate(packet["root_kernels"]):
+        kernel_path = checked_path(row["kernel"])
+        checked_path(row["kernel_log"])
+        payload = kernel_io.read_kernel(kernel_path)
+        matrix = payload["matrix"]
+        require(np.array_equal(payload["selected"], selected), "common selected columns")
+        require(np.array_equal(payload["dependent"], dependent), "common dependent columns")
+        evaluated = kernel_io.evaluate(coefficients, int(row["gamma_root"]))
+        mismatches += int(np.count_nonzero(evaluated != matrix.toarray()))
+        require(int(row["kernel_nonzero_entries"]) == matrix.nnz, "kernel nnz")
+        for column, coordinate in enumerate(dependent):
+            first, past = matrix.indptr[column : column + 2]
+            require(matrix.indices[past - 1] == coordinate and matrix.data[past - 1] == 1, "unit triangular relation")
+        kernel_payloads.append(payload)
+    require(mismatches == 0, "six-root power-basis replay")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    root_index = list(kernel_io.ROOTS).index(ROOT_VALUE)
+    kernel = kernel_payloads[root_index]["matrix"]
+    samples = np.asarray([0, 1, 2, 7, 31, 63, 127, 255, 383, 511, 767, 1023, 1200, 1250, 1272, 1273], dtype=np.int32)
+    sample_kernel = kernel[:, samples]
+    factor = g3de["factorization"]
+    u = woodbury.evaluate(
+        [sparse.load_npz(ROOT / row["path"]).tocsr().astype(np.int64) for row in factor["U_gamma_coefficients"]],
+        ROOT_VALUE,
+    )
+    w = woodbury.evaluate(
+        [sparse.load_npz(ROOT / row["path"]).tocsr().astype(np.int64) for row in factor["W_gamma_coefficients"]],
+        ROOT_VALUE,
+    )
+    dm = np.load(ROOT / json.loads((ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json").read_text())["DM_reduction"]["arrays"]["path"], allow_pickle=False)
+    core = 17597
+    core_rows = np.flatnonzero(dm["component_by_row"] == core)
+    core_columns = np.flatnonzero(dm["component_by_column"] == core)
+    u_core = normalize(u[core_rows, :])
+    w_core = normalize(w[:, core_columns])
+    rhs = normalize(u_core.astype(np.int64) @ sample_kernel.astype(np.int64))
+    root_campaign = next(row for row in g3dh["campaign"] if int(row["gamma_root"]) == ROOT_VALUE)
+    core_chart = checked_path(root_campaign["core_chart"])
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    require(solver.is_file(), "independent split solver")
+    with tempfile.TemporaryDirectory(prefix="ust_g3di_verify_") as temporary:
+        temporary = Path(temporary)
+        rhs_path = temporary / "rhs.bin"
+        solution_path = temporary / "solution.bin"
+        log_path = temporary / "solve.log"
+        exporter.write_rhs(
+            rhs_path,
+            PRIME,
+            24767,
+            rhs.indptr.astype(np.uint64).tolist(),
+            rhs.indices.astype(np.uint32).tolist(),
+            rhs.data.astype(np.uint32).tolist(),
+        )
+        completed = subprocess.run(
+            [
+                "wsl",
+                runtime.wsl_path(solver),
+                "--chart",
+                runtime.wsl_path(core_chart),
+                "--rhs",
+                runtime.wsl_path(rhs_path),
+                "--output",
+                runtime.wsl_path(solution_path),
+                "--log",
+                runtime.wsl_path(log_path),
+            ],
+            cwd=mld,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        solution = split_io.as_scipy(
+            arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+        )
+        require(solution.shape == (24767, samples.size), "sample inverse shape")
+        observation = (
+            w_core.astype(np.int64) @ solution.astype(np.int64)
+        ).toarray().astype(np.int64, copy=False) % PRIME
+        require(np.count_nonzero(observation) == 0, "independent QN sample residual")
+
+    require(packet["guardrails"]["claims_the_relations_lift_to_Q_gamma"] is False, "lift guardrail")
+    print(
+        "UST.G3DI independent verification: PASS "
+        "split_kernel=6022x1274 interpolation_mismatches=0 sampled_QN_residual=0"
+    )
+
+
+if __name__ == "__main__":
+    main()

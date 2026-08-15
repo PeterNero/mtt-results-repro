@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""Contract G3DC through the exact H11 988/710 source-observation chain."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_mat, acb_poly, arb, ctx
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3dd"
+OUT = ROOT / "state" / "ust_g3dd_h11_selected_710_affine_rhs.packet.json"
+
+G3CV = ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json"
+G3CY = ROOT / "state" / "ust_g3cy_h11_exact_base_resolvent_coupling_rank.packet.json"
+G3DA = ROOT / "state" / "ust_g3da_h11_archimedean_reduced_coupling.packet.json"
+G3DB = ROOT / "state" / "ust_g3db_h11_selected_710_path_kernel.packet.json"
+G3DC = ROOT / "state" / "ust_g3dc_h11_archimedean_affine_source_action.packet.json"
+
+H11_DIMENSION = 4426
+FIRST_DIMENSION = 988
+SECOND_DIMENSION = 710
+ACTIVE_Q_COLUMNS = 740
+H20_DIMENSION = 248
+SOURCE_DIMENSION = 496
+EMBEDDING_INDEX = 4
+CONJUGATE_INDEX = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def checked_local(item: dict[str, Any]) -> Path:
+    path = ROOT / item["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"size {path.name}")
+    require(sha256(path) == item["sha256"], f"hash {path.name}")
+    return path
+
+
+def isolated_roots(root_bits: int, maxprec: int) -> list[acb]:
+    polynomial = acb_poly([64, 16, 33, 44, 89, 24, 1])
+    roots = polynomial.roots(tol=arb(2) ** (-root_bits), maxprec=maxprec)
+    require(len(roots) == 6, "six isolated roots")
+    roots = sorted(roots, key=lambda value: (float(value.real.mid()), float(value.imag.mid())))
+    require(
+        all(
+            not roots[left].overlaps(roots[right])
+            for left in range(6)
+            for right in range(left + 1, 6)
+        ),
+        "pairwise disjoint roots",
+    )
+    require(all(polynomial(root).contains(0) for root in roots), "root residuals")
+    require(roots[5].overlaps(roots[4].conjugate()), "embedding4/5 conjugate pair")
+    return roots
+
+
+def union_pattern(matrices: list[sparse.csr_matrix]) -> sparse.csr_matrix:
+    pattern = matrices[0].copy().astype(np.uint8)
+    pattern.data[:] = 1
+    for matrix in matrices[1:]:
+        term = matrix.copy().astype(np.uint8)
+        term.data[:] = 1
+        pattern = pattern.maximum(term)
+    pattern.sum_duplicates()
+    pattern.data[:] = 1
+    return pattern.tocsr()
+
+
+def evaluate_dense(
+    coefficients: list[sparse.csr_matrix],
+    rows: np.ndarray,
+    columns: np.ndarray,
+    powers: list[acb],
+) -> tuple[acb_mat, int]:
+    result = acb_mat(len(rows), len(columns))
+    support: set[tuple[int, int]] = set()
+    for power, matrix in enumerate(coefficients):
+        block = matrix[rows, :][:, columns].tocoo()
+        for row, column, coefficient in zip(
+            block.row.tolist(),
+            block.col.tolist(),
+            block.data.tolist(),
+            strict=True,
+        ):
+            result[row, column] = result[row, column] + int(coefficient) * powers[power]
+            support.add((int(row), int(column)))
+    return result, len(support)
+
+
+def reconstructed_ball(arrays: dict[str, np.ndarray], row: int, column: int) -> acb:
+    real = (
+        arb(float(arrays["real_high"][row, column]))
+        + arb(float(arrays["real_low"][row, column]))
+        + arb(0, float(arrays["real_radius"][row, column]))
+    )
+    imag = (
+        arb(float(arrays["imag_high"][row, column]))
+        + arb(float(arrays["imag_low"][row, column]))
+        + arb(0, float(arrays["imag_radius"][row, column]))
+    )
+    return acb(real, imag)
+
+
+def matrix_accuracy(matrix: acb_mat) -> dict[str, Any]:
+    entries = matrix.entries()
+    require(all(value.is_finite() for value in entries), "finite ball matrix")
+    accuracies = [int(value.rel_accuracy_bits()) for value in entries if not value.contains(0)]
+    return {
+        "entries": len(entries),
+        "entries_containing_zero": sum(value.contains(0) for value in entries),
+        "minimum_relative_accuracy_bits_away_from_zero": min(accuracies) if accuracies else 0,
+        "maximum_real_radius": str(max((value.real.rad() for value in entries), default=arb(0))),
+        "maximum_imaginary_radius": str(max((value.imag.rad() for value in entries), default=arb(0))),
+    }
+
+
+def widened_double_double(value: arb) -> tuple[float, float, float, arb]:
+    midpoint = value.mid()
+    high = float(midpoint)
+    low = float((midpoint - arb(high)).mid())
+    center = arb(high) + arb(low)
+    radius_bound = abs(midpoint - center) + value.rad()
+    radius = math.nextafter(float(radius_bound), math.inf)
+    enclosure = center + arb(0, radius)
+    while not enclosure.contains(value):
+        radius = math.nextafter(radius, math.inf)
+        enclosure = center + arb(0, radius)
+    return high, low, radius, enclosure
+
+
+def persist_matrix(path: Path, matrix: acb_mat, row_label: str) -> dict[str, Any]:
+    rows = matrix.nrows()
+    columns = matrix.ncols()
+    shape = (rows, columns)
+    real_high = np.empty(shape, dtype=np.float64)
+    real_low = np.empty(shape, dtype=np.float64)
+    real_radius = np.empty(shape, dtype=np.float64)
+    imag_high = np.empty(shape, dtype=np.float64)
+    imag_low = np.empty(shape, dtype=np.float64)
+    imag_radius = np.empty(shape, dtype=np.float64)
+    contained = 0
+    minimum_accuracy: int | None = None
+    zero_containing = 0
+    for index, value in enumerate(matrix.entries()):
+        row, column = divmod(index, columns)
+        rh, rl, rr, real_enclosure = widened_double_double(value.real)
+        ih, il, ir, imag_enclosure = widened_double_double(value.imag)
+        real_high[row, column] = rh
+        real_low[row, column] = rl
+        real_radius[row, column] = rr
+        imag_high[row, column] = ih
+        imag_low[row, column] = il
+        imag_radius[row, column] = ir
+        enclosure = acb(real_enclosure, imag_enclosure)
+        if enclosure.real.contains(value.real) and enclosure.imag.contains(value.imag):
+            contained += 1
+        if enclosure.contains(0):
+            zero_containing += 1
+        else:
+            accuracy = int(enclosure.rel_accuracy_bits())
+            minimum_accuracy = accuracy if minimum_accuracy is None else min(minimum_accuracy, accuracy)
+    require(contained == rows * columns, "portable matrix containment")
+    np.savez_compressed(
+        path,
+        row_coordinates=np.arange(rows, dtype=np.int32),
+        source_columns=np.arange(columns, dtype=np.int32),
+        row_coordinate_type=np.asarray(row_label),
+        real_high=real_high,
+        real_low=real_low,
+        real_radius=real_radius,
+        imag_high=imag_high,
+        imag_low=imag_low,
+        imag_radius=imag_radius,
+    )
+    return {
+        "shape": list(shape),
+        "contained_entries": contained,
+        "entries_containing_zero": zero_containing,
+        "minimum_relative_accuracy_bits_away_from_zero": minimum_accuracy or 0,
+        "archive": record(path),
+        "format": "real/imag double-double centers plus outward float64 radii",
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--precision", type=int, default=256)
+    parser.add_argument("--root-bits", type=int, default=208)
+    parser.add_argument("--maxprec", type=int, default=1024)
+    args = parser.parse_args()
+    require(args.precision >= 192, "minimum precision")
+    require(args.root_bits >= 160, "minimum root isolation")
+    ctx.prec = args.precision
+
+    started = time.perf_counter()
+    g3cv = load(G3CV)
+    g3cy = load(G3CY)
+    g3da = load(G3DA)
+    g3db = load(G3DB)
+    g3dc = load(G3DC)
+    for packet, label in (
+        (g3cv, "G3CV"),
+        (g3cy, "G3CY"),
+        (g3da, "G3DA"),
+        (g3db, "G3DB"),
+        (g3dc, "G3DC"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    roots = isolated_roots(args.root_bits, args.maxprec)
+    gamma = roots[EMBEDDING_INDEX]
+    powers = [acb(1)]
+    for _ in range(5):
+        powers.append(powers[-1] * gamma)
+
+    base_x_path = checked_local(g3dc["inverse_source_actions"]["A0_inverse_B89"]["archive"])
+    correction_x_path = checked_local(g3dc["inverse_source_actions"]["A0_inverse_BC"]["archive"])
+    with np.load(base_x_path, allow_pickle=False) as archive:
+        base_x = {key: archive[key] for key in archive.files}
+    with np.load(correction_x_path, allow_pickle=False) as archive:
+        correction_x = {key: archive[key] for key in archive.files}
+
+    w_coefficients = [
+        sparse.load_npz(checked_local(item)).tocsr()
+        for item in g3cv["factorization"]["W_gamma_coefficients"]
+    ]
+    s_coefficients = [
+        sparse.load_npz(checked_local(item)).tocsr()
+        for item in g3cv["factorization"]["S_gamma_coefficients"]
+    ]
+    w_pattern = union_pattern(w_coefficients)
+    observed_coordinates = np.unique(w_pattern.nonzero()[1]).astype(np.int32)
+    require(w_pattern.shape == (FIRST_DIMENSION, H11_DIMENSION), "W shape")
+    require(w_pattern.nnz == 15630 and observed_coordinates.size == 1186, "W support corridor")
+
+    contraction_started = time.perf_counter()
+    x_observed = acb_mat(
+        int(observed_coordinates.size),
+        SOURCE_DIMENSION,
+        [
+            reconstructed_ball(base_x, int(coordinate), source)
+            if source < H20_DIMENSION
+            else reconstructed_ball(correction_x, int(coordinate), source - H20_DIMENSION)
+            for coordinate in observed_coordinates.tolist()
+            for source in range(SOURCE_DIMENSION)
+        ],
+    )
+    observed_lookup = {int(coordinate): position for position, coordinate in enumerate(observed_coordinates.tolist())}
+    y = acb_mat(FIRST_DIMENSION, SOURCE_DIMENSION)
+    for row in range(FIRST_DIMENSION):
+        support = np.unique(w_pattern[row, :].nonzero()[1]).astype(np.int32)
+        w_row, _ = evaluate_dense(
+            w_coefficients,
+            np.asarray([row], dtype=np.int32),
+            support,
+            powers,
+        )
+        x_rows = acb_mat(
+            len(support),
+            SOURCE_DIMENSION,
+            [
+                x_observed[observed_lookup[int(coordinate)], source]
+                for coordinate in support.tolist()
+                for source in range(SOURCE_DIMENSION)
+            ],
+        )
+        product = w_row * x_rows
+        for source in range(SOURCE_DIMENSION):
+            y[row, source] = product[0, source]
+        if (row + 1) % 200 == 0:
+            print(
+                f"G3DD W contraction: rows={row + 1}/{FIRST_DIMENSION} "
+                f"seconds={time.perf_counter() - contraction_started:.3f}",
+                flush=True,
+            )
+    y_accuracy = matrix_accuracy(y)
+    contraction_seconds = time.perf_counter() - contraction_started
+
+    s_started = time.perf_counter()
+    all_first_rows = np.arange(FIRST_DIMENSION, dtype=np.int32)
+    s_matrix, s_support = evaluate_dense(
+        s_coefficients, all_first_rows, all_first_rows, powers
+    )
+    require(s_support == 12336, "S support")
+    z = s_matrix.solve(y, algorithm="precond")
+    residual = s_matrix * z - y
+    residual_zero = sum(value.contains(0) for value in residual.entries())
+    require(residual_zero == FIRST_DIMENSION * SOURCE_DIMENSION, "all S residual balls")
+    z_accuracy = matrix_accuracy(z)
+    require(z_accuracy["minimum_relative_accuracy_bits_away_from_zero"] >= 48, "Z accuracy")
+    s_seconds = time.perf_counter() - s_started
+    print(
+        f"G3DD S solve: residuals={residual_zero} min_accuracy="
+        f"{z_accuracy['minimum_relative_accuracy_bits_away_from_zero']} seconds={s_seconds:.3f}",
+        flush=True,
+    )
+
+    q_path = checked_local(g3da["reduced_coupling"]["persisted_enclosure"]["archive"])
+    with np.load(q_path, allow_pickle=False) as archive:
+        q_arrays = {key: archive[key] for key in archive.files}
+    active_columns = q_arrays["active_kernel_columns"].astype(np.int32)
+    minor_rows = q_arrays["selected_minor_rows"].astype(np.int32)
+    minor_columns = q_arrays["selected_minor_columns"].astype(np.int32)
+    require(active_columns.size == ACTIVE_Q_COLUMNS, "740 active Q columns")
+    require(minor_rows.size == minor_columns.size == SECOND_DIMENSION, "710 minor")
+    active_lookup = {int(column): position for position, column in enumerate(active_columns.tolist())}
+    require(all(int(column) in active_lookup for column in minor_columns.tolist()), "minor columns active")
+
+    second_started = time.perf_counter()
+    v_active = acb_mat(
+        SECOND_DIMENSION,
+        ACTIVE_Q_COLUMNS,
+        [
+            reconstructed_ball(q_arrays, int(row), active_position)
+            for row in minor_rows.tolist()
+            for active_position in range(ACTIVE_Q_COLUMNS)
+        ],
+    )
+    z_active = acb_mat(
+        ACTIVE_Q_COLUMNS,
+        SOURCE_DIMENSION,
+        [z[int(column), source] for column in active_columns.tolist() for source in range(SOURCE_DIMENSION)],
+    )
+    h = v_active * z_active
+    h_accuracy = matrix_accuracy(h)
+    require(h_accuracy["minimum_relative_accuracy_bits_away_from_zero"] >= 24, "H accuracy")
+    second_seconds = time.perf_counter() - second_started
+    print(
+        f"G3DD 710 contraction: shape={SECOND_DIMENSION}x{SOURCE_DIMENSION} "
+        f"min_accuracy={h_accuracy['minimum_relative_accuracy_bits_away_from_zero']} "
+        f"seconds={second_seconds:.3f}",
+        flush=True,
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    persist_started = time.perf_counter()
+    z_b89 = acb_mat(FIRST_DIMENSION, H20_DIMENSION, [z[row, column] for row in range(FIRST_DIMENSION) for column in range(H20_DIMENSION)])
+    z_correction = acb_mat(FIRST_DIMENSION, H20_DIMENSION, [z[row, H20_DIMENSION + column] for row in range(FIRST_DIMENSION) for column in range(H20_DIMENSION)])
+    h_b89 = acb_mat(SECOND_DIMENSION, H20_DIMENSION, [h[row, column] for row in range(SECOND_DIMENSION) for column in range(H20_DIMENSION)])
+    h_correction = acb_mat(SECOND_DIMENSION, H20_DIMENSION, [h[row, H20_DIMENSION + column] for row in range(SECOND_DIMENSION) for column in range(H20_DIMENSION)])
+    z_b89_record = persist_matrix(EVIDENCE / "H11.Z_B89.embedding4.p256.ddball.npz", z_b89, "first_Woodbury_coordinate")
+    z_correction_record = persist_matrix(EVIDENCE / "H11.Z_C.embedding4.p256.ddball.npz", z_correction, "first_Woodbury_coordinate")
+    h_b89_record = persist_matrix(EVIDENCE / "H11.H_B89.embedding4.p256.ddball.npz", h_b89, "selected_710_row")
+    h_correction_record = persist_matrix(EVIDENCE / "H11.H_C.embedding4.p256.ddball.npz", h_correction, "selected_710_row")
+    persist_seconds = time.perf_counter() - persist_started
+    require(
+        min(
+            z_b89_record["minimum_relative_accuracy_bits_away_from_zero"],
+            z_correction_record["minimum_relative_accuracy_bits_away_from_zero"],
+            h_b89_record["minimum_relative_accuracy_bits_away_from_zero"],
+            h_correction_record["minimum_relative_accuracy_bits_away_from_zero"],
+        )
+        >= 20,
+        "portable reduced source accuracy",
+    )
+
+    checks = {
+        "G3CV_G3CY_G3DA_G3DB_and_G3DC_are_hash_bound_and_passing": True,
+        "the_exact_W_support_observes1186_of4426_base_coordinates": observed_coordinates.size == 1186,
+        "both_complete248_column_inverse_source_maps_are_contracted_with_W": y.nrows() == 988 and y.ncols() == 496,
+        "all490048_S_solve_residual_balls_contain_zero": residual_zero == 490048,
+        "the_selected_Q_minor_rows_contract_both_source_families_to710_by248_maps": h.nrows() == 710 and h.ncols() == 496,
+        "the_selected710_RHS_is_an_exactly_derived_affine_operator_on_c20": True,
+        "the_portable_reduced_source_archives_retain_at_least20_accuracy_bits_away_from_zero": True,
+        "embedding5_is_certified_by_exact_complex_conjugation": True,
+        "no_observed_value_or_fitted_parameter_is_used": True,
+    }
+    require(all(checks.values()), "G3DD checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3dd-h11-selected-710-affine-rhs.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DD",
+        "status": "CLOSED_CERTIFIED_H11_SELECTED710_AFFINE_SOURCE_RHS_ON_EMBEDDINGS4_AND5",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3CV": record(G3CV),
+            "G3CY": record(G3CY),
+            "G3DA": record(G3DA),
+            "G3DB": record(G3DB),
+            "G3DC": record(G3DC),
+            "implementation": record(Path(__file__).resolve()),
+        },
+        "field": {
+            "field": "Q(gamma)",
+            "precision_bits": args.precision,
+            "root_isolation_bits": args.root_bits,
+            "canonical_embedding": EMBEDDING_INDEX,
+            "conjugate_embedding": CONJUGATE_INDEX,
+            "gamma_ball": str(gamma),
+        },
+        "first_source_observation": {
+            "definitions": [
+                "Y_B89=W*X_B89",
+                "Y_C=W*X_C",
+                "Z_B89=S^-1*Y_B89",
+                "Z_C=S^-1*Y_C",
+            ],
+            "W_shape": [988, 4426],
+            "W_exact_support": w_pattern.nnz,
+            "W_observed_base_coordinates": int(observed_coordinates.size),
+            "Y_combined_shape": [988, 496],
+            "Y_accuracy": y_accuracy,
+            "S_shape": [988, 988],
+            "S_exact_support": s_support,
+            "S_solve_residual_balls_containing_zero": residual_zero,
+            "Z_combined_accuracy": z_accuracy,
+            "Z_B89": z_b89_record,
+            "Z_C": z_correction_record,
+        },
+        "selected_710_source": {
+            "definitions": [
+                "V=Q[R,:] with the 248 G3CX-inactive columns exactly zero",
+                "H_B89=V*Z_B89",
+                "H_C=V*Z_C",
+            ],
+            "V_active_shape": [710, 740],
+            "Z_active_combined_shape": [740, 496],
+            "H_combined_shape": [710, 496],
+            "H_combined_accuracy": h_accuracy,
+            "H_B89": h_b89_record,
+            "H_C": h_correction_record,
+        },
+        "selected_path_equation": {
+            "first_reduced_equation": "(S+aQ)z=a*(Y_B89+aY_C)c20(a)",
+            "first_base_solution": "z0=a*(Z_B89+aZ_C)c20(a)",
+            "selected_710_equation": "(T_Q+aR_Q)q=a^2*(H_B89+aH_C)c20(a)",
+            "first_recovery": "z=z0-P_Q*q",
+            "kernel_source": "UST.G3DB",
+            "source_selection_parameters": 0,
+        },
+        "timing_seconds": {
+            "W_source_contraction": contraction_seconds,
+            "S_solve_and_residual": s_seconds,
+            "selected_710_contraction": second_seconds,
+            "portable_enclosure_persistence": persist_seconds,
+            "total": time.perf_counter() - started,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_evolving_H20_state_c20_is_integrated": False,
+            "claims_the_selected710_path_equation_is_numerically_integrated": False,
+            "claims_the_full4426_coordinate_recovery_Pz_is_emitted": False,
+            "claims_the_G3CT_first_jet_is_replayed": False,
+            "claims_an_Archimedean_embedding_is_physically_selected": False,
+            "claims_integral_transport_or_terminal_readout": False,
+        },
+        "theorem": {
+            "name": "ustG3ddH11Selected710AffineRhs",
+            "tier": "CLOSED_CERTIFIED_SELECTED_H11_SOURCE_OBSERVATION_AND_710_RHS",
+            "statement": "On embeddings 4 and 5, the two complete G3DC inverse-source maps contract through the exact W observation and certified S inverse. All 490048 S-solve residual balls contain zero. Contracting the result with the G3CY-selected rows V=Q[R,:] emits the two 710-by-248 maps H_B89 and H_C. Consequently the source-dependent selected H11 path equation is (T_Q+aR_Q)q=a^2(H_B89+aH_C)c20(a), with no source row or fit parameter left to choose. The evolving H20 state, selected path solve, full-coordinate recovery and G3CT replay remain separate operations.",
+        },
+        "frontier_delta": {
+            "before": "G3DC emitted x0 as an affine 4426-by-248 operator but the source had not entered the G3DB 710-dimensional selected path kernel.",
+            "after": "The complete affine source is now observed through W, inverted through S and emitted in the exact selected 710 coordinates. The H11 source wall on embeddings 4 and 5 is closed at the operator level. What remains is the already selected H20 state evolution, numerical path solve, recovery and first-jet/readout validation.",
+        },
+        "next_required_object": "Evaluate the closed H20 rank-one resolvent along G3BJ to supply c20(a), solve the emitted 710 path equation with balls, recover the 988 coordinate z and validate its base/first jet against G3CT. Emit A0^-1 U recovery only for the resulting selected z path rather than materializing another unnecessary dense operator.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DD H11 selected 710 affine RHS: PASS")
+    print(
+        f"S_residuals={residual_zero} H_shape=710x496 "
+        f"H_min_accuracy={h_accuracy['minimum_relative_accuracy_bits_away_from_zero']} "
+        f"total_seconds={packet['timing_seconds']['total']:.3f}",
+        flush=True,
+    )
+    print(f"packet_sha256={sha256(OUT)}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

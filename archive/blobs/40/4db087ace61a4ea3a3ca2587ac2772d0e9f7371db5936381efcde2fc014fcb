@@ -1,0 +1,371 @@
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+using u128 = unsigned __int128;
+using i128 = __int128;
+
+struct Input {
+    uint32_t prime = 0;
+    uint32_t width = 0;
+    std::string path;
+    std::ifstream stream;
+    std::vector<uint32_t> values;
+};
+
+struct Counts {
+    uint64_t entries = 0;
+    uint64_t candidates = 0;
+    uint64_t passes = 0;
+    uint64_t aliases = 0;
+    uint64_t no_candidate = 0;
+    uint64_t pass_integers = 0;
+    uint64_t pass_zeros = 0;
+    uint64_t pass_nonzero = 0;
+};
+
+static std::string to_string_u128(u128 value) {
+    if (value == 0) return "0";
+    std::string output;
+    while (value > 0) {
+        output.push_back(static_cast<char>('0' + value % 10));
+        value /= 10;
+    }
+    std::reverse(output.begin(), output.end());
+    return output;
+}
+
+static uint32_t inverse_mod(uint64_t value, uint32_t prime) {
+    int64_t old_r = static_cast<int64_t>(value % prime);
+    int64_t r = prime;
+    int64_t old_s = 1;
+    int64_t s = 0;
+    while (r != 0) {
+        const int64_t quotient = old_r / r;
+        std::tie(old_r, r) = std::make_tuple(r, old_r - quotient * r);
+        std::tie(old_s, s) = std::make_tuple(s, old_s - quotient * s);
+    }
+    if (old_r != 1) throw std::runtime_error("noninvertible CRT modulus");
+    old_s %= static_cast<int64_t>(prime);
+    if (old_s < 0) old_s += prime;
+    return static_cast<uint32_t>(old_s);
+}
+
+static u128 isqrt_u128(u128 value) {
+    if (value < 2) return value;
+    u128 low = 1;
+    u128 high = static_cast<u128>(1) << 64;
+    while (low + 1 < high) {
+        const u128 middle = low + (high - low) / 2;
+        if (middle <= value / middle) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+static uint32_t bit_length_u128(u128 value) {
+    const uint64_t high = static_cast<uint64_t>(value >> 64);
+    if (high != 0) return 64u + 64u - static_cast<uint32_t>(__builtin_clzll(high));
+    const uint64_t low = static_cast<uint64_t>(value);
+    return low == 0 ? 0u : 64u - static_cast<uint32_t>(__builtin_clzll(low));
+}
+
+static i128 abs_i128(i128 value) { return value < 0 ? -value : value; }
+
+static i128 gcd_i128(i128 left, i128 right) {
+    left = abs_i128(left);
+    right = abs_i128(right);
+    while (right != 0) {
+        const i128 temporary = left % right;
+        left = right;
+        right = temporary;
+    }
+    return left;
+}
+
+static std::tuple<i128, i128, bool> rational_reconstruct(
+    u128 residue_unsigned,
+    u128 modulus_unsigned,
+    u128 bound_unsigned
+) {
+    const i128 modulus = static_cast<i128>(modulus_unsigned);
+    const i128 bound = static_cast<i128>(bound_unsigned);
+    i128 old_remainder = modulus;
+    i128 remainder = static_cast<i128>(residue_unsigned);
+    i128 old_denominator = 0;
+    i128 denominator = 1;
+    while (remainder > bound) {
+        const i128 quotient = old_remainder / remainder;
+        const i128 next_remainder = old_remainder - quotient * remainder;
+        const i128 next_denominator = old_denominator - quotient * denominator;
+        old_remainder = remainder;
+        remainder = next_remainder;
+        old_denominator = denominator;
+        denominator = next_denominator;
+    }
+    i128 numerator = remainder;
+    if (denominator < 0) {
+        numerator = -numerator;
+        denominator = -denominator;
+    }
+    const bool valid = denominator > 0 && denominator <= bound &&
+        abs_i128(numerator) <= bound && gcd_i128(numerator, denominator) == 1;
+    return {numerator, denominator, valid};
+}
+
+static uint32_t mod_i128(i128 value, uint32_t prime) {
+    i128 residue = value % static_cast<i128>(prime);
+    if (residue < 0) residue += prime;
+    return static_cast<uint32_t>(residue);
+}
+
+static void set_bit(std::vector<uint8_t>& bits, uint64_t degree_size, uint64_t index) {
+    const uint64_t bytes_per_degree = (degree_size + 7) / 8;
+    const uint64_t degree = index / degree_size;
+    const uint64_t local = index % degree_size;
+    bits[degree * bytes_per_degree + local / 8] |= static_cast<uint8_t>(1u << (local % 8));
+}
+
+static void write_u64(std::ofstream& stream, uint64_t value) {
+    stream.write(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+static void read_chunk(Input& input, uint64_t count) {
+    input.values.resize(count);
+    if (input.width == 2) {
+        std::vector<uint16_t> temporary(count);
+        input.stream.read(reinterpret_cast<char*>(temporary.data()), static_cast<std::streamsize>(count * 2));
+        if (input.stream.gcount() != static_cast<std::streamsize>(count * 2)) {
+            throw std::runtime_error("short uint16 residue input: " + input.path);
+        }
+        for (uint64_t index = 0; index < count; ++index) input.values[index] = temporary[index];
+    } else if (input.width == 4) {
+        input.stream.read(reinterpret_cast<char*>(input.values.data()), static_cast<std::streamsize>(count * 4));
+        if (input.stream.gcount() != static_cast<std::streamsize>(count * 4)) {
+            throw std::runtime_error("short uint32 residue input: " + input.path);
+        }
+    } else {
+        throw std::runtime_error("unsupported residue width");
+    }
+}
+
+int main(int argc, char** argv) {
+    try {
+        uint64_t entries = 0;
+        uint64_t degree_size = 0;
+        uint64_t chunk_size = 1u << 20;
+        std::vector<Input> construction;
+        Input holdout;
+        bool have_holdout = false;
+        std::string candidate_mask_path;
+        std::string pass_mask_path;
+        std::string nonzero_path;
+        std::string log_path;
+        for (int index = 1; index < argc; ++index) {
+            const std::string argument = argv[index];
+            auto need = [&](int count) {
+                if (index + count >= argc) throw std::runtime_error("missing argument after " + argument);
+            };
+            if (argument == "--entries") {
+                need(1); entries = std::stoull(argv[++index]);
+            } else if (argument == "--degree-size") {
+                need(1); degree_size = std::stoull(argv[++index]);
+            } else if (argument == "--chunk-size") {
+                need(1); chunk_size = std::stoull(argv[++index]);
+            } else if (argument == "--construction") {
+                need(3);
+                Input input;
+                input.prime = static_cast<uint32_t>(std::stoul(argv[++index]));
+                input.width = static_cast<uint32_t>(std::stoul(argv[++index]));
+                input.path = argv[++index];
+                construction.push_back(std::move(input));
+            } else if (argument == "--holdout") {
+                need(3);
+                holdout.prime = static_cast<uint32_t>(std::stoul(argv[++index]));
+                holdout.width = static_cast<uint32_t>(std::stoul(argv[++index]));
+                holdout.path = argv[++index];
+                have_holdout = true;
+            } else if (argument == "--candidate-mask") {
+                need(1); candidate_mask_path = argv[++index];
+            } else if (argument == "--pass-mask") {
+                need(1); pass_mask_path = argv[++index];
+            } else if (argument == "--nonzero-pass") {
+                need(1); nonzero_path = argv[++index];
+            } else if (argument == "--log") {
+                need(1); log_path = argv[++index];
+            } else {
+                throw std::runtime_error("unknown argument: " + argument);
+            }
+        }
+        if (entries == 0 || degree_size == 0 || entries % degree_size != 0) {
+            throw std::runtime_error("invalid entry/degree dimensions");
+        }
+        if (construction.empty() || !have_holdout) throw std::runtime_error("missing construction or holdout inputs");
+        if (candidate_mask_path.empty() || pass_mask_path.empty() || nonzero_path.empty() || log_path.empty()) {
+            throw std::runtime_error("missing output path");
+        }
+        for (auto& input : construction) {
+            input.stream.open(input.path, std::ios::binary);
+            if (!input.stream) throw std::runtime_error("cannot open " + input.path);
+        }
+        holdout.stream.open(holdout.path, std::ios::binary);
+        if (!holdout.stream) throw std::runtime_error("cannot open " + holdout.path);
+
+        u128 modulus = construction.front().prime;
+        std::vector<uint32_t> inverses(construction.size(), 0);
+        for (size_t input_index = 1; input_index < construction.size(); ++input_index) {
+            const uint32_t prime = construction[input_index].prime;
+            inverses[input_index] = inverse_mod(static_cast<uint64_t>(modulus % prime), prime);
+            modulus *= prime;
+        }
+        if (modulus >= (static_cast<u128>(1) << 127)) throw std::runtime_error("modulus exceeds signed128 range");
+        const u128 bound = isqrt_u128((modulus - 1) / 2);
+        if (bound > static_cast<u128>(std::numeric_limits<int64_t>::max())) {
+            throw std::runtime_error("candidate bound exceeds int64 output range");
+        }
+
+        const uint64_t degrees = entries / degree_size;
+        const uint64_t bytes_per_degree = (degree_size + 7) / 8;
+        std::vector<uint8_t> candidate_mask(degrees * bytes_per_degree, 0);
+        std::vector<uint8_t> pass_mask(degrees * bytes_per_degree, 0);
+        Counts total;
+        std::vector<Counts> per_degree(degrees);
+
+        std::ofstream nonzero(nonzero_path, std::ios::binary | std::ios::trunc);
+        if (!nonzero) throw std::runtime_error("cannot create nonzero-pass output");
+        nonzero.write("MTTRRZ1\0", 8);
+        write_u64(nonzero, entries);
+        write_u64(nonzero, 0);
+        write_u64(nonzero, construction.size());
+        write_u64(nonzero, holdout.prime);
+        uint64_t nonzero_records = 0;
+
+        for (uint64_t start = 0; start < entries; start += chunk_size) {
+            const uint64_t count = std::min(chunk_size, entries - start);
+            for (auto& input : construction) read_chunk(input, count);
+            read_chunk(holdout, count);
+            for (uint64_t local = 0; local < count; ++local) {
+                const uint64_t global = start + local;
+                const uint64_t degree = global / degree_size;
+                Counts& row = per_degree[degree];
+                ++total.entries;
+                ++row.entries;
+                u128 residue = construction.front().values[local];
+                u128 running_modulus = construction.front().prime;
+                for (size_t input_index = 1; input_index < construction.size(); ++input_index) {
+                    const uint32_t prime = construction[input_index].prime;
+                    const uint32_t current = construction[input_index].values[local];
+                    const uint32_t reduced = static_cast<uint32_t>(residue % prime);
+                    const uint32_t difference = current >= reduced ? current - reduced : current + prime - reduced;
+                    const uint32_t multiplier = static_cast<uint32_t>(
+                        (static_cast<uint64_t>(difference) * inverses[input_index]) % prime
+                    );
+                    residue += running_modulus * multiplier;
+                    running_modulus *= prime;
+                }
+                if (running_modulus != modulus) throw std::runtime_error("CRT modulus drift");
+                auto [numerator, denominator, valid] = rational_reconstruct(residue, modulus, bound);
+                if (!valid) {
+                    ++total.no_candidate;
+                    ++row.no_candidate;
+                    continue;
+                }
+                ++total.candidates;
+                ++row.candidates;
+                set_bit(candidate_mask, degree_size, global);
+                const uint32_t left = mod_i128(numerator, holdout.prime);
+                const uint32_t right = static_cast<uint32_t>(
+                    (static_cast<uint64_t>(holdout.values[local]) * mod_i128(denominator, holdout.prime)) % holdout.prime
+                );
+                if (left != right) {
+                    ++total.aliases;
+                    ++row.aliases;
+                    continue;
+                }
+                ++total.passes;
+                ++row.passes;
+                set_bit(pass_mask, degree_size, global);
+                if (denominator == 1) {
+                    ++total.pass_integers;
+                    ++row.pass_integers;
+                }
+                if (numerator == 0) {
+                    ++total.pass_zeros;
+                    ++row.pass_zeros;
+                } else {
+                    ++total.pass_nonzero;
+                    ++row.pass_nonzero;
+                    const int64_t numerator64 = static_cast<int64_t>(numerator);
+                    const uint64_t denominator64 = static_cast<uint64_t>(denominator);
+                    write_u64(nonzero, global);
+                    nonzero.write(reinterpret_cast<const char*>(&numerator64), sizeof(numerator64));
+                    write_u64(nonzero, denominator64);
+                    ++nonzero_records;
+                }
+            }
+            std::cout << "PROGRESS " << std::min(entries, start + count) << "/" << entries << std::endl;
+        }
+        nonzero.seekp(16, std::ios::beg);
+        write_u64(nonzero, nonzero_records);
+        nonzero.close();
+
+        std::ofstream candidate_mask_stream(candidate_mask_path, std::ios::binary | std::ios::trunc);
+        candidate_mask_stream.write(reinterpret_cast<const char*>(candidate_mask.data()), candidate_mask.size());
+        std::ofstream pass_mask_stream(pass_mask_path, std::ios::binary | std::ios::trunc);
+        pass_mask_stream.write(reinterpret_cast<const char*>(pass_mask.data()), pass_mask.size());
+        if (!candidate_mask_stream || !pass_mask_stream) throw std::runtime_error("mask write failure");
+
+        std::ofstream log(log_path, std::ios::trunc);
+        if (!log) throw std::runtime_error("cannot create log");
+        log << "SCHEMA MTTH02U128ReconstructionAudit.v1\n";
+        log << "STATUS SUCCESS\n";
+        log << "ENTRIES " << total.entries << "\n";
+        log << "DEGREE_SIZE " << degree_size << "\n";
+        log << "DEGREES " << degrees << "\n";
+        log << "CONSTRUCTION_PRIMES";
+        for (const auto& input : construction) log << " " << input.prime;
+        log << "\n";
+        log << "HOLDOUT_PRIME " << holdout.prime << "\n";
+        log << "MODULUS " << to_string_u128(modulus) << "\n";
+        log << "MODULUS_BITS " << bit_length_u128(modulus) << "\n";
+        log << "UNIQUENESS_BOUND " << to_string_u128(bound) << "\n";
+        log << "CANDIDATES " << total.candidates << "\n";
+        log << "PASSES " << total.passes << "\n";
+        log << "ALIASES " << total.aliases << "\n";
+        log << "NO_CANDIDATE " << total.no_candidate << "\n";
+        log << "PASS_INTEGERS " << total.pass_integers << "\n";
+        log << "PASS_ZEROS " << total.pass_zeros << "\n";
+        log << "PASS_NONZERO " << total.pass_nonzero << "\n";
+        for (uint64_t degree = 0; degree < degrees; ++degree) {
+            const Counts& row = per_degree[degree];
+            log << "DEGREE_" << degree << "_ENTRIES " << row.entries << "\n";
+            log << "DEGREE_" << degree << "_CANDIDATES " << row.candidates << "\n";
+            log << "DEGREE_" << degree << "_PASSES " << row.passes << "\n";
+            log << "DEGREE_" << degree << "_ALIASES " << row.aliases << "\n";
+            log << "DEGREE_" << degree << "_NO_CANDIDATE " << row.no_candidate << "\n";
+            log << "DEGREE_" << degree << "_PASS_INTEGERS " << row.pass_integers << "\n";
+            log << "DEGREE_" << degree << "_PASS_ZEROS " << row.pass_zeros << "\n";
+            log << "DEGREE_" << degree << "_PASS_NONZERO " << row.pass_nonzero << "\n";
+        }
+        log << "NONZERO_RECORDS " << nonzero_records << "\n";
+        log << "END_CERTIFICATE\n";
+        log.close();
+        std::cout << "STATUS SUCCESS CANDIDATES " << total.candidates
+                  << " PASSES " << total.passes << " ALIASES " << total.aliases << std::endl;
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "ERROR " << error.what() << std::endl;
+        return 1;
+    }
+}

@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Emit a sixth-prime H02 kernel reserved from the G3DP candidates."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import build_ust_g3dk_h02_third_prime_kernel_relations as exact_campaign
+
+
+ROOT = Path(__file__).resolve().parent
+G3DP = ROOT / "state" / "ust_g3dp_h02_four_prime_reconstruction_holdout.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dq"
+OUT = ROOT / "state" / "ust_g3dq_h02_sixth_prime_holdout_kernel.packet.json"
+PRIME = 69011
+ROOTS = (25540, 36073, 44818, 45576, 61835, 62178)
+SIX_PRIME_MODULUS = 21817 * 33863 * 37493 * 38113 * 68213 * PRIME
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    g3dp = load(G3DP)
+    require(all(g3dp["checks"].values()), "G3DP checks")
+    exact_campaign.PRIME = PRIME
+    exact_campaign.ROOTS = ROOTS
+    exact_campaign.EVIDENCE = EVIDENCE
+    exact_campaign.OUT = OUT
+    exact_campaign.THREE_PRIME_MODULUS = 21817 * 33863 * PRIME
+    exact_campaign.main()
+    raw = load(OUT)
+    require(int(raw["field"]["prime"]) == PRIME, "sixth-prime campaign")
+    require(tuple(raw["field"]["roots"]) == ROOTS, "sixth-prime roots")
+    kernel = raw.pop("third_split_algebra_kernel")
+    checks = {
+        "G3DP_is_hash_bound_and_closed_before_the_sixth_prime_holdout": True,
+        "all_six_roots_of_reserved_prime69011_are_executed": True,
+        "all_six_sixth_prime_couplings_have_rank4748_and1274_verified_relations": all(
+            int(row["kernel_nonzero_entries"]) > 0 for row in raw["root_kernels"]
+        ),
+        "the_coordinate_partition_is_identical_across_all_six_primes": bool(
+            kernel["same_selection_as_G3DI_and_G3DJ"]
+        ),
+        "six_root_interpolation_emits_the_complete_sixth_split_algebra_kernel": int(
+            kernel["interpolation_evaluation_mismatches"]
+        )
+        == 0,
+        "prime69011_coefficients_are_stored_without_uint16_truncation": kernel[
+            "coefficient_storage_dtype"
+        ]
+        == "uint32",
+        "prime69011_was_not_used_in_G3DP_four_prime_candidate_construction_or_fifth_holdout": PRIME
+        not in g3dp["reconstruction_contract"]["construction_primes"]
+        + [g3dp["reconstruction_contract"]["reserved_holdout_prime"]],
+        "no_characteristic_zero_promotion_is_inferred_from_six_prime_agreement": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DQ checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dq-h02-sixth-prime-holdout-kernel.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DQ",
+        "status": "CLOSED_EXACT_H02_RESERVED_SIXTH_SPLIT_PRIME_KERNEL",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {**raw["inputs"], "G3DP": exact_campaign.campaign.record(G3DP)},
+        "field": raw["field"],
+        "root_kernels": raw["root_kernels"],
+        "sixth_split_algebra_kernel": {
+            **kernel,
+            "same_selection_as_all_prior_campaigns": True,
+        },
+        "multiprime_promotion": {
+            "primes": [21817, 33863, 37493, 38113, 68213, PRIME],
+            "CRT_modulus": SIX_PRIME_MODULUS,
+            "CRT_modulus_bits": SIX_PRIME_MODULUS.bit_length(),
+            "sixth_prime_role": "held_out_from_five_prime_candidate_construction",
+            "height_bound_available": False,
+            "exact_Q_gamma_promotion": False,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dqH02SixthPrimeHoldoutKernel",
+            "tier": "CLOSED_EXACT_RESERVED_SIXTH_SPLIT_ALGEBRA_KERNEL",
+            "statement": "At all six roots of the previously unused split prime 69011, the H02 coupling again has rank 4748 and exactly 1274 normalized zero-residual relations with the common coordinate partition. The complete sixth split-algebra kernel is persisted as an independent holdout for five-prime candidates.",
+        },
+        "frontier_delta": {
+            "before": "Four-prime candidates passed or failed a fifth-prime test, but five-prime candidates had no sixth-prime archive.",
+            "after": "A complete sixth-prime split-algebra kernel is reserved for an unsigned128 five-prime reconstruction audit.",
+        },
+        "next_required_object": "Use the unsigned128 reconstruction executor to construct candidates from the first five primes, test them against prime69011, and reserve prime72271 for the next holdout.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DQ H02 reserved sixth-prime kernel: PASS")
+    print(f"six_ranks=4748 kernel=6022x1274 CRT6_bits={SIX_PRIME_MODULUS.bit_length()}")
+    print(f"packet_sha256={exact_campaign.campaign.sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

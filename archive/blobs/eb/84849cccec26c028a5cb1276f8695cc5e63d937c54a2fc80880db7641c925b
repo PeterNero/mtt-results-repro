@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Select an exact 800-row subsystem for component-16 checkpoint recovery.
+
+The interrupted FLINT archive fixes the first 400 coordinate rows.  Its basis
+uses the standard left-to-right nullspace free-column profile, not the finite
+relation coordinates retained by G3EL.  The two sets happened to have the same
+cardinality; confusing them produced an exactly auditable but invalid recovery.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+from build_ust_g3eq_component16_flint_exact_input import (
+    COLUMNS,
+    PRIME,
+    ROOT,
+    SOURCE,
+    evaluate,
+    load_rows,
+)
+
+
+KNOWN_PIVOT_ROWS = 400
+FREE_COLUMNS = (
+    1199,
+    1200,
+    1201,
+    1202,
+    1204,
+    1205,
+    1206,
+    1207,
+    1208,
+    1209,
+    1210,
+    1211,
+    1212,
+    1213,
+    1214,
+    1215,
+    1216,
+    1217,
+    1218,
+    1219,
+    1220,
+)
+UNKNOWN_COLUMNS = tuple(
+    column
+    for column in range(KNOWN_PIVOT_ROWS, COLUMNS)
+    if column not in FREE_COLUMNS
+)
+OUTPUT = ROOT / "evidence/ust_g3et/H02.component16.checkpoint_recovery_rows.txt"
+FREE_OUTPUT = ROOT / "evidence/ust_g3et/H02.component16.checkpoint_free_columns.txt"
+CERTIFICATE = ROOT / "evidence/ust_g3et/H02.component16.checkpoint_recovery_rows.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def select_rows(
+    exact_rows: list[list[tuple[int, tuple[int, ...]]]],
+) -> tuple[list[int], list[int]]:
+    lookup = {column: index for index, column in enumerate(UNKNOWN_COLUMNS)}
+    pivots: dict[int, dict[int, int]] = {}
+    selected: list[int] = []
+    for row_index, exact_row in enumerate(exact_rows):
+        row = {
+            lookup[column]: value
+            for column, coefficients in exact_row
+            if column in lookup and (value := evaluate(coefficients))
+        }
+        while row:
+            column = min(row)
+            value = row[column]
+            prior = pivots.get(column)
+            if prior is None:
+                inverse = pow(value, -1, PRIME)
+                row = {
+                    key: item * inverse % PRIME
+                    for key, item in row.items()
+                    if item
+                }
+                pivots[column] = row
+                selected.append(row_index)
+                break
+            for key, item in prior.items():
+                reduced = (row.get(key, 0) - value * item) % PRIME
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+        if len(pivots) == len(UNKNOWN_COLUMNS):
+            break
+    require(len(pivots) == len(UNKNOWN_COLUMNS), "unknown-column finite rank")
+    require(sorted(pivots) == list(range(len(UNKNOWN_COLUMNS))), "unknown pivot set")
+    require(len(selected) == len(UNKNOWN_COLUMNS), "selected row count")
+    return selected, sorted(pivots)
+
+
+def standard_free_columns(
+    exact_rows: list[list[tuple[int, tuple[int, ...]]]],
+) -> tuple[int, ...]:
+    """Return the left-to-right row-space free profile at the proof fiber."""
+
+    pivots: dict[int, dict[int, int]] = {}
+    for exact_row in exact_rows:
+        row = {
+            column: value
+            for column, coefficients in exact_row
+            if (value := evaluate(coefficients))
+        }
+        while row:
+            column = min(row)
+            value = row[column]
+            prior = pivots.get(column)
+            if prior is None:
+                inverse = pow(value, -1, PRIME)
+                pivots[column] = {
+                    key: item * inverse % PRIME
+                    for key, item in row.items()
+                    if item
+                }
+                break
+            for key, item in prior.items():
+                reduced = (row.get(key, 0) - value * item) % PRIME
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+    require(len(pivots) == 1200, "standard finite rank")
+    return tuple(column for column in range(COLUMNS) if column not in pivots)
+
+
+def main() -> None:
+    require(len(UNKNOWN_COLUMNS) == 800, "unknown coordinate count")
+    require(not set(UNKNOWN_COLUMNS) & set(FREE_COLUMNS), "unknown/free disjoint")
+    exact_rows, entries = load_rows()
+    detected_free_columns = standard_free_columns(exact_rows)
+    require(detected_free_columns == FREE_COLUMNS, "standard finite free-column profile")
+    selected, pivots = select_rows(exact_rows)
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    temporary_rows = OUTPUT.with_suffix(OUTPUT.suffix + ".tmp")
+    temporary_rows.write_text(
+        f"{len(selected)}\n" + "\n".join(str(row + 1) for row in selected) + "\n",
+        encoding="ascii",
+    )
+    temporary_rows.replace(OUTPUT)
+    temporary_free = FREE_OUTPUT.with_suffix(FREE_OUTPUT.suffix + ".tmp")
+    temporary_free.write_text(
+        f"{len(FREE_COLUMNS)}\n"
+        + "\n".join(str(column + 1) for column in FREE_COLUMNS)
+        + "\n",
+        encoding="ascii",
+    )
+    temporary_free.replace(FREE_OUTPUT)
+
+    payload = {
+        "schema": "ust.g3et.h02.component16.checkpoint-recovery-rows.v2",
+        "date": "2026-08-14",
+        "source": SOURCE.relative_to(ROOT).as_posix(),
+        "source_sha256": sha256(SOURCE),
+        "source_entries": entries,
+        "checkpoint_complete_coordinate_rows": KNOWN_PIVOT_ROWS,
+        "free_columns_zero_based": list(FREE_COLUMNS),
+        "standard_left_to_right_free_columns_at_proof_fiber": list(
+            detected_free_columns
+        ),
+        "unknown_columns_zero_based": list(UNKNOWN_COLUMNS),
+        "unknown_column_count": len(UNKNOWN_COLUMNS),
+        "specialization": {"prime": PRIME, "gamma": 5},
+        "selected_source_rows_zero_based": selected,
+        "pivot_indices_zero_based": pivots,
+        "selected_minor_rank": len(pivots),
+        "rows_file": {
+            "path": OUTPUT.relative_to(ROOT).as_posix(),
+            "sha256": sha256(OUTPUT),
+            "bytes": OUTPUT.stat().st_size,
+        },
+        "free_columns_file": {
+            "path": FREE_OUTPUT.relative_to(ROOT).as_posix(),
+            "sha256": sha256(FREE_OUTPUT),
+            "bytes": FREE_OUTPUT.stat().st_size,
+        },
+        "theorem_status": {
+            "exact_unknown_block_rank_lower_bound": len(pivots),
+            "reason": (
+                "Left-to-right elimination at p=21817,gamma=5 leaves exactly the "
+                "displayed standard-nullspace free columns. The selected 800-square "
+                "complementary-coordinate minor is nonzero at that specialization, "
+                "hence nonzero over Q(gamma)."
+            ),
+            "checkpoint_recovery_pending": True,
+        },
+        "claim_boundary": (
+            "This corrects the free-basis selection and chooses an exact recovery "
+            "subsystem after 400 complete kernel coordinate rows. It does not promote "
+            "the checkpoint, a recovered archive, or component 16 until literal full "
+            "replay succeeds."
+        ),
+    }
+    temporary_certificate = CERTIFICATE.with_suffix(CERTIFICATE.suffix + ".tmp")
+    temporary_certificate.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary_certificate.replace(CERTIFICATE)
+    print(
+        "G3ET component16 checkpoint recovery rows: PASS "
+        f"known={KNOWN_PIVOT_ROWS} free={len(FREE_COLUMNS)} unknown={len(UNKNOWN_COLUMNS)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

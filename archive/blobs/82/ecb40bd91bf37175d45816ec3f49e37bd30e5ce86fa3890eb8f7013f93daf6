@@ -1,0 +1,99 @@
+# UST.G3CM Matrix-Free Selected-State Action Theorem
+
+## Status
+
+`CLOSED_EXACT_GF11_MATRIX_FREE_FULL_CARRIER_ACTION_EQUIVALENCE_FAMILY_ORACLE_EXECUTION_OPEN`
+
+## Exact sector action
+
+In the fixed B103 order, write a state as
+
+```text
+v=(v_H20,v_H11,v_H02)
+```
+
+with dimensions `248+1013+248=1509`. G3CD emits three exact recursive source
+blocks
+
+```text
+K_H20 : GF(11)^248  -> GF(11)^1509,
+K_H11 : GF(11)^1013 -> GF(11)^1509,
+K_H02 : GF(11)^248  -> GF(11)^1509.
+```
+
+The complete action is exactly
+
+```text
+K v = K_H20 v_H20 + K_H11 v_H11 + K_H02 v_H02.
+```
+
+For the homogeneous affine lift,
+
+```text
+K_tilde(v,s)=(K v+s b,0).
+```
+
+## Full-frame replay
+
+The G3CM builder never loads the dense terminal operator. Starting with the
+selected source `b`, it repeatedly applies only the three sparse sector maps.
+All `1,509` resulting vectors agree entrywise with the G3CJ Krylov frame:
+
+```text
+[b,Kb,...,K^1508b].
+```
+
+The independently verified mismatch count is zero across all
+`1509 x 1509` compared entries. The next action also satisfies the emitted
+degree-1,509 G3CJ recurrence with zero residual.
+
+A second verifier concatenates the three blocks and checks that every entry
+equals the frozen dense G3CD operator before independently replaying the
+sequence. Thus matrix-free and dense execution are not merely numerically
+close; they are the same finite linear map.
+
+## Family execution consequence
+
+Every stage used to construct the sector blocks is linear: source formation,
+toric return, original-Jacobian reduction, recursive divergence and chart
+solve. Therefore, at a family point, one may combine the current coordinates
+before executing the return machinery:
+
+```text
+H20 lane: combine 248 coefficients, then one -3 P sC return chain;
+H11 lane: combine 1013 coefficients, then one -4 P sC return chain;
+H02 lane: combine 248 coefficients, then one -5 P sC pole-six return chain.
+```
+
+One connection right-hand-side evaluation therefore needs three combined
+sector chains, not materialization of 1,509 individual columns. The carrier
+and state remain 1,509-dimensional; this is a matrix-free execution theorem,
+not dimensional reduction.
+
+## Remaining implementation
+
+G3CM proves the exact interface and terminal equivalence. It does not yet emit
+the characteristic-zero or interval family implementations of those three
+chains. The immediate work is:
+
+1. implement on-demand H20 and H11 actions, reusing their existing endpoint
+   actions and chart factorizations;
+2. implement the on-demand H02 pole-six and recursive return for one combined
+   evolving source;
+3. validate each implementation against G3CD at B89 and G3BO/G3BT at the
+   split-prime endpoint;
+4. use the result as the `K_tilde(a(t))Y(t)` callback in a certified path
+   integrator.
+
+No path solution, integral marking, normalized readout or `beta_C` value is
+claimed here.
+
+## Verification
+
+```text
+python build_ust_g3cm_matrix_free_selected_state_action.py
+python verify_ust_g3cm_matrix_free_selected_state_action.py
+```
+
+The canonical packet is
+`state/ust_g3cm_matrix_free_selected_state_action.packet.json`.

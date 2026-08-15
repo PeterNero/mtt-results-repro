@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Deterministic sparse rank over a declared rational number field."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+from sympy import Poly, QQ, Symbol
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("matrix", type=Path)
+    parser.add_argument("--certificate", type=Path)
+    args = parser.parse_args()
+    path = args.matrix.resolve()
+    require(path.is_file(), "number-field matrix")
+
+    with path.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared_nonzeros = map(
+            int, handle.readline().split()
+        )
+        minimal = list(map(int, handle.readline().split()))
+        require(
+            rows >= 0 and columns >= 0 and degree > 0
+            and len(minimal) == degree + 1 and minimal[-1] == 1,
+            "number-field matrix header",
+        )
+        raw_entries = []
+        for line in handle:
+            values = list(map(int, line.split()))
+            require(len(values) == degree + 2, "coefficient-vector entry")
+            row, column = values[0] - 1, values[1] - 1
+            require(0 <= row < rows and 0 <= column < columns, "entry bounds")
+            raw_entries.append((row, column, tuple(values[2:])))
+    require(len(raw_entries) == declared_nonzeros, "declared nonzero count")
+
+    generator = Symbol("gamma")
+    minimal_poly = Poly(
+        sum(coefficient * generator**index for index, coefficient in enumerate(minimal)),
+        generator,
+    )
+    field = QQ.alg_field_from_poly(minimal_poly, alias="gamma")
+    alpha = field.from_sympy(field.ext)
+    powers = [field.one]
+    for _ in range(1, degree):
+        powers.append(powers[-1] * alpha)
+    cache = {}
+
+    def element(coefficients: tuple[int, ...]):
+        value = cache.get(coefficients)
+        if value is None:
+            value = field.zero
+            for coefficient, power in zip(coefficients, powers, strict=True):
+                if coefficient:
+                    value += field(coefficient) * power
+            require(value, "declared coefficient vector is nonzero")
+            cache[coefficients] = value
+        return value
+
+    sparse_rows: list[dict[int, object]] = [{} for _ in range(rows)]
+    for row, column, coefficients in raw_entries:
+        require(column not in sparse_rows[row], "duplicate matrix entry")
+        sparse_rows[row][column] = element(coefficients)
+
+    pivots: dict[int, dict[int, object]] = {}
+    dependent_rows: list[int] = []
+    elimination_count = 0
+    for original_row, row in enumerate(sparse_rows):
+        while row:
+            pivot_column = min(row)
+            pivot_value = row[pivot_column]
+            pivot_row = pivots.get(pivot_column)
+            if pivot_row is None:
+                inverse = field.one / pivot_value
+                pivots[pivot_column] = {
+                    column: value * inverse for column, value in row.items() if value
+                }
+                break
+            for column, value in pivot_row.items():
+                reduced = row.get(column, field.zero) - pivot_value * value
+                if reduced:
+                    row[column] = reduced
+                else:
+                    row.pop(column, None)
+            elimination_count += 1
+        else:
+            dependent_rows.append(original_row)
+
+    rank = len(pivots)
+    certificate = {
+        "schema": "mtt.unified-source.exact-number-field-sparse-rank.v1",
+        "status": "PASS_DETERMINISTIC_EXACT_NUMBER_FIELD_SPARSE_ELIMINATION",
+        "matrix": {
+            "path": path.name,
+            "sha256": sha256(path),
+            "rows": rows,
+            "columns": columns,
+            "degree": degree,
+            "declared_nonzeros": declared_nonzeros,
+            "minimal_polynomial_coefficients_ascending": minimal,
+        },
+        "algorithm": {
+            "coefficient_domain": "SymPy AlgebraicField over QQ",
+            "row_order": "input order",
+            "pivot_rule": "least available column",
+            "normalization": "exact field inverse",
+            "probabilistic_steps": 0,
+        },
+        "result": {
+            "rank": rank,
+            "nullity": columns - rank,
+            "row_dependency_dimension": rows - rank,
+            "pivot_columns_zero_based": sorted(pivots),
+            "dependent_rows_zero_based": dependent_rows,
+            "row_eliminations": elimination_count,
+            "distinct_nonzero_field_coefficients_loaded": len(cache),
+        },
+        "checks": {
+            "the_declared_monic_polynomial_defines_the_selected_algebraic_domain": True,
+            "all_matrix_entries_are_loaded_as_exact_power_basis_vectors": True,
+            "all_pivots_and_row_operations_use_exact_number_field_arithmetic": True,
+            "the_pivot_rule_and_input_order_are_deterministic": True,
+            "no_modular_or_floating_point_rank_inference_is_used": True,
+        },
+    }
+    if args.certificate is not None:
+        args.certificate.parent.mkdir(parents=True, exist_ok=True)
+        args.certificate.write_text(
+            json.dumps(certificate, indent=2) + "\n", encoding="ascii", newline="\n"
+        )
+    print(
+        "EXACT_NUMBER_FIELD_SPARSE_RANK "
+        f"rows={rows} columns={columns} degree={degree} "
+        f"nonzeros={declared_nonzeros} rank={rank} "
+        f"dependent_rows={len(dependent_rows)} eliminations={elimination_count}"
+    )
+
+
+if __name__ == "__main__":
+    main()

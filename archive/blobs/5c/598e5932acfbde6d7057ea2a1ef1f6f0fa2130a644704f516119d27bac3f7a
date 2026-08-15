@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Build the UST.G3AH formal coefficient-kernel theorem packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+G3AG_SOURCE = ROOT / "state" / "ust_g3ag_three_graph_joint_coefficient_lift.packet.json"
+OUT = ROOT / "state" / "ust_g3ah_formal_coefficient_kernel.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def component_row(label: str, class_multiple: int, genus: int, map_degree: int) -> dict:
+    h_square = 2
+    coefficient_degree = 9 * class_multiple * h_square
+    target_degree = 3 * map_degree
+    total_degree = coefficient_degree + target_degree
+    canonical_degree = 2 * genus - 2
+    require(total_degree > canonical_degree, f"{label} H1 vanishing degree bound")
+    h0 = total_degree + 1 - genus
+    return {
+        "label": label,
+        "curve_class": f"{class_multiple}H" if class_multiple != 1 else "H",
+        "genus": genus,
+        "map_degree_to_E": map_degree,
+        "degree_O9H_on_curve": coefficient_degree,
+        "degree_pullback_OE_3O": target_degree,
+        "total_target_line_degree": total_degree,
+        "canonical_degree": canonical_degree,
+        "H1_vanishes": True,
+        "H0_rank_by_Riemann_Roch": h0,
+    }
+
+
+def main() -> None:
+    source = json.loads(G3AG_SOURCE.read_text(encoding="utf-8"))
+    require(source["theorem_id"] == "UST.G3AG", "G3AG source")
+    system = source["simultaneous_linear_system"]
+    require(system["shape"] == [168, 249], "G3AG system shape")
+    require(system["three_graph_stacked_rank"] == 126, "G3AG rank")
+
+    h0_o9h = 2 + (9 * 9 * 2) // 2
+    require(h0_o9h == 83, "K3 O(9H) section rank")
+    source_rank = 3 * h0_o9h
+    require(source_rank == 249, "eta9 coefficient rank")
+    components = [
+        component_row("first_H", 1, 2, 3),
+        component_row("second_H", 1, 2, 3),
+        component_row("four_H", 4, 17, 6),
+    ]
+    target_rank = sum(row["H0_rank_by_Riemann_Roch"] for row in components)
+    require(target_rank == 26 + 26 + 74 == 126, "formal target rank")
+    require(system["three_graph_stacked_rank"] == target_rank, "special-fiber surjectivity")
+    kernel_rank = source_rank - target_rank
+    require(kernel_rank == 123, "formal kernel rank")
+
+    packet = {
+        "schema": "mtt.unified-source.g3ah-formal-coefficient-kernel.v1",
+        "theorem_id": "UST.G3AH",
+        "status": "CLOSED_EXACT_CONDITIONAL_FORMAL_COEFFICIENT_LIFT_GRAPH_MAP_FORMALITY_OPEN",
+        "inputs": {
+            "local_G3AG_packet": {
+                "path": "state/ust_g3ag_three_graph_joint_coefficient_lift.packet.json",
+                "sha256": sha256(G3AG_SOURCE),
+            }
+        },
+        "geometric_rank_calculation": {
+            "K3_polarization_square": 2,
+            "h0_O_K3_9H": h0_o9h,
+            "three_coefficient_source_rank": source_rank,
+            "component_target_rows": components,
+            "disjoint_graph_target_rank": target_rank,
+            "G3AG_special_fiber_rank": system["three_graph_stacked_rank"],
+            "special_fiber_map_is_surjective_onto_geometric_target": True,
+            "formal_kernel_rank": kernel_rank,
+        },
+        "formal_algebra": {
+            "base": "complete unramified DVR O with residue F_101[gamma]/(M)",
+            "hypotheses": [
+                "the three selected graph curves and marked maps admit disjoint flat formal lifts over O",
+                "their genera and map degrees remain (2,3),(2,3),(17,6)",
+                "the eta9 coefficient and target cohomology modules obey cohomology-and-base-change",
+            ],
+            "source_module": "O^249",
+            "target_module": "O^126",
+            "special_fiber_rank": 126,
+            "nakayama_conclusion": "the formal incidence map O^249 -> O^126 is surjective",
+            "kernel_conclusion": "the kernel is finite free of rank 123 and commutes with reduction",
+            "lifting_conclusion": (
+                "every special-fiber eta9 coefficient vector containing the three graphs has a compatible "
+                "coefficient lift through O/p^n for every n"
+            ),
+            "no_higher_coefficient_obstruction": True,
+        },
+        "theorem": {
+            "name": "FormalThreeGraphCoefficientKernelTheorem",
+            "statement": (
+                "For any disjoint flat formal lift of the selected graph maps with the fixed genera and "
+                "degrees, the eta9 incidence target is locally free of rank 26+26+74=126. G3AG gives full "
+                "rank on the special fiber, so Nakayama implies formal surjectivity. The coefficient kernel "
+                "is finite free of rank 123 and reduction-surjective; hence the G3AG coefficient member "
+                "lifts through every 101-adic order without a new coefficient obstruction."
+            ),
+            "tier": "CLOSED_EXACT_CONDITIONAL_ON_FORMAL_GRAPH_MAP_LIFTS",
+        },
+        "frontier_delta": {
+            "coefficient_side_all_orders_obstruction_removed": True,
+            "repeated_higher_digit_249_coefficient_search_required": False,
+            "first_H_formal_source_branch_available": True,
+            "four_H_algebraic_map_available": True,
+            "second_H_marked_map_formal_all_orders_proved": False,
+            "smooth_characteristic_zero_selected_member_emitted": False,
+            "beta_C_computed": False,
+            "next_required_object": (
+                "Prove the selected second-H marked-map surplus equations are formal ideal consequences "
+                "or otherwise construct its all-orders map lift. Then apply this free-kernel theorem and "
+                "evaluate beta_C on the same characteristic-zero member."
+            ),
+        },
+        "scope": {
+            "unconditional_without_formal_graph_map_lifts": False,
+            "proves_second_H_marked_map_all_orders": False,
+            "selects_one_of_123_kernel_directions_physically": False,
+            "proves_smoothness_of_selected_characteristic_zero_member": False,
+            "computes_beta_C": False,
+            "constructs_visible_V3_HYM": False,
+            "closes_B_ETA9_01": False,
+            "closes_B_ETA9_02": False,
+            "closes_B_HS_01": False,
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_physics_inputs": 0,
+            "formal_kernel_rank_not_physical_parameter_count": 123,
+        },
+        "guardrails": {
+            "claims_second_H_formal_map_is_closed": False,
+            "claims_characteristic_zero_selected_member_is_emitted": False,
+            "claims_beta_C_is_decided": False,
+            "claims_visible_V3_or_HYM": False,
+            "uses_observed_physics_values": False,
+            "adds_fitted_parameter": False,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AH formal coefficient kernel: BUILT")
+    print("geometric target ranks: 26 + 26 + 74 = 126")
+    print("special-fiber rank: 126; formal kernel rank: 123")
+    print("coefficient lifting: unobstructed at all orders, conditional on formal graph-map lifts")
+    print("open: selected second-H marked-map all-orders theorem and beta_C")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,481 @@
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <numeric>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr std::uint32_t kNoBasis = std::numeric_limits<std::uint32_t>::max();
+
+struct Entry {
+    std::uint32_t index;
+    std::uint32_t value;
+};
+
+struct Chart {
+    std::uint64_t prime{};
+    std::uint64_t rows{};
+    std::uint64_t columns{};
+    std::uint64_t nonzeros{};
+    std::uint64_t quotient_units{};
+    std::uint64_t image_rank{};
+    std::vector<std::uint64_t> indptr;
+    std::vector<std::uint32_t> indices;
+    std::vector<std::uint32_t> data;
+};
+
+template <typename T>
+void read_exact(std::ifstream& input, T* destination, std::size_t count) {
+    input.read(
+        reinterpret_cast<char*>(destination),
+        static_cast<std::streamsize>(sizeof(T) * count));
+    if (!input) throw std::runtime_error("truncated chart binary");
+}
+
+template <typename T>
+void write_exact(std::ofstream& output, const T* source, std::size_t count) {
+    output.write(
+        reinterpret_cast<const char*>(source),
+        static_cast<std::streamsize>(sizeof(T) * count));
+    if (!output) throw std::runtime_error("failed writing kernel binary");
+}
+
+Chart read_chart(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot open chart: " + path);
+    std::array<char, 8> magic{};
+    read_exact(input, magic.data(), magic.size());
+    const std::array<char, 8> expected{'M','T','T','S','P','C','1','\0'};
+    if (magic != expected) throw std::runtime_error("unexpected chart magic");
+    Chart chart;
+    read_exact(input, &chart.prime, 1);
+    read_exact(input, &chart.rows, 1);
+    read_exact(input, &chart.columns, 1);
+    read_exact(input, &chart.nonzeros, 1);
+    read_exact(input, &chart.quotient_units, 1);
+    read_exact(input, &chart.image_rank, 1);
+    if (chart.prime < 3 || chart.prime >= (std::uint64_t{1} << 31) ||
+        chart.rows == 0 || chart.columns == 0) {
+        throw std::runtime_error("invalid chart header");
+    }
+    chart.indptr.resize(chart.columns + 1);
+    chart.indices.resize(chart.nonzeros);
+    chart.data.resize(chart.nonzeros);
+    read_exact(input, chart.indptr.data(), chart.indptr.size());
+    read_exact(input, chart.indices.data(), chart.indices.size());
+    read_exact(input, chart.data.data(), chart.data.size());
+    if (chart.indptr.front() != 0 || chart.indptr.back() != chart.nonzeros) {
+        throw std::runtime_error("invalid CSC endpoints");
+    }
+    for (std::size_t column = 0; column < chart.columns; ++column) {
+        if (chart.indptr[column] > chart.indptr[column + 1]) {
+            throw std::runtime_error("nonmonotone CSC pointers");
+        }
+    }
+    for (std::size_t index = 0; index < chart.nonzeros; ++index) {
+        if (chart.indices[index] >= chart.rows || chart.data[index] == 0 ||
+            chart.data[index] >= chart.prime) {
+            throw std::runtime_error("invalid CSC entry");
+        }
+    }
+    return chart;
+}
+
+std::uint32_t multiply_mod(
+    std::uint32_t left, std::uint32_t right, std::uint32_t prime) {
+    return static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(left) * right) % prime);
+}
+
+std::uint32_t subtract_product(
+    std::uint32_t current,
+    std::uint32_t left,
+    std::uint32_t right,
+    std::uint32_t prime) {
+    const auto product = multiply_mod(left, right, prime);
+    return current >= product ? current - product : current + prime - product;
+}
+
+std::uint32_t add_product(
+    std::uint32_t current,
+    std::uint32_t left,
+    std::uint32_t right,
+    std::uint32_t prime) {
+    return static_cast<std::uint32_t>(
+        (current + static_cast<std::uint64_t>(left) * right) % prime);
+}
+
+std::uint32_t power_mod(
+    std::uint32_t value, std::uint64_t exponent, std::uint32_t prime) {
+    auto result = std::uint32_t{1};
+    while (exponent != 0) {
+        if (exponent & 1U) result = multiply_mod(result, value, prime);
+        value = multiply_mod(value, value, prime);
+        exponent >>= 1U;
+    }
+    return result;
+}
+
+std::uint32_t inverse_mod(std::uint32_t value, std::uint32_t prime) {
+    if (value == 0) throw std::runtime_error("attempted inversion of zero");
+    return power_mod(value, prime - 2, prime);
+}
+
+class KernelCompiler {
+public:
+    KernelCompiler(
+        const Chart& chart,
+        std::uint32_t update_start,
+        std::vector<std::uint32_t> original_to_priority)
+        : chart_(chart),
+          prime_(static_cast<std::uint32_t>(chart.prime)),
+          rows_(chart.rows),
+          update_start_(update_start),
+          update_dimension_(static_cast<std::uint32_t>(chart.columns) - update_start),
+          original_to_priority_(std::move(original_to_priority)),
+          basis_(rows_),
+          basis_index_by_pivot_(rows_, kNoBasis),
+          work_(rows_, 0),
+          nonzero_words_((rows_ + 63) / 64, 0),
+          g_(rows_, 0),
+          coordinates_(rows_, 0),
+          reconstruction_(rows_, 0) {
+        relation_indptr_.push_back(0);
+    }
+
+    bool insert_column(std::uint32_t column) {
+        ensure_empty();
+        scratch_transcript_.clear();
+        for (auto index = chart_.indptr[column]; index < chart_.indptr[column + 1]; ++index) {
+            set_value(
+                original_to_priority_[chart_.indices[index]],
+                chart_.data[index]);
+        }
+        std::size_t search_from = 0;
+        while (current_nonzeros_ != 0) {
+            const auto pivot = first_nonzero(search_from);
+            const auto basis_index = basis_index_by_pivot_[pivot];
+            if (basis_index == kNoBasis) {
+                const auto pivot_coefficient = work_[pivot];
+                const auto inverse = inverse_mod(pivot_coefficient, prime_);
+                auto& vector = basis_[pivot];
+                vector.reserve(current_nonzeros_);
+                for (std::size_t word_index = pivot / 64;
+                     word_index < nonzero_words_.size(); ++word_index) {
+                    auto word = nonzero_words_[word_index];
+                    while (word != 0) {
+                        const auto bit = static_cast<unsigned>(__builtin_ctzll(word));
+                        const auto row = static_cast<std::uint32_t>(word_index * 64 + bit);
+                        if (row < rows_) {
+                            vector.push_back(
+                                Entry{row, multiply_mod(work_[row], inverse, prime_)});
+                            work_[row] = 0;
+                        }
+                        word &= word - 1;
+                    }
+                    nonzero_words_[word_index] = 0;
+                }
+                const auto new_index = static_cast<std::uint32_t>(selected_columns_.size());
+                basis_index_by_pivot_[pivot] = new_index;
+                selected_columns_.push_back(column);
+                pivot_coefficients_.push_back(pivot_coefficient);
+                transcripts_.push_back(scratch_transcript_);
+                if (column >= update_start_) {
+                    selected_update_columns_.push_back(column - update_start_);
+                }
+                basis_terms_ += vector.size();
+                transcript_terms_ += scratch_transcript_.size();
+                current_nonzeros_ = 0;
+                ++rank_;
+                return true;
+            }
+            const auto factor = work_[pivot];
+            scratch_transcript_.push_back(Entry{basis_index, factor});
+            for (const auto& entry : basis_[pivot]) {
+                update_value(
+                    entry.index,
+                    subtract_product(work_[entry.index], factor, entry.value, prime_));
+            }
+            ++reductions_;
+            search_from = pivot;
+        }
+        if (column < update_start_) {
+            throw std::runtime_error("dependent base column " + std::to_string(column));
+        }
+        emit_relation(column);
+        return false;
+    }
+
+    void write_kernel(const std::string& path) const {
+        std::ofstream output(path, std::ios::binary);
+        if (!output) throw std::runtime_error("cannot open kernel output: " + path);
+        const std::array<char, 8> magic{'M','T','T','K','E','R','1','\0'};
+        write_exact(output, magic.data(), magic.size());
+        const std::array<std::uint64_t, 8> header{
+            chart_.prime,
+            update_dimension_,
+            dependent_update_columns_.size(),
+            relation_indices_.size(),
+            chart_.rows,
+            rank_,
+            update_start_,
+            selected_update_columns_.size()};
+        write_exact(output, header.data(), header.size());
+        write_exact(output, relation_indptr_.data(), relation_indptr_.size());
+        write_exact(output, relation_indices_.data(), relation_indices_.size());
+        write_exact(output, relation_data_.data(), relation_data_.size());
+        write_exact(
+            output,
+            dependent_update_columns_.data(),
+            dependent_update_columns_.size());
+        write_exact(
+            output,
+            selected_update_columns_.data(),
+            selected_update_columns_.size());
+    }
+
+    std::size_t rank() const { return rank_; }
+    std::uint64_t basis_terms() const { return basis_terms_; }
+    std::uint64_t transcript_terms() const { return transcript_terms_; }
+    std::uint64_t reductions() const { return reductions_; }
+    std::uint64_t relation_nonzeros() const { return relation_indices_.size(); }
+    std::uint64_t verified_relations() const { return verified_relations_; }
+    std::size_t selected_update_count() const { return selected_update_columns_.size(); }
+    std::size_t dependent_update_count() const { return dependent_update_columns_.size(); }
+
+private:
+    void emit_relation(std::uint32_t column) {
+        std::fill(g_.begin(), g_.end(), 0);
+        std::fill(coordinates_.begin(), coordinates_.end(), 0);
+        for (const auto& entry : scratch_transcript_) {
+            g_[entry.index] = entry.value;
+        }
+        for (std::size_t reverse = selected_columns_.size(); reverse > 0; --reverse) {
+            const auto index = reverse - 1;
+            const auto value = multiply_mod(
+                g_[index], inverse_mod(pivot_coefficients_[index], prime_), prime_);
+            coordinates_[index] = value;
+            if (value == 0) continue;
+            for (const auto& entry : transcripts_[index]) {
+                g_[entry.index] = subtract_product(
+                    g_[entry.index], value, entry.value, prime_);
+            }
+        }
+        verify_relation(column);
+        for (std::size_t index = 0; index < selected_columns_.size(); ++index) {
+            const auto selected = selected_columns_[index];
+            const auto value = coordinates_[index];
+            if (selected < update_start_ || value == 0) continue;
+            relation_indices_.push_back(selected - update_start_);
+            relation_data_.push_back(prime_ - value);
+        }
+        const auto local_column = column - update_start_;
+        relation_indices_.push_back(local_column);
+        relation_data_.push_back(1);
+        relation_indptr_.push_back(relation_indices_.size());
+        dependent_update_columns_.push_back(local_column);
+    }
+
+    void verify_relation(std::uint32_t column) {
+        std::fill(reconstruction_.begin(), reconstruction_.end(), 0);
+        for (auto index = chart_.indptr[column]; index < chart_.indptr[column + 1]; ++index) {
+            reconstruction_[chart_.indices[index]] = chart_.data[index];
+        }
+        for (std::size_t basis_index = 0;
+             basis_index < selected_columns_.size(); ++basis_index) {
+            const auto value = coordinates_[basis_index];
+            if (value == 0) continue;
+            const auto selected = selected_columns_[basis_index];
+            for (auto index = chart_.indptr[selected];
+                 index < chart_.indptr[selected + 1]; ++index) {
+                const auto row = chart_.indices[index];
+                reconstruction_[row] = subtract_product(
+                    reconstruction_[row], value, chart_.data[index], prime_);
+            }
+        }
+        if (std::any_of(
+                reconstruction_.begin(),
+                reconstruction_.end(),
+                [](std::uint32_t value) { return value != 0; })) {
+            throw std::runtime_error("emitted relation has nonzero residual");
+        }
+        ++verified_relations_;
+    }
+
+    void ensure_empty() const {
+        if (current_nonzeros_ != 0) throw std::runtime_error("working vector not empty");
+    }
+
+    void set_value(std::uint32_t row, std::uint32_t value) {
+        if (value == 0 || work_[row] != 0) {
+            throw std::runtime_error("zero or duplicate sparse coefficient");
+        }
+        work_[row] = value;
+        nonzero_words_[row / 64] |= std::uint64_t{1} << (row % 64);
+        ++current_nonzeros_;
+    }
+
+    void update_value(std::uint32_t row, std::uint32_t value) {
+        const auto old = work_[row];
+        if (old == 0 && value != 0) {
+            nonzero_words_[row / 64] |= std::uint64_t{1} << (row % 64);
+            ++current_nonzeros_;
+        } else if (old != 0 && value == 0) {
+            nonzero_words_[row / 64] &= ~(std::uint64_t{1} << (row % 64));
+            --current_nonzeros_;
+        }
+        work_[row] = value;
+    }
+
+    std::uint32_t first_nonzero(std::size_t start) const {
+        auto word_index = start / 64;
+        auto word = nonzero_words_[word_index] &
+                    ((~std::uint64_t{0}) << (start % 64));
+        while (true) {
+            if (word != 0) {
+                return static_cast<std::uint32_t>(
+                    word_index * 64 + static_cast<unsigned>(__builtin_ctzll(word)));
+            }
+            ++word_index;
+            if (word_index >= nonzero_words_.size()) {
+                throw std::runtime_error("bitset/coefficient inconsistency");
+            }
+            word = nonzero_words_[word_index];
+        }
+    }
+
+    const Chart& chart_;
+    std::uint32_t prime_;
+    std::size_t rows_;
+    std::uint32_t update_start_;
+    std::uint32_t update_dimension_;
+    std::vector<std::uint32_t> original_to_priority_;
+    std::vector<std::vector<Entry>> basis_;
+    std::vector<std::uint32_t> basis_index_by_pivot_;
+    std::vector<std::uint32_t> work_;
+    std::vector<std::uint64_t> nonzero_words_;
+    std::vector<Entry> scratch_transcript_;
+    std::vector<std::vector<Entry>> transcripts_;
+    std::vector<std::uint32_t> selected_columns_;
+    std::vector<std::uint32_t> pivot_coefficients_;
+    std::vector<std::uint32_t> g_;
+    std::vector<std::uint32_t> coordinates_;
+    std::vector<std::uint32_t> reconstruction_;
+    std::vector<std::uint64_t> relation_indptr_;
+    std::vector<std::uint32_t> relation_indices_;
+    std::vector<std::uint32_t> relation_data_;
+    std::vector<std::uint32_t> dependent_update_columns_;
+    std::vector<std::uint32_t> selected_update_columns_;
+    std::size_t current_nonzeros_{};
+    std::size_t rank_{};
+    std::uint64_t basis_terms_{};
+    std::uint64_t transcript_terms_{};
+    std::uint64_t reductions_{};
+    std::uint64_t verified_relations_{};
+};
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        std::string chart_path, kernel_path, log_path;
+        std::uint32_t update_start = 0;
+        double progress_seconds = 10.0;
+        for (int index = 1; index < argc; ++index) {
+            const std::string argument = argv[index];
+            if (argument == "--chart" && index + 1 < argc) chart_path = argv[++index];
+            else if (argument == "--kernel" && index + 1 < argc) kernel_path = argv[++index];
+            else if (argument == "--log" && index + 1 < argc) log_path = argv[++index];
+            else if (argument == "--update-start" && index + 1 < argc) {
+                update_start = static_cast<std::uint32_t>(std::stoul(argv[++index]));
+            } else if (argument == "--progress-seconds" && index + 1 < argc) {
+                progress_seconds = std::stod(argv[++index]);
+            } else {
+                throw std::runtime_error("unknown or incomplete argument: " + argument);
+            }
+        }
+        if (chart_path.empty() || kernel_path.empty() || log_path.empty()) {
+            throw std::runtime_error("--chart, --kernel and --log are required");
+        }
+        const auto chart = read_chart(chart_path);
+        if (update_start >= chart.columns) {
+            throw std::runtime_error("valid --update-start required");
+        }
+        std::vector<std::uint32_t> incidence(chart.rows, 0);
+        for (const auto row : chart.indices) ++incidence[row];
+        std::vector<std::uint32_t> priority_to_original(chart.rows);
+        std::iota(priority_to_original.begin(), priority_to_original.end(), 0);
+        std::stable_sort(
+            priority_to_original.begin(),
+            priority_to_original.end(),
+            [&incidence](std::uint32_t left, std::uint32_t right) {
+                return incidence[left] != incidence[right]
+                    ? incidence[left] < incidence[right] : left < right;
+            });
+        std::vector<std::uint32_t> original_to_priority(chart.rows);
+        for (std::size_t priority = 0; priority < chart.rows; ++priority) {
+            original_to_priority[priority_to_original[priority]] =
+                static_cast<std::uint32_t>(priority);
+        }
+
+        KernelCompiler compiler(chart, update_start, std::move(original_to_priority));
+        const auto started = std::chrono::steady_clock::now();
+        auto next_progress = started + std::chrono::duration<double>(progress_seconds);
+        for (std::uint32_t column = 0; column < chart.columns; ++column) {
+            compiler.insert_column(column);
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_progress) {
+                const auto elapsed = std::chrono::duration<double>(now - started).count();
+                std::cout << "PROGRESS columns=" << column + 1 << '/' << chart.columns
+                          << " rank=" << compiler.rank()
+                          << " kernel=" << compiler.dependent_update_count()
+                          << " elapsed=" << std::fixed << std::setprecision(3)
+                          << elapsed << '\n' << std::flush;
+                next_progress = now + std::chrono::duration<double>(progress_seconds);
+            }
+        }
+        compiler.write_kernel(kernel_path);
+        const auto finished = std::chrono::steady_clock::now();
+        const auto elapsed = std::chrono::duration<double>(finished - started).count();
+        std::ofstream log(log_path);
+        if (!log) throw std::runtime_error("cannot open log: " + log_path);
+        log << "SCHEMA MTTSplitPrimeSparseKernel.v1\n";
+        log << "STATUS SUCCESS\n";
+        log << "PRIME " << chart.prime << '\n';
+        log << "ROWS " << chart.rows << '\n';
+        log << "COLUMNS " << chart.columns << '\n';
+        log << "RANK " << compiler.rank() << '\n';
+        log << "NULLITY " << chart.columns - compiler.rank() << '\n';
+        log << "UPDATE_START " << update_start << '\n';
+        log << "UPDATE_DIMENSION " << chart.columns - update_start << '\n';
+        log << "SELECTED_UPDATE_COLUMNS " << compiler.selected_update_count() << '\n';
+        log << "DEPENDENT_UPDATE_COLUMNS " << compiler.dependent_update_count() << '\n';
+        log << "KERNEL_NONZEROS " << compiler.relation_nonzeros() << '\n';
+        log << "VERIFIED_RELATIONS " << compiler.verified_relations() << '\n';
+        log << "BASIS_TERMS " << compiler.basis_terms() << '\n';
+        log << "TRANSCRIPT_TERMS " << compiler.transcript_terms() << '\n';
+        log << "REDUCTIONS " << compiler.reductions() << '\n';
+        log << "ELAPSED_SECONDS " << std::fixed << std::setprecision(6) << elapsed << '\n';
+        log << "END_CERTIFICATE\n";
+        std::cout << "SUCCESS prime=" << chart.prime
+                  << " rank=" << compiler.rank()
+                  << " selected_update=" << compiler.selected_update_count()
+                  << " kernel_columns=" << compiler.dependent_update_count()
+                  << " kernel_nnz=" << compiler.relation_nonzeros()
+                  << " verified=" << compiler.verified_relations()
+                  << " elapsed=" << std::fixed << std::setprecision(3)
+                  << elapsed << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "ERROR " << error.what() << '\n';
+        return 1;
+    }
+}

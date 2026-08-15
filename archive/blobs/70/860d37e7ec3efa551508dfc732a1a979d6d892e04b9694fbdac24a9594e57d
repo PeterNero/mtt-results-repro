@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Emit and reserve a third-prime H02 kernel for reconstruction holdout."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3dg_h02_split_place_full_coupling_rank as rank_runtime
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+import build_ust_g3dj_h02_second_prime_kernel_relations as campaign
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3BU = ROOT / "state" / "ust_g3bu_h02_endpoint_determinant_crt_campaign.packet.json"
+G3BW = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+G3BZ = ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json"
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3DI = ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+G3DJ = ROOT / "state" / "ust_g3dj_h02_second_prime_kernel_relations.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dk"
+OUT = ROOT / "state" / "ust_g3dk_h02_third_prime_kernel_relations.packet.json"
+PRIME = 37493
+ROOTS = (4637, 7219, 7234, 16137, 17865, 21870)
+UPDATE_START = 24767
+UPDATE_DIMENSION = 6022
+KERNEL_DIMENSION = 1274
+COUPLING_RANK = 4748
+THREE_PRIME_MODULUS = 21817 * 33863 * PRIME
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def coefficient_dtype() -> type[np.unsignedinteger[Any]]:
+    return np.uint16 if PRIME <= np.iinfo(np.uint16).max else np.uint32
+
+
+def interpolate(values: np.ndarray) -> np.ndarray:
+    require(values.shape[0] == 6, "six root values")
+    vandermonde = np.asarray(
+        [[pow(root, degree, PRIME) for degree in range(6)] for root in ROOTS],
+        dtype=np.int64,
+    )
+    augmented = np.concatenate((vandermonde, np.eye(6, dtype=np.int64)), axis=1)
+    for column in range(6):
+        choices = np.flatnonzero(augmented[column:, column] % PRIME)
+        require(choices.size > 0, "Vandermonde pivot")
+        selected = column + int(choices[0])
+        if selected != column:
+            augmented[[column, selected]] = augmented[[selected, column]]
+        augmented[column] = (
+            augmented[column]
+            * pow(int(augmented[column, column] % PRIME), -1, PRIME)
+            % PRIME
+        )
+        for row in range(6):
+            if row == column:
+                continue
+            factor = int(augmented[row, column] % PRIME)
+            if factor:
+                augmented[row] = (augmented[row] - factor * augmented[column]) % PRIME
+    inverse = augmented[:, 6:].astype(np.uint64)
+    coefficients = np.empty(values.shape, dtype=coefficient_dtype())
+    for degree in range(6):
+        accumulator = np.zeros(values.shape[1:], dtype=np.uint64)
+        for root_index in range(6):
+            accumulator += values[root_index].astype(np.uint64) * inverse[degree, root_index]
+            accumulator %= PRIME
+        coefficients[degree] = accumulator.astype(coefficient_dtype())
+    return coefficients
+
+
+def evaluate_dense(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.uint64)
+    for degree in reversed(range(5)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value.astype(coefficient_dtype())
+
+
+def main() -> None:
+    # Reuse the exact campaign arithmetic with this prime and its six roots.
+    campaign.PRIME = PRIME
+    campaign.ROOTS = ROOTS
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    packets = {
+        label: load(path)
+        for label, path in (
+            ("G3BU", G3BU),
+            ("G3BW", G3BW),
+            ("G3BZ", G3BZ),
+            ("G3DE", G3DE),
+            ("G3DI", G3DI),
+            ("G3DJ", G3DJ),
+        )
+    }
+    require(all(all(packet["checks"].values()) for packet in packets.values()), "input checks")
+    prime_record = next(
+        row for row in packets["G3BU"]["prime_residues"] if int(row["prime"]) == PRIME
+    )
+    require(tuple(prime_record["roots"]) == ROOTS, "third-prime roots")
+    endpoints = {int(row["gamma_root"]): row for row in prime_record["root_solves"]}
+
+    dm = np.load(
+        ROOT / packets["G3BW"]["DM_reduction"]["arrays"]["path"], allow_pickle=False
+    )
+    core_rows = np.flatnonzero(dm["component_by_row"] == 17597).astype(np.int32)
+    core_columns = np.flatnonzero(dm["component_by_column"] == 17597).astype(np.int32)
+    require(core_rows.size == core_columns.size == UPDATE_START, "core dimensions")
+    delta_records = packets["G3BZ"]["affine_path_update"]["exact_gamma_coefficient_matrices"]
+    u_records = packets["G3DE"]["factorization"]["U_gamma_coefficients"]
+    w_records = packets["G3DE"]["factorization"]["W_gamma_coefficients"]
+    selection = np.load(
+        ROOT / packets["G3DI"]["split_algebra_kernel"]["selection"]["path"],
+        allow_pickle=False,
+    )
+    selected_reference = selection["selected_update_columns"].astype(np.int32)
+    dependent_reference = selection["dependent_update_columns"].astype(np.int32)
+
+    source = ROOT / packets["G3DI"]["inputs"]["kernel_tool_source"]["path"]
+    executable = ROOT / packets["G3DI"]["inputs"]["kernel_tool_executable"]["path"]
+    require(campaign.sha256(source) == packets["G3DI"]["inputs"]["kernel_tool_source"]["sha256"], "kernel source hash")
+    require(campaign.sha256(executable) == packets["G3DI"]["inputs"]["kernel_tool_executable"]["sha256"], "kernel executable hash")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    root_payloads: list[dict[str, Any]] = []
+    matrices: list[sparse.csc_matrix] = []
+    reuse_exact_kernels = os.environ.get("UST_REUSE_EXACT_KERNELS") == "1"
+    for index, root in enumerate(ROOTS, start=1):
+        print(f"G3DK root {index}/6 gamma={root}: constructing reserved-prime border", flush=True)
+        endpoint_path = ROOT / endpoints[root]["endpoint_chart"]["path"]
+        require(campaign.sha256(endpoint_path) == endpoints[root]["endpoint_chart"]["sha256"], "endpoint hash")
+        endpoint = split_io.as_scipy(
+            arithmetic.read_csc(endpoint_path, b"MTTSPC1\0", 6)
+        ).tocsc().astype(np.int64)
+        delta = campaign.evaluate(delta_records, root)
+        u = campaign.evaluate(u_records, root)
+        w = campaign.evaluate(w_records, root)
+        base = campaign.normalize(endpoint[dm["complement_rows"], :][:, 248:] - delta)
+        a_core = campaign.normalize(base[core_rows, :][:, core_columns])
+        u_core = campaign.normalize(u[core_rows, :])
+        w_core = campaign.normalize(w[:, core_columns])
+        outside = np.ones(u.shape[0], dtype=bool)
+        outside[core_rows] = False
+        require(u[outside, :].nnz == 0, "U core support")
+        border = campaign.normalize(
+            sparse.bmat(
+                [[a_core, u_core], [w_core, sparse.csc_matrix((UPDATE_DIMENSION, UPDATE_DIMENSION), dtype=np.uint32)]],
+                format="csc",
+            )
+        )
+        border_path = EVIDENCE / f"H02.B89.bordered_Q.p{PRIME}.g{root}.chart.bin"
+        exporter.write_chart(
+            border_path,
+            PRIME,
+            border.shape[0],
+            0,
+            border.shape[0],
+            border.indptr.astype(np.uint64).tolist(),
+            border.indices.astype(np.uint32).tolist(),
+            border.data.astype(np.uint32).tolist(),
+        )
+        kernel_path = EVIDENCE / f"H02.Q_kernel.p{PRIME}.g{root}.bin"
+        log_path = EVIDENCE / f"H02.Q_kernel.p{PRIME}.g{root}.log"
+        if reuse_exact_kernels and kernel_path.is_file() and log_path.is_file():
+            completed_stdout = "reused hash-bound exact kernel binary after storage-width repair"
+        else:
+            completed = subprocess.run(
+                [
+                    "wsl",
+                    runtime.wsl_path(executable),
+                    "--chart",
+                    runtime.wsl_path(border_path),
+                    "--kernel",
+                    runtime.wsl_path(kernel_path),
+                    "--log",
+                    runtime.wsl_path(log_path),
+                    "--update-start",
+                    str(UPDATE_START),
+                    "--progress-seconds",
+                    "20",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            require(completed.returncode == 0, completed.stdout + completed.stderr)
+            completed_stdout = completed.stdout.strip()
+        fields = rank_runtime.initializer.parse_log(log_path)
+        require(int(fields["RANK"]) == UPDATE_START + COUPLING_RANK, "third-prime border rank")
+        require(int(fields["VERIFIED_RELATIONS"]) == KERNEL_DIMENSION, "third-prime verified relations")
+        payload = kernel_io.read_kernel(kernel_path)
+        require(np.array_equal(payload["selected"], selected_reference), "same selected columns")
+        require(np.array_equal(payload["dependent"], dependent_reference), "same dependent columns")
+        matrices.append(payload["matrix"])
+        root_payloads.append(
+            {
+                "gamma_root": root,
+                "endpoint_chart": campaign.record(endpoint_path),
+                "border_chart": campaign.record(border_path),
+                "kernel": campaign.record(kernel_path),
+                "kernel_log": campaign.record(log_path),
+                "kernel_nonzero_entries": int(payload["matrix"].nnz),
+                "solver_stdout": completed_stdout,
+            }
+        )
+        print(f"G3DK gamma={root}: rank=4748 kernel_nnz={payload['matrix'].nnz}", flush=True)
+
+    values = np.stack(
+        [matrix.toarray().astype(coefficient_dtype(), copy=False) for matrix in matrices], axis=0
+    )
+    coefficients = interpolate(values)
+    mismatches = sum(
+        int(np.count_nonzero(evaluate_dense(coefficients, root) != values[index]))
+        for index, root in enumerate(ROOTS)
+    )
+    require(mismatches == 0, "third-prime interpolation")
+    power_path = EVIDENCE / f"H02.Q_kernel.p{PRIME}.power_basis.u16.npz"
+    np.savez_compressed(power_path, coefficients=coefficients)
+    del values, coefficients
+
+    checks = {
+        "all_upstream_packets_are_hash_bound_and_passing": True,
+        "all_six_roots_of_reserved_prime37493_are_executed": True,
+        "all_six_third_prime_couplings_have_rank4748_and1274_verified_relations": True,
+        "the_coordinate_partition_is_identical_across_all_three_primes": True,
+        "six_root_interpolation_emits_the_complete_reserved_split_algebra_kernel": mismatches == 0,
+        "the_third_prime_was_not_used_in_the_prior_two_prime_reconstruction_screen": True,
+        "no_characteristic_zero_promotion_is_inferred_from_three_prime_agreement": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DK checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dk-h02-third-prime-kernel-relations.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DK",
+        "status": "CLOSED_EXACT_H02_RESERVED_THIRD_SPLIT_PRIME_KERNEL",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            label: campaign.record(path)
+            for label, path in (("G3BU", G3BU), ("G3BW", G3BW), ("G3BZ", G3BZ), ("G3DE", G3DE), ("G3DI", G3DI), ("G3DJ", G3DJ))
+        },
+        "field": {
+            "prime": PRIME,
+            "roots": list(ROOTS),
+            "algebra": "F_37493[gamma]/(m_gamma) is the product over the six roots",
+        },
+        "root_kernels": root_payloads,
+        "third_split_algebra_kernel": {
+            "shape": [UPDATE_DIMENSION, KERNEL_DIMENSION],
+            "rank": KERNEL_DIMENSION,
+            "coupling_rank": COUPLING_RANK,
+            "power_basis_coefficients": campaign.record(power_path),
+            "power_basis_shape": [6, UPDATE_DIMENSION, KERNEL_DIMENSION],
+            "coefficient_storage_dtype": np.dtype(coefficient_dtype()).name,
+            "interpolation_evaluation_mismatches": mismatches,
+            "same_selection_as_G3DI_and_G3DJ": True,
+        },
+        "multiprime_promotion": {
+            "primes": [21817, 33863, PRIME],
+            "CRT_modulus": THREE_PRIME_MODULUS,
+            "CRT_modulus_bits": THREE_PRIME_MODULUS.bit_length(),
+            "third_prime_role": "held_out_from_the_prior_two_prime_candidate_construction",
+            "height_bound_available": False,
+            "exact_Q_gamma_promotion": False,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dkH02ThirdPrimeKernelRelations",
+            "tier": "CLOSED_EXACT_RESERVED_COMPLETE_SPLIT_ALGEBRA_KERNEL",
+            "statement": "At all six roots of the previously unused split prime 37493, the H02 coupling again has rank 4748 and exactly 1274 normalized zero-residual relations with the same coordinate partition as G3DI/G3DJ. The complete third split-algebra kernel is persisted as an independent holdout for rational reconstruction tests.",
+        },
+        "frontier_delta": {
+            "before": "Two primes supplied candidate residues but no independent holdout.",
+            "after": "A complete third-prime split-algebra kernel is reserved for coefficientwise out-of-sample validation before it is admitted into a larger CRT modulus.",
+        },
+        "next_required_object": "Test every two-prime rational reconstruction candidate against the reserved third-prime coefficients, then use all three primes only for coefficients that pass or remain unreconstructed; retain a later prime as a new holdout.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DK H02 reserved third-prime kernel: PASS")
+    print(f"six_ranks=4748 kernel=6022x1274 CRT3={THREE_PRIME_MODULUS}")
+    print(f"packet_sha256={campaign.sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

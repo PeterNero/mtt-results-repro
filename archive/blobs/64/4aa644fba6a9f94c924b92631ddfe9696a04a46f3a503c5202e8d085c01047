@@ -1,0 +1,184 @@
+# UST.G3AH: Formal Three-Graph Coefficient-Kernel Theorem
+
+## Status
+
+`CLOSED_EXACT_CONDITIONAL_ON_FORMAL_GRAPH_MAP_LIFTS`
+
+`UST.G3AG` proves that one eta9 coefficient vector contains all three selected
+graphs modulo `101^2`. A naive continuation would repeat a 249-variable solve
+at every higher digit. This theorem proves that such repeated coefficient
+searches are unnecessary.
+
+Once the selected graph maps admit disjoint flat formal lifts, their eta9
+coefficient kernel is free of rank 123 and every special-fiber coefficient
+member lifts through every `101`-adic order.
+
+## 1. Source Rank
+
+On the q79 K3, `H^2=2`. Kodaira vanishing and K3 Riemann-Roch give
+
+```text
+h0(O_K3(9H)) = 2 + (9H)^2/2 = 83.
+```
+
+The eta9 equation has three Fermat-coordinate coefficients, hence the formal
+coefficient module has rank
+
+```text
+3*83 = 249.
+```
+
+## 2. Geometric Target Ranks
+
+On a graph `Gamma_i`, the contraction of an eta9 coefficient with the marked
+Fermat coordinate is a section of
+
+```text
+O_K3(9H)|C_i tensor f_i^* O_E(3[0]).
+```
+
+For either primitive-H graph,
+
+```text
+genus(C_i) = 2,
+degree(f_i) = 3,
+degree O_K3(9H)|C_i = 18,
+degree f_i^*O_E(3[0]) = 9.
+```
+
+The total degree is 27, greater than `2g-2=2`, so `H1=0` and
+
+```text
+h0 = 27+1-2 = 26.
+```
+
+For the `4H` graph,
+
+```text
+genus(C_3) = 17,
+degree(f_3) = 6,
+degree O_K3(9H)|C_3 = 72,
+degree f_3^*O_E(3[0]) = 18.
+```
+
+The total degree is 90, greater than `2g-2=32`, so again `H1=0` and
+
+```text
+h0 = 90+1-17 = 74.
+```
+
+Because the three graph divisors are disjoint in the K3-Fermat product, the
+formal target is their direct sum and has rank
+
+```text
+26+26+74 = 126.
+```
+
+The 168 polynomial rows used by G3AG are a redundant coordinate presentation
+of this rank-126 geometric target.
+
+## 3. Surjectivity from G3AG
+
+Let `O` be the complete unramified DVR of the selected gamma completion, and
+suppose the three selected graph maps have disjoint flat formal lifts over
+`O`. Cohomology and base change applies because all three `H1` groups above
+vanish. The incidence map is therefore a morphism of finite free modules
+
+```text
+Phi_O : O^249 -> O^126.
+```
+
+G3AG computes rank 126 on the residue fiber. Thus the reduction of `Phi_O` is
+surjective. The cokernel of `Phi_O` is finite, and its reduction is zero, so
+Nakayama's lemma gives
+
+```text
+coker(Phi_O)=0.
+```
+
+Therefore `Phi_O` is surjective. Since its target is free, the sequence splits:
+
+```text
+0 -> K_O -> O^249 -> O^126 -> 0,
+```
+
+and
+
+```text
+K_O is free of rank 249-126=123.
+```
+
+Base change is exact, so `K_O -> K_O/pK_O` is surjective.
+
+## 4. Theorem
+
+**Formal Three-Graph Coefficient-Kernel Theorem.** Assume the three selected
+G3AG graph curves and marked maps admit disjoint flat formal lifts over the
+selected complete unramified DVR, preserving genera `(2,2,17)` and map degrees
+`(3,3,6)`. Then the eta9 incidence map is surjective onto a finite free
+rank-126 target. Its kernel is finite free of rank 123 and commutes with
+reduction. Consequently every special-fiber eta9 coefficient vector containing
+the three graphs has compatible coefficient lifts modulo `101^n` for every
+`n`.
+
+**Proof.** The three `H1` vanishings and Riemann-Roch calculations give target
+ranks `26`, `26` and `74`, stable under formal base change. Disjointness gives
+their direct sum. G3AG gives full rank 126 after reduction. Nakayama's lemma
+proves surjectivity over the complete local base. The kernel of a surjection
+between finite free modules is a finite projective module, hence free over the
+local ring, with rank 123. Tensoring the split exact sequence with every
+`O/p^n` proves compatible lifting. QED.
+
+## 5. What This Changes
+
+The higher-order coefficient problem is closed conditionally:
+
+```text
+formal graph-map lift
+  => coefficient lift at every order automatically.
+```
+
+No further 249-variable brute-force campaign is needed. The 123 kernel
+directions remain deformation witnesses, not physical knobs. A later physical
+selection rule or `beta_C` condition may cut this kernel, but its existence is
+not an obstruction.
+
+## 6. Condition Discharged by UST.G3AI
+
+The three graph-map inputs have unequal status:
+
+- the first-H source has an invertible incidence Jacobian and a unique formal
+  source branch;
+- the `4H` map is algebraic over `Q(rho)` and embeds in the completion;
+- the selected second-H source curve has a unique formal branch, but its
+  overdetermined marked-map compiler is presently certified only through
+  `101^6`.
+
+At the time of this theorem, the remaining formal wall was the second-H
+marked-map surplus theorem. `UST.G3AI` has now discharged it. The first eight
+coefficient rows form a square Hensel chart with determinant norm `57 mod
+101`; the independently established Hesse-Hurwitz cover supplies the full
+thirteen-row solution after finite base extension. Hensel uniqueness and
+faithful descent force all five surplus rows to vanish over the original
+unramified DVR.
+
+This theorem does not itself prove graph-map formality, select one of the 123
+kernel directions, emit a smooth characteristic-zero selected member, compute
+`beta_C`, or construct the visible HYM endpoint.
+
+## 7. Next Construction
+
+```text
+UST.G3AI second-H all-orders map
+  -> free rank-123 coefficient kernel applies unconditionally at formal tier
+  -> select a smooth characteristic-zero member
+  -> evaluate beta_C on that same member.
+```
+
+## 8. Reproduction
+
+```text
+python build_ust_g3ah_formal_coefficient_kernel.py
+python verify_ust_g3ah_formal_coefficient_kernel.py
+python verify.py
+```

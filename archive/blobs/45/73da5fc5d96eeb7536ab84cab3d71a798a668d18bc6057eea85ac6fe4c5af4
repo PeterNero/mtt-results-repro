@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Test the intrinsic fourth-order conic Laplacian against component 20."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+def falling(value: int, order: int) -> int:
+    if value < order:
+        return 0
+    return math.prod(range(value - order + 1, value + 1))
+
+
+def delta_power_matrix(power: int) -> np.ndarray:
+    """Matrix of (4*d_x*d_z-d_y^2)^power: Sym15 -> Sym(15-2*power)."""
+    source = graded.homogeneous_exponents(15)
+    target = graded.homogeneous_exponents(15 - 2 * power)
+    target_lookup = {exponent: row for row, exponent in enumerate(target)}
+    matrix = np.zeros((len(target), len(source)), dtype=object)
+    for column, (a, b, c) in enumerate(source):
+        for y_pair_count in range(power + 1):
+            xz_count = power - y_pair_count
+            if a < xz_count or c < xz_count or b < 2 * y_pair_count:
+                continue
+            target_exponent = (
+                a - xz_count,
+                b - 2 * y_pair_count,
+                c - xz_count,
+            )
+            coefficient = (
+                math.comb(power, y_pair_count)
+                * 4**xz_count
+                * (-1) ** y_pair_count
+                * falling(a, xz_count)
+                * falling(c, xz_count)
+                * falling(b, 2 * y_pair_count)
+            )
+            matrix[target_lookup[target_exponent], column] += coefficient
+    return np.asarray(matrix, dtype=np.int64)
+
+
+def main() -> None:
+    delta4 = delta_power_matrix(4)
+    assert delta4.shape == (36, 136)
+    rank_q = graded.rref(delta4.T, 104729)[0]
+    assert rank_q == 36
+
+    failures = 0
+    residual_ranks: list[int] = []
+    for packet_path in conic.SPLIT_PACKETS:
+        packet = conic.load(packet_path)
+        prime = int(packet["field"]["prime"])
+        rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        for root in packet["field"]["roots"]:
+            kernel = conic.component_kernel(rows[int(root)], prime)
+            residual = (delta4 % prime) @ kernel % prime
+            residual_rank = graded.rref(residual, prime)[0]
+            residual_ranks.append(residual_rank)
+            if np.count_nonzero(residual):
+                failures += 1
+            print(
+                f"p={prime} gamma={root} residual_nnz={np.count_nonzero(residual)} "
+                f"residual_rank={residual_rank}",
+                flush=True,
+            )
+
+    print(
+        "G3FL apolar Fischer candidate: "
+        f"delta4_rank={rank_q} fibers={len(residual_ranks)} "
+        f"zero_fibers={len(residual_ranks)-failures} "
+        f"residual_rank_range={min(residual_ranks)}..{max(residual_ranks)}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

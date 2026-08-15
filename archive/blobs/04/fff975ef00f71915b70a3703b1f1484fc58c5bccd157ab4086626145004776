@@ -1,0 +1,100 @@
+# UST.G3GM Prime-Arithmetic Compatibility Correction Theorem v1
+
+## Scope
+
+This theorem audits the fresh-prime H02 campaign behind UST.G3GA--G3GH.  It
+is a correction theorem.  It does not add a stronger name to an unchanged
+packet, and it does not alter the same-field G3GK/G3GL calculation.
+
+## Defect
+
+The fresh-prime builder requested the primes `79903`, `81359`, and `82963`,
+but imported `evaluate()` and `normalize()` from the G3DJ second-prime
+runtime.  Those functions close over
+
+```text
+PRIME = 33863.
+```
+
+Thus the endpoint itself was evaluated at the requested prime while the
+`Delta`, `U`, `W`, subtraction, and sparse canonicalization steps inherited
+the unrelated modulus `33863`.  The resulting matrices were not finite
+specializations of one common integral H02 family.
+
+## Exact compatibility test
+
+The defect is visible without interpretation.  Replaying the superseded
+fresh-prime assembly at the archived anchor `(p,gamma)=(21817,5)` disagrees
+with the archived G3DH border in the exact number of entries recorded by the
+G3GM certificate.  Replacing every inherited operation by
+
+```text
+evaluate_at_prime(records, gamma, prime)
+normalize_at_prime(matrix, prime)
+```
+
+reproduces the archived `30789 x 30789` border entry by entry: the sparse
+difference has zero nonzero entries.
+
+## Corrected fresh anchor
+
+The same corrected compiler was then executed at the independent split
+anchor
+
+```text
+(p,gamma) = (79903,12863).
+```
+
+Exact sparse elimination gives
+
+```text
+coupling rank    = 4748,
+kernel dimension = 1274.
+```
+
+The 4,748 selected coordinates and 1,274 dependent coordinates are identical
+to the archived `(21817,5)` chart.  Therefore the previously reported
+`4752/1270` profile and its component-23/24 chart transition were artifacts
+of mixed-modulus arithmetic.
+
+## What survives
+
+The corrected anchor still has the component-20 second-jet profile
+
+```text
+(15,5,0,33,17,1).
+```
+
+The canonical `210 x 132` source operator has rank 115, the same fixed row
+chart completes it to an invertible `132 x 132` system, and the corrected
+source replays that system exactly.  Hence the archived 48-fiber G3GG
+fixed-minor formula survives and is independently confirmed at one corrected
+fresh anchor.  Its promotion over `Q(gamma)` remains open.
+
+## Corrected frontier
+
+The accepted global interval returns to
+
+```text
+4748 <= rank_Q(gamma)(Q) <= 5102,
+kernel_dimension_Q(gamma)(Q) <= 1274.
+```
+
+No equality is asserted.  The following claims are retracted pending a
+prime-parameterized rebuild:
+
+* the `4752` characteristic-zero lower bound;
+* the `1270` kernel upper bound;
+* the component-23/24 four-unit rank jump;
+* the G3GA--G3GE mixed-prime height reconstruction.
+
+G3GK and G3GL are unaffected because they execute at the fixed
+`(21817,5)` endpoint and do not import the defective fresh-prime arithmetic.
+
+## Reproduction
+
+```powershell
+python build_ust_g3gm_prime_arithmetic_compatibility_correction.py
+python verify_ust_g3gm_prime_arithmetic_compatibility_correction.py
+```
+

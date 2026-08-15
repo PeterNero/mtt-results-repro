@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Independently verify the G3FV Cox Hilbert--Burch certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "evidence/ust_g3fv/selected_cox_hilbert_burch_source.json"
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+PRIME = 21817
+GAMMA = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def finite_value(row: list[int]) -> int:
+    value = 0
+    for coefficient in reversed(row):
+        value = (value * GAMMA + int(coefficient)) % PRIME
+    return value
+
+
+def restricted(coefficients: list[list[int]], theta: int) -> sp.Poly:
+    u = sp.symbols("u")
+    x, y, z, w = 1, u, 1 + 2 * u, 1 + 2 * u**2 + u**3
+    offset = 83 * theta
+    expression = 0
+    for local, exponent in enumerate(conic.source_monomials(9)):
+        expression += finite_value(coefficients[offset + local]) * x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+    for local, exponent in enumerate(conic.source_monomials(6)):
+        expression += finite_value(coefficients[offset + 55 + local]) * w * x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+    return sp.Poly(sp.expand(expression), u, modulus=PRIME)
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fv.selected-cox-hilbert-burch-source.v1", "schema")
+    for row in packet["inputs"].values():
+        path = ROOT / row["path"]
+        require(path.stat().st_size == row["bytes"] and digest(path) == row["sha256"], "input lock")
+
+    h, r, e, t, a, b, c, d, u = sp.symbols("h r e t a b c d u")
+    matrix = sp.Matrix([[h, 0, u * d], [r, 0, u * c], [0, e, a], [0, t, b]])
+    minors = []
+    for index in range(4):
+        minor = matrix.copy()
+        minor.row_del(index)
+        minors.append(sp.expand((-1) ** index * minor.det()))
+    require(all(sp.expand(value) == 0 for value in matrix.T * sp.Matrix(minors)), "minor syzygies")
+    ce = e * b - t * a
+    ck = u * (h * c - r * d)
+    expected = [r * ce, -h * ce, -t * ck, e * ck]
+    require(
+        all(sp.expand(left - right) == 0 for left, right in zip(minors, expected, strict=True)),
+        "minor formulas",
+    )
+
+    source = json.loads(G3BI.read_text(encoding="utf-8"))["selected_source"]["coefficient_vectors"]
+    first, second = restricted(source, 1), restricted(source, 2)
+    require(first.degree() == second.degree() == 9, "restriction degrees")
+    require(sp.gcd(first, second).degree() == 0, "restriction gcd")
+    require(packet["grade_two_certificate"]["height"] == 2, "height certificate")
+    require(packet["comparison_with_finite_component20"]["status"] == "OPEN_COX_TO_APOLAR_INTERTWINER", "open comparison")
+    require(all(packet["checks"].values()) and not any(packet["guardrails"].values()), "claim discipline")
+    print("UST.G3FV independent verification: PASS checks=14 apolar_comparison=open")
+
+
+if __name__ == "__main__":
+    main()

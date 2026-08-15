@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Rebuild the superseded G3GA--G3GE campaign in a disjoint v2 namespace."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import build_ust_g3fz_component20_second_jet_o8_source as second_jet
+import build_ust_g3ga_component20_second_jet_qgamma_promotion as g3ga
+import build_ust_g3gb_extra_root_second_jet_height_campaign as g3gb
+import build_ust_g3gc_adaptive_root_second_jet_height_extension as g3gc
+import build_ust_g3gd_final_root_second_jet_height_extension as g3gd
+import build_ust_g3ge_component20_eleven_prime_second_jet_height_audit as g3ge
+import build_ust_g3ft_component20_full_relation_height_campaign as heights
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3gn"
+SCRATCH = ROOT / "state" / "ust_g3gn_scratch"
+PROGRESS = EVIDENCE / "progress.json"
+OUT = ROOT / "state" / "ust_g3gn_corrected_fresh_prime_campaign.packet.json"
+ARITHMETIC_SCHEMA = "prime_parameterized_v2"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+    os.replace(temporary, path)
+
+
+def progress(phase: str, **extra: Any) -> None:
+    payload = {
+        "schema": "mtt.unified-source.g3gn-progress.v1",
+        "phase": phase,
+        "arithmetic_schema": ARITHMETIC_SCHEMA,
+        **extra,
+    }
+    atomic_json(PROGRESS, payload)
+    print(f"G3GN progress phase={phase}", flush=True)
+
+
+def configure_disjoint_outputs() -> None:
+    g3ga.EVIDENCE = EVIDENCE / "g3ga"
+    g3ga.SCRATCH = SCRATCH / "g3ga"
+    g3ga.ARRAYS = g3ga.EVIDENCE / "H02.component20.second_jet_qgamma_promotion.npz"
+    g3ga.CERTIFICATE = g3ga.EVIDENCE / "H02.component20.second_jet_qgamma_promotion.json"
+
+    g3gb.EVIDENCE = EVIDENCE / "g3gb"
+    g3gb.SCRATCH = SCRATCH / "g3gb"
+    g3gb.ARRAYS = g3gb.EVIDENCE / "H02.component20.extra_root_second_jet_height.npz"
+    g3gb.CERTIFICATE = g3gb.EVIDENCE / "H02.component20.extra_root_second_jet_height.json"
+
+    g3gc.EVIDENCE = EVIDENCE / "g3gc"
+    g3gc.ARRAYS = g3gc.EVIDENCE / "H02.component20.adaptive_root_second_jet_height.npz"
+    g3gc.CERTIFICATE = g3gc.EVIDENCE / "H02.component20.adaptive_root_second_jet_height.json"
+
+    g3gd.EVIDENCE = EVIDENCE / "g3gd"
+    g3gd.ARRAYS = g3gd.EVIDENCE / "H02.component20.final_root_second_jet_height.npz"
+    g3gd.CERTIFICATE = g3gd.EVIDENCE / "H02.component20.final_root_second_jet_height.json"
+
+    g3ge.EVIDENCE = EVIDENCE / "g3ge"
+    g3ge.ARRAYS = g3ge.EVIDENCE / "H02.component20.eleven_prime_second_jet_height_audit.npz"
+    g3ge.CERTIFICATE = g3ge.EVIDENCE / "H02.component20.eleven_prime_second_jet_height_audit.json"
+    g3ge.PRIOR = g3ga.ARRAYS
+    g3ge.ARCHIVED_81359_ROOT = (
+        g3gb.EVIDENCE
+        / f"H02.component20.p81359.g{heights.FIBERS[81359][0]}.second_jet_source.npz"
+    )
+
+    def corrected_source_path(prime: int, gamma: int) -> Path:
+        return (
+            g3gb.EVIDENCE
+            / f"H02.component20.p{prime}.g{gamma}.second_jet_source.npz"
+        )
+
+    g3ge.source_path = corrected_source_path
+
+
+def compute_missing_81359_first_root() -> None:
+    g3bi = second_jet.load(second_jet.G3BI)
+    g3fx = np.load(second_jet.G3FX, allow_pickle=False)
+    context = g3ga.full_kernel_context(g3bi)
+    gamma = int(heights.FIBERS[81359][0])
+    _, row = g3gb.compute_root(
+        81359,
+        gamma,
+        context,
+        g3bi["selected_source"]["coefficient_vectors"],
+        g3fx["D7_gamma_coordinates"],
+        g3fx["B6_gamma_coordinates"],
+    )
+    require(row["arithmetic_schema"] == ARITHMETIC_SCHEMA, "p81359 root schema")
+    require(row["coupling_rank"] == 4748, "p81359 root rank")
+    require(row["kernel_dimension"] == 1274, "p81359 root nullity")
+
+
+def fresh_root_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for directory in (g3ga.EVIDENCE, g3gb.EVIDENCE):
+        for path in sorted(directory.glob("H02.component20.p*.g*.second_jet_source.json")):
+            metadata = load(path)
+            require(metadata.get("arithmetic_schema") == ARITHMETIC_SCHEMA, "fresh root schema")
+            artifact = ROOT / metadata["artifact"]["path"]
+            require(artifact.is_file(), "fresh source artifact")
+            require(sha256(artifact) == metadata["artifact"]["sha256"], "fresh source hash")
+            if "fiber" in metadata:
+                arrays = np.load(artifact, allow_pickle=False)
+                fiber = metadata["fiber"]
+                row = {
+                    **fiber,
+                    "prime": int(arrays["prime"][0]),
+                    "gamma_root": int(arrays["gamma"][0]),
+                    "component20_second_jet_profile": fiber["second_jet_profile"],
+                    "artifact": metadata["artifact"],
+                }
+            else:
+                row = metadata
+            rows.append(row)
+    return rows
+
+
+def run_stage(label: str, action: Any) -> None:
+    progress(label)
+    action()
+    progress(label + "_complete")
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    configure_disjoint_outputs()
+    try:
+        run_stage("g3ga_running", g3ga.main)
+        run_stage("g3gb_running", g3gb.main)
+        run_stage("p81359_first_root_running", compute_missing_81359_first_root)
+        run_stage("g3gc_running", g3gc.main)
+        run_stage("g3gd_running", g3gd.main)
+        run_stage("g3ge_running", g3ge.main)
+    except Exception as exc:
+        progress("failed", error_type=type(exc).__name__, error=str(exc))
+        raise
+
+    rows = fresh_root_rows()
+    pairs = {(int(row["prime"]), int(row["gamma_root"])) for row in rows}
+    require(len(rows) == len(pairs) == 23, "23 unique corrected fresh fibers")
+    require(
+        all(
+            int(row["coupling_rank"]) == 4748
+            and int(row["kernel_dimension"]) == 1274
+            for row in rows
+        ),
+        "corrected global profile stability",
+    )
+    require(
+        all(row["component20_second_jet_profile"] == [15, 5, 0, 33, 17, 1] for row in rows),
+        "corrected component20 profile stability",
+    )
+    packets = {
+        "G3GA_v2": load(g3ga.CERTIFICATE),
+        "G3GB_v2": load(g3gb.CERTIFICATE),
+        "G3GC_v2": load(g3gc.CERTIFICATE),
+        "G3GD_v2": load(g3gd.CERTIFICATE),
+        "G3GE_v2": load(g3ge.CERTIFICATE),
+    }
+    require(
+        all(all(packet["checks"].values()) for packet in packets.values()),
+        "all corrected stage checks",
+    )
+    require(
+        all(not any(packet["guardrails"].values()) for packet in packets.values()),
+        "all corrected stage guardrails",
+    )
+    old_source = np.load(
+        ROOT / "evidence/ust_g3ga/H02.component20.p79903.g12863.second_jet_source.npz",
+        allow_pickle=False,
+    )["source_coefficient"]
+    corrected_source = np.load(
+        g3ga.EVIDENCE / "H02.component20.p79903.g12863.second_jet_source.npz",
+        allow_pickle=False,
+    )["source_coefficient"]
+    source_mismatches = int(np.count_nonzero(old_source != corrected_source))
+    require(source_mismatches == 115, "known mixed-modulus source mismatch")
+
+    packet = {
+        "schema": "mtt.unified-source.g3gn-corrected-fresh-prime-campaign.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GN",
+        "status": "CLOSED_EXACT_CORRECTED_23_FRESH_FIBER_CAMPAIGN",
+        "inputs": {
+            "G3GM": record(
+                ROOT / "state/ust_g3gm_prime_arithmetic_compatibility_correction.packet.json"
+            ),
+            "corrected_builder": record(
+                ROOT / "build_ust_g3ga_component20_second_jet_qgamma_promotion.py"
+            ),
+        },
+        "stages": {
+            label: record(path)
+            for label, path in (
+                ("G3GA_v2", g3ga.CERTIFICATE),
+                ("G3GB_v2", g3gb.CERTIFICATE),
+                ("G3GC_v2", g3gc.CERTIFICATE),
+                ("G3GD_v2", g3gd.CERTIFICATE),
+                ("G3GE_v2", g3ge.CERTIFICATE),
+            )
+        },
+        "campaign": {
+            "arithmetic_schema": ARITHMETIC_SCHEMA,
+            "fresh_fibers": len(rows),
+            "unique_prime_root_pairs": len(pairs),
+            "coupling_rank": 4748,
+            "kernel_dimension": 1274,
+            "component20_second_jet_profile": [15, 5, 0, 33, 17, 1],
+            "mixed_modulus_source_coordinate_mismatches_at_p79903_g12863": source_mismatches,
+            "height_audit": packets["G3GE_v2"]["full_root_campaign"],
+            "root_validation": packets["G3GE_v2"]["independent_root_validation"],
+        },
+        "checks": {
+            "all23_fresh_fibers_use_prime_parameterized_v2": True,
+            "all23_fresh_fibers_have_profile4748_1274": True,
+            "all23_fresh_fibers_preserve_the_component20_second_jet_profile": True,
+            "the_corrected_height_audit_uses_only_corrected_fresh_fibers": True,
+            "the_historical_mixed_modulus_artifacts_are_not_overwritten": True,
+        },
+        "guardrails": {
+            "claims_global_rank4748_equality": False,
+            "claims_characteristic_zero_component20_promotion": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Use the corrected finite campaign only as a specialization and height audit. "
+            "Global equality still requires a symbolic 1274-dimensional kernel or an "
+            "equivalent upper-rank decomposition; component20 still requires the selected "
+            "Q(gamma) operator promotion."
+        ),
+    }
+    require(all(packet["checks"].values()), "G3GN checks")
+    require(not any(packet["guardrails"].values()), "G3GN guardrails")
+    atomic_json(OUT, packet)
+    progress("accepted", packet_sha256=sha256(OUT), fresh_fibers=len(rows))
+    print(
+        "UST.G3GN corrected fresh-prime campaign: PASS "
+        f"fibers={len(rows)} profile=4748/1274 source_mismatches={source_mismatches}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

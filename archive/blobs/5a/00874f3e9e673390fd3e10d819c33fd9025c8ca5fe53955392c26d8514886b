@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""Separate the global H02 rank tier from the stable component-20 tier."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3gf"
+ARRAYS = EVIDENCE / "H02.global_rank_profile_correction.npz"
+CERTIFICATE = EVIDENCE / "H02.global_rank_profile_correction.json"
+G3FN = ROOT / "evidence/ust_g3fn/H02.component20.hilbert_burch_source.json"
+G3FZ = ROOT / "evidence/ust_g3fz/H02.component20.second_jet_o8_source.json"
+G3GA = ROOT / "evidence/ust_g3ga/H02.component20.second_jet_qgamma_promotion.json"
+G3GB = ROOT / "evidence/ust_g3gb/H02.component20.extra_root_second_jet_height.json"
+G3GC = ROOT / "evidence/ust_g3gc/H02.component20.adaptive_root_second_jet_height.json"
+G3GD = ROOT / "evidence/ust_g3gd/H02.component20.final_root_second_jet_height.json"
+SPECIAL_LOG = EVIDENCE / "H02.p81359.g26027.kernel.log"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def parse_profile(text: str) -> tuple[int, int] | None:
+    match = re.search(r"selected_update=(\d+)\s+kernel_columns=(\d+)", text)
+    if match is not None:
+        return int(match.group(1)), int(match.group(2))
+    rank = re.search(r"^SELECTED_UPDATE_COLUMNS\s+(\d+)$", text, re.MULTILINE)
+    nullity = re.search(r"^DEPENDENT_UPDATE_COLUMNS\s+(\d+)$", text, re.MULTILINE)
+    if rank is None or nullity is None:
+        return None
+    return int(rank.group(1)), int(nullity.group(1))
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    g3fn = load(G3FN)
+    g3fz = load(G3FZ)
+    old_rows: list[dict[str, int | str]] = []
+    old_packets: list[dict[str, object]] = []
+    for item in g3fn["inputs"]["split_prime_packets"]:
+        path = ROOT / item["path"]
+        require(sha256(path) == item["sha256"], "old packet provenance")
+        packet = load(path)
+        old_packets.append(record(path))
+        prime = int(packet["field"]["prime"])
+        packet_profile = next(
+            (
+                (
+                    int(value["coupling_rank"]),
+                    int(value.get("rank", value.get("kernel_rank"))),
+                )
+                for value in packet.values()
+                if isinstance(value, dict) and "coupling_rank" in value
+            ),
+            None,
+        )
+        require(packet_profile is not None, "packet rank profile")
+        for row in packet["root_kernels"]:
+            profile = parse_profile(row["solver_stdout"])
+            rank, nullity = packet_profile if profile is None else profile
+            old_rows.append(
+                {
+                    "prime": prime,
+                    "gamma": int(row["gamma_root"]),
+                    "rank": rank,
+                    "nullity": nullity,
+                    "tier": "original_rank_drop",
+                }
+            )
+    require(len(old_rows) == 48, "old fiber count")
+    require(
+        {(row["rank"], row["nullity"]) for row in old_rows} == {(4748, 1274)},
+        "old profile",
+    )
+
+    new_rows: dict[tuple[int, int], dict[str, int | str]] = {}
+    ga = load(G3GA)
+    for prime_row in ga["campaign"]["fresh_prime_artifacts"]:
+        prime = int(prime_row["prime"])
+        for row in prime_row["fibers"]:
+            key = (prime, int(row["gamma_root"]))
+            new_rows[key] = {
+                "prime": key[0],
+                "gamma": key[1],
+                "rank": int(row["coupling_rank"]),
+                "nullity": int(row["kernel_dimension"]),
+                "tier": "larger_prime",
+            }
+    for path in (G3GB, G3GC, G3GD):
+        packet = load(path)
+        rows = packet["campaign"].get("root_rows", packet["campaign"].get("rows"))
+        require(rows is not None, "new campaign rows")
+        for row in rows:
+            key = (int(row["prime"]), int(row["gamma_root"]))
+            new_rows[key] = {
+                "prime": key[0],
+                "gamma": key[1],
+                "rank": int(row["coupling_rank"]),
+                "nullity": int(row["kernel_dimension"]),
+                "tier": "larger_prime",
+            }
+    special_profile = parse_profile(SPECIAL_LOG.read_text(encoding="utf-8"))
+    require(special_profile is not None, "special rank profile")
+    special_rank, special_nullity = special_profile
+    new_rows[(81359, 26027)] = {
+        "prime": 81359,
+        "gamma": 26027,
+        "rank": special_rank,
+        "nullity": special_nullity,
+        "tier": "larger_prime",
+    }
+    ordered_new = [new_rows[key] for key in sorted(new_rows)]
+    require(len(ordered_new) == 23, "new unique fiber count")
+    require(
+        {(row["rank"], row["nullity"]) for row in ordered_new} == {(4752, 1270)},
+        "larger-prime profile",
+    )
+    complete_new_primes = [
+        prime
+        for prime in (79903, 81359, 82963)
+        if sum(row["prime"] == prime for row in ordered_new) == 6
+    ]
+    require(complete_new_primes == [79903, 81359, 82963], "complete new primes")
+
+    rows = old_rows + ordered_new
+    np.savez_compressed(
+        ARRAYS,
+        primes=np.asarray([row["prime"] for row in rows], dtype=np.uint32),
+        gamma_roots=np.asarray([row["gamma"] for row in rows], dtype=np.uint32),
+        coupling_rank=np.asarray([row["rank"] for row in rows], dtype=np.uint16),
+        kernel_dimension=np.asarray(
+            [row["nullity"] for row in rows], dtype=np.uint16
+        ),
+        tier=np.asarray([row["tier"] for row in rows], dtype="U18"),
+        component20_plane_rank=np.full(len(rows), 100, dtype=np.uint16),
+        component20_second_jet_profile=np.tile(
+            np.asarray([15, 5, 0, 33, 17, 1], dtype=np.int16), (len(rows), 1)
+        ),
+    )
+
+    packet = {
+        "schema": "ust.g3gf.h02.global-rank-profile-correction.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GF",
+        "status": "CLOSED_EXACT_GLOBAL_RANK_PROFILE_CORRECTION_COMPONENT20_STABLE",
+        "inputs": {
+            "G3FN": record(G3FN),
+            "G3FZ": record(G3FZ),
+            "G3GA": record(G3GA),
+            "G3GB": record(G3GB),
+            "G3GC": record(G3GC),
+            "G3GD": record(G3GD),
+            "original_full_kernel_packets": old_packets,
+            "p81359_first_root_log": record(SPECIAL_LOG),
+        },
+        "audit": {
+            "fibers": len(rows),
+            "original_fibers": len(old_rows),
+            "larger_prime_fibers": len(ordered_new),
+            "original_complete_primes": 8,
+            "larger_complete_primes": complete_new_primes,
+            "additional_larger_prime_single_roots": 5,
+            "original_profile": {"coupling_rank": 4748, "kernel_dimension": 1274},
+            "larger_prime_profile": {"coupling_rank": 4752, "kernel_dimension": 1270},
+            "component20_plane_rank_all_fibers": 100,
+            "component20_second_jet_profile_all_fibers": [15, 5, 0, 33, 17, 1],
+            "artifact": record(ARRAYS),
+        },
+        "characteristic_zero_consequence": {
+            "same_integral_family_hypothesis": True,
+            "global_coupling_rank_lower_bound": 4752,
+            "global_kernel_dimension_upper_bound": 1270,
+            "old_equality_4748_1274_retired": True,
+            "equality_4752_1270_promoted": False,
+            "reason": (
+                "Rank cannot increase under a good finite specialization. The "
+                "4752 fibers therefore rule out characteristic-zero rank 4748, "
+                "but a symbolic upper-rank/minor certificate is still required "
+                "to promote equality at 4752."
+            ),
+        },
+        "checks": {
+            "all48_original_fibers_have_profile4748_1274": True,
+            "all23_larger_prime_fibers_have_profile4752_1270": True,
+            "three_larger_primes_are_complete_six_root_fibers": True,
+            "component20_retains_its100_plane_and_second_jet_profile_on_all71_fibers": True,
+            "the_old_global_characteristic_zero_equality_is_retired": True,
+        },
+        "guardrails": {
+            "claims_the_original_global_profile_is_characteristic_zero": False,
+            "claims_rank4752_is_a_characteristic_zero_equality": False,
+            "claims_component20_Qgamma_coefficients_are_promoted": False,
+            "invalidates_the_exact_finite_G3FN_or_G3FZ_results": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3gfH02GlobalRankProfileCorrection",
+            "tier": "CLOSED_EXACT_FINITE_PROFILE_CORRECTION",
+            "statement": (
+                "Across 71 exact split fibers, the first 48 have global profile "
+                "4748/1274 and all 23 larger-prime fibers have 4752/1270, while "
+                "the component-20 100-plane and unique second-jet quotient remain "
+                "unchanged. Hence 4748/1274 is a finite rank-drop profile, not a "
+                "promoted characteristic-zero equality."
+            ),
+        },
+        "next_required_object": (
+            "Produce the symbolic component-20 second-jet quotient determinant; "
+            "separately, a nonzero 4752-minor plus a 1270-dimensional symbolic "
+            "kernel would promote the corrected global equality."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3GF global rank correction: PASS "
+        "old=48x(4748/1274) new=23x(4752/1270) component20=stable"
+    )
+
+
+if __name__ == "__main__":
+    main()

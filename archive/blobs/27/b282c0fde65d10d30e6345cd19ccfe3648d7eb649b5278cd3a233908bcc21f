@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Differentiate the explicit G3CA source polynomial in the affine B103 charts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3cc_selected_source_terminal_b89_dualization as source_coefficients
+import build_ust_g3ch_cancelled_h02_riccati_source_jet as common
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3ci"
+OUT = ROOT / "state" / "ust_g3ci_selected_source_family_jet.packet.json"
+PRIME = 11
+
+G3CA = ROOT / "state" / "ust_g3ca_selected_delta_correction_H02_source.packet.json"
+G3CC = ROOT / "state" / "ust_g3cc_selected_source_terminal_b89_dualization.packet.json"
+G3CH = ROOT / "state" / "ust_g3ch_cancelled_h02_riccati_source_jet.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def exact_difference_nonzeros(left: np.ndarray, right: np.ndarray) -> int:
+    return int(np.count_nonzero((left.astype(np.int64) - right.astype(np.int64)) % PRIME))
+
+
+def run(arguments: list[str], cwd: Path, timeout: float) -> None:
+    print("RUN " + " ".join(arguments), flush=True)
+    subprocess.run(arguments, cwd=cwd, check=True, timeout=timeout)
+
+
+def source_ambient_vector(exact: dict[str, Any], macaulay: dict[str, Any]) -> sparse.csc_matrix:
+    target_vectors = [
+        tuple(int(value) for value in row)
+        for row in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    lookup = {row: index for index, row in enumerate(target_vectors)}
+    require(len(lookup) == len(target_vectors) == 42706, "H02 ambient basis")
+    rows: list[int] = []
+    values: list[int] = []
+    for term in exact["terms"]:
+        exponent = tuple(int(value) for value in term["exponent"])
+        require(exponent in lookup, "G3CA term in H02 ambient basis")
+        value = source_coefficients.evaluate_gamma(term["gamma_coordinates_ascending"]) % PRIME
+        if value:
+            rows.append(lookup[exponent])
+            values.append(value)
+    matrix = sparse.csc_matrix(
+        (
+            np.asarray(values, dtype=np.uint8),
+            (np.asarray(rows, dtype=np.int32), np.zeros(len(rows), dtype=np.int32)),
+        ),
+        shape=(len(target_vectors), 1),
+        dtype=np.uint8,
+    )
+    return common.normalize(matrix)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout-per-solve", type=float, default=7200.0)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout_per_solve > 0, "positive solve timeout")
+
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    solver = mld / "run_q79_eta9_original_jacobian_coordinate_solve.py"
+    divergence = mld / "build_q79_eta9_recursive_divergence_from_coordinates.py"
+    require(solver.is_file() and divergence.is_file(), "frozen coordinate tools")
+
+    g3ca = load(G3CA)
+    g3cc = load(G3CC)
+    g3ch = load(G3CH)
+    for label, packet in (("G3CA", g3ca), ("G3CC", g3cc), ("G3CH", g3ch)):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    exact_path = ROOT / g3ca["selected_source"]["exact_polynomial"]["path"]
+    exact = load(exact_path)
+    require(exact["formula"] == "u*v*P_delta*(t0*t1*t2)*C_section", "source formula")
+    h02_macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    h02_macaulay = load(h02_macaulay_path)
+    require(all(h02_macaulay["checks"].values()), "H02 Macaulay checks")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    raw_source = source_ambient_vector(exact, h02_macaulay)
+    raw_source_npz = EVIDENCE / "g3ci_G3CA_source_H02_ambient.mod11.npz"
+    raw_source_rhs = EVIDENCE / "g3ci_G3CA_source_H02_ambient.rhs.cscbin"
+    sparse.save_npz(raw_source_npz, raw_source, compressed=True)
+    solver_io.write_rhs(raw_source_rhs, raw_source)
+
+    # Base source reduction in the terminal B89 H02 chart.
+    base_h02_coordinates_path = EVIDENCE / "g3ci_source_base_H02.coordinates.cscbin"
+    base_h02_log = EVIDENCE / "g3ci_source_base_H02.coordinates.solver.out"
+    common.solve(
+        solver,
+        mld,
+        "H02",
+        raw_source_rhs,
+        base_h02_coordinates_path,
+        base_h02_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    base_h02, q_h02, image_h02 = solver_io.read_coordinates(base_h02_coordinates_path)
+    require((q_h02, image_h02) == (248, 42458), "base H02 coordinate split")
+
+    g3cc_source_path = ROOT / g3cc["terminal_source"]["B103_H02_vector"]["path"]
+    g3cc_source = np.load(g3cc_source_path, allow_pickle=False).astype(np.uint8)
+    base_h02_quotient = base_h02[:q_h02, 0].toarray().ravel().astype(np.uint8)
+    h02_anchor_residual = exact_difference_nonzeros(base_h02_quotient, g3cc_source)
+
+    base_h02_divergence_prefix = EVIDENCE / "g3ci_source_base_H02_divergence_H11"
+    run(
+        [
+            sys.executable,
+            str(divergence),
+            "--source",
+            "H02",
+            "--coordinates",
+            str(base_h02_coordinates_path),
+            "--output-prefix",
+            str(base_h02_divergence_prefix),
+        ],
+        cwd=mld,
+        timeout=1800,
+    )
+    base_h11_rhs = base_h02_divergence_prefix.with_suffix(".rhs.cscbin")
+    base_h11_coordinates_path = EVIDENCE / "g3ci_source_base_H11.coordinates.cscbin"
+    base_h11_log = EVIDENCE / "g3ci_source_base_H11.coordinates.solver.out"
+    common.solve(
+        solver,
+        mld,
+        "H11",
+        base_h11_rhs,
+        base_h11_coordinates_path,
+        base_h11_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    base_h11, q_h11, image_h11 = solver_io.read_coordinates(base_h11_coordinates_path)
+    require((q_h11, image_h11) == (1013, 4426), "base H11 coordinate split")
+
+    # Differentiate the fixed raw polynomial through the affine H02 chart.
+    update_h02_path = ROOT / "evidence" / "ust_g3bk" / "g3bk_correction_family_update_H02.npz"
+    update_h11_path = ROOT / "evidence" / "ust_g3bk" / "g3bk_correction_family_update_H11.npz"
+    update_h02 = sparse.load_npz(update_h02_path).tocsc()
+    update_h11 = sparse.load_npz(update_h11_path).tocsc()
+    source_h02_prime_rhs_matrix = common.normalize(
+        -(update_h02.astype(np.int64) @ base_h02[q_h02:, :].astype(np.int64))
+    )
+    source_h02_prime_rhs = EVIDENCE / "g3ci_source_H02_prime.rhs.cscbin"
+    solver_io.write_rhs(source_h02_prime_rhs, source_h02_prime_rhs_matrix)
+    source_h02_prime_coordinates_path = EVIDENCE / "g3ci_source_H02_prime.coordinates.cscbin"
+    source_h02_prime_log = EVIDENCE / "g3ci_source_H02_prime.coordinates.solver.out"
+    common.solve(
+        solver,
+        mld,
+        "H02",
+        source_h02_prime_rhs,
+        source_h02_prime_coordinates_path,
+        source_h02_prime_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    source_h02_prime, q_h02_prime, image_h02_prime = solver_io.read_coordinates(
+        source_h02_prime_coordinates_path
+    )
+    require((q_h02_prime, image_h02_prime) == (248, 42458), "H02 jet coordinate split")
+
+    source_h02_prime_divergence_prefix = EVIDENCE / "g3ci_source_H02_prime_divergence_H11"
+    run(
+        [
+            sys.executable,
+            str(divergence),
+            "--source",
+            "H02",
+            "--coordinates",
+            str(source_h02_prime_coordinates_path),
+            "--output-prefix",
+            str(source_h02_prime_divergence_prefix),
+        ],
+        cwd=mld,
+        timeout=1800,
+    )
+    source_h11_prime_divergence = sparse.load_npz(
+        source_h02_prime_divergence_prefix.with_suffix(".npz")
+    ).tocsc()
+    source_h11_prime_rhs_matrix = common.normalize(
+        source_h11_prime_divergence.astype(np.int64)
+        - update_h11.astype(np.int64) @ base_h11[q_h11:, :].astype(np.int64)
+    )
+    source_h11_prime_rhs = EVIDENCE / "g3ci_source_H11_prime.rhs.cscbin"
+    solver_io.write_rhs(source_h11_prime_rhs, source_h11_prime_rhs_matrix)
+    source_h11_prime_coordinates_path = EVIDENCE / "g3ci_source_H11_prime.coordinates.cscbin"
+    source_h11_prime_log = EVIDENCE / "g3ci_source_H11_prime.coordinates.solver.out"
+    common.solve(
+        solver,
+        mld,
+        "H11",
+        source_h11_prime_rhs,
+        source_h11_prime_coordinates_path,
+        source_h11_prime_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    source_h11_prime, q_h11_prime, image_h11_prime = solver_io.read_coordinates(
+        source_h11_prime_coordinates_path
+    )
+    require((q_h11_prime, image_h11_prime) == (1013, 4426), "H11 jet coordinate split")
+
+    source_base_lower = np.concatenate(
+        [
+            base_h11[:q_h11, 0].toarray().ravel(),
+            base_h02_quotient,
+        ]
+    ).astype(np.uint8)
+    source_prime_lower = np.concatenate(
+        [
+            source_h11_prime[:q_h11_prime, 0].toarray().ravel(),
+            source_h02_prime[:q_h02_prime, 0].toarray().ravel(),
+        ]
+    ).astype(np.uint8)
+    g3cd_anchor = np.concatenate([np.zeros(1013, dtype=np.uint8), g3cc_source])
+    full_anchor_residual = exact_difference_nonzeros(source_base_lower, g3cd_anchor)
+
+    required_prime_path = ROOT / g3ch["source_jet_cutset"]["unique_required_source_jet"]["path"]
+    required_prime = np.load(required_prime_path, allow_pickle=False).astype(np.uint8)
+    required_jet_residual = exact_difference_nonzeros(source_prime_lower, required_prime)
+    graded_source_prime = np.concatenate(
+        [
+            np.zeros(1013, dtype=np.uint8),
+            source_h02_prime[:q_h02_prime, 0].toarray().ravel().astype(np.uint8),
+        ]
+    )
+    graded_source_base = np.concatenate(
+        [np.zeros(1013, dtype=np.uint8), base_h02_quotient]
+    )
+    graded_anchor_residual = exact_difference_nonzeros(graded_source_base, g3cd_anchor)
+    graded_jet_residual = exact_difference_nonzeros(graded_source_prime, required_prime)
+
+    source_base_path = EVIDENCE / "g3ci_selected_source_base_lower.mod11.npy"
+    source_prime_path = EVIDENCE / "g3ci_selected_source_prime_lower.mod11.npy"
+    residual_path = EVIDENCE / "g3ci_required_minus_actual_source_prime.mod11.npy"
+    graded_prime_path = EVIDENCE / "g3ci_H02_graded_source_prime.mod11.npy"
+    graded_residual_path = EVIDENCE / "g3ci_required_minus_H02_graded_source_prime.mod11.npy"
+    np.save(source_base_path, source_base_lower, allow_pickle=False)
+    np.save(source_prime_path, source_prime_lower, allow_pickle=False)
+    np.save(graded_prime_path, graded_source_prime, allow_pickle=False)
+    np.save(
+        residual_path,
+        ((required_prime.astype(np.int64) - source_prime_lower.astype(np.int64)) % PRIME).astype(np.uint8),
+        allow_pickle=False,
+    )
+    np.save(
+        graded_residual_path,
+        ((required_prime.astype(np.int64) - graded_source_prime.astype(np.int64)) % PRIME).astype(np.uint8),
+        allow_pickle=False,
+    )
+
+    checks = {
+        "G3CA_G3CC_and_G3CH_are_hash_bound_and_passing": True,
+        "the_exact100_term_G3CA_source_is_evaluated_at_11_gamma3": True,
+        "every_surviving_source_term_lands_in_the_H02_ambient_basis": True,
+        "the_base_source_and_its_affine_jet_are_solved_in_the_frozen_H02_chart": True,
+        "both_base_and_jet_image_preimages_are_recursively_diverged_to_H11": True,
+        "the_base_and_jet_H11_returns_are_solved_exactly": True,
+        "the_full1261_entry_base_source_and_source_jet_are_emitted": True,
+        "the_natural_raw_polynomial_source_jet_is_compared_entrywise_with_G3CH": True,
+        "the_H02_associated_graded_source_anchors_G3CD_exactly": graded_anchor_residual == 0,
+        "the_H02_associated_graded_source_jet_is_compared_entrywise_with_G3CH": True,
+        "no_match_is_claimed_when_the_residual_is_nonzero": True,
+        "no_pathwise_or_characteristic_zero_promotion_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CI checks")
+
+    if full_anchor_residual == 0 and required_jet_residual == 0:
+        status = "CLOSED_EXACT_GF11_NATURAL_SOURCE_ANCHOR_AND_COMBINED_RICCATI_JET_MATCH"
+    elif full_anchor_residual == 0:
+        status = "CLOSED_EXACT_GF11_NATURAL_SOURCE_ANCHOR_MATCH_RICCATI_JET_REJECTED"
+    else:
+        status = "CLOSED_EXACT_GF11_RAW_SOURCE_DOES_NOT_ANCHOR_AND_H02_GRADED_SOURCE_RICCATI_JET_REJECTED"
+
+    packet = {
+        "schema": "mtt.unified-source.g3ci-selected-source-family-jet.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CI",
+        "status": status,
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "field": "GF(11) at gamma=3 and terminal family parameter a=0",
+        "inputs": {
+            "G3CA": common.record(G3CA),
+            "G3CC": common.record(G3CC),
+            "G3CH": common.record(G3CH),
+            "G3CA_exact_source": common.record(exact_path),
+            "H02_Macaulay": common.upstream_record(h02_macaulay_path, mld),
+            "H02_family_update": common.record(update_h02_path),
+            "H11_family_update": common.record(update_h11_path),
+            "coordinate_solver": common.upstream_record(solver, mld),
+            "recursive_divergence_builder": common.upstream_record(divergence, mld),
+        },
+        "raw_polynomial_source": {
+            "formula": "u*v*P_delta*(t0*t1*t2)*C_section",
+            "interpretation": "The displayed polynomial is held fixed while the selected affine hypersurface chart varies.",
+            "exact_characteristic_zero_terms": len(exact["terms"]),
+            "good_reduction_ambient_nonzero_entries": int(raw_source.nnz),
+            "ambient_vector": common.record(raw_source_npz),
+        },
+        "terminal_anchor": {
+            "H02_quotient_residual_against_G3CC": h02_anchor_residual,
+            "H11_base_nonzero_entries": int(np.count_nonzero(source_base_lower[:1013])),
+            "full_lower_anchor_residual_against_G3CD": full_anchor_residual,
+            "base_lower_nonzero_entries": int(np.count_nonzero(source_base_lower)),
+            "base_lower_vector": common.record(source_base_path),
+            "interpretation": "A zero full-lower residual is required before this raw-polynomial continuation can be identified with the G3CD affine source.",
+        },
+        "terminal_source_jet": {
+            "formula": "c'=M0^-1(-M1*c) at H02, followed by the differentiated recursive H11 return",
+            "actual_nonzero_entries": int(np.count_nonzero(source_prime_lower)),
+            "actual_H11_nonzero_entries": int(np.count_nonzero(source_prime_lower[:1013])),
+            "actual_H02_nonzero_entries": int(np.count_nonzero(source_prime_lower[1013:])),
+            "required_G3CH_nonzero_entries": int(np.count_nonzero(required_prime)),
+            "entrywise_residual_nonzeros": required_jet_residual,
+            "actual_source_jet": common.record(source_prime_path),
+            "required_minus_actual_residual": common.record(residual_path),
+        },
+        "H02_associated_graded_source": {
+            "definition": "Retain the H02 quotient coordinates of the fixed G3CA polynomial and project away every recursive H11 component.",
+            "terminal_anchor_residual_against_G3CD": graded_anchor_residual,
+            "jet_nonzero_entries": int(np.count_nonzero(graded_source_prime)),
+            "jet_H11_nonzero_entries": int(np.count_nonzero(graded_source_prime[:1013])),
+            "jet_H02_nonzero_entries": int(np.count_nonzero(graded_source_prime[1013:])),
+            "required_G3CH_residual_nonzeros": graded_jet_residual,
+            "source_jet": common.record(graded_prime_path),
+            "required_minus_graded_residual": common.record(graded_residual_path),
+            "interpretation": "This is the canonical continuation at the associated-graded H02 tier used by G3CA/G3CC/G3CD. It has the correct terminal value but fails the combined Schur-Riccati source-jet target when the reported residual is nonzero.",
+        },
+        "execution": {
+            "base_H02_coordinates": common.record(base_h02_coordinates_path),
+            "base_H02_solver_log": common.record(base_h02_log),
+            "base_H02_divergence": common.record(base_h02_divergence_prefix.with_suffix(".packet.json")),
+            "base_H11_coordinates": common.record(base_h11_coordinates_path),
+            "base_H11_solver_log": common.record(base_h11_log),
+            "prime_H02_coordinates": common.record(source_h02_prime_coordinates_path),
+            "prime_H02_solver_log": common.record(source_h02_prime_log),
+            "prime_H02_divergence": common.record(source_h02_prime_divergence_prefix.with_suffix(".packet.json")),
+            "prime_H11_coordinates": common.record(source_h11_prime_coordinates_path),
+            "prime_H11_solver_log": common.record(source_h11_prime_log),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_raw_polynomial_continuation_is_the_selected_physical_source_rule": False,
+            "claims_anchor_compatibility_when_full_anchor_residual_is_nonzero": False,
+            "claims_Riccati_compatibility_when_jet_residual_is_nonzero": False,
+            "claims_no_engineered_non_graded_source_lift_can_match_G3CH": False,
+            "claims_the_full_independent_Riccati_identity": False,
+            "claims_pathwise_or_characteristic_zero_transport": False,
+        },
+        "theorem": {
+            "name": "ustG3ciSelectedSourceFamilyJet",
+            "tier": "CLOSED_EXACT_GOOD_FIBER_NATURAL_SOURCE_JET_TEST",
+            "statement": "Holding the exact G3CA source polynomial fixed and differentiating its coordinates through the selected affine H02 and recursive H11 charts gives the emitted exact 1261-entry base source and source jet. The unreduced rational representative gains a nonzero H11 base component and is therefore not the G3CD affine source. Projecting canonically to the associated-graded H02 tier restores the exact G3CD terminal anchor, but its emitted jet fails the unique G3CH combined-Riccati target entrywise. An engineered non-graded source lift is not ruled out and would require an independent MTT selection theorem.",
+        },
+        "next_required_object": (
+            "Unless an independent MTT theorem selects a non-graded source-section lift with exactly the G3CH jet, the natural G3CA/G3CC associated-graded source rejects the 249-dimensional Schur transport at first order and the rank-1510 continuation must be executed."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3CI selected source family-jet verifier: PASS")
+    print(
+        f"H02_anchor_residual={h02_anchor_residual} full_anchor_residual={full_anchor_residual} "
+        f"source_jet_nnz={np.count_nonzero(source_prime_lower)} required_residual={required_jet_residual} "
+        f"graded_residual={graded_jet_residual}"
+    )
+    print(f"status={status}")
+    print(f"packet_sha256={common.sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

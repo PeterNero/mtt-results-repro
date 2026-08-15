@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Run both correction-direction recursive source chains and assemble G3CD."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import subprocess
+import sys
+from pathlib import Path
+
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cd"
+SOURCE_BUILDER = ROOT / "build_ust_g3cd_correction_direct_source_blocks.py"
+ASSEMBLER = ROOT / "assemble_ust_g3cd_correction_full_operator.py"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def run(arguments: list[str], cwd: Path, timeout: float | None = None) -> None:
+    print("RUN " + " ".join(arguments), flush=True)
+    subprocess.run(arguments, cwd=cwd, check=True, timeout=timeout)
+
+
+def solved(output: Path, log: Path, rhs: Path) -> bool:
+    stamp = output.with_suffix(output.suffix + ".rhs.sha256")
+    return (
+        output.is_file()
+        and log.is_file()
+        and stamp.is_file()
+        and "SUCCESS" in log.read_text(encoding="utf-8")
+        and stamp.read_text(encoding="ascii").strip() == sha256(rhs)
+    )
+
+
+def solve(
+    solver: Path,
+    mld: Path,
+    target: str,
+    rhs: Path,
+    output: Path,
+    log: Path,
+    timeout: float,
+    resume: bool,
+) -> None:
+    if resume and solved(output, log, rhs):
+        print(f"CHECKPOINT {output.name}", flush=True)
+        return
+    run(
+        [
+            sys.executable,
+            str(solver),
+            "--target",
+            target,
+            "--rhs",
+            str(rhs),
+            "--output",
+            str(output),
+            "--log",
+            str(log),
+            "--timeout",
+            str(timeout),
+        ],
+        cwd=mld,
+        timeout=timeout + 300,
+    )
+    output.with_suffix(output.suffix + ".rhs.sha256").write_text(
+        sha256(rhs) + "\n", encoding="ascii"
+    )
+
+
+def diverge(divergence: Path, mld: Path, source: str, coordinates: Path, prefix: Path) -> None:
+    run(
+        [
+            sys.executable,
+            str(divergence),
+            "--source",
+            source,
+            "--coordinates",
+            str(coordinates),
+            "--output-prefix",
+            str(prefix),
+        ],
+        cwd=mld,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout-per-solve", type=float, default=7200.0)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout_per_solve > 0, "positive solve timeout")
+
+    mld = source_runtime.resolve_mld()
+    solver = mld / "run_q79_eta9_original_jacobian_coordinate_solve.py"
+    divergence = mld / "build_q79_eta9_recursive_divergence_from_coordinates.py"
+    require(solver.is_file() and divergence.is_file(), "frozen MLD coordinate tools")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    run([sys.executable, str(SOURCE_BUILDER)], cwd=ROOT)
+
+    # H20 source -> H11 direct -> H20 lower return.
+    h20_h11 = EVIDENCE / "g3cd_H20_H11.coordinates.cscbin"
+    h20_h11_log = EVIDENCE / "g3cd_H20_H11.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H11",
+        EVIDENCE / "g3cd_correction_H20_to_H11_ambient.rhs.cscbin",
+        h20_h11,
+        h20_h11_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    h20_lower_prefix = EVIDENCE / "g3cd_H20_recursive_H20_ambient"
+    diverge(divergence, mld, "H11", h20_h11, h20_lower_prefix)
+    h20_h20 = EVIDENCE / "g3cd_H20_H20.coordinates.cscbin"
+    h20_h20_log = EVIDENCE / "g3cd_H20_H20.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H20",
+        h20_lower_prefix.with_suffix(".rhs.cscbin"),
+        h20_h20,
+        h20_h20_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+
+    # H11 source -> H02 direct -> H11 lower -> H20 terminal return.
+    h11_h02 = EVIDENCE / "g3cd_H11_H02.coordinates.cscbin"
+    h11_h02_log = EVIDENCE / "g3cd_H11_H02.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H02",
+        EVIDENCE / "g3cd_correction_H11_to_H02_ambient.rhs.cscbin",
+        h11_h02,
+        h11_h02_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    h11_lower_prefix = EVIDENCE / "g3cd_H11_recursive_H11_ambient"
+    diverge(divergence, mld, "H02", h11_h02, h11_lower_prefix)
+    h11_h11 = EVIDENCE / "g3cd_H11_H11.coordinates.cscbin"
+    h11_h11_log = EVIDENCE / "g3cd_H11_H11.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H11",
+        h11_lower_prefix.with_suffix(".rhs.cscbin"),
+        h11_h11,
+        h11_h11_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    h11_terminal_prefix = EVIDENCE / "g3cd_H11_recursive_H20_ambient"
+    diverge(divergence, mld, "H11", h11_h11, h11_terminal_prefix)
+    h11_h20 = EVIDENCE / "g3cd_H11_H20.coordinates.cscbin"
+    h11_h20_log = EVIDENCE / "g3cd_H11_H20.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H20",
+        h11_terminal_prefix.with_suffix(".rhs.cscbin"),
+        h11_h20,
+        h11_h20_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+
+    run([sys.executable, str(ASSEMBLER)], cwd=ROOT, timeout=7200)
+    print("UST.G3CD correction full operator run: PASS", flush=True)
+
+
+if __name__ == "__main__":
+    main()

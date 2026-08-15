@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+"""Reconstruct component 20 in the canonical fourth-normal graph chart."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3FF = ROOT / "evidence/ust_g3ff/H02.component20.conic_fourth_normal_source.json"
+SPLIT_PACKETS = (
+    ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dj_h02_second_prime_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dk_h02_third_prime_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3do_h02_fifth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3dq_h02_sixth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3ds_h02_seventh_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3du_h02_eighth_prime_holdout_kernel.packet.json",
+)
+EVIDENCE = ROOT / "evidence/ust_g3fg"
+RESIDUES = EVIDENCE / "H02.component20.conic_graph_eight_prime_residues.npz"
+RECONSTRUCTION = EVIDENCE / "H02.component20.conic_graph_reconstruction.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.conic_graph_reconstruction.json"
+
+PRIMES = (21817, 33863, 37493, 38113, 68213, 69011, 72271, 73673)
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound artifact exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def rank_pivots(matrix: np.ndarray, prime: int) -> tuple[int, tuple[int, ...]]:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    rows, columns = work.shape
+    pivot_row = 0
+    pivots: list[int] = []
+    for column in range(columns):
+        choices = np.flatnonzero(work[pivot_row:, column])
+        if choices.size == 0:
+            continue
+        selected = pivot_row + int(choices[0])
+        work[[pivot_row, selected]] = work[[selected, pivot_row]]
+        work[pivot_row] = (
+            work[pivot_row] * pow(int(work[pivot_row, column]), -1, prime)
+        ) % prime
+        for row in range(rows):
+            if row != pivot_row and work[row, column]:
+                work[row] = (
+                    work[row] - int(work[row, column]) * work[pivot_row]
+                ) % prime
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    return pivot_row, tuple(pivots)
+
+
+def inverse_mod(matrix: np.ndarray, prime: int) -> np.ndarray:
+    size = matrix.shape[0]
+    require(matrix.shape == (size, size), "square modular inverse")
+    work = np.concatenate(
+        (np.asarray(matrix, dtype=np.int64) % prime, np.eye(size, dtype=np.int64)),
+        axis=1,
+    )
+    for column in range(size):
+        choices = np.flatnonzero(work[column:, column])
+        require(choices.size > 0, f"invertible pivot {column}")
+        selected = column + int(choices[0])
+        work[[column, selected]] = work[[selected, column]]
+        work[column] = (
+            work[column] * pow(int(work[column, column]), -1, prime)
+        ) % prime
+        for row in range(size):
+            if row != column and work[row, column]:
+                work[row] = (
+                    work[row] - int(work[row, column]) * work[column]
+                ) % prime
+    require(np.array_equal(work[:, :size], np.eye(size, dtype=np.int64)), "inverse replay")
+    return work[:, size:] % prime
+
+
+def component_kernel(row: dict[str, object], prime: int) -> np.ndarray:
+    path = bound_path(row["kernel"])
+    payload = kernel_runtime.read_kernel(path)
+    require(int(payload["prime"]) == prime, "kernel prime")
+    dependent = payload["dependent"]
+    selected = np.flatnonzero(
+        (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+    )
+    kernel = (
+        payload["matrix"][COMPONENT_START:COMPONENT_PAST, :][:, selected]
+        .toarray()
+        .astype(np.int64)
+        % prime
+    )
+    require(kernel.shape == (136, 100), "component kernel shape")
+    require(rank_pivots(kernel, prime)[0] == 100, "component kernel rank")
+    return kernel
+
+
+def interpolate(values: np.ndarray, roots: tuple[int, ...], prime: int) -> np.ndarray:
+    vandermonde = np.asarray(
+        [[pow(root, degree, prime) for degree in range(6)] for root in roots],
+        dtype=np.int64,
+    )
+    inverse = inverse_mod(vandermonde, prime)
+    coefficients = inverse @ values.reshape(6, -1) % prime
+    require(
+        np.array_equal(vandermonde @ coefficients % prime, values.reshape(6, -1) % prime),
+        "interpolation replay",
+    )
+    return coefficients.reshape((6,) + values.shape[1:])
+
+
+def rational_reconstruct(residue: int, modulus: int, bound: int) -> tuple[int, int, bool]:
+    old_remainder, remainder = modulus, residue
+    old_denominator, denominator = 0, 1
+    while abs(remainder) > bound:
+        quotient = old_remainder // remainder
+        old_remainder, remainder = remainder, old_remainder - quotient * remainder
+        old_denominator, denominator = denominator, old_denominator - quotient * denominator
+    numerator = remainder
+    if denominator < 0:
+        numerator, denominator = -numerator, -denominator
+    valid = (
+        denominator > 0
+        and denominator <= bound
+        and abs(numerator) <= bound
+        and math.gcd(numerator, denominator) == 1
+    )
+    return numerator, denominator, valid
+
+
+def reconstruct(
+    residues: np.ndarray,
+) -> tuple[dict[str, int], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    flattened = residues.reshape(8, -1).astype(np.int64)
+    combined = [int(value) for value in flattened[0]]
+    modulus = PRIMES[0]
+    for prime, row in zip(PRIMES[1:7], flattened[1:7], strict=True):
+        inverse = pow(modulus % prime, -1, prime)
+        combined = [
+            value + modulus * (((int(target) - value % prime) * inverse) % prime)
+            for value, target in zip(combined, row, strict=True)
+        ]
+        modulus *= prime
+    bound = math.isqrt((modulus - 1) // 2)
+    numerator = np.zeros(flattened.shape[1], dtype=np.int64)
+    denominator = np.zeros(flattened.shape[1], dtype=np.int64)
+    valid = np.zeros(flattened.shape[1], dtype=bool)
+    holdout = np.zeros(flattened.shape[1], dtype=bool)
+    for index, (value, target) in enumerate(zip(combined, flattened[7], strict=True)):
+        num, den, candidate = rational_reconstruct(value, modulus, bound)
+        if not candidate:
+            continue
+        numerator[index] = num
+        denominator[index] = den
+        valid[index] = True
+        holdout[index] = (num - int(target) * den) % PRIMES[7] == 0
+    passed = valid & holdout
+    zeros = passed & (numerator == 0)
+    units = passed & (np.abs(numerator) == 1) & (denominator == 1)
+    integers = passed & (denominator == 1)
+    shape = residues.shape[1:]
+    counts = {
+        "coefficient_slots": flattened.shape[1],
+        "seven_prime_modulus": modulus,
+        "seven_prime_modulus_bits": modulus.bit_length(),
+        "rational_uniqueness_bound": bound,
+        "valid_candidates": int(np.count_nonzero(valid)),
+        "holdout_passes": int(np.count_nonzero(passed)),
+        "holdout_aliases": int(np.count_nonzero(valid & ~holdout)),
+        "outside_uniqueness_range": int(np.count_nonzero(~valid)),
+        "passing_zeros": int(np.count_nonzero(zeros)),
+        "passing_units": int(np.count_nonzero(units)),
+        "passing_integers": int(np.count_nonzero(integers)),
+        "passing_nontrivial_coefficients": int(np.count_nonzero(passed & ~zeros & ~units)),
+        "maximum_passing_absolute_numerator": int(np.max(np.abs(numerator[passed]))) if np.any(passed) else 0,
+        "maximum_passing_denominator": int(np.max(denominator[passed])) if np.any(passed) else 0,
+    }
+    return (
+        counts,
+        numerator.reshape(shape),
+        denominator.reshape(shape),
+        valid.reshape(shape),
+        holdout.reshape(shape),
+    )
+
+
+def main() -> None:
+    g3ff = json.loads(G3FF.read_text(encoding="utf-8"))
+    require(all(g3ff["checks"].values()), "G3FF checks")
+    normal_path = bound_path(
+        g3ff["exact_characteristic_zero_source"]["normal_source_artifact"]
+    )
+    normal = np.load(normal_path, allow_pickle=False)
+    q4 = normal["q4_Sym7_basis"].astype(np.int64)
+    d7 = normal["D7_gamma_coordinates"].astype(np.int64)
+    require(q4.shape == (136, 36), "q4 carrier")
+    require(d7.shape == (36, 6), "D7 control source")
+    pivot_rank, pivot_rows = rank_pivots(q4.T, 104729)
+    require(pivot_rank == 36, "q4 pivot rows")
+    base_rows = tuple(index for index in range(136) if index not in set(pivot_rows))
+    require(len(base_rows) == 100, "conic quotient row count")
+
+    all_residues = np.zeros((8, 6, 36, 100), dtype=np.uint32)
+    control_residues = np.zeros((8, 6, 36), dtype=np.uint32)
+    campaign: list[dict[str, object]] = []
+    for prime_index, packet_path in enumerate(SPLIT_PACKETS):
+        packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        require(all(packet["checks"].values()), f"split checks p-index={prime_index}")
+        prime = int(packet["field"]["prime"])
+        require(prime == PRIMES[prime_index], "prime order")
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        require(tuple(rows) == roots and len(roots) == 6, f"root order p={prime}")
+        q_mod = q4 % prime
+        q_pivot_inverse = inverse_mod(q_mod[np.asarray(pivot_rows), :], prime)
+        q_base = q_mod[np.asarray(base_rows), :]
+        graph_values = np.zeros((6, 36, 100), dtype=np.int64)
+        for root_index, root in enumerate(roots):
+            kernel = component_kernel(rows[root], prime)
+            projected = (
+                kernel[np.asarray(base_rows), :]
+                - q_base
+                @ q_pivot_inverse
+                @ kernel[np.asarray(pivot_rows), :]
+            ) % prime
+            normalized = kernel @ inverse_mod(projected, prime) % prime
+            graph = q_pivot_inverse @ normalized[np.asarray(pivot_rows), :] % prime
+            representative = np.zeros((136, 100), dtype=np.int64)
+            representative[np.asarray(base_rows), :] = np.eye(100, dtype=np.int64)
+            require(
+                np.array_equal(normalized, (representative + q_mod @ graph) % prime),
+                f"canonical graph replay p={prime} root={root}",
+            )
+            graph_values[root_index] = graph
+        coefficients = interpolate(graph_values, roots, prime)
+        all_residues[prime_index] = coefficients.astype(np.uint32)
+        control_values = np.zeros((6, 36), dtype=np.int64)
+        for root_index, root in enumerate(roots):
+            value = np.zeros(36, dtype=np.int64)
+            for degree in reversed(range(6)):
+                value = (value * root + d7[:, degree]) % prime
+            control_values[root_index] = value
+        control_residues[prime_index] = interpolate(
+            control_values, roots, prime
+        ).astype(np.uint32)
+        campaign.append(
+            {
+                "prime": prime,
+                "roots": list(roots),
+                "fibers": 6,
+                "graph_shape_per_fiber": [36, 100],
+                "power_basis_shape": [6, 36, 100],
+                "source_packet": record(packet_path),
+            }
+        )
+        print(f"G3FG p={prime}: canonical conic graphs=6 interpolation=PASS", flush=True)
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        RESIDUES,
+        primes=np.asarray(PRIMES, dtype=np.int64),
+        q4_pivot_rows=np.asarray(pivot_rows, dtype=np.int16),
+        conic_quotient_base_rows=np.asarray(base_rows, dtype=np.int16),
+        graph_power_basis_residues=all_residues,
+        exact_D7_control_power_basis_residues=control_residues,
+    )
+    counts, numerators, denominators, valid, holdout = reconstruct(all_residues)
+    control_counts, control_numerators, control_denominators, control_valid, control_holdout = reconstruct(
+        control_residues
+    )
+    require(control_counts["coefficient_slots"] == 216, "D7 control slots")
+    require(control_counts["holdout_passes"] == 216, "D7 control holdout")
+    require(control_counts["holdout_aliases"] == 0, "D7 control aliases")
+    require(
+        np.array_equal(control_numerators, d7.T)
+        and np.array_equal(control_denominators, np.ones((6, 36), dtype=np.int64)),
+        "D7 literal reconstruction",
+    )
+    np.savez_compressed(
+        RECONSTRUCTION,
+        graph_numerators=numerators,
+        graph_denominators=denominators,
+        valid_reconstruction=valid,
+        eighth_prime_holdout_pass=holdout,
+        D7_control_numerators=control_numerators,
+        D7_control_denominators=control_denominators,
+        D7_control_valid_reconstruction=control_valid,
+        D7_control_eighth_prime_holdout_pass=control_holdout,
+    )
+    complete = counts["holdout_passes"] == counts["coefficient_slots"]
+    status = (
+        "CLOSED_EIGHT_PRIME_CANONICAL_CONIC_GRAPH_QGAMMA_CANDIDATE_EXACT_REPLAY_OPEN"
+        if complete
+        else "CANONICAL_CONIC_GRAPH_RECONSTRUCTION_INCOMPLETE_MORE_EXACT_SOURCE_STRUCTURE_REQUIRED"
+    )
+    packet = {
+        "schema": "ust.g3fg.h02.component20.conic-graph-reconstruction.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FG",
+        "status": status,
+        "inputs": {
+            "G3FF": record(G3FF),
+            "split_prime_packets": [record(path) for path in SPLIT_PACKETS],
+            "fourth_normal_source": record(normal_path),
+        },
+        "canonical_graph_chart": {
+            "ambient_dimension": 136,
+            "kernel_dimension": 100,
+            "fourth_normal_dimension": 36,
+            "q4_pivot_rows_zero_based": list(pivot_rows),
+            "conic_quotient_base_rows_zero_based": list(base_rows),
+            "normalization": "L(v)=v_B-Q_B*Q_P^-1*v_P; each K is normalized by L|K=I",
+            "graph_formula": "K=span(E_B+q4Sym7*T_gamma)",
+            "campaign": campaign,
+        },
+        "reconstruction": counts,
+        "exact_D7_pipeline_control": control_counts,
+        "artifacts": {
+            "eight_prime_residues": record(RESIDUES),
+            "seven_prime_reconstruction_eighth_prime_holdout": record(RECONSTRUCTION),
+        },
+        "checks": {
+            "the_G3FF_fourth_normal_carrier_is_hash_bound": True,
+            "one_fixed_rational_q4_pivot_chart_is_valid_at_all_eight_primes": True,
+            "all48_kernels_are_normalized_in_the_same_conic_graph_chart": True,
+            "all48_normalized_graphs_replay_to_the_canonical_kernels": True,
+            "all_eight_split_algebras_are_interpolated_in_the_gamma_power_basis": True,
+            "the_same_pipeline_reconstructs_all216_exact_D7_control_coordinates": control_counts[
+                "holdout_passes"
+            ]
+            == 216,
+            "every_graph_coefficient_has_a_unique_candidate_passing_the_eighth_prime": complete,
+        },
+        "guardrails": {
+            "claims_the_holdout_alone_is_an_exact_Qgamma_proof": False,
+            "claims_the_component_graph_includes_the_full_prior_source_lift": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "If complete, reconstruct the same canonically normalized100 relations on "
+            "the full selected-update carrier and replay them literally against the "
+            "characteristic-zero endpoint operator. If incomplete, use the exact qD7 "
+            "identity to derive the missing graph entries through a normal-jet homotopy."
+        ),
+    }
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FG component20 conic graph reconstruction: "
+        f"{'PASS' if complete else 'INCOMPLETE'} "
+        f"holdout={counts['holdout_passes']}/{counts['coefficient_slots']} "
+        f"nontrivial={counts['passing_nontrivial_coefficients']}"
+    )
+
+
+if __name__ == "__main__":
+    main()

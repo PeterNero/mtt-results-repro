@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""Construct the exact conic quotient and audit the component-20 normal filtration."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3FE = ROOT / "evidence/ust_g3fe/H02.component20.eight_prime_graded_promotion_audit.json"
+SPLIT_PACKETS = (
+    ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dj_h02_second_prime_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dk_h02_third_prime_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3do_h02_fifth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3dq_h02_sixth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3ds_h02_seventh_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3du_h02_eighth_prime_holdout_kernel.packet.json",
+)
+EVIDENCE = ROOT / "evidence/ust_g3ff"
+NORMAL_SOURCE = EVIDENCE / "H02.component20.conic_fourth_normal_source.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.conic_fourth_normal_source.json"
+
+EXPECTED_PRIMES = (21817, 33863, 37493, 38113, 68213, 69011, 72271, 73673)
+EXPECTED_COLON_PROFILE = (100, 69, 42, 19, 0, 0, 0, 0)
+EXPECTED_LAYER_DIMENSIONS = (31, 27, 23, 19)
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+
+# The exact G3 from the hash-locked splitting-conic K3 source used by G3BI.
+G3_TERMS = {
+    (3, 0, 0): -2,
+    (2, 0, 1): -2,
+    (1, 2, 0): 1,
+    (1, 1, 1): 1,
+    (1, 0, 2): 2,
+    (0, 3, 0): -1,
+    (0, 1, 2): -2,
+    (0, 0, 3): -1,
+}
+LOCKED_BASE_SHA256 = "2f7dd722c5e387baf9438e6c2e14fe66f564de2109030ab08516552dabb86035"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def source_monomials(degree: int) -> list[tuple[int, int, int]]:
+    """Reproduce the locked B67 coefficient order without an adjacent-repo import."""
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in reversed(range(degree + 1))
+        for y_power in reversed(range(degree - x_power + 1))
+    ]
+
+
+def coefficient_add(
+    left: tuple[int, ...], right: tuple[int, ...]
+) -> tuple[int, ...]:
+    return tuple(a + b for a, b in zip(left, right, strict=True))
+
+
+def add_term(
+    target: dict[tuple[int, int, int], tuple[int, ...]],
+    exponent: tuple[int, int, int],
+    coefficient: tuple[int, ...],
+) -> None:
+    updated = coefficient_add(target.get(exponent, (0,) * 6), coefficient)
+    if any(updated):
+        target[exponent] = updated
+    else:
+        target.pop(exponent, None)
+
+
+def restricted_coefficient(
+    coefficients: list[list[int]], theta: int
+) -> dict[tuple[int, int, int], tuple[int, ...]]:
+    """Return A_theta(x,y,z,w=-G3) as a degree-nine Q(gamma) polynomial."""
+    result: dict[tuple[int, int, int], tuple[int, ...]] = {}
+    offset = 83 * theta
+    for local, exponent in enumerate(source_monomials(9)):
+        add_term(result, exponent, tuple(int(value) for value in coefficients[offset + local]))
+    for local, exponent in enumerate(source_monomials(6)):
+        value = tuple(int(raw) for raw in coefficients[offset + 55 + local])
+        for g3_exponent, g3_coefficient in G3_TERMS.items():
+            product = tuple(
+                exponent[index] + g3_exponent[index] for index in range(3)
+            )
+            add_term(result, product, tuple(-g3_coefficient * raw for raw in value))
+    return result
+
+
+def exact_conic_quotient(
+    coefficients: list[list[int]],
+) -> tuple[np.ndarray, dict[tuple[int, int, int], tuple[int, ...]]]:
+    """Factor (A0-A1)|_{w=-G3}=(xz-y^2)D7 coefficientwise over Q(gamma)."""
+    left = restricted_coefficient(coefficients, 0)
+    right = restricted_coefficient(coefficients, 1)
+    difference: dict[tuple[int, int, int], tuple[int, ...]] = {}
+    for exponent in set(left) | set(right):
+        add_term(
+            difference,
+            exponent,
+            tuple(
+                left.get(exponent, (0,) * 6)[index]
+                - right.get(exponent, (0,) * 6)[index]
+                for index in range(6)
+            ),
+        )
+
+    x, y, z = sp.symbols("x y z")
+    conic = sp.Poly(x * z - y**2, x, y, z, domain=sp.ZZ)
+    quotients: list[sp.Poly] = []
+    for coordinate in range(6):
+        polynomial = sp.Poly(
+            sum(
+                value[coordinate]
+                * x ** exponent[0]
+                * y ** exponent[1]
+                * z ** exponent[2]
+                for exponent, value in difference.items()
+            ),
+            x,
+            y,
+            z,
+            domain=sp.ZZ,
+        )
+        quotient, remainder = sp.div(polynomial, conic)
+        require(remainder.is_zero, f"exact conic divisibility coordinate{coordinate}")
+        require(quotient.total_degree() == 7, f"degree-seven quotient coordinate{coordinate}")
+        require(polynomial == conic * quotient, f"literal quotient replay coordinate{coordinate}")
+        quotients.append(quotient)
+
+    basis7 = graded.homogeneous_exponents(7)
+    rows = np.asarray(
+        [
+            [
+                int(
+                    quotient.coeff_monomial(
+                        x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+                    )
+                )
+                for quotient in quotients
+            ]
+            for exponent in basis7
+        ],
+        dtype=np.int64,
+    )
+    require(rows.shape == (36, 6), "D7 coefficient shape")
+    require(np.count_nonzero(np.any(rows != 0, axis=1)) == 35, "D7 support")
+    return rows, difference
+
+
+def conic_power_matrix(power: int, prime: int | None = None) -> np.ndarray:
+    source_degree = 15 - 2 * power
+    source = graded.homogeneous_exponents(source_degree)
+    target = graded.homogeneous_exponents(15)
+    lookup = {exponent: index for index, exponent in enumerate(target)}
+    matrix = np.zeros((136, len(source)), dtype=np.int64)
+    for column, exponent in enumerate(source):
+        for y_pair_count in range(power + 1):
+            shifted = list(exponent)
+            shifted[0] += power - y_pair_count
+            shifted[1] += 2 * y_pair_count
+            shifted[2] += power - y_pair_count
+            matrix[lookup[tuple(shifted)], column] += (
+                math.comb(power, y_pair_count) * (-1) ** y_pair_count
+            )
+    return matrix if prime is None else matrix % prime
+
+
+def component_kernel(row: dict[str, object], prime: int) -> np.ndarray:
+    path = ROOT / row["kernel"]["path"]
+    require(path.is_file(), f"kernel exists: {path}")
+    require(sha256(path) == row["kernel"]["sha256"], f"kernel hash: {path.name}")
+    payload = kernel_runtime.read_kernel(path)
+    require(payload["prime"] == prime, "kernel prime")
+    dependent = payload["dependent"]
+    selected = np.flatnonzero(
+        (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+    )
+    kernel = (
+        payload["matrix"][COMPONENT_START:COMPONENT_PAST, :][:, selected]
+        .toarray()
+        .astype(np.int64)
+        % prime
+    )
+    require(kernel.shape == (136, 100), "canonical component kernel shape")
+    require(graded.rref(kernel, prime)[0] == 100, "canonical component kernel rank")
+    return kernel
+
+
+def main() -> None:
+    g3bi = load(G3BI)
+    g3fe = load(G3FE)
+    split_packets = [load(path) for path in SPLIT_PACKETS]
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3fe["checks"].values()), "G3FE checks")
+    require(
+        g3bi["selected_source"]["containment_identity"]
+        == "(A0-A1)|Rminus=0 coefficientwise in Q(gamma)",
+        "G3BI containment identity",
+    )
+    require(
+        g3bi["inputs"]["finite_evidence"]["sha256"]
+        == sha256(ROOT / g3bi["inputs"]["finite_evidence"]["path"]),
+        "G3BI evidence hash",
+    )
+    coefficients = g3bi["selected_source"]["coefficient_vectors"]
+    require(len(coefficients) == 249, "three B67 coefficient rows")
+
+    # The vendored G3 must reproduce G3BI's binary restriction of w=-G3.
+    restriction = [0] * 7
+    for exponent, coefficient in G3_TERMS.items():
+        restriction[exponent[1] + 2 * exponent[2]] -= coefficient
+    require(restriction == [2, 0, 1, 0, -2, 2, 1], "locked w=-G3 restriction")
+
+    d7, difference = exact_conic_quotient(coefficients)
+    q4 = conic_power_matrix(4)
+    require(q4.shape == (136, 36), "fourth-normal carrier shape")
+    require(graded.rref(q4, 104729)[0] == 36, "fourth-normal carrier rank over Q")
+
+    prime_rows: list[dict[str, object]] = []
+    all_profiles: list[tuple[int, ...]] = []
+    for packet_path, packet in zip(SPLIT_PACKETS, split_packets, strict=True):
+        prime = int(packet["field"]["prime"])
+        require(all(packet["checks"].values()), f"split packet checks p={prime}")
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        root_rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        require(tuple(root_rows) == roots, f"root order p={prime}")
+        powers = [conic_power_matrix(power, prime) for power in range(8)]
+        local_profiles: list[tuple[int, ...]] = []
+        for root in roots:
+            kernel = component_kernel(root_rows[root], prime)
+            profile: list[int] = []
+            for power_matrix in powers:
+                combined_rank = graded.rref(
+                    np.concatenate((kernel, power_matrix), axis=1), prime
+                )[0]
+                profile.append(100 + power_matrix.shape[1] - combined_rank)
+            profile_tuple = tuple(profile)
+            require(
+                profile_tuple == EXPECTED_COLON_PROFILE,
+                f"conic-colon profile p={prime} root={root}",
+            )
+            require(
+                graded.rref(np.concatenate((kernel, powers[4]), axis=1), prime)[0]
+                == 136,
+                f"fourth-normal direct sum p={prime} root={root}",
+            )
+            local_profiles.append(profile_tuple)
+            all_profiles.append(profile_tuple)
+        prime_rows.append(
+            {
+                "prime": prime,
+                "roots": list(roots),
+                "fibers": len(roots),
+                "colon_profile": list(local_profiles[0]),
+                "fourth_normal_direct_sum_rank": 136,
+                "source_packet": record(packet_path),
+            }
+        )
+        print(
+            f"G3FF p={prime}: fibers=6 colon={EXPECTED_COLON_PROFILE} "
+            "K_plus_q4Sym7=Sym15",
+            flush=True,
+        )
+    require(tuple(int(packet["field"]["prime"]) for packet in split_packets) == EXPECTED_PRIMES, "prime order")
+    require(len(all_profiles) == 48 and len(set(all_profiles)) == 1, "common 48-fiber profile")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        NORMAL_SOURCE,
+        D7_gamma_coordinates=d7,
+        degree7_exponents=np.asarray(graded.homogeneous_exponents(7), dtype=np.int16),
+        q4_Sym7_basis=q4,
+        degree15_exponents=np.asarray(graded.homogeneous_exponents(15), dtype=np.int16),
+    )
+    packet = {
+        "schema": "ust.g3ff.h02.component20.conic-fourth-normal-source.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FF",
+        "status": "CLOSED_EXACT_QGAMMA_CONIC_QUOTIENT_AND_48_FIBER_FOURTH_NORMAL_PROFILE_INTERTWINER_OPEN",
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3FE": record(G3FE),
+            "split_prime_packets": [record(path) for path in SPLIT_PACKETS],
+            "locked_splitting_conic_base_sha256": LOCKED_BASE_SHA256,
+        },
+        "exact_characteristic_zero_source": {
+            "number_field": "Q(gamma)",
+            "minimal_polynomial_coefficients_ascending": [64, 16, 33, 44, 89, 24, 1],
+            "conic": "q=x*z-y^2",
+            "root_graph": "Rminus: q=0 and w=-G3",
+            "G3": "-2*x^3-2*x^2*z+x*y^2+x*y*z+2*x*z^2-y^3-2*y*z^2-z^3",
+            "identity": "(A0-A1)|_(w=-G3)=q*D7",
+            "difference_nonzero_monomials": len(difference),
+            "D7_dimension": 36,
+            "D7_nonzero_coefficient_rows": int(np.count_nonzero(np.any(d7 != 0, axis=1))),
+            "D7_maximum_absolute_gamma_coordinate": int(np.max(np.abs(d7))),
+            "normal_source_artifact": record(NORMAL_SOURCE),
+        },
+        "finite_conic_normal_filtration": {
+            "carrier": "Sym^15(k^3)",
+            "carrier_dimension": 136,
+            "kernel_dimension": 100,
+            "colon_definition": "K_j={f in Sym^(15-2j): q^j*f lies in K_15}",
+            "colon_dimensions_j0_through_j7": list(EXPECTED_COLON_PROFILE),
+            "successive_conic_restriction_dimensions": list(EXPECTED_LAYER_DIMENSIONS),
+            "dimension_identity": "100=31+27+23+19",
+            "fourth_normal_carrier": "q^4*Sym^7(k^3)",
+            "fourth_normal_dimension": 36,
+            "direct_sum_identity_at_every_split_fiber": "K_15 direct_sum q^4*Sym^7 = Sym^15",
+            "campaign": prime_rows,
+        },
+        "checks": {
+            "the_locked_G3_reproduces_the_G3BI_root_restriction": True,
+            "the_characteristic_zero_difference_factors_exactly_as_q_times_D7": True,
+            "the_exact_D7_carrier_has_dimension36": d7.shape[0] == 36,
+            "all48_split_fibers_have_colon_profile100_69_42_19_0": len(set(all_profiles)) == 1,
+            "the_four_successive_layers_have_full_conic_dimensions31_27_23_19": tuple(
+                EXPECTED_COLON_PROFILE[index] - EXPECTED_COLON_PROFILE[index + 1]
+                for index in range(4)
+            ) == EXPECTED_LAYER_DIMENSIONS,
+            "the_kernel_and_q4Sym7_form_a_direct_sum_on_all48_fibers": True,
+            "the_complement_dimension36_equals_dimSym7_and_dimD7": q4.shape[1] == d7.shape[0] == 36,
+        },
+        "guardrails": {
+            "claims_the_finite_kernel_is_promoted_to_Qgamma": False,
+            "claims_the_exact_endpoint_operator_factors_through_the_fourth_normal_lane": False,
+            "claims_the_D7_identity_alone_proves_component20_rank36": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3ffComponent20ConicFourthNormalSource",
+            "tier": "CLOSED_EXACT_QGAMMA_SOURCE_IDENTITY_AND_EXACT_48_FIBER_NORMAL_FILTRATION",
+            "statement": (
+                "The selected G3BI root-containment correction has the exact "
+                "characteristic-zero factorization (A0-A1)|_(w=-G3)=(xz-y^2)D7 "
+                "with D7 in Sym^7 and dim Sym^7=36. Independently, every one of "
+                "the48 canonical component-20 split kernels has conic-colon profile "
+                "100,69,42,19,0 and forms a direct sum with (xz-y^2)^4 Sym^7 in "
+                "Sym^15. The exact intertwiner identifying the endpoint operator "
+                "with this fourth-normal quotient remains to be constructed."
+            ),
+        },
+        "next_required_object": (
+            "Construct over Q(gamma) the selected Koszul/normal-jet homotopy that "
+            "absorbs the q-adic layers of orders0 through3 into the ordered prior "
+            "source plus Jacobian image, and prove that the component-20 quotient "
+            "operator factors through q^4*Sym^7 with the exact D7 source. A "
+            "denominator-safe36x36 minor then promotes rank36."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FF component20 conic fourth-normal source: PASS "
+        "exact_D7=36 finite_fibers=48 quotient=36"
+    )
+
+
+if __name__ == "__main__":
+    main()

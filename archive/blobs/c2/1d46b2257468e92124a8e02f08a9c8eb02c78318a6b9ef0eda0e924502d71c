@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""Run the unsigned128 five-prime H02 reconstruction and sixth-prime holdout."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import struct
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "ust_h02_u128_reconstruction_audit.cpp"
+EXECUTABLE = ROOT / "state" / "ust_h02_u128_reconstruction_audit"
+G3DI = ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+G3DJ = ROOT / "state" / "ust_g3dj_h02_second_prime_kernel_relations.packet.json"
+G3DK = ROOT / "state" / "ust_g3dk_h02_third_prime_kernel_relations.packet.json"
+G3DM = ROOT / "state" / "ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json"
+G3DO = ROOT / "state" / "ust_g3do_h02_fifth_prime_holdout_kernel.packet.json"
+G3DP = ROOT / "state" / "ust_g3dp_h02_four_prime_reconstruction_holdout.packet.json"
+G3DQ = ROOT / "state" / "ust_g3dq_h02_sixth_prime_holdout_kernel.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dr"
+OUT = ROOT / "state" / "ust_g3dr_h02_five_prime_reconstruction_holdout.packet.json"
+PRIMES = (21817, 33863, 37493, 38113, 68213)
+HOLDOUT = 69011
+ENTRIES_PER_DEGREE = 6022 * 1274
+ENTRIES = 6 * ENTRIES_PER_DEGREE
+BYTES_PER_DEGREE = (ENTRIES_PER_DEGREE + 7) // 8
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {"path": path.relative_to(ROOT).as_posix(), "sha256": sha256(path), "bytes": path.stat().st_size}
+
+
+def compile_tool() -> str:
+    require(SOURCE.is_file(), "u128 source")
+    completed = subprocess.run(
+        ["wsl", "g++", "-O3", "-std=c++17", runtime.wsl_path(SOURCE), "-o", runtime.wsl_path(EXECUTABLE)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    require(EXECUTABLE.is_file(), "u128 executable")
+    return completed.stdout.strip() or "compiled unsigned128 reconstruction auditor"
+
+
+def parse_log(path: Path) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for line in path.read_text(encoding="ascii").splitlines():
+        if " " in line:
+            key, value = line.split(" ", 1)
+            fields[key] = value.strip()
+    require(fields.get("STATUS") == "SUCCESS", "native audit status")
+    return fields
+
+
+def checked_coefficients(record_value: dict[str, Any], prime: int) -> tuple[np.ndarray, Path]:
+    path = ROOT / record_value["path"]
+    require(path.is_file() and sha256(path) == record_value["sha256"], f"coefficient hash p{prime}")
+    coefficients = np.load(path, allow_pickle=False)["coefficients"]
+    require(coefficients.shape == (6, 6022, 1274), f"coefficient shape p{prime}")
+    require(coefficients.dtype in (np.dtype("uint16"), np.dtype("uint32")), f"coefficient dtype p{prime}")
+    require(int(coefficients.max(initial=0)) < prime, f"untruncated coefficient residues p{prime}")
+    if prime > np.iinfo(np.uint16).max:
+        require(coefficients.dtype == np.dtype("uint32"), f"uint32 required p{prime}")
+    return coefficients, path
+
+
+def main() -> None:
+    packet_paths = (
+        ("G3DI", G3DI), ("G3DJ", G3DJ), ("G3DK", G3DK), ("G3DM", G3DM),
+        ("G3DO", G3DO), ("G3DP", G3DP), ("G3DQ", G3DQ),
+    )
+    packets = {label: load(path) for label, path in packet_paths}
+    require(all(all(packet["checks"].values()) for packet in packets.values()), "input checks")
+    coefficient_records = (
+        packets["G3DI"]["split_algebra_kernel"]["power_basis_coefficients"],
+        packets["G3DJ"]["second_split_algebra_kernel"]["power_basis_coefficients"],
+        packets["G3DK"]["third_split_algebra_kernel"]["power_basis_coefficients"],
+        packets["G3DM"]["fourth_split_algebra_kernel"]["power_basis_coefficients"],
+        packets["G3DO"]["fifth_split_algebra_kernel"]["power_basis_coefficients"],
+        packets["G3DQ"]["sixth_split_algebra_kernel"]["power_basis_coefficients"],
+    )
+    arrays_and_paths = [
+        checked_coefficients(value, prime)
+        for value, prime in zip(coefficient_records, PRIMES + (HOLDOUT,), strict=True)
+    ]
+    compile_stdout = compile_tool()
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    candidate_path = EVIDENCE / "H02.Q_kernel.five_prime_candidate.mask.bin"
+    pass_path = EVIDENCE / "H02.Q_kernel.sixth_prime_pass.mask.bin"
+    nonzero_path = EVIDENCE / "H02.Q_kernel.sixth_prime_nonzero_pass.rational.bin"
+    log_path = EVIDENCE / "H02.Q_kernel.five_to_six.audit.log"
+    with tempfile.TemporaryDirectory(prefix="ust_g3dr_raw_") as temporary_name:
+        temporary = Path(temporary_name)
+        raw_inputs: list[tuple[int, int, Path]] = []
+        for (coefficients, _), prime in zip(arrays_and_paths, PRIMES + (HOLDOUT,), strict=True):
+            raw_path = temporary / f"p{prime}.{coefficients.dtype.name}.raw"
+            coefficients.tofile(raw_path)
+            require(raw_path.stat().st_size == ENTRIES * coefficients.dtype.itemsize, f"raw bytes p{prime}")
+            raw_inputs.append((prime, coefficients.dtype.itemsize, raw_path))
+        command = [
+            "wsl", runtime.wsl_path(EXECUTABLE),
+            "--entries", str(ENTRIES),
+            "--degree-size", str(ENTRIES_PER_DEGREE),
+        ]
+        for prime, width, path in raw_inputs[:-1]:
+            command += ["--construction", str(prime), str(width), runtime.wsl_path(path)]
+        prime, width, path = raw_inputs[-1]
+        command += [
+            "--holdout", str(prime), str(width), runtime.wsl_path(path),
+            "--candidate-mask", runtime.wsl_path(candidate_path),
+            "--pass-mask", runtime.wsl_path(pass_path),
+            "--nonzero-pass", runtime.wsl_path(nonzero_path),
+            "--log", runtime.wsl_path(log_path),
+        ]
+        completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+
+    fields = parse_log(log_path)
+    require(fields["CONSTRUCTION_PRIMES"] == " ".join(str(value) for value in PRIMES), "construction primes")
+    require(int(fields["HOLDOUT_PRIME"]) == HOLDOUT, "holdout prime")
+    require(int(fields["ENTRIES"]) == ENTRIES, "native entries")
+    candidate_count = int(fields["CANDIDATES"])
+    pass_count = int(fields["PASSES"])
+    alias_count = int(fields["ALIASES"])
+    no_candidate = int(fields["NO_CANDIDATE"])
+    require(candidate_count + no_candidate == ENTRIES, "candidate coverage")
+    require(pass_count + alias_count == candidate_count, "candidate verdict partition")
+    require(candidate_path.stat().st_size == pass_path.stat().st_size == 6 * BYTES_PER_DEGREE, "mask bytes")
+    candidate_mask = np.fromfile(candidate_path, dtype=np.uint8).reshape(6, BYTES_PER_DEGREE)
+    pass_mask = np.fromfile(pass_path, dtype=np.uint8).reshape(6, BYTES_PER_DEGREE)
+    require(sum(int(np.unpackbits(row, bitorder="little")[:ENTRIES_PER_DEGREE].sum()) for row in candidate_mask) == candidate_count, "candidate mask count")
+    require(sum(int(np.unpackbits(row, bitorder="little")[:ENTRIES_PER_DEGREE].sum()) for row in pass_mask) == pass_count, "pass mask count")
+
+    prior = np.load(ROOT / packets["G3DP"]["evidence"]["masks"]["path"], allow_pickle=False)["four_prime_holdout_pass"]
+    require(prior.shape == (6, BYTES_PER_DEGREE), "prior mask shape")
+    retained = lost = new_stable = 0
+    per_degree: list[dict[str, int]] = []
+    for degree in range(6):
+        prior_bits = np.unpackbits(prior[degree], bitorder="little")[:ENTRIES_PER_DEGREE].astype(bool)
+        pass_bits = np.unpackbits(pass_mask[degree], bitorder="little")[:ENTRIES_PER_DEGREE].astype(bool)
+        retained_row = int(np.count_nonzero(prior_bits & pass_bits))
+        lost_row = int(np.count_nonzero(prior_bits & ~pass_bits))
+        new_row = int(np.count_nonzero(~prior_bits & pass_bits))
+        retained += retained_row
+        lost += lost_row
+        new_stable += new_row
+        per_degree.append(
+            {
+                "degree": degree,
+                "entries": int(fields[f"DEGREE_{degree}_ENTRIES"]),
+                "five_prime_candidates": int(fields[f"DEGREE_{degree}_CANDIDATES"]),
+                "sixth_prime_holdout_passes": int(fields[f"DEGREE_{degree}_PASSES"]),
+                "five_prime_aliases": int(fields[f"DEGREE_{degree}_ALIASES"]),
+                "five_prime_no_candidate": int(fields[f"DEGREE_{degree}_NO_CANDIDATE"]),
+                "pass_integers": int(fields[f"DEGREE_{degree}_PASS_INTEGERS"]),
+                "pass_zeros": int(fields[f"DEGREE_{degree}_PASS_ZEROS"]),
+                "pass_nonzero": int(fields[f"DEGREE_{degree}_PASS_NONZERO"]),
+                "retained_four_prime_passes": retained_row,
+                "lost_four_prime_passes": lost_row,
+                "new_stable_beyond_four_prime": new_row,
+            }
+        )
+    raw = nonzero_path.read_bytes()[:40]
+    require(raw[:8] == b"MTTRRZ1\0", "nonzero binary magic")
+    binary_entries, binary_records, construction_count, binary_holdout = struct.unpack_from("<4Q", raw, 8)
+    require(binary_entries == ENTRIES and binary_records == int(fields["NONZERO_RECORDS"]), "nonzero header")
+    require(construction_count == len(PRIMES) and binary_holdout == HOLDOUT, "nonzero provenance")
+    require(nonzero_path.stat().st_size == 40 + binary_records * 24, "nonzero binary length")
+
+    totals = {
+        "entries": ENTRIES,
+        "five_prime_candidates": candidate_count,
+        "sixth_prime_holdout_passes": pass_count,
+        "five_prime_aliases": alias_count,
+        "five_prime_no_candidate": no_candidate,
+        "pass_integers": int(fields["PASS_INTEGERS"]),
+        "pass_zeros": int(fields["PASS_ZEROS"]),
+        "pass_nonzero": int(fields["PASS_NONZERO"]),
+        "retained_four_prime_passes": retained,
+        "lost_four_prime_passes": lost,
+        "new_stable_beyond_four_prime": new_stable,
+    }
+    checks = {
+        "G3DI_through_G3DQ_are_hash_bound_and_passing": True,
+        "prime68213_residues_are_uint32_and_untruncated": arrays_and_paths[4][0].dtype == np.dtype("uint32"),
+        "prime69011_residues_are_uint32_and_untruncated": arrays_and_paths[5][0].dtype == np.dtype("uint32"),
+        "the_native_unsigned128_executor_self_bounds_the_modulus": int(fields["MODULUS_BITS"]) == 76,
+        "all46032168_coefficients_are_audited": int(fields["ENTRIES"]) == ENTRIES,
+        "five_prime_candidates_are_partitioned_by_an_independent_sixth_prime": candidate_count == pass_count + alias_count,
+        "candidate_and_pass_masks_replay_the_native_counts": True,
+        "all_nonzero_passing_fractions_are_persisted_with_indices": binary_records == int(fields["PASS_NONZERO"]),
+        "no_finite_holdout_pass_is_promoted_to_Q_gamma": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DR checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dr-h02-five-prime-reconstruction-holdout.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DR",
+        "status": "CLOSED_EXACT_FIVE_PRIME_RECONSTRUCTION_WITH_INDEPENDENT_SIXTH_PRIME_HOLDOUT",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {label: record(path) for label, path in packet_paths},
+        "coefficient_archives": [record(path) for _, path in arrays_and_paths],
+        "native_executor": {
+            "source": record(SOURCE),
+            "executable": record(EXECUTABLE),
+            "compile_stdout": compile_stdout,
+            "solver_stdout": completed.stdout.strip(),
+        },
+        "reconstruction_contract": {
+            "construction_primes": list(PRIMES),
+            "reserved_holdout_prime": HOLDOUT,
+            "five_prime_modulus": int(fields["MODULUS"]),
+            "five_prime_modulus_bits": int(fields["MODULUS_BITS"]),
+            "five_prime_uniqueness_bound": int(fields["UNIQUENESS_BOUND"]),
+            "algorithm": "signed-__int128 extended-Euclidean uniqueness-range rational reconstruction",
+            "holdout_test": "n congruent to residue*d modulo 69011",
+        },
+        "totals": totals,
+        "fractions": {
+            "five_prime_candidate_fraction": candidate_count / ENTRIES,
+            "sixth_prime_holdout_pass_fraction_of_all": pass_count / ENTRIES,
+            "sixth_prime_holdout_pass_fraction_of_candidates": pass_count / candidate_count,
+            "five_prime_alias_fraction_of_candidates": alias_count / candidate_count,
+            "new_stable_fraction_of_all": new_stable / ENTRIES,
+        },
+        "per_degree": per_degree,
+        "evidence": {
+            "candidate_mask": record(candidate_path),
+            "holdout_pass_mask": record(pass_path),
+            "nonzero_passing_fractions": record(nonzero_path),
+            "native_log": record(log_path),
+            "mask_bit_order": "little within each byte; each degree separately padded to a byte boundary",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_a_holdout_pass_is_an_exact_rational_coefficient": False,
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3drH02FivePrimeReconstructionHoldout",
+            "tier": "CLOSED_EXACT_U128_MULTIPRIME_RECONSTRUCTION_AUDIT",
+            "statement": "A native signed-128-bit executor reconstructs every normalized H02 kernel coefficient from five complete split-prime archives inside the exact uniqueness range and tests it against the independently reserved sixth prime. Candidate, pass and nonzero rational payloads are persisted without reducing finite agreement to a characteristic-zero identity.",
+        },
+        "frontier_delta": {
+            "before": "The five-prime modulus exceeded signed64 range, so no safe candidate layer existed beyond G3DP.",
+            "after": "All five-prime candidates have exact sixth-prime verdicts under a reusable signed128 executor, and every nonzero passing fraction is materialized for later direct identity verification.",
+        },
+        "next_required_object": "Construct six-prime candidates with the same executor, reserve prime72271 as holdout, then proceed to prime73673 and direct exact polynomial relation verification or a sufficient height bound.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DR H02 five-prime reconstruction holdout: PASS")
+    print(
+        f"five_candidates={candidate_count} holdout_pass={pass_count} "
+        f"aliases={alias_count} new_stable={new_stable} nonzero_pass={binary_records}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

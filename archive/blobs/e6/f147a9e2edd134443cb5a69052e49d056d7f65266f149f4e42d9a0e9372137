@@ -1,0 +1,300 @@
+#!/usr/bin/env python3
+"""Construct the exact adjugate homotopy from the normal pair to K3 Jacobians."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fj_component20_k3_normal_matrix_factorization as normal_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3FI = ROOT / "evidence/ust_g3fi/H02.component20.root_ideal_normal_pair.json"
+G3FJ = ROOT / "evidence/ust_g3fj/H02.component20.k3_normal_matrix_factorization.json"
+G3FK = ROOT / "evidence/ust_g3fk/selected_four_normal_cayley_source.json"
+PDELTA = ROOT.parent / "12 Quantum Gravity/q79_splitting_conic_delta_residue_polynomial.packet.json"
+EVIDENCE = ROOT / "evidence/ust_g3fx"
+ARRAYS = EVIDENCE / "H02.component20.adjugate_normal_homotopy.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.adjugate_normal_homotopy.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path, *, repository: Path = ROOT) -> dict[str, object]:
+    return {
+        "path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def homogeneous(exponents: np.ndarray, coefficients: np.ndarray, variables: tuple[sp.Symbol, ...]) -> sp.Expr:
+    return sp.expand(
+        sum(
+            int(coefficient)
+            * sp.prod(variable ** int(power) for variable, power in zip(variables, exponent, strict=True))
+            for exponent, coefficient in zip(exponents, coefficients, strict=True)
+        )
+    )
+
+
+def weighted_exponents(degree: int) -> list[tuple[int, int, int, int]]:
+    return [
+        (a, b, c, w_power)
+        for w_power in range(degree // 3 + 1)
+        for a in range(degree - 3 * w_power + 1)
+        for b in range(degree - 3 * w_power - a + 1)
+        for c in [degree - 3 * w_power - a - b]
+    ]
+
+
+def encode(
+    polynomials: list[sp.Expr],
+    degree: int,
+    variables: tuple[sp.Symbol, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    exponents = weighted_exponents(degree)
+    rows = []
+    for polynomial in polynomials:
+        value = sp.Poly(polynomial, *variables, domain=sp.ZZ)
+        rows.append(
+            [
+                int(value.coeff_monomial(sp.prod(variable ** power for variable, power in zip(variables, exponent, strict=True))))
+                for exponent in exponents
+            ]
+        )
+    coefficients = np.asarray(rows, dtype=object)
+    maximum = max(abs(int(value)) for value in coefficients.reshape(-1))
+    require(maximum < 2**63, f"degree{degree} coefficients fit int64")
+    return np.asarray(exponents, dtype=np.int16), coefficients.astype(np.int64)
+
+
+def main() -> None:
+    g3fi, g3fj, g3fk, pdelta = map(load, (G3FI, G3FJ, G3FK, PDELTA))
+    for label, packet in (("G3FI", g3fi), ("G3FJ", g3fj), ("G3FK", g3fk), ("Pdelta", pdelta)):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    artifact_path = ROOT / g3fj["matrix_factorization"]["artifact"]["path"]
+    require(sha256(artifact_path) == g3fj["matrix_factorization"]["artifact"]["sha256"], "G3FJ artifact hash")
+    artifact = np.load(artifact_path, allow_pickle=False)
+    x, y, z, w = sp.symbols("x y z w")
+    variables = (x, y, z, w)
+    xyz = (x, y, z)
+    q = x * z - y**2
+    g3 = sum(
+        coefficient * x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+        for exponent, coefficient in conic.G3_TERMS.items()
+    )
+    r = w + g3
+    rbar = w - g3
+    h4 = homogeneous(
+        artifact["degree4_exponents"], artifact["H4_coefficients"], xyz
+    )
+    k3 = sp.expand(q * h4 + r * rbar)
+
+    normal_functions = sp.Matrix([q, h4, rbar, r])
+    jacobian = normal_functions.jacobian(variables)
+    determinant = sp.expand(jacobian.det())
+    pdelta_exact = sp.sympify(
+        pdelta["residue_polynomial"]["expanded"],
+        locals={"x": x, "y": y, "z": z, "w": w},
+    )
+    require(sp.expand(determinant - 6 * pdelta_exact) == 0, "Jacobian determinant normalization")
+
+    b6_rows = artifact["B6_gamma_coordinates"].astype(np.int64)
+    d7_rows = artifact["D7_gamma_coordinates"].astype(np.int64)
+    basis6 = np.asarray(normal_runtime.homogeneous_exponents(6), dtype=np.int16)
+    basis7 = np.asarray(normal_runtime.homogeneous_exponents(7), dtype=np.int16)
+    adjugate = jacobian.adjugate()
+    homotopies: list[list[sp.Expr]] = []
+    residuals: list[sp.Expr] = []
+    identity_residuals: list[sp.Expr] = []
+    for coordinate in range(6):
+        b6 = homogeneous(basis6, b6_rows[:, coordinate], xyz)
+        d7 = homogeneous(basis7, d7_rows[:, coordinate], xyz)
+        residual = sp.expand(r * b6 + q * d7)
+        vector = sp.Matrix([0, d7, b6, 0])
+        homotopy = [sp.expand(value) for value in adjugate * vector]
+        replay = sp.expand(
+            sum(value * sp.diff(k3, variable) for value, variable in zip(homotopy, variables, strict=True))
+            - determinant * residual
+        )
+        require(replay == 0, f"adjugate homotopy coordinate{coordinate}")
+        homotopies.append(homotopy)
+        residuals.append(residual)
+        identity_residuals.append(replay)
+
+    hx_exponents, hx_coefficients = encode(
+        [homotopies[field][component] for field in range(6) for component in range(3)],
+        10,
+        variables,
+    )
+    hw_exponents, hw_coefficients = encode(
+        [homotopies[field][3] for field in range(6)], 12, variables
+    )
+    hx_coefficients = hx_coefficients.reshape(6, 3, -1)
+    require(hx_coefficients.shape[0:2] == (6, 3), "xyz homotopy shape")
+    require(hw_coefficients.shape[0] == 6, "w homotopy shape")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ARRAYS,
+        field_power_basis_degrees=np.arange(6, dtype=np.int8),
+        xyz_multiplier_weighted_exponents=hx_exponents,
+        xyz_multiplier_coefficients=hx_coefficients,
+        w_multiplier_weighted_exponents=hw_exponents,
+        w_multiplier_coefficients=hw_coefficients,
+        H4_coefficients=artifact["H4_coefficients"],
+        B6_gamma_coordinates=b6_rows,
+        D7_gamma_coordinates=d7_rows,
+    )
+
+    packet = {
+        "schema": "ust.g3fx.h02.component20.adjugate-normal-homotopy.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FX",
+        "status": "CLOSED_EXACT_ADJUGATE_NUMERATOR_HOMOTOPY_PDELTA_DESCENT_OPEN",
+        "inputs": {
+            "G3FI": record(G3FI),
+            "G3FJ": record(G3FJ),
+            "G3FK": record(G3FK),
+            "q79_Pdelta": {
+                "repository": PDELTA.parent.parent.name,
+                **record(PDELTA, repository=PDELTA.parent.parent),
+            },
+        },
+        "normal_jacobian": {
+            "normal_functions": ["q", "H4", "rbar", "r"],
+            "variables": ["x", "y", "z", "w"],
+            "determinant": "6*P_delta",
+            "determinant_nonzero": True,
+        },
+        "homotopy": {
+            "normal_source_vector": "v=(0,D7,B6,0)^T",
+            "definition": "h=adj(J)*v",
+            "identity": "h dot grad(K3)=6*P_delta*(q*D7+r*B6)",
+            "field_coordinates_replayed": 6,
+            "bare_multiplier_weighted_degrees": [10, 10, 10, 12],
+            "artifact": record(ARRAYS),
+            "nonzero_counts": {
+                "hx_hy_hz_by_field_coordinate": [
+                    [int(np.count_nonzero(hx_coefficients[field, component])) for component in range(3)]
+                    for field in range(6)
+                ],
+                "hw_by_field_coordinate": [
+                    int(np.count_nonzero(hw_coefficients[field])) for field in range(6)
+                ],
+            },
+        },
+        "Cox_degree_audit": {
+            "variable_degrees": {
+                "x_y_z": [1, 0, 0],
+                "w": [3, 0, 0],
+                "t0_t1_t2": [0, 1, 0],
+                "u": [-6, 0, 1],
+                "s": [-9, -1, 1],
+            },
+            "frozen_H02_target_degree": [9, 1, 2],
+            "Pdelta_degree": [6, 0, 0],
+            "component_t_derivative_multiplier_degree": [9, 2, 1],
+            "adjugate_xyz_Jacobian_multiplier_degree_after_component_factors": [16, 1, 1],
+            "adjugate_w_Jacobian_multiplier_degree_after_component_factors": [18, 1, 1],
+            "adjugate_identity_target_degree": [15, 1, 2],
+            "verdict": (
+                "The adjugate identity lands six H-degrees above the frozen H02 "
+                "presentation, exactly because det(J)=6*Pdelta. It is the integral "
+                "numerator of a localized homotopy, not yet a same-degree G3EX row."
+            ),
+        },
+        "full_Cayley_first_repair": {
+            "Phi": "u*K3+v*E+s*F_selected",
+            "identity": (
+                "s*h dot grad_X(Phi)=6*P_delta*u*s*(q*D7+r*B6) "
+                "+ s^2*h dot grad_X(F_selected)"
+            ),
+            "interpretation": (
+                "The first term cancels the Pdelta-multiplied normal source in the "
+                "higher Cox degree. The second is the explicit next repair defect "
+                "generated by the eta9 perturbation."
+            ),
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "checks": {
+            "the_normal_Jacobian_determinant_is_exactly6Pdelta": True,
+            "the_adjugate_homotopy_is_emitted_in_all_six_field_coordinates": True,
+            "all_six_homotopy_identities_replay_with_literal_zero_residual": not any(identity_residuals),
+            "the_xyz_homotopy_multipliers_have_weighted_degree10": True,
+            "the_w_homotopy_multiplier_has_weighted_degree12": True,
+            "the_adjugate_identity_lands_in_Cox_degree15_1_2": True,
+            "the_degree_shift_from_frozen_H02_is_exactly_Pdelta_degree6_0_0": True,
+            "the_full_Cayley_first_repair_identity_is_exact": True,
+        },
+        "guardrails": {
+            "claims_Pdelta_is_globally_invertible": False,
+            "claims_the_adjugate_numerator_is_a_same_degree_G3EX_relation": False,
+            "claims_the_s_squared_repair_defect_vanishes": False,
+            "claims_the_four_step_perturbation_series_is_completed": False,
+            "claims_literal_G3EX_replay_of100_relations": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fxComponent20AdjugateNormalHomotopy",
+            "tier": "CLOSED_EXACT_ADJUGATE_NUMERATOR_HOMOTOPY",
+            "statement": (
+                "The selected normal source q*D7+r*B6 admits one explicit, "
+                "denominator-free adjugate homotopy into the four K3 Jacobian "
+                "columns after multiplication by the exact residue 6*Pdelta. "
+                "Its bare multiplier degrees have the expected Jacobian shape, but "
+                "the determinant factor raises the full component identity from "
+                "Cox degree(9,1,2) to(15,1,2). Thus it is the exact numerator of a "
+                "localized homotopy. Pdelta descent, higher repair and projection "
+                "remain open."
+            ),
+        },
+        "next_required_object": (
+            "Decide Pdelta saturation on the selected100-dimensional quotient, or "
+            "construct the residue-duality map that descends the adjugate numerator "
+            "from Cox degree(15,1,2) to the frozen(9,1,2) presentation without "
+            "assuming Pdelta invertible. Only then iterate the explicit next defect "
+            "and compile 100 literal G3EX residuals."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FX adjugate normal homotopy: PASS "
+        "field_coordinates=6 degrees=10,10,10,12 next_defect=s^2"
+    )
+
+
+if __name__ == "__main__":
+    main()

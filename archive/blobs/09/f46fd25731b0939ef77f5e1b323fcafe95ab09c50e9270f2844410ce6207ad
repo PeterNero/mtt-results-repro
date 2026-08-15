@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Independently replay the UST.G3GJ anchor source-injection certificate."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3gj_k6_h02_source_injection as builder
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+def main() -> None:
+    packet = builder.load(builder.OUT)
+    builder.require(all(packet["checks"].values()), "packet checks")
+    builder.require(not any(packet["guardrails"].values()), "packet guardrails")
+    for section in (
+        packet["inputs"],
+        packet["selected_source"],
+        packet["anchor_execution"],
+    ):
+        for value in section.values():
+            if not isinstance(value, dict) or "path" not in value:
+                continue
+            path = builder.ROOT / value["path"]
+            builder.require(path.is_file(), f"artifact exists: {path}")
+            builder.require(builder.sha256(path) == value["sha256"], f"artifact hash: {path}")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+
+    macaulay_path = mld / packet["inputs"]["H02_Macaulay"]["repository_relative_path"]
+    builder.require(
+        builder.sha256(macaulay_path) == packet["inputs"]["H02_Macaulay"]["sha256"],
+        "external H02 Macaulay hash",
+    )
+    macaulay = builder.load(macaulay_path)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+
+    arrays = np.load(builder.G3FY_ARRAYS, allow_pickle=False)
+    k6 = arrays["pdelta_kernel_degree6"].astype(np.int64) % builder.PRIME
+    exponents = arrays["degree6_exponents"].astype(np.int64)
+    g3bi = builder.load(builder.G3BI)
+    reconstructed = builder.selected_k6_source(k6, exponents, g3bi, target_lookup)
+    source_path = builder.ROOT / packet["selected_source"]["source_matrix"]["path"]
+    stored_source = sparse.load_npz(source_path).tocsc()
+    builder.require((reconstructed != stored_source).nnz == 0, "independent source reconstruction")
+
+    chart_path = builder.ROOT / packet["inputs"]["endpoint_chart"]["path"]
+    rhs_path = builder.ROOT / packet["selected_source"]["RHS"]["path"]
+    solution_path = builder.ROOT / packet["anchor_execution"]["solution"]["path"]
+    chart = split_io.as_scipy(arithmetic.read_csc(chart_path, b"MTTSPC1\0", 6))
+    rhs = split_io.as_scipy(arithmetic.read_csc(rhs_path, b"MTTSRH1\0", 4))
+    solution = split_io.as_scipy(arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6))
+    builder.require((rhs != reconstructed).nnz == 0, "binary RHS equality")
+    residual = split_io.residual_nonzeros(chart, solution, rhs, builder.PRIME)
+    builder.require(residual == packet["anchor_execution"]["residual_nonzeros"] == 0, "zero residual")
+
+    quotient = solution[: builder.QUOTIENT_UNITS, :].toarray().astype(np.int64) % builder.PRIME
+    quotient_path = builder.ROOT / packet["anchor_execution"]["quotient_coordinates"]["path"]
+    builder.require(np.array_equal(quotient, np.load(quotient_path, allow_pickle=False)), "quotient coordinates")
+    quotient_rank = graded.rref(quotient, builder.PRIME)[0]
+
+    g3ca = builder.load(builder.G3CA)
+    roots = [int(value) for value in g3ca["selected_source"]["roots"]]
+    root_index = roots.index(builder.ROOT_VALUE)
+    pdelta_path = builder.ROOT / g3ca["selected_source"]["root_values"]["path"]
+    pdelta = np.load(pdelta_path, allow_pickle=False)[:, root_index].astype(np.int64) % builder.PRIME
+    augmented_rank = graded.rref(
+        np.concatenate((quotient, pdelta[:, None]), axis=1), builder.PRIME
+    )[0]
+    builder.require(quotient_rank == packet["rank_decision"]["K6_quotient_image_rank"] == 18, "rank18")
+    builder.require(
+        augmented_rank == packet["rank_decision"]["K6_plus_Pdelta_quotient_image_rank"] == 19,
+        "Pdelta complement rank19",
+    )
+    print(
+        "UST.G3GJ verifier: PASS "
+        f"source_shape={reconstructed.shape} quotient_rank={quotient_rank} augmented_rank={augmented_rank}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Export one exact chunk complementary to the balanced 50,000-row campaign."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import threading
+import time
+
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as fixed_chunk
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+CHUNK_ROOT = STATE / "ust_g3ap_selected_cayley_target_macaulay_complement_chunks"
+REUSED_ROWS = 50_000
+FULL_ROWS = macaulay.EXPECTED_SOURCE_MULTIPLES
+COMPLEMENT_ROWS = FULL_ROWS - REUSED_ROWS
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def source_hash(values: list[tuple[int, tuple[int, ...]]]) -> str:
+    payload = json.dumps(
+        [[generator, list(exponent)] for generator, exponent in values],
+        separators=(",", ":"),
+    ).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def selections(
+    leaders: list[tuple[int, ...]],
+) -> tuple[
+    list[tuple[int, tuple[int, ...]]],
+    list[tuple[int, tuple[int, ...]]],
+    list[tuple[int, tuple[int, ...]]],
+]:
+    full, _ = macaulay.source_data(leaders)
+    balanced, _ = macaulay.balanced_source_subset(full, REUSED_ROWS)
+    require(len(full) == FULL_ROWS and len(set(full)) == FULL_ROWS, "full sources")
+    balanced_set = set(balanced)
+    complement = [source for source in full if source not in balanced_set]
+    require(
+        len(balanced_set) == REUSED_ROWS
+        and len(complement) == COMPLEMENT_ROWS
+        and not balanced_set.intersection(complement)
+        and balanced_set.union(complement) == set(full),
+        "exact source partition",
+    )
+    return full, balanced, complement
+
+
+def paths(index: int, count: int) -> dict[str, Path]:
+    stem = f"complement42979_chunk{index:03d}of{count:03d}"
+    return {
+        "script": CHUNK_ROOT / f"{stem}.sing",
+        "output": CHUNK_ROOT / f"{stem}.singular.out.gz",
+        "triples": CHUNK_ROOT / f"{stem}.packed-triples",
+        "packet": CHUNK_ROOT / f"{stem}.packet.json",
+        "external_active": CHUNK_ROOT / f"{stem}.external-active",
+    }
+
+
+def wait_for_external_worker(
+    output_paths: dict[str, Path], index: int, count: int, timeout: int
+) -> bool:
+    """Wait for a disjoint coordinator already assigned to this exact chunk."""
+    marker = output_paths["external_active"]
+    if not marker.is_file():
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        packet_path = output_paths["packet"]
+        triples = output_paths["triples"]
+        if packet_path.is_file() and triples.is_file():
+            try:
+                packet = json.loads(packet_path.read_text(encoding="ascii"))
+                if (
+                    packet.get("schema")
+                    == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-complement-chunk.v1"
+                    and all(packet.get("checks", {}).values())
+                    and not any(packet.get("guardrails", {}).values())
+                    and packet["selection"]["chunk_index"] == index
+                    and packet["selection"]["chunk_count"] == count
+                    and packet["execution"]["packed_triples"]["sha256"]
+                    == sha256(triples)
+                ):
+                    return True
+            except (KeyError, OSError, ValueError, json.JSONDecodeError):
+                pass
+        time.sleep(5)
+    raise TimeoutError(f"external complement worker did not finish chunk {index}/{count}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--chunk-index", type=int, required=True)
+    parser.add_argument("--chunk-count", type=int, required=True)
+    parser.add_argument("--timeout", type=int, default=43_200)
+    args = parser.parse_args()
+    require(args.chunk_count > 0, "positive chunk count")
+    require(0 <= args.chunk_index < args.chunk_count, "chunk index")
+    CHUNK_ROOT.mkdir(parents=True, exist_ok=True)
+
+    leaders, base_packet = fixed_chunk.load_coordinates()
+    targets, _ = macaulay.coordinate_data(leaders)
+    target_index = {value: index for index, value in enumerate(targets, start=1)}
+    require(len(target_index) == len(targets), "unique target coordinates")
+    full, balanced, complement = selections(leaders)
+    start = COMPLEMENT_ROWS * args.chunk_index // args.chunk_count
+    stop = COMPLEMENT_ROWS * (args.chunk_index + 1) // args.chunk_count
+    chunk = complement[start:stop]
+    require(chunk, "nonempty complement chunk")
+
+    output_paths = paths(args.chunk_index, args.chunk_count)
+    if wait_for_external_worker(
+        output_paths, args.chunk_index, args.chunk_count, args.timeout
+    ):
+        print(
+            "G3AP complement chunk: REUSE_EXTERNAL "
+            f"chunk={args.chunk_index + 1}/{args.chunk_count}"
+        )
+        return
+    source_text = macaulay.SOURCE.read_text(encoding="ascii")
+    output_paths["script"].write_text(
+        macaulay.export_script(source_text, chunk), encoding="ascii"
+    )
+
+    process = subprocess.Popen(
+        singular_command(ROOT, output_paths["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    require(process.stdout is not None, "Singular stdout")
+    nonzeros = 0
+    singular_errors: list[str] = []
+    marker = f"G3AP_MACAULAY_EXPORT_ROWS={len(chunk)}"
+    marker_seen = False
+    pass_seen = False
+    timed_out = threading.Event()
+
+    def kill_on_timeout() -> None:
+        if process.poll() is None:
+            timed_out.set()
+            process.kill()
+
+    watchdog = threading.Timer(args.timeout, kill_on_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        with (
+            gzip.open(output_paths["output"], "wt", encoding="utf-8") as raw_output,
+            output_paths["triples"].open("w", encoding="ascii") as triple_output,
+        ):
+            for line in process.stdout:
+                raw_output.write(line)
+                stripped = line.rstrip()
+                if stripped == marker:
+                    marker_seen = True
+                elif stripped == "G3AP_MACAULAY_EXPORT_PASS":
+                    pass_seen = True
+                if line.lstrip().startswith("?"):
+                    singular_errors.append(stripped)
+                if not line.startswith("G3AP_MACAULAY_TERM="):
+                    continue
+                row_text, component_text, exponent_text, coefficient_text = (
+                    stripped.split("=", 1)[1].split("|", 3)
+                )
+                local_row = int(row_text)
+                require(1 <= local_row <= len(chunk), "local complement row")
+                coordinate = (
+                    int(component_text),
+                    tuple(int(value) for value in exponent_text.split(",")),
+                )
+                require(coordinate in target_index, "term outside target coordinates")
+                packed = macaulay.packed_coefficient(coefficient_text)
+                require(packed != 0, "nonzero exported coefficient")
+                union_row = REUSED_ROWS + start + local_row
+                triple_output.write(
+                    f"{union_row} {target_index[coordinate]} {packed}\n"
+                )
+                nonzeros += 1
+        returncode = process.wait()
+    finally:
+        watchdog.cancel()
+    if timed_out.is_set():
+        raise subprocess.TimeoutExpired(str(output_paths["script"]), args.timeout)
+    require(returncode == 0, "complement chunk execution")
+    require(not singular_errors, f"Singular errors: {singular_errors[:3]}")
+    require(marker_seen and pass_seen, "complement chunk completion markers")
+
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-complement-chunk.v1",
+        "date": "2026-08-11",
+        "status": "CANDIDATE_EXACT_COMPLEMENT_MATRIX_CHUNK_NOT_G3AP_CLOSURE",
+        "inputs": {
+            "selected_source": {
+                "path": macaulay.relative(macaulay.SOURCE),
+                "sha256": macaulay.sha256(macaulay.SOURCE),
+            },
+            "base_coordinate_packet": {
+                "path": macaulay.relative(macaulay.INSPECT_PACKET),
+                "sha256": sha256(macaulay.INSPECT_PACKET),
+            },
+        },
+        "selection": {
+            "kind": "ordered_complement_of_balanced50000_in_all92979_sources",
+            "full_rows": FULL_ROWS,
+            "reused_balanced_rows": REUSED_ROWS,
+            "complement_rows": COMPLEMENT_ROWS,
+            "full_source_sha256": source_hash(full),
+            "reused_balanced_source_sha256": source_hash(balanced),
+            "complement_source_sha256": source_hash(complement),
+            "chunk_index": args.chunk_index,
+            "chunk_count": args.chunk_count,
+            "complement_start_zero_based": start,
+            "complement_stop_exclusive_zero_based": stop,
+            "chunk_source_sha256": source_hash(chunk),
+            "union_row_range_one_based": [REUSED_ROWS + start + 1, REUSED_ROWS + stop],
+        },
+        "execution": {
+            "script": {
+                "path": macaulay.relative(output_paths["script"]),
+                "sha256": sha256(output_paths["script"]),
+            },
+            "compressed_output": {
+                "path": macaulay.relative(output_paths["output"]),
+                "sha256": sha256(output_paths["output"]),
+                "bytes": output_paths["output"].stat().st_size,
+            },
+            "packed_triples": {
+                "path": macaulay.relative(output_paths["triples"]),
+                "sha256": sha256(output_paths["triples"]),
+                "bytes": output_paths["triples"].stat().st_size,
+            },
+            "nonzeros": nonzeros,
+        },
+        "matrix_shape_after_union": [FULL_ROWS, len(targets)],
+        "checks": {
+            "the_full_and_balanced_source_lists_are_recomputed": True,
+            "the_complement_is_the_exact_disjoint_set_difference": True,
+            "union_rows_follow_the_50000_reused_rows_without_overlap": True,
+            "every_emitted_term_is_an_exact_selected_target_coordinate": True,
+        },
+        "guardrails": {
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+    }
+    require(all(packet["checks"].values()), "complement checks")
+    output_paths["packet"].write_text(
+        json.dumps(packet, indent=2) + "\n", encoding="ascii"
+    )
+    print(
+        "G3AP complement chunk: PASS "
+        f"chunk={args.chunk_index + 1}/{args.chunk_count} rows={len(chunk)} "
+        f"nonzeros={nonzeros}"
+    )
+
+
+if __name__ == "__main__":
+    main()

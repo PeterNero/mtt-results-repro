@@ -1,0 +1,731 @@
+#!/usr/bin/env python3
+"""Compile the G3BI correction pencil into the frozen eta9 operator charts."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+from collections import deque
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components, maximum_bipartite_matching
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3BJ = ROOT / "state" / "ust_g3bj_transcendental_arc_path.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3bk"
+OUT = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+
+VARIABLES = ("x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s")
+TARGETS = ("H20", "H11", "H02")
+PRIME = 11
+GAMMA_RESIDUE = 3
+MINPOLY = [64, 16, 33, 44, 89, 24, 1]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def upstream_record(path: Path) -> dict[str, Any]:
+    packet = load(path)
+    return {
+        "repository": "20 Mathematical Language Discovery Program",
+        "path": path.name,
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+        "schema": packet.get("schema", "UNSCHEMATIZED"),
+        "status": packet.get("status", "NO_STATUS"),
+    }
+
+
+def resolve_mld() -> Path:
+    candidates = []
+    configured = os.environ.get("MTT_MLD_REPO")
+    if configured:
+        candidates.append(Path(configured))
+    candidates.extend(
+        [
+            ROOT.parent / "20 Mathematical Language Discovery Program",
+            ROOT.parent / "Mathematical Language Discovery Program",
+        ]
+    )
+    for candidate in candidates:
+        if (candidate / "q79_eta9_full_vanishing_residue_basis.packet.json").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError(
+        "Set MTT_MLD_REPO to the Mathematical Language Discovery Program repository"
+    )
+
+
+def evaluate_mod11(coefficients: list[int]) -> int:
+    return sum(
+        (int(value) % PRIME) * pow(GAMMA_RESIDUE, power, PRIME)
+        for power, value in enumerate(coefficients)
+    ) % PRIME
+
+
+def weighted_base_monomials(h_degree: int, l_degree: int):
+    if h_degree < 0 or l_degree < 0:
+        return
+    for w_exponent in range(h_degree // 3 + 1):
+        xyz_degree = h_degree - 3 * w_exponent
+        for x_exponent in range(xyz_degree + 1):
+            for y_exponent in range(xyz_degree - x_exponent + 1):
+                z_exponent = xyz_degree - x_exponent - y_exponent
+                for t0_exponent in range(l_degree + 1):
+                    for t1_exponent in range(l_degree - t0_exponent + 1):
+                        t2_exponent = l_degree - t0_exponent - t1_exponent
+                        yield (
+                            x_exponent,
+                            y_exponent,
+                            z_exponent,
+                            w_exponent,
+                            t0_exponent,
+                            t1_exponent,
+                            t2_exponent,
+                        )
+
+
+def monomials_of_cox_degree(degree: tuple[int, int, int]) -> list[tuple[int, ...]]:
+    h_target, l_target, xi_target = degree
+    if xi_target < 0:
+        return []
+    result = []
+    for u_exponent in range(xi_target + 1):
+        for v_exponent in range(xi_target - u_exponent + 1):
+            s_exponent = xi_target - u_exponent - v_exponent
+            h_degree = h_target + 6 * u_exponent + 9 * s_exponent
+            l_degree = l_target + 3 * v_exponent + s_exponent
+            for base in weighted_base_monomials(h_degree, l_degree):
+                result.append(base + (u_exponent, v_exponent, s_exponent))
+    require(len(result) == len(set(result)), "unique Cox monomials")
+    return result
+
+
+def correction_terms(g3bi: dict[str, Any]) -> list[dict[str, Any]]:
+    result = []
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        xyz = tuple(int(value) for value in row["source_monomial"])
+        coefficients = [int(value) for value in row["correction_gamma_coordinates"]]
+        require(len(coefficients) == 6 and any(coefficients), "nonzero Q(gamma) row")
+        # C is the t0 coefficient of F; s*C is the Cayley-family deformation.
+        f_exponent = xyz + (0, 1, 0, 0, 0, 0, 0)
+        cayley_exponent = xyz + (0, 1, 0, 0, 0, 0, 1)
+        result.append(
+            {
+                "t_power": int(row["t_power"]),
+                "F_exponent": f_exponent,
+                "sF_exponent": cayley_exponent,
+                "coefficients": coefficients,
+                "mod11": evaluate_mod11(coefficients),
+            }
+        )
+    require(len(result) == 19, "19 correction terms")
+    require(len({row["F_exponent"] for row in result}) == 19, "unique F terms")
+    require(len({row["sF_exponent"] for row in result}) == 19, "unique sF terms")
+    return result
+
+
+def derivative_generators(
+    terms: list[dict[str, Any]],
+) -> list[list[tuple[int, tuple[int, ...]]]]:
+    result: list[list[tuple[int, tuple[int, ...]]]] = []
+    for variable in range(len(VARIABLES)):
+        derivative: dict[tuple[int, ...], int] = {}
+        for row in terms:
+            coefficient = int(row["mod11"])
+            exponent = tuple(int(value) for value in row["sF_exponent"])
+            power = exponent[variable]
+            if coefficient == 0 or power == 0:
+                continue
+            reduced = list(exponent)
+            reduced[variable] -= 1
+            key = tuple(reduced)
+            derivative[key] = (derivative.get(key, 0) + coefficient * power) % PRIME
+        result.append(
+            [(value, exponent) for exponent, value in sorted(derivative.items()) if value]
+        )
+    return result
+
+
+def locate_column(blocks: list[dict[str, Any]], column: int) -> tuple[int, int]:
+    for generator, block in enumerate(blocks):
+        first = int(block["first_column"])
+        stop = int(block["past_last_column"])
+        if first <= column < stop:
+            return generator, column - first
+    raise AssertionError(f"column {column} outside all Macaulay blocks")
+
+
+def selected_column_descriptors(
+    macaulay: dict[str, Any], factor: dict[str, Any]
+) -> list[tuple[int, tuple[int, ...]]]:
+    blocks = macaulay["column_blocks"]
+    multiplier_cache = [
+        monomials_of_cox_degree(tuple(int(value) for value in block["coefficient_Cox_degree"]))
+        for block in blocks
+    ]
+    result = []
+    for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]:
+        generator, local = locate_column(blocks, int(value))
+        require(local < len(multiplier_cache[generator]), "selected multiplier index")
+        result.append((generator, multiplier_cache[generator][local]))
+    return result
+
+
+def build_update(
+    macaulay: dict[str, Any], factor: dict[str, Any], derivatives
+) -> sparse.csc_matrix:
+    target = [
+        tuple(int(value) for value in row)
+        for row in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {row: index for index, row in enumerate(target)}
+    require(len(target_lookup) == len(target), "unique ambient target basis")
+    descriptors = selected_column_descriptors(macaulay, factor)
+    rows: list[int] = []
+    columns: list[int] = []
+    data: list[int] = []
+    for selected_index, (generator, multiplier) in enumerate(descriptors):
+        entries: dict[int, int] = {}
+        for coefficient, exponent in derivatives[generator]:
+            product = tuple(a + b for a, b in zip(multiplier, exponent))
+            target_row = target_lookup.get(product)
+            require(target_row is not None, "correction update term in ambient basis")
+            entries[target_row] = (entries.get(target_row, 0) + coefficient) % PRIME
+        for target_row, coefficient in sorted(entries.items()):
+            if coefficient:
+                rows.append(target_row)
+                columns.append(selected_index)
+                data.append(coefficient)
+    matrix = sparse.csc_matrix(
+        (
+            np.asarray(data, dtype=np.uint8),
+            (np.asarray(rows, dtype=np.int32), np.asarray(columns, dtype=np.int32)),
+        ),
+        shape=(len(target), len(descriptors)),
+        dtype=np.uint8,
+    )
+    matrix.sum_duplicates()
+    matrix.data %= PRIME
+    matrix.eliminate_zeros()
+    return matrix
+
+
+def minimum_vertex_cover(
+    matrix: sparse.csr_matrix, row_match: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    rows, columns = matrix.shape
+    column_match = np.full(columns, -1, dtype=np.int32)
+    matched_rows = np.flatnonzero(row_match >= 0)
+    column_match[row_match[matched_rows]] = matched_rows
+    visited_rows = np.zeros(rows, dtype=np.bool_)
+    visited_columns = np.zeros(columns, dtype=np.bool_)
+    queue: deque[int] = deque(int(row) for row in np.flatnonzero(row_match < 0))
+    visited_rows[row_match < 0] = True
+    while queue:
+        row = queue.popleft()
+        first, stop = int(matrix.indptr[row]), int(matrix.indptr[row + 1])
+        for column_value in matrix.indices[first:stop]:
+            column = int(column_value)
+            if row_match[row] == column or visited_columns[column]:
+                continue
+            visited_columns[column] = True
+            matched_row = int(column_match[column])
+            if matched_row >= 0 and not visited_rows[matched_row]:
+                visited_rows[matched_row] = True
+                queue.append(matched_row)
+    return ~visited_rows, visited_columns
+
+
+def structural_certificate(matrix: sparse.csc_matrix) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+    support = matrix.copy().tocsc()
+    support.data[:] = 1
+    support.eliminate_zeros()
+    csr = support.tocsr()
+    row_match = maximum_bipartite_matching(csr, perm_type="column").astype(np.int32)
+    matched_rows = np.flatnonzero(row_match >= 0)
+    row_cover, column_cover = minimum_vertex_cover(csr, row_match)
+    coo = support.tocoo()
+    require(
+        bool(np.all(row_cover[coo.row] | column_cover[coo.col])),
+        "minimum vertex cover contains every edge",
+    )
+    matching_size = int(matched_rows.size)
+    cover_size = int(row_cover.sum() + column_cover.sum())
+    require(matching_size == cover_size, "Konig matching-cover equality")
+    graph_rows = np.concatenate([coo.row, support.shape[0] + coo.col])
+    graph_columns = np.concatenate([support.shape[0] + coo.col, coo.row])
+    graph = sparse.csr_matrix(
+        (np.ones(graph_rows.size, dtype=np.uint8), (graph_rows, graph_columns)),
+        shape=(support.shape[0] + support.shape[1],) * 2,
+    )
+    component_count, labels = connected_components(graph, directed=False, return_labels=True)
+    active_labels = np.unique(labels[coo.row]) if coo.nnz else np.asarray([], dtype=np.int32)
+    summary = {
+        "shape": list(support.shape),
+        "nonzero_entries": int(support.nnz),
+        "nonzero_rows": int(np.count_nonzero(np.diff(csr.indptr))),
+        "nonzero_columns": int(np.count_nonzero(np.diff(support.indptr))),
+        "maximum_matching_size": matching_size,
+        "minimum_vertex_cover_size": cover_size,
+        "structural_rank_upper_bound": matching_size,
+        "connected_components_including_isolated_vertices": int(component_count),
+        "active_connected_components": int(active_labels.size),
+    }
+    arrays = {
+        "row_match": row_match,
+        "minimum_vertex_cover_rows": np.flatnonzero(row_cover).astype(np.int32),
+        "minimum_vertex_cover_columns": np.flatnonzero(column_cover).astype(np.int32),
+        "bipartite_component_labels": labels.astype(np.int32),
+    }
+    return summary, arrays
+
+
+def dense_rank_mod_prime(matrix: np.ndarray, prime: int = PRIME) -> int:
+    work = np.asarray(matrix, dtype=np.int64) % prime
+    rows, columns = work.shape
+    rank = 0
+    for column in range(columns):
+        candidates = np.flatnonzero(work[rank:, column])
+        if candidates.size == 0:
+            continue
+        pivot = rank + int(candidates[0])
+        if pivot != rank:
+            work[[rank, pivot]] = work[[pivot, rank]]
+        work[rank] = work[rank] * pow(int(work[rank, column]), -1, prime) % prime
+        if rank + 1 < rows:
+            factors = work[rank + 1 :, column].copy()
+            active = np.flatnonzero(factors)
+            if active.size:
+                target_rows = rank + 1 + active
+                work[target_rows] = (
+                    work[target_rows] - factors[active, None] * work[rank]
+                ) % prime
+        rank += 1
+        if rank == rows:
+            break
+    return rank
+
+
+def componentwise_rank_mod_prime(
+    matrix: sparse.csc_matrix, component_labels: np.ndarray
+) -> tuple[int, list[dict[str, int]]]:
+    coo = matrix.tocoo()
+    row_count = matrix.shape[0]
+    active_labels = np.unique(component_labels[coo.row])
+    total = 0
+    components = []
+    for label_value in active_labels:
+        label = int(label_value)
+        rows = np.flatnonzero(component_labels[:row_count] == label)
+        columns = np.flatnonzero(component_labels[row_count:] == label)
+        rank = dense_rank_mod_prime(matrix[rows][:, columns].toarray())
+        total += rank
+        components.append(
+            {
+                "component_label": label,
+                "rows": int(rows.size),
+                "columns": int(columns.size),
+                "rank_mod11": rank,
+            }
+        )
+    return total, components
+
+
+def canonical_source_block(
+    source_block: dict[str, Any],
+    target_macaulay: dict[str, Any],
+    terms: list[dict[str, Any]],
+    pole_order: int,
+) -> dict[str, Any]:
+    source = [tuple(int(value) for value in row) for row in source_block["basis_exponent_vectors"]]
+    target = [
+        tuple(int(value) for value in row)
+        for row in target_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {row: index for index, row in enumerate(target)}
+    exact_digest = hashlib.sha256()
+    reduced_digest = hashlib.sha256()
+    exact_nonzeros = 0
+    reduced_nonzeros = 0
+    sample: list[dict[str, Any]] = []
+    for column, basis_exponent in enumerate(source):
+        rows_seen = set()
+        for term in terms:
+            product = tuple(
+                a + b for a, b in zip(basis_exponent, term["sF_exponent"])
+            )
+            row = target_lookup.get(product)
+            require(row is not None, "source derivative term in target ambient basis")
+            require(row not in rows_seen, "no within-column source collision")
+            rows_seen.add(row)
+            coefficients = [-pole_order * int(value) for value in term["coefficients"]]
+            require(any(coefficients), "nonzero exact source coefficient")
+            exact_digest.update(f"{column}:{row}:".encode("ascii"))
+            exact_digest.update(",".join(str(value) for value in coefficients).encode("ascii"))
+            exact_digest.update(b"\n")
+            exact_nonzeros += 1
+            reduced = (-pole_order * int(term["mod11"])) % PRIME
+            if reduced:
+                reduced_digest.update(f"{column}:{row}:{reduced}\n".encode("ascii"))
+                reduced_nonzeros += 1
+            if len(sample) < 3:
+                sample.append(
+                    {
+                        "column": column,
+                        "ambient_row": row,
+                        "coefficients_ascending": coefficients,
+                        "mod11": reduced,
+                    }
+                )
+    return {
+        "source_dimension": len(source),
+        "target_ambient_dimension": len(target),
+        "source_pole_order": pole_order,
+        "formula": f"R_P=-{pole_order}*P*s*C for every frozen B103 source monomial P",
+        "exact_nonzero_entries_over_Q_gamma": exact_nonzeros,
+        "good_reduction_nonzero_entries": reduced_nonzeros,
+        "canonical_exact_source_sha256": exact_digest.hexdigest(),
+        "canonical_good_reduction_source_sha256": reduced_digest.hexdigest(),
+        "sample_entries": sample,
+    }
+
+
+def canonical_source_block_on_generated_target(
+    source_block: dict[str, Any],
+    target: list[tuple[int, ...]],
+    terms: list[dict[str, Any]],
+    pole_order: int,
+) -> dict[str, Any]:
+    source = [tuple(int(value) for value in row) for row in source_block["basis_exponent_vectors"]]
+    target_lookup = {row: index for index, row in enumerate(target)}
+    require(len(target_lookup) == len(target), "unique generated pole-six target")
+    exact_digest = hashlib.sha256()
+    reduced_digest = hashlib.sha256()
+    exact_nonzeros = 0
+    reduced_nonzeros = 0
+    sample: list[dict[str, Any]] = []
+    for column, basis_exponent in enumerate(source):
+        rows_seen = set()
+        for term in terms:
+            product = tuple(
+                a + b for a, b in zip(basis_exponent, term["sF_exponent"])
+            )
+            row = target_lookup.get(product)
+            require(row is not None, "H02 pole-six source term in generated target")
+            require(row not in rows_seen, "no within-column H02 source collision")
+            rows_seen.add(row)
+            coefficients = [-pole_order * int(value) for value in term["coefficients"]]
+            exact_digest.update(f"{column}:{row}:".encode("ascii"))
+            exact_digest.update(",".join(str(value) for value in coefficients).encode("ascii"))
+            exact_digest.update(b"\n")
+            exact_nonzeros += 1
+            reduced = (-pole_order * int(term["mod11"])) % PRIME
+            if reduced:
+                reduced_digest.update(f"{column}:{row}:{reduced}\n".encode("ascii"))
+                reduced_nonzeros += 1
+            if len(sample) < 3:
+                sample.append(
+                    {
+                        "column": column,
+                        "ambient_row": row,
+                        "coefficients_ascending": coefficients,
+                        "mod11": reduced,
+                    }
+                )
+    return {
+        "source_dimension": len(source),
+        "target_ambient_dimension": len(target),
+        "target_Cox_degree": [9, 1, 3],
+        "source_pole_order": pole_order,
+        "formula": f"R_P=-{pole_order}*P*s*C for every frozen B103 H02 source monomial P",
+        "exact_nonzero_entries_over_Q_gamma": exact_nonzeros,
+        "good_reduction_nonzero_entries": reduced_nonzeros,
+        "canonical_exact_source_sha256": exact_digest.hexdigest(),
+        "canonical_good_reduction_source_sha256": reduced_digest.hexdigest(),
+        "sample_entries": sample,
+        "return_contract": "apply the bound toric Griffiths-Dwork pole6-to-pole5 targeted transform and recursive divergence",
+        "return_executed": False,
+    }
+
+
+def main() -> None:
+    mld = resolve_mld()
+    g3bi = load(G3BI)
+    g3bj = load(G3BJ)
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3bj["checks"].values()), "G3BJ checks")
+    require(g3bj["selected_path"]["formula"] == "a(t)=1-t+i*pi*t*(1-t)", "G3BJ path")
+
+    paths = {
+        "B103": mld / "q79_eta9_full_vanishing_residue_basis.packet.json",
+        "H20_characteristic_zero_resolvent": mld
+        / "q79_eta9_characteristic_zero_H20_family_resolvent.packet.json",
+        "three_block_characteristic_zero_chart_oracle": mld
+        / "q79_eta9_characteristic_zero_three_block_chart_oracle.packet.json",
+        "toric_Griffiths_Dwork_contract": mld
+        / "q79_eta9_toric_griffiths_dwork_contract.packet.json",
+    }
+    for target in TARGETS:
+        paths[f"{target}_Macaulay"] = mld / f"q79_eta9_original_jacobian_macaulay_{target}.packet.json"
+        paths[f"{target}_factorization"] = mld / f"q79_eta9_original_jacobian_coordinate_factorization_{target}.packet.json"
+    paths["H20_CSC"] = mld / "q79_eta9_original_jacobian_macaulay_H20_csc.packet.json"
+    packets = {name: load(path) for name, path in paths.items()}
+    for name, packet in packets.items():
+        if "checks" in packet:
+            require(all(packet["checks"].values()), f"{name} checks")
+
+    terms = correction_terms(g3bi)
+    require(sum(row["mod11"] != 0 for row in terms) == 18, "18 surviving good-reduction terms")
+    derivatives = derivative_generators(terms)
+    derivative_counts = {
+        variable: len(derivatives[index]) for index, variable in enumerate(VARIABLES)
+    }
+    require(derivative_counts == {"x": 16, "y": 9, "z": 16, "w": 0, "t0": 18, "t1": 0, "t2": 0, "u": 0, "v": 0, "s": 18}, "correction derivative counts")
+
+    h20_resolvent = packets["H20_characteristic_zero_resolvent"]
+    h20_macaulay = packets["H20_Macaulay"]
+    h20_csc = packets["H20_CSC"]
+    h20_target = [
+        tuple(int(value) for value in row)
+        for row in h20_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    h20_lookup = {row: index for index, row in enumerate(h20_target)}
+    quotient_rows = {int(value) for value in h20_csc["binary"]["quotient_unit_rows"]}
+    residual_rows = [row for row in range(len(h20_target)) if row not in quotient_rows]
+    left_covector = [
+        int(value)
+        for value in h20_resolvent["selected_H20_chart"]["primitive_left_null_covector_on_complement"]
+    ]
+    require(len(residual_rows) == len(left_covector) == 34, "H20 complement covector")
+    correction_vector = [[[0] * 6][0] for _ in h20_target]
+    for term in terms:
+        row = h20_lookup.get(tuple(term["F_exponent"]))
+        require(row is not None, "correction F term in H20 ambient basis")
+        correction_vector[row] = [int(value) for value in term["coefficients"]]
+    numerator = [
+        sum(left_covector[index] * correction_vector[row][power] for index, row in enumerate(residual_rows))
+        for power in range(6)
+    ]
+    denominator = [
+        int(value)
+        for value in h20_resolvent["chart_determinant_ratio"]["D_coefficients_ascending"]
+    ]
+    require(numerator == [3261, 1627, -611, -3170, -827, 2917], "exact correction numerator")
+    require(denominator == [-335, 547, 1304, 627, 443, -407], "frozen H20 denominator")
+    endpoint_sum = [a + b for a, b in zip(denominator, numerator)]
+    require(any(numerator) and any(denominator) and any(endpoint_sum), "nonzero H20 field elements")
+    require(evaluate_mod11(numerator) == 9, "correction alpha numerator mod11")
+    require(evaluate_mod11(denominator) == 8, "H20 denominator mod11")
+    require(evaluate_mod11(endpoint_sum) == 6, "start endpoint chart remains a unit at the proof prime")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    target_summaries: dict[str, Any] = {}
+    for target in TARGETS:
+        macaulay = packets[f"{target}_Macaulay"]
+        factor = packets[f"{target}_factorization"]
+        matrix = build_update(macaulay, factor, derivatives)
+        matrix_path = EVIDENCE / f"g3bk_correction_family_update_{target}.npz"
+        certificate_path = EVIDENCE / f"g3bk_correction_family_update_{target}.certificate.npz"
+        sparse.save_npz(matrix_path, matrix, compressed=True)
+        structural, arrays = structural_certificate(matrix)
+        exact_rank, component_ranks = componentwise_rank_mod_prime(
+            matrix, arrays["bipartite_component_labels"]
+        )
+        require(
+            exact_rank <= int(structural["structural_rank_upper_bound"]),
+            "algebraic rank below structural rank",
+        )
+        structural["exact_algebraic_rank_mod11"] = exact_rank
+        structural["characteristic_zero_rank_lower_bound"] = exact_rank
+        structural["component_ranks_mod11"] = component_ranks
+        np.savez_compressed(certificate_path, **arrays)
+        selected_by_generator = {name: 0 for name in VARIABLES}
+        for generator, _ in selected_column_descriptors(macaulay, factor):
+            selected_by_generator[VARIABLES[generator]] += 1
+        target_summaries[target] = {
+            "selected_columns_by_original_partial": selected_by_generator,
+            "good_reduction_update": structural,
+            "matrix": local_record(matrix_path),
+            "matching_cover_certificate": local_record(certificate_path),
+        }
+
+    require(target_summaries["H20"]["good_reduction_update"]["nonzero_columns"] == 1, "rank-one H20 support")
+    require(target_summaries["H20"]["good_reduction_update"]["maximum_matching_size"] == 1, "rank-one H20 matching")
+
+    b103 = packets["B103"]
+    blocks = {block["name"]: block for block in b103["basis_blocks"]}
+    sources = {
+        "H20_to_H11": canonical_source_block(blocks["H20"], packets["H11_Macaulay"], terms, 3),
+        "H11_to_H02": canonical_source_block(blocks["H11"], packets["H02_Macaulay"], terms, 4),
+        "H02_to_pole6": canonical_source_block_on_generated_target(
+            blocks["H02"], monomials_of_cox_degree((9, 1, 3)), terms, 5
+        ),
+    }
+    require(sources["H20_to_H11"]["exact_nonzero_entries_over_Q_gamma"] == 248 * 19, "H20 source count")
+    require(sources["H11_to_H02"]["exact_nonzero_entries_over_Q_gamma"] == 1013 * 19, "H11 source count")
+    require(sources["H20_to_H11"]["good_reduction_nonzero_entries"] == 248 * 18, "H20 reduced source count")
+    require(sources["H11_to_H02"]["good_reduction_nonzero_entries"] == 1013 * 18, "H11 reduced source count")
+    require(sources["H02_to_pole6"]["target_ambient_dimension"] == 208570, "pole-six target dimension")
+    require(sources["H02_to_pole6"]["exact_nonzero_entries_over_Q_gamma"] == 248 * 19, "H02 source count")
+    require(sources["H02_to_pole6"]["good_reduction_nonzero_entries"] == 248 * 18, "H02 reduced source count")
+
+    checks = {
+        "G3BI_and_G3BJ_inputs_pass": True,
+        "the_exact_19_term_Q_gamma_correction_is_reconstructed": True,
+        "exactly18_terms_survive_at_11_gamma3": True,
+        "all_ten_partial_derivatives_are_computed_coefficientwise": True,
+        "the_H20_update_has_one_active_column_and_rank_one_support": True,
+        "the_H20_rank_one_numerator_is_nonzero_over_Q_gamma": True,
+        "the_H20_chart_is_valid_at_the_B89_endpoint_a0": True,
+        "the_H20_chart_pole_is_algebraic_and_no_interior_G3BJ_point_can_hit_it": True,
+        "the_start_endpoint_chart_value_D_plus_N_is_nonzero_over_Q_gamma": True,
+        "the_same_H20_chart_is_a_unit_at_both_endpoints_at_11_gamma3": True,
+        "all_three_frozen_charts_avoid_poles_on_the_open_transcendental_arc": True,
+        "all_three_good_reduction_update_matrices_are_emitted": True,
+        "all_three_matching_cover_certificates_satisfy_Konig_equality": True,
+        "all_three_componentwise_GF11_ranks_are_computed_by_exact_elimination": True,
+        "the_complete_H20_to_H11_characteristic_zero_source_is_emitted": True,
+        "the_complete_H11_to_H02_characteristic_zero_source_is_emitted": True,
+        "the_complete_H02_to_pole6_characteristic_zero_source_is_emitted": True,
+        "the_direction_independent_toric_return_contract_is_hash_bound": True,
+        "no_observed_value_or_fitted_parameter_is_used": True,
+    }
+    require(all(checks.values()), "G3BK checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3bk-correction-pencil-operator.v1",
+        "date": "2026-08-12",
+        "status": "CLOSED_EXACT_CORRECTION_DIRECTION_H20_RESOLVENT_THREE_RAW_SOURCE_BLOCKS_AND_THREE_GOOD_REDUCTION_UPDATES_TORIC_RETURN_INVERSE_ACTION_AND_ONE_VECTOR_TRANSPORT_OPEN",
+        "inputs": {
+            "G3BI_explicit_root_start": local_record(G3BI),
+            "G3BJ_transcendental_arc": local_record(G3BJ),
+            **{name: upstream_record(path) for name, path in paths.items()},
+        },
+        "correction_direction": {
+            "field": "Q(gamma)",
+            "minimal_polynomial_coefficients_ascending": MINPOLY,
+            "formula": "C=F_G3BI-F_B89=t0*sum_j c_j(gamma)*x^(9-b-c)y^b z^c",
+            "characteristic_zero_nonzero_terms": 19,
+            "good_reduction_prime_ideal": "(11,gamma-3)",
+            "good_reduction_nonzero_terms": 18,
+            "good_reduction_coefficients_by_t_power": [int(row["mod11"]) for row in terms],
+            "partial_term_counts_at_good_reduction": derivative_counts,
+        },
+        "H20_rank_one_resolvent": {
+            "base_chart": "the frozen B89 H20 augmented Macaulay chart C0",
+            "update_formula": "K_C=C0^-1*C1_C=x_C*e_F0^T",
+            "rank_over_Q_gamma": 1,
+            "quadratic_identity": "K_C^2=alpha_C*K_C",
+            "alpha_C": {
+                "numerator_coefficients_ascending": numerator,
+                "denominator_coefficients_ascending": denominator,
+                "formula": "N_C(gamma)/D(gamma)",
+                "numerator_mod11": evaluate_mod11(numerator),
+                "denominator_mod11": evaluate_mod11(denominator),
+            },
+            "chart_determinant_ratio": "det(C0+a*C1_C)/det(C0)=1+a*alpha_C=(D+a*N_C)/D",
+            "unique_chart_pole": "a_*=-D(gamma)/N_C(gamma), an algebraic number in every embedding",
+            "path_certificate": {
+                "B89_endpoint_a": 0,
+                "root_start_endpoint_a": 1,
+                "D_plus_N_coefficients_ascending": endpoint_sum,
+                "D_plus_N_is_nonzero_in_Q_gamma": True,
+                "D_plus_N_mod11": evaluate_mod11(endpoint_sum),
+                "interior_G3BJ_points_are_transcendental": True,
+                "interior_avoids_the_algebraic_chart_pole": True,
+                "note": "The same H20 chart is a unit at both endpoints at (11,gamma-3); every interior point avoids its algebraic pole by G3BJ transcendence.",
+            },
+        },
+        "all_block_interior_chart_avoidance": {
+            "blocks": ["H20", "H11", "H02"],
+            "determinant_polynomial": "Delta_T(a)=det(C0_T+a*C1_C_T) belongs to Q(gamma)[a]",
+            "nonzero_polynomial_certificate": "Delta_T(0)=det(C0_T) is nonzero for every block by the bound characteristic-zero chart oracle",
+            "root_field": "every zero of every Delta_T is algebraic over Q",
+            "G3BJ_interior": "a(t)=1-t+i*pi*t*(1-t) is transcendental for 0<t<1",
+            "conclusion": "the fixed B89 H20/H11/H02 charts have no pole on the open G3BJ arc and remain valid at the terminal B89 endpoint a=0",
+            "start_endpoint": {
+                "H20_a1_unit": True,
+                "H11_a1_unit": "not_evaluated",
+                "H02_a1_unit": "not_evaluated",
+                "maximum_remaining_chart_transition_location": "the initial endpoint a=1 only",
+            },
+        },
+        "characteristic_zero_derivative_sources": sources,
+        "good_reduction_family_updates": target_summaries,
+        "theorem": {
+            "name": "CorrectionPencilOperatorCompilerTheorem",
+            "statement": "The exact 19-term G3BI correction defines a unique affine eta9 family direction in the frozen B103/Macaulay language. Its H20 augmented-chart update has rank one over Q(gamma), with the displayed determinant ratio and algebraic chart pole. More generally, each frozen H20/H11/H02 chart determinant is a nonzero polynomial over Q(gamma), so every chart pole is algebraic and no pole lies on the transcendental interior of G3BJ; only the H11/H02 start endpoint may still need an initializer chart. The complete characteristic-zero raw derivative sources -3 P sC, -4 P sC and -5 P sC and all three good-reduction Macaulay updates are emitted exactly. Thus raw source construction is closed for the correction direction; the targeted H02 toric return, H11/H02 inverse actions and certified one-vector continuation remain.",
+            "tier": "CLOSED_EXACT_DIRECTION_COMPILATION_AND_H20_PATH_RESOLVENT",
+        },
+        "frontier_delta": {
+            "before": "G3BJ selected a smooth path and an abstract integral transport, but the correction direction was not represented in the frozen eta9 operator charts.",
+            "after": "The correction direction, all three raw characteristic-zero derivative source blocks, three finite update matrices and the exact H20 path resolvent are now hash-bound. The targeted H02 toric return, H11/H02 inverse-action evaluation, rigorous one-vector continuation and terminal 248 readout remain.",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_H11_or_H02_inverse_action_is_evaluated": False,
+            "claims_a_full_characteristic_zero_1509_connection_matrix": False,
+            "claims_the_H02_pole6_targeted_return_is_executed": False,
+            "claims_PT_G3BJ_z4_has_been_numerically_or_integrally_executed": False,
+            "claims_terminal_B89_coordinates_or_a_meridian_word": False,
+            "claims_the_248_readout_or_beta_C_decision": False,
+            "claims_B_ETA9_01_or_B_ETA9_02_is_closed": False,
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "selected_path_marking": "+i upper G3BJ arc",
+            "proof_prime": 11,
+            "proof_gamma_residue": 3,
+            "accepted_physical_knobs": 0,
+        },
+        "next_required_object": "Execute the bound targeted Griffiths-Dwork return for the emitted -5 P sC H02 pole-six block, construct at most the H11/H02 initializer transition at a=1, evaluate the fixed source-active inverse actions on 0<t<=1, then integrate only the G3BG root vector and emit its terminal 248 readout.",
+    }
+    require(not any(packet["guardrails"].values()), "G3BK guardrails")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BK correction-pencil operator compiler: PASS")
+    print(f"H20 alpha numerator={numerator} mod11={evaluate_mod11(numerator)}")
+    for target in TARGETS:
+        summary = target_summaries[target]["good_reduction_update"]
+        print(
+            f"{target} shape={summary['shape']} nnz={summary['nonzero_entries']} "
+            f"active_columns={summary['nonzero_columns']} rank_mod11={summary['exact_algebraic_rank_mod11']} "
+            f"structural_rank={summary['structural_rank_upper_bound']}"
+        )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

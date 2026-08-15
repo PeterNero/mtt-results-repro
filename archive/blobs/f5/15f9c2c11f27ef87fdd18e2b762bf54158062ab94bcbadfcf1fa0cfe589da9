@@ -1,0 +1,66 @@
+# UST G3AP Structural SCC Minor Factorization Lemma v1
+
+## Status
+
+`CLOSED_EXACT_STRUCTURAL_LINEAR_ALGEBRA_LEMMA`
+
+This lemma is purely finite linear algebra. It does not assert that the G3AP
+minor exists or that any emitted factor is nonsingular; those are separate
+machine-checked premises.
+
+## Lemma
+
+Let `A` be an `n x n` matrix over a field and let `mu` be a perfect matching
+of its bipartite nonzero graph. Permute the columns so that column `mu(i)` is
+paired with row `i`. Define the directed matched graph on the row indices by
+
+```text
+i -> j  exactly when  A[i, mu(j)] != 0.
+```
+
+Let `C_1, ..., C_r` be its strongly connected components. A topological order
+of the condensation DAG simultaneously permutes the matched rows and columns
+so that `A` is block triangular, with diagonal blocks
+
+```text
+A[C_k, mu(C_k)].
+```
+
+Consequently,
+
+```text
+det(A) = sign * product_k det(A[C_k, mu(C_k)]).
+```
+
+In particular, `A` is nonsingular if and only if every diagonal SCC block is
+nonsingular. One SCC may be checked separately from the direct sum of all
+remaining SCCs: the latter induced submatrix is itself block triangular and
+has determinant equal, up to sign, to the product of the remaining diagonal
+blocks.
+
+## Proof
+
+Contract every matched row-column pair to one vertex. Every nonzero matrix
+entry becomes a directed edge in the matched graph. Condensing strongly
+connected components gives a DAG. In a topological ordering of that DAG, an
+entry can occur only on a diagonal SCC block or on one permitted side of the
+block diagonal. Thus the permuted matrix is block triangular. The determinant
+formula for a block-triangular matrix gives the displayed product. The final
+equivalence follows because a product in a field is nonzero exactly when every
+factor is nonzero.
+
+## G3AP use contract
+
+For a G3AP closure packet to invoke this lemma, it must bind all of the
+following:
+
+1. the exact selected square minor;
+2. a perfect matching of all `39,725` rows and columns;
+3. the SCC decomposition derived from that same matching and nonzero graph;
+4. exact factor matrices emitted from the matched row and column subsets;
+5. independent exact ranks equal to the dimensions of every retained factor,
+   or of a coarsening whose diagonal factors partition all SCCs.
+
+Structural nonsingularity alone is not numerical nonsingularity. The matching
+and SCC calculation therefore provide only the factorization; exact LinBox and
+Givaro arithmetic must still prove the factor ranks.

@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+"""Certify hard G3AO charts after eliminating the Cayley multipliers.
+
+The direct orbit systems retain the projective Cayley multipliers.  On the
+``s``, ``us``, ``vs`` and ``uvs`` strata they can instead be eliminated by
+necessary Jacobian-rank or derivative-proportionality equations.  The
+resulting determinantal locus is a superset of the original critical locus,
+so a unit ideal is an exact emptiness certificate for the original system as
+well.
+"""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import itertools
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "determinantal"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def pair_minors(left: str, right: str, variables: list[str]) -> list[str]:
+    return [
+        f"diff({right},{a})*diff({left},{b})-diff({right},{b})*diff({left},{a})"
+        for a, b in itertools.combinations(variables, 2)
+    ]
+
+
+def determinant_expression(matrix: list[list[str]]) -> str:
+    size = len(matrix)
+    require(size > 0 and all(len(row) == size for row in matrix), "square determinant")
+    terms: list[str] = []
+    for permutation in itertools.permutations(range(size)):
+        inversions = sum(
+            permutation[i] > permutation[j]
+            for i in range(size)
+            for j in range(i + 1, size)
+        )
+        factor = "*".join(matrix[row][permutation[row]] for row in range(size))
+        terms.append(("-" if inversions % 2 else "+") + factor)
+    return "(" + "".join(terms).lstrip("+") + ")"
+
+
+def full_row_minors(rows: list[str], variables: list[str]) -> list[str]:
+    """Return all maximal minors which force the given rows to lose rank."""
+    size = len(rows)
+    if size > len(variables):
+        return []
+    minors: list[str] = []
+    for columns in itertools.combinations(variables, size):
+        minors.append(
+            determinant_expression(
+                [
+                    [f"diff({row},{column})" for column in columns]
+                    for row in rows
+                ]
+            )
+        )
+    return minors
+
+
+def make_script(
+    polynomials: dict[str, str],
+    base_support: tuple[str, ...],
+    elliptic_support: tuple[str, ...],
+    fiber_support: tuple[str, ...],
+    algorithm: str,
+) -> str:
+    require(
+        fiber_support
+        in (("s",), ("u", "s"), ("v", "s"), ("u", "v", "s")),
+        "determinantal method supports only s, us, vs or uvs",
+    )
+    base_gauge = base_support[0]
+    elliptic_gauge = elliptic_support[0]
+    base_tangent = [name for name in base_support if name != base_gauge]
+    elliptic_tangent = [
+        name for name in elliptic_support if name != elliptic_gauge
+    ]
+    tangent = [*base_tangent, *elliptic_tangent]
+    elliptic_coordinates_eliminated = False
+    critical_c = "C"
+    generators = ["E", critical_c]
+    if fiber_support == ("s",):
+        # Write C=sum_j t_j B_j on the selected elliptic support.  The
+        # t-derivatives and C=0 force every B_j to vanish.  The remaining
+        # base-gradient equation has a nonzero left-kernel vector t, hence
+        # the row Jacobian (dB_j) must have rank below the number of rows.
+        coefficient_rows = [f"diff(C,{name})" for name in elliptic_support]
+        generators = [*coefficient_rows]
+        generators.extend(full_row_minors(coefficient_rows, base_tangent))
+        method = "s_linear_elliptic_coefficient_Jacobian_rank_elimination"
+        tangent = base_tangent
+        elliptic_coordinates_eliminated = True
+    elif (
+        fiber_support == ("v", "s")
+        and base_support == direct.BASE
+        and elliptic_support == direct.ELLIPTIC
+    ):
+        # The equations C=d_yC=d_zC=d_wC=0 are linear in the three
+        # elliptic coordinates.  Their existence forces the resulting 4x3
+        # coefficient-incidence matrix to lose column rank.  Dropping E and
+        # the remaining elliptic proportionality equations only enlarges the
+        # locus, so a unit maximal-minor ideal is still conclusive.
+        coefficient_rows = [f"diff(C,{name})" for name in elliptic_support]
+        incidence_rows = [
+            coefficient_rows,
+            *[
+                [f"diff({coefficient},{name})" for coefficient in coefficient_rows]
+                for name in base_tangent
+            ],
+        ]
+        generators = [
+            determinant_expression([incidence_rows[index] for index in indices])
+            for indices in itertools.combinations(range(len(incidence_rows)), len(coefficient_rows))
+        ]
+        method = "vs_full_support_base_coefficient_incidence_rank_elimination"
+        tangent = base_tangent
+        elliptic_coordinates_eliminated = True
+    elif fiber_support == ("v", "s"):
+        generators.extend(f"diff({critical_c},{name})" for name in base_tangent)
+        generators.extend(pair_minors("E", critical_c, elliptic_tangent))
+        method = "vs_multiplier_elimination"
+    elif fiber_support == ("u", "s"):
+        critical_c = "C_reduced"
+        generators = ["K", critical_c]
+        generators.extend(pair_minors("K", critical_c, base_tangent))
+        generators.extend(f"diff({critical_c},{name})" for name in elliptic_tangent)
+        method = "us_multiplier_elimination_mod_K"
+    else:
+        # On K=0, C=C_reduced.  Moreover dC=dC_reduced+B_ambient*dK,
+        # so replacing C by C_reduced only translates the eliminated u
+        # multiplier and leaves every proportionality condition unchanged.
+        critical_c = "C_reduced"
+        generators = ["E", critical_c]
+        generators.insert(0, "K")
+        generators.extend(pair_minors("K", critical_c, base_tangent))
+        generators.extend(pair_minors("E", critical_c, elliptic_tangent))
+        method = "uvs_block_Jacobian_rank_elimination_mod_K"
+    source_variables = [*direct.BASE, *direct.ELLIPTIC]
+    target_variables = [*tangent, "orbitInv"] if tangent else ["dummy"]
+    map_images = []
+    for name in source_variables:
+        if name in direct.BASE:
+            image = "1" if name == base_gauge else name if name in base_support else "0"
+        else:
+            image = (
+                "1"
+                if name == elliptic_gauge
+                or elliptic_coordinates_eliminated and name in elliptic_support
+                else name if name in elliptic_support else "0"
+            )
+        map_images.append(image)
+    restricted = ["orbitMap(determinantalSystem)"]
+    if tangent:
+        restricted.append("orbitInv*(" + "*".join(tangent) + ")-1")
+    ap0 = "A0"
+    ap1 = "A0+A1+3*A2"
+    ap2 = "A0+7*A1+7*A2"
+    orbit_label = direct.label(base_support, elliptic_support, fiber_support)
+    return f'''// UST.G3AO determinantal toric certificate: {orbit_label}
+// Method: {method}. Empty necessary locus implies empty multiplier locus.
+ring source=(101,g),({','.join(source_variables)}),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly E={direct.ELLIPTIC_POLYNOMIAL};
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly C_reduced=({ap0})*t0+({ap1})*t1+({ap2})*t2;
+poly B_ambient={direct.AMBIENT_GAUGE};
+poly C=C_reduced+K*B_ambient;
+ideal determinantalSystem={','.join(generators)};
+ring orbit=(101,g),({','.join(target_variables)}),dp;
+minpoly={polynomials["minpoly"]};
+map orbitMap=source,{','.join(map_images)};
+ideal restrictedSystem={','.join(restricted)};
+ideal orbitBasis={algorithm}(restrictedSystem);
+if (size(orbitBasis)==1 && orbitBasis[1]==1)
+{{ print("G3AO_DETERMINANTAL_TORIC_ORBIT_PASS {orbit_label}"); }}
+else
+{{ print("G3AO_DETERMINANTAL_TORIC_ORBIT_FAIL {orbit_label} basis="+string(size(orbitBasis))+" dim="+string(dim(orbitBasis))); }}
+quit;
+'''
+
+
+def run_one(
+    item: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    polynomials: dict[str, str],
+    algorithm: str,
+    timeout: int,
+    source_hash: str,
+    adopt: bool,
+) -> tuple[str, bool, float]:
+    base_support, elliptic_support, fiber_support = item
+    orbit_label = direct.label(*item)
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    script = CAMPAIGN / f"{orbit_label}.sing"
+    output = CAMPAIGN / f"{orbit_label}.singular.out"
+    packet_path = CAMPAIGN / f"{orbit_label}.packet.json"
+    script.write_text(
+        make_script(polynomials, *item, algorithm), encoding="ascii"
+    )
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            singular_command(ROOT, script),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        captured = error.stdout or b""
+        raw = (
+            captured.decode("utf-8", errors="replace")
+            if isinstance(captured, bytes)
+            else captured
+        )
+        returncode = 124
+    output.write_text(raw, encoding="utf-8")
+    elapsed = time.time() - started
+    passed = (
+        not timed_out
+        and returncode == 0
+        and f"G3AO_DETERMINANTAL_TORIC_ORBIT_PASS {orbit_label}" in raw
+    )
+    packet = {
+        "schema": "mtt.unified-source.g3ao-selected-cayley-toric-orbit-determinantal.v1",
+        "label": orbit_label,
+        "source_sha256": source_hash,
+        "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+        "supports": {
+            "base": list(base_support),
+            "elliptic": list(elliptic_support),
+            "Cayley_fiber": list(fiber_support),
+        },
+        "script": {
+            "path": str(script.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(script),
+        },
+        "output": {
+            "path": str(output.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(output),
+        },
+        "algorithm": f"determinantal_{algorithm}",
+        "certificate_method": "determinantal_necessary_locus",
+        "proof_scope": {
+            "original_multiplier_critical_locus_is_contained_in_the_determinantal_locus": True,
+            "the_triangular_C_shift_is_retained_for_s_and_vs_and_eliminated_exactly_modulo_K_when_K_vanishes": True,
+            "unit_determinantal_ideal_proves_the_original_orbit_locus_empty": passed,
+            "nonunit_determinantal_ideal_would_be_inconclusive": True,
+        },
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "passed": passed,
+    }
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    if passed and adopt:
+        canonical = dict(packet)
+        canonical["schema"] = "mtt.unified-source.g3ao-selected-cayley-toric-orbit.v1"
+        (direct.CAMPAIGN / f"{orbit_label}.packet.json").write_text(
+            json.dumps(canonical, indent=2) + "\n", encoding="ascii"
+        )
+    return orbit_label, passed, elapsed
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--labels", required=True)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--timeout-per-system", type=int, default=3600)
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="std")
+    parser.add_argument("--adopt", action="store_true")
+    args = parser.parse_args()
+    require(1 <= args.workers <= 8, "workers")
+    polynomials = direct.selected_polynomials()
+    source_hash = sha256(direct.SOURCE)
+    all_items = list(
+        itertools.product(
+            direct.nonempty_subsets(direct.BASE),
+            direct.nonempty_subsets(direct.ELLIPTIC),
+            (("s",), ("u", "s"), ("v", "s"), ("u", "v", "s")),
+        )
+    )
+    by_label = {direct.label(*item): item for item in all_items}
+    requested = [value for value in args.labels.split(",") if value]
+    require(requested and len(requested) == len(set(requested)), "unique labels")
+    require(set(requested) <= set(by_label), "supported determinantal labels")
+    failures = []
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(
+                run_one,
+                by_label[label],
+                polynomials,
+                args.algorithm,
+                args.timeout_per_system,
+                source_hash,
+                args.adopt,
+            ): label
+            for label in requested
+        }
+        for future in as_completed(futures):
+            orbit_label, passed, elapsed = future.result()
+            print(
+                f"{orbit_label}: {'PASS' if passed else 'INCONCLUSIVE'} ({elapsed:.1f}s)",
+                flush=True,
+            )
+            if not passed:
+                failures.append(orbit_label)
+    if failures:
+        raise SystemExit("inconclusive determinantal systems: " + ",".join(sorted(failures)))
+
+
+if __name__ == "__main__":
+    main()

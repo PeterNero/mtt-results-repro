@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Verify UST.G3E exact type, fiber-pair and defect arithmetic."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3e_opposite_complex_bfield_wit.packet.json"
+LOCK = ROOT / "state" / "upstream-lock.json"
+BASIS = ("eta", "zeta", "etabar", "zetabar")
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def add(*forms: dict[str, sp.Expr]) -> dict[str, sp.Expr]:
+    result: dict[str, sp.Expr] = {}
+    for form in forms:
+        for key, value in form.items():
+            result[key] = sp.simplify(result.get(key, 0) + value)
+    return {key: value for key, value in result.items() if value != 0}
+
+
+def scale(value: sp.Expr, form: dict[str, sp.Expr]) -> dict[str, sp.Expr]:
+    return {key: sp.simplify(value * coefficient) for key, coefficient in form.items()}
+
+
+def wedge(left: dict[str, sp.Expr], right: dict[str, sp.Expr]) -> dict[tuple[str, str], sp.Expr]:
+    result: dict[tuple[str, str], sp.Expr] = {}
+    for left_key, left_value in left.items():
+        for right_key, right_value in right.items():
+            if left_key == right_key:
+                continue
+            left_index = BASIS.index(left_key)
+            right_index = BASIS.index(right_key)
+            if left_index < right_index:
+                key = (left_key, right_key)
+                sign = 1
+            else:
+                key = (right_key, left_key)
+                sign = -1
+            result[key] = sp.simplify(result.get(key, 0) + sign * left_value * right_value)
+    return {key: value for key, value in result.items() if value != 0}
+
+
+def add_two(*forms: dict[tuple[str, str], sp.Expr]) -> dict[tuple[str, str], sp.Expr]:
+    result: dict[tuple[str, str], sp.Expr] = {}
+    for form in forms:
+        for key, value in form.items():
+            result[key] = sp.simplify(result.get(key, 0) + value)
+    return {key: value for key, value in result.items() if value != 0}
+
+
+def type_components(epsilon: int) -> dict[tuple[str, str], sp.Expr]:
+    eta = {"eta": sp.Integer(1)}
+    etabar = {"etabar": sp.Integer(1)}
+    zeta = {"zeta": sp.Integer(1)}
+    zetabar = {"zetabar": sp.Integer(1)}
+    theta = scale(sp.Rational(1, 2), add(eta, etabar))
+    t = scale(1 / (2 * sp.I * epsilon), add(eta, scale(-1, etabar)))
+    s = scale(sp.Rational(1, 2), add(zeta, zetabar))
+    a = scale(1 / (2 * sp.I), add(zeta, scale(-1, zetabar)))
+    return add_two(scale(-1, wedge(theta, a)), scale(-1, wedge(t, s)))
+
+
+def component_types(form: dict[tuple[str, str], sp.Expr]) -> set[tuple[int, int]]:
+    holomorphic = {"eta", "zeta"}
+    return {
+        (
+            int(left in holomorphic) + int(right in holomorphic),
+            int(left not in holomorphic) + int(right not in holomorphic),
+        )
+        for left, right in form
+    }
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    lock = json.loads(LOCK.read_text(encoding="utf-8"))
+    require(packet["schema"] == "mtt.unified-source.opposite-complex-bfield-wit-result.v1", "schema")
+    require(packet["theorem_id"] == "UST.G3E", "theorem id")
+    require(
+        packet["state"] == "CLOSED_EXACT_LOCAL_HOLOMORPHIC_REDUCTION_TWO_FIBER_DEFECT_GLOBAL_PHYSICAL_W9_OPEN",
+        "state",
+    )
+
+    qg = next(repository for repository in lock["repositories"] if repository["id"] == "q79-quantum-gravity")
+    require(qg["commit"] == packet["source"]["q79_quantum_gravity_commit"], "qg commit")
+    locked = {source["path"]: source for source in qg["sources"]}
+    for artifact in packet["source"]["artifacts"]:
+        require(artifact["path"] in locked, f"unlocked source: {artifact['path']}")
+        require(locked[artifact["path"]]["sha256"] == artifact["sha256"], f"source hash: {artifact['path']}")
+
+    same = type_components(+1)
+    opposite = type_components(-1)
+    require(component_types(same) == {(2, 0), (0, 2)}, "same-sign type decomposition")
+    require(component_types(opposite) == {(1, 1)}, "opposite-sign type decomposition")
+    require(packet["complex_orientation"]["same_sign_has_nonzero_20_and_02"] is True, "same-sign exclusion")
+    require(packet["complex_orientation"]["opposite_sign_is_pure_11"] is True, "opposite-sign selection")
+    require(packet["complex_orientation"]["causal_time_arrow_selected"] is False, "causal guard")
+
+    transport = packet["fiber_transport"]
+    source_rank, ordinary_degree = transport["ordinary_source_pair"]
+    twisted_degree = ordinary_degree - source_rank * transport["integral_B_X"]
+    require([source_rank, twisted_degree] == transport["twisted_source_pair"] == [3, 9], "source B shift")
+    transformed = [twisted_degree, -source_rank]
+    require(transformed == transport["twisted_target_pair"] == [9, -3], "elliptic FM pair")
+    ordinary_target = [transformed[0], transformed[1] + transport["target_B_field_degree_correction"]]
+    require(ordinary_target == transport["ordinary_target_pair"] == [9, 0], "target determinant cancellation")
+    require(transport["continuous_fit_parameters"] == 0, "no fit")
+
+    atlas = packet["corrected_fiber_atlas"]
+    require(sum(atlas["off_support"]["WIT0_output_ranks"]) == atlas["off_support"]["total_rank"] == 9, "off-support rank")
+    require(sum(atlas["generic_support"]["WIT0_output_ranks"]) == atlas["generic_support"]["total_rank"] == 9, "generic rank")
+    require(atlas["special_support"]["degrees"] == [6, 3, 0], "special degrees")
+    require(atlas["special_support"]["WIT0_vector_rank"] == 9, "special vector rank")
+    require(atlas["special_support"]["shifted_skyscraper_count"] == 1, "special shifted defect")
+    require(atlas["zeros_of_base_degree_two_section"] == atlas["remaining_derived_defect_base_fibers"] == 2, "two-fiber cutset")
+
+    boundary = packet["promotion_boundary"]
+    require(not any(boundary.values()), "no global or physical promotion")
+    require(packet["curvings"]["ordinary_global_line_bundles_claimed"] is False, "gerbe curving guard")
+
+    print("UST.G3E opposite-complex B-field WIT reduction: PASS")
+    print("selected target fiber form: eta=theta-i*t")
+    print("twisted fiber transport: (3,9)->(9,-3)")
+    print("remaining corrected derived defect fibers in G3E: 2; closed downstream by G3R")
+    print("physical hidden W9 constructed: false")
+
+
+if __name__ == "__main__":
+    main()

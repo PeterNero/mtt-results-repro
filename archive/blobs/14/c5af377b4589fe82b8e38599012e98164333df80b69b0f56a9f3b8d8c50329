@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Continue an exact direct G3AP SBA cache with Hilbert-guided ``std``.
+
+The SBA cache is a warm start generated from the same selected 39 relations
+and 165 target-external L boundaries.  The predecessor Hilbert numerator is a
+stopping hint only.  Process success remains candidate evidence until the
+ordinary certifier reconstructs provenance and the complete target squeeze.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ap_hmajor_ltrunc_hilbert_hint as hint_builder
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_hilbert_hedge as direct
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_hedge as sba
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+ENGINE = "sba_warm_hilbert"
+TARGET_SCALAR_DEGREE = direct.TARGET_SCALAR_DEGREE
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+    }
+
+
+def paths(label: str) -> dict[str, Path]:
+    stem = (
+        "ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_"
+        f"{label}_{ENGINE}"
+    )
+    return {
+        "script": STATE / f"{stem}.sing",
+        "output": STATE / f"{stem}.singular.out",
+        "module_cache": STATE / f"{stem}_degree328.ssi",
+        "packet": STATE / f"{stem}.packet.json",
+    }
+
+
+def marker(label: str) -> str:
+    return f"G3AP_F2_HMAJORDIRECTLTRUNCSBAWARMHILBERT_{label.upper()}"
+
+
+def candidate_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    seed_cache: Path,
+    module_cache: Path,
+    hilbert_hint: list[int],
+) -> str:
+    require(hilbert_hint and hilbert_hint[0] == 1, "normalized Hilbert hint")
+    old_to_new, _ = permuted.position_maps(order)
+    generators = direct.mapped_generators(order)
+    require(len(generators) == 204, "39 selected plus 165 L boundaries")
+    shifts = ",".join(str(value) for value in direct.mapped_shifts(order))
+    weights = ",".join(str(value) for value in direct.BASE_WEIGHTS)
+    hint = ",".join(str(value) for value in hilbert_hint)
+    seed = str(seed_cache.relative_to(ROOT)).replace("\\", "/")
+    output = str(module_cache.relative_to(ROOT)).replace("\\", "/")
+    tag = marker(label)
+    canonical_component = old_to_new[6]
+    prefix = direct.base_prefix(source)
+    require(prefix.count(direct.MODULE_RING) == 1, "warm-start ring marker")
+    before_ring, after_ring = prefix.split(direct.MODULE_RING, 1)
+    loaded_prefix = (
+        before_ring
+        + direct.MODULE_RING
+        + f'def cachedSBA=read("ssi:r {seed}");\n'
+        + after_ring
+    )
+    return loaded_prefix + f'''option(noredTail);
+intvec componentShifts={shifts};
+module MT=
+  {',\n  '.join(generators)};
+attrib(MT,"isHomog",componentShifts);
+module Seed=cachedSBA;
+attrib(Seed,"isSB",0);
+attrib(Seed,"isHomog",componentShifts);
+module Warm=MT,Seed;
+attrib(Warm,"isHomog",componentShifts);
+degBound={TARGET_SCALAR_DEGREE};
+bigintvec truncatedHilbert={hint};
+intvec selectedWeights={weights};
+module G=std(Warm,truncatedHilbert,selectedWeights);
+vector canonicalSocle=w^12*t2^4*gen({canonical_component});
+vector canonicalNormal=reduce(canonicalSocle,G);
+int i;
+print("{tag}_BOUND="+string(degBound));
+print("{tag}_ORIGINAL_GENERATORS="+string(size(MT)));
+print("{tag}_SBA_SEED_SIZE="+string(size(Seed)));
+print("{tag}_WARM_GENERATORS="+string(size(Warm)));
+print("{tag}_MODULE_GB_SIZE="+string(size(G)));
+print("{tag}_CANONICAL_NORMAL_ZERO="+string(canonicalNormal==0));
+print("{tag}_CANONICAL_NORMAL="+string(canonicalNormal));
+for (i=1;i<=size(G);i++)
+{{
+  print("{tag}_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("{tag}_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {output}",G);
+print("{tag}_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_module(raw: str, label: str):
+    return fiber2.parse_leaders(
+        raw.replace(f"{marker(label)}_", "G3AP_F2_")
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(permuted.PERMUTATIONS), required=True)
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    label = args.permutation
+    order = permuted.PERMUTATIONS[label]
+    old_to_new, new_to_old = permuted.position_maps(order)
+    route = paths(label)
+    seed = sba.paths(label)
+    source = SOURCE.read_text(encoding="ascii")
+    hint_packet, hilbert_hint = hint_builder.load_hint()
+
+    require(seed["script"].is_file(), "SBA seed script")
+    require(seed["output"].is_file(), "SBA seed output")
+    require(seed["module_cache"].is_file(), "SBA seed cache")
+    require(
+        seed["script"].read_text(encoding="ascii")
+        == sba.candidate_script(source, label, order, seed["module_cache"]),
+        "SBA seed script reconstruction",
+    )
+    seed_raw = seed["output"].read_text(encoding="utf-8")
+    require(
+        f"{sba.marker(label)}_LEADER_EXPORT_PASS" in seed_raw,
+        "SBA seed completion marker",
+    )
+    require(
+        not any(line.lstrip().startswith("?") for line in seed_raw.splitlines()),
+        "SBA seed Singular errors",
+    )
+    seed_module = sba.parse_module(seed_raw, label)
+
+    route["script"].write_text(
+        candidate_script(
+            source,
+            label,
+            order,
+            seed["module_cache"],
+            route["module_cache"],
+            hilbert_hint,
+        ),
+        encoding="ascii",
+    )
+    if args.emit_only:
+        print(
+            f"emitted {route['script'].relative_to(ROOT)} "
+            f"SBA_seed={len(seed_module)}"
+        )
+        return
+
+    route["module_cache"].unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, route["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    raw = completed.stdout
+    route["output"].write_text(raw, encoding="utf-8")
+    tag = marker(label)
+    require(completed.returncode == 0, "SBA-warm Hilbert execution")
+    require(
+        not any(line.lstrip().startswith("?") for line in raw.splitlines()),
+        "SBA-warm Hilbert Singular errors",
+    )
+    require(f"{tag}_LEADER_EXPORT_PASS" in raw, "completion marker")
+    require(
+        route["module_cache"].is_file()
+        and route["module_cache"].stat().st_size > 0,
+        "candidate module cache",
+    )
+    module_new = parse_module(raw, label)
+    module_old = [(new_to_old[component], exponent) for component, exponent in module_new]
+    standards, sectors = fiber2.enumerate_target(module_old)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(len(standards) == 1, "candidate target upper bound one")
+    standard_old_component, standard_exponent = standards[0]
+
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-sba-warm-hilbert-candidate.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_REQUIRES_INDEPENDENT_HMAJOR_DIRECT_LTRUNC_SBA_WARM_HILBERT_CERTIFICATION",
+        "candidate_engine": ENGINE,
+        "permutation": {
+            "label": label,
+            "old_components_in_new_position_order": list(order),
+            "old_to_new": {str(key): value for key, value in old_to_new.items()},
+            "new_to_old": {str(key): value for key, value in new_to_old.items()},
+            "new_position_shifts": list(direct.mapped_shifts(order)),
+            "is_degree_preserving_module_isomorphism": True,
+        },
+        "inputs": {
+            "selected_source": record(SOURCE),
+            "non_authoritative_hilbert_hint": record(hint_builder.PACKET),
+            "exact_selected_source_SBA_warm_start": {
+                "script": record(seed["script"]),
+                "output": record(seed["output"]),
+                "module_cache": {
+                    **record(seed["module_cache"]),
+                    "bytes": seed["module_cache"].stat().st_size,
+                },
+                "reduction_set_size": len(seed_module),
+            },
+        },
+        "regrading": {
+            "Cox_functional": "9H+L",
+            "base_weights": list(direct.BASE_WEIGHTS),
+            "component_shifts_old_order": list(direct.COMPONENT_SHIFTS),
+            "target_scalar_degree": TARGET_SCALAR_DEGREE,
+        },
+        "truncation": {
+            "kind": "componentwise_L_boundary_plus_H_major_scalar_bound",
+            "L_boundary_generator_count": 165,
+            "explicit_H_boundary_generator_count": 0,
+            "target_Cox_piece_of_boundary_submodule_is_zero": True,
+            "one_H_step_exits_the_scalar_bound_in_every_component": True,
+        },
+        "execution": {
+            "engine": "Singular std continued from an exact selected-source SBA cache with a non-authoritative Hilbert numerator",
+            "script": record(route["script"]),
+            "output": record(route["output"]),
+            "elapsed_seconds": time.time() - started,
+            "selected_module_generator_count": 39,
+            "truncation_generator_count": 165,
+            "SBA_warm_start_size": len(seed_module),
+            "candidate_basis_size_through_bound": len(module_new),
+            "candidate_module_cache": {
+                **record(route["module_cache"]),
+                "bytes": route["module_cache"].stat().st_size,
+                "computational_scalar_bound": TARGET_SCALAR_DEGREE,
+                "valid_for_Cox_degree": [18, 2, 2],
+                "is_full_standard_basis": False,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "candidate_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "weighted_scalar_degree": TARGET_SCALAR_DEGREE,
+            "enumerated_monomials": total,
+            "dimension_if_certified": 1,
+            "standard_old_component": standard_old_component,
+            "standard_new_component": old_to_new[standard_old_component],
+            "standard_exponent": list(standard_exponent),
+        },
+        "guardrails": {
+            "claims_candidate_process_success_is_a_proof": False,
+            "claims_Hilbert_hint_is_selected_source_evidence": False,
+            "claims_SBA_cache_without_hash_bound_provenance": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Independently reconstruct the selected module, SBA seed provenance, "
+            "9H+L grading, target-effective reducers and complete target squeeze."
+        ),
+    }
+    require(
+        hint_packet["status"] == "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE",
+        "Hilbert hint tier",
+    )
+    route["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"G3AP direct H-major SBA-warm Hilbert candidate ({label}): PASS "
+        f"seed={len(seed_module)} module={len(module_new)} "
+        f"standard={standards[0]} certification=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

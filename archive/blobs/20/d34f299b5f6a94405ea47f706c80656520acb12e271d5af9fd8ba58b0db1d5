@@ -1,0 +1,468 @@
+#!/usr/bin/env python3
+"""Certify a permuted Cox-box G3AP candidate by the exact target squeeze."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import build_ust_g3ap_selected_cayley_ordinary_top_lower_bound as lower
+import certify_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_candidate as canonical
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_qslimgb_hedge as qslimgb_runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_std_hedge as std_runner
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+LOWER_VERIFIER = canonical.LOWER_VERIFIER
+COX_SHIFTS_H = (-12, -6, -15, 0, -9, -18)
+COX_SHIFTS_L = (0, -3, -1, -6, -4, -2)
+CANDIDATE_ENGINES = ("hilbert", "qslimgb", "std")
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file() and sha256(path) == record["sha256"], label)
+    return path
+
+
+def candidate_paths(label: str, candidate_engine: str) -> dict[str, Path]:
+    require(candidate_engine in CANDIDATE_ENGINES, "candidate engine")
+    if candidate_engine == "hilbert":
+        return runner.paths(label)
+    if candidate_engine == "qslimgb":
+        return qslimgb_runner.paths(label)
+    return std_runner.paths(label)
+
+
+def candidate_schema(candidate_engine: str) -> str:
+    require(candidate_engine in CANDIDATE_ENGINES, "candidate engine")
+    if candidate_engine == "hilbert":
+        return "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-permuted-boxtrunc-hilbert-candidate.v1"
+    if candidate_engine == "qslimgb":
+        return "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-permuted-boxtrunc-qslimgb-candidate.v1"
+    return "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-permuted-boxtrunc-std-candidate.v1"
+
+
+def candidate_marker(label: str, candidate_engine: str) -> str:
+    require(candidate_engine in CANDIDATE_ENGINES, "candidate engine")
+    stem = {
+        "hilbert": "G3AP_F2_WBOXPERM",
+        "qslimgb": "G3AP_F2_WBOXPERMQSLIM",
+        "std": "G3AP_F2_WBOXPERMSTD",
+    }[candidate_engine]
+    return f"{stem}_{label.upper()}"
+
+
+def reconstructed_candidate_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    hint: dict,
+    candidate_module: Path,
+    candidate_engine: str,
+) -> str:
+    require(candidate_engine in CANDIDATE_ENGINES, "candidate engine")
+    if candidate_engine == "hilbert":
+        return runner.candidate_script(
+            source,
+            label,
+            order,
+            [int(value) for value in hint["hilbert_numerator"]],
+            candidate_module,
+        )
+    if candidate_engine == "qslimgb":
+        return qslimgb_runner.candidate_script(
+            source,
+            label,
+            order,
+            candidate_module,
+        )
+    return std_runner.candidate_script(source, label, order, candidate_module)
+
+
+def certified_paths(label: str, candidate_engine: str = "hilbert") -> dict[str, Path]:
+    require(candidate_engine in CANDIDATE_ENGINES, "candidate engine")
+    engine_suffix = {"hilbert": "", "qslimgb": "_qslimgb", "std": "_std"}[
+        candidate_engine
+    ]
+    stem = f"ust_g3ap_selected_cayley_fiber2_weighted_boxperm_{label}{engine_suffix}_certified"
+    return {
+        "script": STATE / f"{stem}.sing",
+        "output": STATE / f"{stem}.singular.out",
+        "base_cache": STATE / f"{stem}_base.ssi",
+        "module_cache": STATE / f"{stem}_degree254.ssi",
+        "packet": STATE / f"{stem}.packet.json",
+    }
+
+
+def component_cox_shifts(order: tuple[int, ...]) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    return (
+        tuple(COX_SHIFTS_H[old - 1] for old in order),
+        tuple(COX_SHIFTS_L[old - 1] for old in order),
+    )
+
+
+def certification_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    candidate_engine: str,
+    candidate_base: Path,
+    candidate_module: Path,
+    output_base: Path,
+    output_module: Path,
+) -> str:
+    old_to_new, _ = runner.position_maps(order)
+    before, after = qring.derivative_representatives()
+    selected = [
+        runner.map_components(value, old_to_new) for value in qring.derivative_generators()
+    ]
+    shifts = ",".join(str(value) for value in runner.mapped_shifts(order))
+    cox_h, cox_l = component_cox_shifts(order)
+    candidate_base_relative = str(candidate_base.relative_to(ROOT)).replace("\\", "/")
+    candidate_module_relative = str(candidate_module.relative_to(ROOT)).replace("\\", "/")
+    output_base_relative = str(output_base.relative_to(ROOT)).replace("\\", "/")
+    output_module_relative = str(output_module.relative_to(ROOT)).replace("\\", "/")
+    engine_marker = {"hilbert": "", "qslimgb": "QSLIM", "std": "STD"}[
+        candidate_engine
+    ]
+    marker = f"G3AP_F2_WBOXPERMCERT{engine_marker}_{label.upper()}"
+    canonical_component = old_to_new[6]
+    return weighted.weighted_base_prefix(source) + f'''LIB("multigrading.lib");
+option(noredTail);
+{before}
+ideal I0=K,E,C;
+ideal G0=std(I0);
+def cachedIdeal=read("ssi:r {candidate_base_relative}");
+ideal GI=cachedIdeal;
+int i;
+print("{marker}_BASE_CANDIDATE_IS_SB_ATTR="+string(attrib(GI,"isSB")));
+print("{marker}_BASE_CANDIDATE_SIZE="+string(size(GI)));
+for (i=1;i<=size(GI);i++)
+{{ print("{marker}_BASE_CANDIDATE_LEADER_"+string(i)+"_EXP="+string(leadexp(GI[i]))); }}
+ideal GICheck=std(GI);
+int equalBase=1;
+for (i=1;i<=size(G0);i++)
+{{ if (reduce(G0[i],GICheck)!=0) {{ equalBase=0; }} }}
+for (i=1;i<=size(GICheck);i++)
+{{ if (reduce(GICheck[i],G0)!=0) {{ equalBase=0; }} }}
+print("{marker}_BASE_IDEAL_EQUAL="+string(equalBase));
+print("{marker}_BASE_GB_SIZE="+string(size(GICheck)));
+for (i=1;i<=size(GICheck);i++)
+{{ print("{marker}_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GICheck[i]))); }}
+attrib(GICheck,"isSB",0);
+write("ssi:w {output_base_relative}",GICheck);
+attrib(GICheck,"isSB",1);
+qring q=GICheck;
+{after}
+module M=
+  {',\n  '.join(selected)};
+intvec componentShifts={shifts};
+attrib(M,"isHomog",componentShifts);
+def cachedCandidate=read("ssi:r {candidate_module_relative}");
+module G=cachedCandidate;
+print("{marker}_MODULE_CANDIDATE_IS_SB_ATTR="+string(attrib(G,"isSB")));
+intmat variableCoxWeights[2][7]=
+  1,1,1,3,0,0,0,
+  0,0,0,0,1,1,1;
+setBaseMultigrading(variableCoxWeights);
+intmat componentCoxShifts[2][6]=
+  {','.join(str(value) for value in cox_h)},
+  {','.join(str(value) for value in cox_l)};
+G=setModuleGrading(G,componentCoxShifts);
+int coxHomogeneous=isHomogeneous(G,"checkGens");
+print("{marker}_COX_HOMOGENEOUS="+string(coxHomogeneous));
+attrib(G,"isSB",1);
+int badGeneratorRemainders=0;
+for (i=1;i<=size(M);i++)
+{{ if (reduce(M[i],G)!=0) {{ badGeneratorRemainders=badGeneratorRemainders+1; }} }}
+vector canonicalSocle=w^12*t2^4*gen({canonical_component});
+vector canonicalNormal=reduce(canonicalSocle,G);
+print("{marker}_BOUND="+string({weighted.TARGET_SCALAR_DEGREE}));
+print("{marker}_ORIGINAL_GENERATORS="+string(size(M)));
+print("{marker}_BAD_GENERATOR_REMAINDERS="+string(badGeneratorRemainders));
+print("{marker}_CANONICAL_NORMAL_ZERO="+string(canonicalNormal==0));
+print("{marker}_CANONICAL_NORMAL="+string(canonicalNormal));
+print("{marker}_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("{marker}_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("{marker}_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {output_module_relative}",G);
+print("{marker}_PASS");
+quit;
+'''
+
+
+def certification_marker(label: str, candidate_engine: str) -> str:
+    require(candidate_engine in CANDIDATE_ENGINES, "candidate engine")
+    engine_marker = {"hilbert": "", "qslimgb": "QSLIM", "std": "STD"}[
+        candidate_engine
+    ]
+    return f"G3AP_F2_WBOXPERMCERT{engine_marker}_{label.upper()}"
+
+
+def parse_bases(raw: str, label: str, candidate_engine: str = "hilbert"):
+    marker = f"{certification_marker(label, candidate_engine)}_"
+    return qring.parse_leaders(raw.replace(marker, "G3AP_F2_QRING_"))
+
+
+def effective_leader_count(
+    module_old: list[tuple[int, tuple[int, ...]]],
+) -> int:
+    count = 0
+    for component, exponent in module_old:
+        _, _, (target_h, target_l), _ = fiber2.COMPONENTS[component - 1]
+        degree_h = exponent[0] + exponent[1] + exponent[2] + 3 * exponent[3]
+        degree_l = exponent[4] + exponent[5] + exponent[6]
+        if degree_h <= target_h and degree_l <= target_l:
+            count += 1
+    return count
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(runner.PERMUTATIONS), required=True)
+    parser.add_argument(
+        "--candidate-engine", choices=CANDIDATE_ENGINES, default="hilbert"
+    )
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    label = args.permutation
+    candidate_engine = args.candidate_engine
+    order = runner.PERMUTATIONS[label]
+    old_to_new, new_to_old = runner.position_maps(order)
+    route_paths = candidate_paths(label, candidate_engine)
+    output_paths = certified_paths(label, candidate_engine)
+
+    subprocess.run([sys.executable, str(LOWER_VERIFIER)], cwd=ROOT, check=True)
+    subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ap_permuted_cox_box_routes.py")],
+        cwd=ROOT,
+        check=True,
+    )
+    lower_packet = json.loads(lower.OUT.read_text(encoding="ascii"))
+    require(
+        lower_packet["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_AT_LEAST_ONE"
+        and all(lower_packet["checks"].values())
+        and not any(lower_packet["guardrails"].values()),
+        "selected lower bound",
+    )
+    require(route_paths["packet"].is_file(), f"{label} {candidate_engine} candidate packet")
+    candidate = json.loads(route_paths["packet"].read_text(encoding="ascii"))
+    require(
+        candidate["schema"] == candidate_schema(candidate_engine)
+        and candidate["status"]
+        == "CANDIDATE_REQUIRES_INDEPENDENT_PERMUTATION_AND_TARGET_BOX_CERTIFICATION",
+        "candidate identity",
+    )
+    require(candidate["permutation"]["label"] == label, "candidate permutation label")
+    require(
+        tuple(candidate["permutation"]["old_components_in_new_position_order"])
+        == order,
+        "candidate permutation",
+    )
+    require(not any(candidate["guardrails"].values()), "candidate guardrails")
+    source_path = checked(candidate["inputs"]["selected_source"], "selected source")
+    candidate_base = checked(candidate["inputs"]["weighted_base_cache"], "candidate base")
+    hint_path = checked(candidate["inputs"]["canonical_box_hint"], "canonical box hint")
+    candidate_script_path = checked(candidate["execution"]["script"], "candidate script")
+    candidate_output = checked(candidate["execution"]["output"], "candidate output")
+    candidate_module = checked(
+        candidate["execution"]["candidate_module_cache"], "candidate module"
+    )
+    hint = json.loads(hint_path.read_text(encoding="ascii"))
+    require(not any(hint["guardrails"].values()), "hint guardrails")
+    source = source_path.read_text(encoding="ascii")
+    reconstructed = reconstructed_candidate_script(
+        source,
+        label,
+        order,
+        hint,
+        candidate_module,
+        candidate_engine,
+    )
+    recovery_used = bool(candidate["execution"].get("leader_recovery_used"))
+    require(
+        candidate_engine == "hilbert" or not recovery_used,
+        "non-Hilbert candidate cannot use legacy Hilbert recovery",
+    )
+    require(
+        fiber2.candidate_script_matches(
+            candidate_script_path.read_text(encoding="ascii"),
+            reconstructed,
+            recovery_used,
+        ),
+        "candidate script reconstruction",
+    )
+    marker = f"{candidate_marker(label, candidate_engine)}_LEADER_EXPORT_PASS"
+    require(marker in candidate_output.read_text(encoding="utf-8"), "candidate execution")
+
+    script_text = certification_script(
+        source,
+        label,
+        order,
+        candidate_engine,
+        candidate_base,
+        candidate_module,
+        output_paths["base_cache"],
+        output_paths["module_cache"],
+    )
+    output_paths["script"].write_text(script_text, encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {output_paths['script'].relative_to(ROOT)}")
+        return
+    output_paths["base_cache"].unlink(missing_ok=True)
+    output_paths["module_cache"].unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, output_paths["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    output_paths["output"].write_text(completed.stdout, encoding="utf-8")
+    cert_marker = certification_marker(label, candidate_engine)
+    require(completed.returncode == 0, "permuted certification execution")
+    require(f"{cert_marker}_PASS" in completed.stdout, "permuted certification pass")
+    expected = {
+        f"{cert_marker}_BASE_CANDIDATE_IS_SB_ATTR": 0,
+        f"{cert_marker}_BASE_IDEAL_EQUAL": 1,
+        f"{cert_marker}_MODULE_CANDIDATE_IS_SB_ATTR": 0,
+        f"{cert_marker}_COX_HOMOGENEOUS": 1,
+        f"{cert_marker}_ORIGINAL_GENERATORS": 21,
+        f"{cert_marker}_BAD_GENERATOR_REMAINDERS": 0,
+    }
+    for field, value in expected.items():
+        require(
+            re.search(rf"^{field}={value}$", completed.stdout, re.MULTILINE)
+            is not None,
+            field,
+        )
+    base, module_new = parse_bases(completed.stdout, label, candidate_engine)
+    candidate_base_leaders = canonical.parse_candidate_base_leaders(
+        completed.stdout, cert_marker
+    )
+    require(
+        canonical.same_monomial_ideal(candidate_base_leaders, base),
+        "candidate base leading ideal",
+    )
+    module_old = [(new_to_old[component], exponent) for component, exponent in module_new]
+    standards, sectors = fiber2.enumerate_target(qring.combined_leaders(base, module_old))
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(len(standards) == 1, "target upper bound one")
+    effective = effective_leader_count(module_old)
+    require(effective > 0, "target-effective selected reducers")
+    standard_old_component, standard_exponent = standards[0]
+    canonical_normal_match = re.search(
+        rf"^{cert_marker}_CANONICAL_NORMAL=(.+)$", completed.stdout, re.MULTILINE
+    )
+    require(canonical_normal_match is not None, "canonical normal form")
+    canonical_zero_match = re.search(
+        rf"^{cert_marker}_CANONICAL_NORMAL_ZERO=([01])$",
+        completed.stdout,
+        re.MULTILINE,
+    )
+    require(canonical_zero_match is not None, "canonical normal zero diagnostic")
+
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-permuted-leading-squeeze-certified-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.FIBER2.WEIGHTED-PERMUTED-LEADING-SQUEEZE.CERTIFIED",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_WEIGHTED_PERMUTED_LEADING_SQUEEZE_TOP_DIMENSION_ONE",
+        "candidate_engine": candidate_engine,
+        "permutation": candidate["permutation"],
+        "inputs": {
+            "candidate": {"path": str(route_paths["packet"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(route_paths["packet"])},
+            "selected_source": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SOURCE)},
+            "selected_ordinary_top_lower_bound": {"path": str(lower.OUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(lower.OUT)},
+        },
+        "truncation": candidate["truncation"],
+        "execution": {
+            "candidate_engine": candidate_engine,
+            "script": {"path": str(output_paths["script"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(output_paths["script"])},
+            "output": {"path": str(output_paths["output"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(output_paths["output"])},
+            "elapsed_seconds": time.time() - started,
+            "base_basis_size": len(base),
+            "certified_reduction_set_size": len(module_new),
+            "target_effective_reducer_count": effective,
+            "certified_base_cache": {"path": str(output_paths["base_cache"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(output_paths["base_cache"]), "bytes": output_paths["base_cache"].stat().st_size, "isSB_trust_attribute_stored": False},
+            "certified_module_cache": {"path": str(output_paths["module_cache"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(output_paths["module_cache"]), "bytes": output_paths["module_cache"].stat().st_size, "valid_through_weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE, "valid_for_Cox_degree": [18, 2, 2], "is_full_standard_basis": False, "isSB_trust_attribute_stored": False},
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "enumerated_monomials": total,
+            "dimension": 1,
+            "standard_old_component": standard_old_component,
+            "standard_new_component": old_to_new[standard_old_component],
+            "standard_exponent": list(standard_exponent),
+            "canonical_socle_old_component": 6,
+            "canonical_socle_new_component": old_to_new[6],
+            "canonical_socle_normal_form": canonical_normal_match.group(1).strip(),
+            "canonical_socle_normal_form_is_nonzero": canonical_zero_match.group(1) == "0",
+        },
+        "checks": {
+            "selected_source_is_hash_bound": True,
+            "component_permutation_is_an_exact_degree_preserving_module_isomorphism": True,
+            "selected_base_ideal_is_recomputed_and_equal_to_the_candidate_base": True,
+            "candidate_base_and_recomputed_base_have_the_same_leading_ideal": True,
+            "candidate_reduction_set_is_Cox_bihomogeneous_in_the_permuted_grading": True,
+            "all_21_permuted_selected_generators_reduce_to_zero": True,
+            "all_12159_truncators_begin_strictly_outside_the_corresponding_target_box": True,
+            "every_target_effective_reducer_belongs_to_the_selected_untruncated_module": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "candidate_leading_submodule_leaves_at_most_one_target_class": True,
+            "selected_toric_residue_lower_bound_supplies_at_least_one_target_class": True,
+            "selected_ordinary_top_piece_has_dimension_one": True,
+            "the_unique_selected_standard_supplies_the_downstream_normalization": True,
+            "no_predecessor_entry_is_used_as_selected_source_evidence": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_candidate_cache_is_a_full_standard_basis": False,
+            "claims_global_equality_of_truncated_and_untruncated_modules": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_promotion": False,
+        },
+        "next_required_object": "Adopt the permuted one-line reducer with its normalization and execute G3AM/G3AN.",
+    }
+    output_paths["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"G3AP permuted Cox-box leading squeeze ({label}, {candidate_engine}): PASS "
+        f"reducers={len(module_new)} effective={effective} standard={standards[0]} dimension=1"
+    )
+
+
+if __name__ == "__main__":
+    main()

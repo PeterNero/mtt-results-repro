@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Export the exact full-vs smooth-primal incidence system for G3AO."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "vs_primal_msolve"
+EXPORT_SCRIPT = CAMPAIGN / "export_smooth_primal.sing"
+RAW_OUTPUT = CAMPAIGN / "export_smooth_primal.singular.out"
+INPUT = CAMPAIGN / "smooth.msolve.in"
+OUT = CAMPAIGN / "inputs.packet.json"
+BIDUAL_IDENTITY = ROOT / "state" / "ust_g3ao_elliptic_bidual_identity.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_export_script(polynomials: dict[str, str]) -> str:
+    return f'''// UST.G3AO exact full-vs smooth-primal incidence export.
+ring source=(101,g),(x,y,z,w,t0,t1,t2),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly B_ambient={direct.AMBIENT_GAUGE};
+poly P0=A0+K*diff(B_ambient,t0);
+poly P1=A0+A1+3*A2+K*diff(B_ambient,t1);
+poly P2=A0+7*A1+7*A2+K*diff(B_ambient,t2);
+ring orbit=(101,g),(y,z,w,Y,Z,orbitInv),dp;
+minpoly={polynomials["minpoly"]};
+map orbitMap=source,1,y,z,w,0,0,0;
+poly P0=orbitMap(P0);
+poly P1=orbitMap(P1);
+poly P2=orbitMap(P2);
+poly dual0=-14*P0;
+poly dual1=-4*P0+7*P1-3*P2;
+poly dual2=6*P0-7*P1+P2;
+poly Fermat=1+Y^3+Z^3;
+poly covector1=dual1-dual0*Y^2;
+poly covector2=dual2-dual0*Z^2;
+poly T0=-14-4*Y+6*Z;
+poly T1=7*Y-7*Z;
+poly T2=-3*Y+Z;
+poly responseY=T0*diff(P0,y)+T1*diff(P1,y)+T2*diff(P2,y);
+poly responseZ=T0*diff(P0,z)+T1*diff(P1,z)+T2*diff(P2,z);
+poly responseW=T0*diff(P0,w)+T1*diff(P1,w)+T2*diff(P2,w);
+ideal smoothPrimal=Fermat,covector1,covector2,responseY,responseZ,responseW,
+  orbitInv*(y*z*w*Y*Z*dual0)-1;
+int exportIndex;
+print("G3AO_MSOLVE_SMOOTH_COUNT="+string(size(smoothPrimal)));
+for (exportIndex=1;exportIndex<=size(smoothPrimal);exportIndex++)
+{{ print("G3AO_MSOLVE_SMOOTH_"+string(exportIndex)+"="+string(smoothPrimal[exportIndex])); }}
+print("G3AO_MSOLVE_EXPORT_PASS");
+quit;
+'''
+
+
+def make_msolve_input(polynomials: dict[str, str], generators: list[str]) -> str:
+    equations = [common.normalize_for_msolve(polynomials["minpoly"])]
+    equations.extend(common.normalize_for_msolve(value) for value in generators)
+    return "y,z,w,Y,Z,orbitInv,g\n101\n" + ",\n".join(equations) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--reuse-export", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    polynomials = direct.selected_polynomials()
+    require(BIDUAL_IDENTITY.is_file(), "elliptic-bidual identity packet")
+    identity = json.loads(BIDUAL_IDENTITY.read_text(encoding="ascii"))
+    require(all(identity["checks"].values()), "elliptic-bidual identity checks")
+    g = sp.symbols("g")
+    minpoly = sp.Poly(sp.sympify(polynomials["minpoly"].replace("^", "**")), g, modulus=101)
+    require(minpoly.degree() == 6 and minpoly.is_irreducible, "irreducible F101 extension")
+    EXPORT_SCRIPT.write_text(make_export_script(polynomials), encoding="ascii")
+    if args.reuse_export:
+        require(RAW_OUTPUT.is_file(), "reusable raw export")
+        raw = RAW_OUTPUT.read_text(encoding="utf-8")
+    else:
+        completed = subprocess.run(
+            singular_command(ROOT, EXPORT_SCRIPT), cwd=ROOT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=args.timeout, check=False,
+        )
+        RAW_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+        require(completed.returncode == 0, "Singular full-vs primal export")
+        raw = completed.stdout
+    require("G3AO_MSOLVE_EXPORT_PASS" in raw, "export marker")
+    generators = common.parse_locus(raw, "smooth")
+    INPUT.write_text(make_msolve_input(polynomials, generators), encoding="ascii")
+    packet = {
+        "schema": "mtt.unified-source.g3ao-vs-smooth-primal-msolve-input.v1",
+        "source_sha256": sha256(direct.SOURCE),
+        "dependencies": {
+            "elliptic_bidual_identity": {
+                "path": str(BIDUAL_IDENTITY.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BIDUAL_IDENTITY),
+                "theorem_id": identity["theorem_id"],
+            }
+        },
+        "field_presentation": {
+            "characteristic": 101,
+            "extension_variable": "g",
+            "minpoly": polynomials["minpoly"],
+            "degree": 6,
+            "irreducible_over_F101": True,
+        },
+        "export_script": {
+            "path": str(EXPORT_SCRIPT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(EXPORT_SCRIPT),
+        },
+        "raw_output": {
+            "path": str(RAW_OUTPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(RAW_OUTPUT),
+        },
+        "input": {
+            "path": str(INPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(INPUT),
+        },
+        "generator_count_including_minpoly": len(generators) + 1,
+        "checks": {
+            "P_equals_the_full_C_coefficient_A_plus_K_times_B": True,
+            "the_X_one_chart_covers_every_smooth_Fermat_contact": True,
+            "the_transformed_P_covector_is_proportional_to_1_Y2_Z2": True,
+            "the_three_full_original_base_derivatives_vanish": True,
+            "nonzero_dual0_implies_the_required_nonzero_lambdaV": True,
+            "the_selected_base_and_smooth_contact_tori_are_saturated": True,
+            "the_extension_minpoly_is_irreducible_and_adjoined_over_F101": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(f"UST.G3AO vs smooth-primal input: PASS generators={len(generators)+1}")
+
+
+if __name__ == "__main__":
+    main()

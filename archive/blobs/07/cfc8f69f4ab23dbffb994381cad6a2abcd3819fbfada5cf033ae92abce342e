@@ -1,0 +1,533 @@
+#!/usr/bin/env python3
+"""Compare the component-12 finite kernel with the raw boundary-Koszul family."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as dm_runtime
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PRIME = 21817
+ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+COMPLEMENT_DIMENSION = 42458
+UPDATE_DIMENSION = 6022
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def evaluate_field(coordinates: tuple[int, ...], root: int) -> int:
+    value = 0
+    for coefficient in reversed(coordinates):
+        value = (value * root + coefficient) % PRIME
+    return value
+
+
+def evaluate_sparse(coefficients: list[sparse.spmatrix], root: int) -> sparse.csc_matrix:
+    result = sparse.csc_matrix(coefficients[0].shape, dtype=np.int64)
+    power = 1
+    for matrix in coefficients:
+        term = matrix.copy().tocsc().astype(np.int64)
+        term.data %= PRIME
+        term.data = term.data * power % PRIME
+        result = result + term
+        power = power * root % PRIME
+    result = result.tocsc()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def inverse_mod(matrix: np.ndarray) -> tuple[np.ndarray, int]:
+    size = matrix.shape[0]
+    require(matrix.shape == (size, size), "square modular inverse")
+    augmented = np.concatenate(
+        (matrix.astype(np.int64) % PRIME, np.eye(size, dtype=np.int64)), axis=1
+    )
+    determinant = 1
+    sign = 1
+    for column in range(size):
+        choices = np.flatnonzero(augmented[column:, column] % PRIME)
+        require(choices.size > 0, "invertible modular matrix")
+        pivot = column + int(choices[0])
+        if pivot != column:
+            augmented[[column, pivot]] = augmented[[pivot, column]]
+            sign = -sign
+        pivot_value = int(augmented[column, column] % PRIME)
+        determinant = determinant * pivot_value % PRIME
+        augmented[column] = augmented[column] * pow(pivot_value, -1, PRIME) % PRIME
+        for row in range(size):
+            if row == column:
+                continue
+            factor = int(augmented[row, column] % PRIME)
+            if factor:
+                augmented[row] = (augmented[row] - factor * augmented[column]) % PRIME
+    return augmented[:, size:], determinant * sign % PRIME
+
+
+def rank_mod(matrix: np.ndarray) -> int:
+    work = matrix.astype(np.int64) % PRIME
+    row = 0
+    for column in range(work.shape[1]):
+        choices = np.flatnonzero(work[row:, column] % PRIME)
+        if choices.size == 0:
+            continue
+        pivot = row + int(choices[0])
+        if pivot != row:
+            work[[row, pivot]] = work[[pivot, row]]
+        work[row] = work[row] * pow(int(work[row, column]), -1, PRIME) % PRIME
+        for target in range(work.shape[0]):
+            if target == row:
+                continue
+            factor = int(work[target, column] % PRIME)
+            if factor:
+                work[target] = (work[target] - factor * work[row]) % PRIME
+        row += 1
+        if row == work.shape[0]:
+            break
+    return row
+
+
+def independent_rows(matrix: sparse.spmatrix, count: int) -> np.ndarray:
+    rows = matrix.tocsr()
+    pivots: list[np.ndarray] = []
+    pivot_columns: list[int] = []
+    selected: list[int] = []
+    for row_index in range(rows.shape[0]):
+        row = np.zeros(count, dtype=np.int64)
+        start, past = rows.indptr[row_index], rows.indptr[row_index + 1]
+        row[rows.indices[start:past]] = rows.data[start:past] % PRIME
+        for pivot, column in zip(pivots, pivot_columns, strict=True):
+            factor = int(row[column] % PRIME)
+            if factor:
+                row = (row - factor * pivot) % PRIME
+        nonzero = np.flatnonzero(row % PRIME)
+        if nonzero.size == 0:
+            continue
+        column = int(nonzero[0])
+        row = row * pow(int(row[column]), -1, PRIME) % PRIME
+        pivots.append(row)
+        pivot_columns.append(column)
+        selected.append(row_index)
+        if len(selected) == count:
+            return np.asarray(selected, dtype=np.int32)
+    raise AssertionError(f"matrix rank is below {count}")
+
+
+def add_exponents(*values: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(sum(parts) for parts in zip(*values, strict=True))
+
+
+def raw_koszul_action(
+    root: int,
+    f0: dict[tuple[int, ...], tuple[int, ...]],
+    correction_t0: dict[tuple[int, ...], tuple[int, ...]],
+    target_lookup: dict[tuple[int, ...], int],
+    complement_lookup: dict[int, int],
+    oracle: Any,
+) -> tuple[sparse.csc_matrix, int, int]:
+    q1 = oracle.derivative_terms(f0, 5)
+    q2 = oracle.derivative_terms(f0, 6)
+    entries: dict[tuple[int, int], int] = {}
+    raw_descriptors: set[tuple[int, tuple[int, ...]]] = set()
+    quotient_terms = 0
+    for column in range(10):
+        h = (0, column, 9 - column) + (0,) * 7
+        for terms, tail, sign in (
+            (q1, (0, 0, 0, 0, 0, 0, 3, 0, 0, 1), 1),
+            (q2, (0, 0, 0, 0, 0, 2, 1, 0, 0, 1), -1),
+        ):
+            for q_exponent, q_coordinates in terms.items():
+                multiplier = add_exponents(h, q_exponent, tail)
+                q_value = sign * evaluate_field(q_coordinates, root) % PRIME
+                if not q_value:
+                    continue
+                raw_descriptors.add((4, multiplier))
+                for c_exponent, c_coordinates in correction_t0.items():
+                    c_value = evaluate_field(c_coordinates, root)
+                    if not c_value:
+                        continue
+                    ambient = target_lookup[add_exponents(multiplier, c_exponent)]
+                    local = complement_lookup.get(ambient)
+                    if local is None:
+                        quotient_terms += 1
+                        continue
+                    key = (local, column)
+                    entries[key] = (entries.get(key, 0) + q_value * c_value) % PRIME
+    triples = [
+        (row, column, value)
+        for (row, column), value in entries.items()
+        if value % PRIME
+    ]
+    rows, columns, values = zip(*triples, strict=True)
+    matrix = sparse.csc_matrix(
+        (np.asarray(values, dtype=np.int64), (rows, columns)),
+        shape=(COMPLEMENT_DIMENSION, 10),
+    )
+    return matrix, len(raw_descriptors), quotient_terms
+
+
+def raw_koszul_source(
+    root: int,
+    f0: dict[tuple[int, ...], tuple[int, ...]],
+    update_descriptor_lookup: dict[tuple[int, tuple[int, ...]], int],
+    oracle: Any,
+) -> tuple[sparse.csc_matrix, list[tuple[int, tuple[int, ...], int, int]]]:
+    q1 = oracle.derivative_terms(f0, 5)
+    q2 = oracle.derivative_terms(f0, 6)
+    entries: dict[tuple[int, int], int] = {}
+    missing: list[tuple[int, tuple[int, ...], int, int]] = []
+    for column in range(10):
+        h = (0, column, 9 - column) + (0,) * 7
+        for terms, tail, sign in (
+            (q1, (0, 0, 0, 0, 0, 0, 3, 0, 0, 1), 1),
+            (q2, (0, 0, 0, 0, 0, 2, 1, 0, 0, 1), -1),
+        ):
+            for q_exponent, q_coordinates in terms.items():
+                multiplier = add_exponents(h, q_exponent, tail)
+                value = sign * evaluate_field(q_coordinates, root) % PRIME
+                if not value:
+                    continue
+                descriptor = (4, multiplier)
+                coordinate = update_descriptor_lookup.get(descriptor)
+                if coordinate is None:
+                    missing.append((column, descriptor, value, sign))
+                    continue
+                key = (coordinate, column)
+                entries[key] = (entries.get(key, 0) + value) % PRIME
+    triples = [
+        (row, column, value)
+        for (row, column), value in entries.items()
+        if value % PRIME
+    ]
+    rows, columns, values = zip(*triples, strict=True)
+    matrix = sparse.csc_matrix(
+        (np.asarray(values, dtype=np.int64), (rows, columns)),
+        shape=(UPDATE_DIMENSION, 10),
+    )
+    return matrix, missing
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--all-roots", action="store_true")
+    parser.add_argument("--chart-reduction", action="store_true")
+    arguments = parser.parse_args()
+
+    g3bi = load(ROOT / "state/ust_g3bi_explicit_root_start.packet.json")
+    g3br = load(ROOT / "state/ust_g3br_h02_alternate_split_prime_initializer.packet.json")
+    g3bw = load(ROOT / "state/ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json")
+    g3de = load(ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json")
+    g3di = load(ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json")
+    g3dx = load(ROOT / "state/ust_g3dx_h02_prefix_structural_gap_localization.packet.json")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json")
+    factor = load(mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json")
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    selected_updates = np.load(
+        ROOT / g3de["factorization"]["selection"]["path"], allow_pickle=False
+    )["selected_columns"].astype(np.int32)
+    component = g3dx["prefix_gap_localization"]["component_rows"][12]
+    require(
+        (component["coordinate_start"], component["coordinate_past"], component["dimension"])
+        == (3106, 3187, 81),
+        "component-12 ledger",
+    )
+    component_descriptors = [descriptors[int(selected_updates[index])] for index in range(3106, 3187)]
+    require(all(generator == 4 for generator, _ in component_descriptors), "component-12 t0 block")
+    update_descriptor_lookup = {
+        descriptors[int(complement_coordinate)]: update_coordinate
+        for update_coordinate, complement_coordinate in enumerate(selected_updates)
+    }
+
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    dm_arrays = np.load(
+        ROOT / g3bw["DM_reduction"]["arrays"]["path"], allow_pickle=False
+    )
+    complement_rows = dm_arrays["complement_rows"].astype(np.int32)
+    complement_lookup = {int(ambient): local for local, ambient in enumerate(complement_rows)}
+
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    f0 = oracle.exact_f0_terms(global_f0)
+    generators0, _, _ = oracle.exact_generators(base, global_f0, load(oracle.B89))
+    correction_t0 = dm_runtime.correction_derivatives_exact(g3bi)[4]
+
+    u_coefficients = [
+        sparse.load_npz(ROOT / row["path"]).tocsc().astype(np.int64)
+        for row in g3de["factorization"]["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(ROOT / row["path"]).tocsc().astype(np.int64)
+        for row in g3de["factorization"]["W_gamma_coefficients"]
+    ]
+    roots = ROOTS if arguments.all_roots else ROOTS[:1]
+    for root in roots:
+        kernel_row = next(
+            row for row in g3di["root_kernels"] if int(row["gamma_root"]) == root
+        )
+        kernel = kernel_runtime.read_kernel(ROOT / kernel_row["kernel"]["path"])
+        dependent = kernel["dependent"]
+        relation_indices = np.flatnonzero((dependent >= 3177) & (dependent < 3187))
+        require(relation_indices.size == 10, "ten component-12 kernel columns")
+        relations = kernel["matrix"][:, relation_indices].astype(np.int64)
+        update = evaluate_sparse(u_coefficients, root)
+        observed = (update @ relations).tocsc()
+        observed.data %= PRIME
+        observed.eliminate_zeros()
+        raw, raw_descriptor_count, quotient_terms = raw_koszul_action(
+            root, f0, correction_t0, target_lookup, complement_lookup, oracle
+        )
+        raw_source, missing = raw_koszul_source(
+            root, f0, update_descriptor_lookup, oracle
+        )
+        raw_component12 = raw_source[3106:3187, :].toarray() % PRIME
+        raw_dependent_minor = raw_source[3177:3187, :].toarray() % PRIME
+        raw_component12_rank = rank_mod(raw_component12)
+        raw_dependent_rank = rank_mod(raw_dependent_minor)
+        source_normalizer = np.zeros((10, 10), dtype=np.int64)
+        source_difference_nonzeros = -1
+        source_difference_support: list[int] = []
+        normalized_action_residual = -1
+        if raw_dependent_rank == 10:
+            source_normalizer, _ = inverse_mod(raw_dependent_minor)
+            normalized_source = np.asarray(raw_source @ source_normalizer, dtype=np.int64) % PRIME
+            observed_source = relations.toarray() % PRIME
+            source_difference = (observed_source - normalized_source) % PRIME
+            source_difference_nonzeros = int(np.count_nonzero(source_difference))
+            source_difference_support = np.flatnonzero(
+                np.any(source_difference != 0, axis=1)
+            ).astype(int).tolist()
+            normalized_action_residual = int(
+                np.count_nonzero(
+                    (np.asarray(observed @ np.eye(10, dtype=np.int64))
+                     - np.asarray(raw @ source_normalizer)) % PRIME
+                )
+            )
+
+        pivot_rows = independent_rows(observed, 10)
+        observed_minor = observed[pivot_rows, :].toarray() % PRIME
+        raw_minor = raw[pivot_rows, :].toarray() % PRIME
+        inverse, determinant = inverse_mod(observed_minor)
+
+        chart_result = "not-run"
+        if arguments.chart_reduction:
+            require(root == 5, "the stored G3BR chart reduction is rooted at gamma=5")
+            evidence = ROOT / "evidence/ust_g3eb_probe"
+            evidence.mkdir(parents=True, exist_ok=True)
+            endpoint_chart_path = ROOT / g3br["endpoint_chart"]["binary"]["path"]
+            endpoint_chart = split_io.as_scipy(
+                arithmetic.read_csc(endpoint_chart_path, b"MTTSPC1\0", 6)
+            ).tocsc().astype(np.int64)
+            full_update = sparse.load_npz(
+                ROOT / g3br["endpoint_update"]["matrix"]["path"]
+            ).tocsc().astype(np.int64)
+            endpoint_update = sparse.hstack(
+                [sparse.csc_matrix((42706, 248), dtype=np.int64), full_update],
+                format="csc",
+            )
+            base_chart = (endpoint_chart - endpoint_update).tocsc()
+            base_chart.data %= PRIME
+            base_chart.eliminate_zeros()
+            base_chart_path = evidence / "H02.p21817.g5.base_chart.bin"
+            exporter.write_chart(
+                base_chart_path,
+                PRIME,
+                42706,
+                248,
+                42458,
+                base_chart.indptr.astype(np.uint64).tolist(),
+                base_chart.indices.astype(np.uint32).tolist(),
+                base_chart.data.astype(np.uint32).tolist(),
+            )
+
+            missing_descriptors = sorted({item[1] for item in missing})
+            require(len(missing_descriptors) == 10, "ten unique boundary descriptors")
+            rhs_indptr = [0]
+            rhs_indices: list[int] = []
+            rhs_data: list[int] = []
+            for descriptor in missing_descriptors:
+                column = oracle.exact_column(descriptor, generators0, target_lookup)
+                exporter.append_column(column, PRIME, root, rhs_indices, rhs_data)
+                rhs_indptr.append(len(rhs_indices))
+            rhs_path = evidence / "H02.component12.raw_boundary_base_columns.rhs.bin"
+            solution_path = evidence / "H02.component12.raw_boundary_base_columns.solution.bin"
+            log_path = evidence / "H02.component12.raw_boundary_base_columns.solve.log"
+            exporter.write_rhs(
+                rhs_path, PRIME, 42706, rhs_indptr, rhs_indices, rhs_data
+            )
+            solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+            command = [
+                "wsl", runtime.wsl_path(solver),
+                "--chart", runtime.wsl_path(base_chart_path),
+                "--rhs", runtime.wsl_path(rhs_path),
+                "--output", runtime.wsl_path(solution_path),
+                "--log", runtime.wsl_path(log_path),
+            ]
+            if not solution_path.is_file():
+                completed = subprocess.run(
+                    command, cwd=mld, capture_output=True, text=True, check=False
+                )
+                require(completed.returncode == 0, completed.stdout + completed.stderr)
+            stored_solution = split_io.as_scipy(
+                arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+            ).tocsc().astype(np.int64)
+            require(
+                split_io.residual_nonzeros(
+                    base_chart,
+                    stored_solution,
+                    split_io.as_scipy(
+                        arithmetic.read_csc(rhs_path, b"MTTSRH1\0", 4)
+                    ),
+                    PRIME,
+                ) == 0,
+                "base-chart boundary solve residual",
+            )
+            preimage = stored_solution[248:, :].tocsc()
+            descriptor_index = {
+                descriptor: index for index, descriptor in enumerate(missing_descriptors)
+            }
+            missing_coefficients = np.zeros((10, 10), dtype=np.int64)
+            for family_column, descriptor, value, _ in missing:
+                missing_coefficients[descriptor_index[descriptor], family_column] = (
+                    missing_coefficients[descriptor_index[descriptor], family_column] + value
+                ) % PRIME
+            replacement = np.asarray(
+                full_update @ preimage @ missing_coefficients, dtype=np.int64
+            ) % PRIME
+            corrected_action = (
+                (update @ raw_source).toarray().astype(np.int64)
+                + replacement[complement_rows, :]
+            ) % PRIME
+            corrected_minor = corrected_action[pivot_rows, :]
+            corrected_transform = inverse @ corrected_minor % PRIME
+            corrected_residual = int(
+                np.count_nonzero(
+                    (np.asarray(observed @ corrected_transform, dtype=np.int64)
+                     - corrected_action) % PRIME
+                )
+            )
+            corrected_transform_rank = rank_mod(corrected_transform)
+
+            observed_coo = observed.tocoo()
+            lift_rhs = sparse.csc_matrix(
+                (
+                    (-observed_coo.data.astype(np.int64)) % PRIME,
+                    (complement_rows[observed_coo.row], observed_coo.col),
+                ),
+                shape=(42706, 10),
+            )
+            lift_rhs.sum_duplicates()
+            lift_rhs.data %= PRIME
+            lift_rhs.eliminate_zeros()
+            lift_rhs_path = evidence / "H02.component12.observed_action.rhs.bin"
+            lift_solution_path = evidence / "H02.component12.observed_action.solution.bin"
+            lift_log_path = evidence / "H02.component12.observed_action.solve.log"
+            exporter.write_rhs(
+                lift_rhs_path,
+                PRIME,
+                42706,
+                lift_rhs.indptr.astype(np.uint64).tolist(),
+                lift_rhs.indices.astype(np.uint32).tolist(),
+                lift_rhs.data.astype(np.uint32).tolist(),
+            )
+            lift_command = [
+                "wsl", runtime.wsl_path(solver),
+                "--chart", runtime.wsl_path(base_chart_path),
+                "--rhs", runtime.wsl_path(lift_rhs_path),
+                "--output", runtime.wsl_path(lift_solution_path),
+                "--log", runtime.wsl_path(lift_log_path),
+            ]
+            if not lift_solution_path.is_file():
+                completed = subprocess.run(
+                    lift_command, cwd=mld, capture_output=True, text=True, check=False
+                )
+                require(completed.returncode == 0, completed.stdout + completed.stderr)
+            lift_solution = split_io.as_scipy(
+                arithmetic.read_csc(lift_solution_path, b"MTTSCO1\0", 6)
+            ).tocsc().astype(np.int64)
+            require(
+                split_io.residual_nonzeros(
+                    base_chart, lift_solution, lift_rhs, PRIME
+                ) == 0,
+                "observed component-12 lift solve residual",
+            )
+            lift_quotient = lift_solution[:248, :].tocsc()
+            lift = lift_solution[248:, :].tocsc()
+            lift_support = np.unique(lift.nonzero()[0]).astype(np.int32)
+            generator_counts: dict[int, int] = {}
+            for coordinate in lift_support:
+                generator = descriptors[int(coordinate)][0]
+                generator_counts[generator] = generator_counts.get(generator, 0) + 1
+            w_at_root = evaluate_sparse(w_coefficients, root)
+            w_lift = (w_at_root @ lift).tocsc()
+            w_lift.data %= PRIME
+            w_lift.eliminate_zeros()
+            chart_result = (
+                f"chart_preimage_nnz={preimage.nnz} corrected_rank={rank_mod(corrected_action)} "
+                f"corrected_transform_rank={corrected_transform_rank} "
+                f"corrected_residual_nnz={corrected_residual} "
+                f"actual_lift_nnz={lift.nnz} actual_lift_rows={lift_support.size} "
+                f"actual_lift_generators={generator_counts} quotient_nnz={lift_quotient.nnz} "
+                f"W_lift_nnz={w_lift.nnz}"
+            )
+
+        transform = inverse @ raw_minor % PRIME
+        reconstructed = np.asarray(observed @ transform, dtype=np.int64) % PRIME
+        residual_nonzeros = int(np.count_nonzero((reconstructed - raw.toarray()) % PRIME))
+        raw_dense = raw.toarray() % PRIME
+        raw_rank = rank_mod(raw_dense)
+        transform_rank = rank_mod(transform)
+        transform_determinant = 0
+        if transform_rank == 10:
+            _, transform_determinant = inverse_mod(transform)
+        print(
+            f"root={root} observed_rank=10 raw_rank={raw_rank} "
+            f"transform_rank={transform_rank} observed_minor_det={determinant} "
+            f"transform_det={transform_determinant} "
+            f"residual_nnz={residual_nonzeros} raw_descriptors={raw_descriptor_count} "
+            f"quotient_terms={quotient_terms} selected_source_nnz={raw_source.nnz} "
+            f"missing_terms={len(missing)} comp12_rank={raw_component12_rank} "
+            f"dependent_minor_rank={raw_dependent_rank} source_diff_nnz={source_difference_nonzeros} "
+            f"source_diff_rows={len(source_difference_support)} normalized_action_residual={normalized_action_residual} "
+            f"{chart_result}"
+        )
+
+
+if __name__ == "__main__":
+    main()

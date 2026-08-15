@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Compile the exact component support of the stable H02 kernel partition."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+
+
+ROOT = Path(__file__).resolve().parent
+G3BZ = ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json"
+G3DI = ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+G3DV = ROOT / "state" / "ust_g3dv_h02_seven_prime_reconstruction_holdout.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dw"
+OUT = ROOT / "state" / "ust_g3dw_h02_kernel_component_triangularity.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {"path": path.relative_to(ROOT).as_posix(), "sha256": sha256(path), "bytes": path.stat().st_size}
+
+
+def runs(values: np.ndarray) -> list[list[int]]:
+    if values.size == 0:
+        return []
+    output: list[list[int]] = []
+    start = previous = int(values[0])
+    for raw in values[1:]:
+        value = int(raw)
+        if value == previous + 1:
+            previous = value
+            continue
+        output.append([start, previous, previous - start + 1])
+        start = previous = value
+    output.append([start, previous, previous - start + 1])
+    return output
+
+
+def main() -> None:
+    g3bz = load(G3BZ)
+    g3di = load(G3DI)
+    g3dv = load(G3DV)
+    require(all(all(packet["checks"].values()) for packet in (g3bz, g3di, g3dv)), "input checks")
+    dimensions = np.asarray(
+        [int(row["rank"]) for row in g3bz["affine_path_update"]["selected_root_components"]],
+        dtype=np.int32,
+    )
+    require(dimensions.size == 34 and int(dimensions.sum()) == 6022, "component dimensions")
+    boundaries = np.concatenate((np.asarray([0], dtype=np.int32), np.cumsum(dimensions)))
+    selection = np.load(ROOT / g3di["split_algebra_kernel"]["selection"]["path"], allow_pickle=False)
+    selected = selection["selected_update_columns"].astype(np.int32)
+    dependent = selection["dependent_update_columns"].astype(np.int32)
+    require(np.array_equal(np.sort(np.concatenate((selected, dependent))), np.arange(6022)), "coordinate partition")
+    root_kernel = kernel_io.read_kernel(ROOT / g3di["root_kernels"][0]["kernel"]["path"])["matrix"]
+
+    component_rows: list[dict[str, Any]] = []
+    relation_component_edges: set[tuple[int, int]] = set()
+    future_support_terms = 0
+    future_support_columns = 0
+    fully_dependent_components: list[int] = []
+    active_components: list[int] = []
+    for component in range(34):
+        start = int(boundaries[component])
+        past = int(boundaries[component + 1])
+        dependent_columns = np.flatnonzero((dependent >= start) & (dependent < past))
+        selected_count = int(np.count_nonzero((selected >= start) & (selected < past)))
+        support_rows: list[np.ndarray] = []
+        component_future_columns = 0
+        for column in dependent_columns:
+            rows = root_kernel.indices[root_kernel.indptr[column] : root_kernel.indptr[column + 1]]
+            support_rows.append(rows)
+            row_components = np.searchsorted(boundaries[1:], rows, side="right")
+            for row_component in np.unique(row_components):
+                relation_component_edges.add((int(row_component), component))
+            count = int(np.count_nonzero(row_components > component))
+            future_support_terms += count
+            if count:
+                component_future_columns += 1
+        future_support_columns += component_future_columns
+        union = np.unique(np.concatenate(support_rows)) if support_rows else np.empty(0, dtype=np.int32)
+        union_components = np.unique(np.searchsorted(boundaries[1:], union, side="right"))
+        dependent_count = int(dependent_columns.size)
+        if dependent_count:
+            active_components.append(component)
+        if dependent_count == int(dimensions[component]):
+            fully_dependent_components.append(component)
+        component_rows.append(
+            {
+                "component": component,
+                "coordinate_start": start,
+                "coordinate_past": past,
+                "dimension": int(dimensions[component]),
+                "selected_coordinates": selected_count,
+                "dependent_coordinates": dependent_count,
+                "dependent_runs": runs(dependent[(dependent >= start) & (dependent < past)]),
+                "kernel_nonzero_entries": int(sum(root_kernel.indptr[column + 1] - root_kernel.indptr[column] for column in dependent_columns)),
+                "support_row_union": int(union.size),
+                "support_row_components": [int(value) for value in union_components],
+                "future_component_support_columns": component_future_columns,
+            }
+        )
+
+    require(sum(row["dependent_coordinates"] for row in component_rows) == 1274, "dependent sum")
+    require(sum(row["selected_coordinates"] for row in component_rows) == 4748, "selected sum")
+    require(len(active_components) == 16, "active component count")
+    require(len(fully_dependent_components) == 5, "fully dependent component count")
+    require(future_support_terms == future_support_columns == 0, "lower triangular component support")
+    require(all(source <= target for source, target in relation_component_edges), "component edge order")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    arrays_path = EVIDENCE / "H02.kernel_component_partition.npz"
+    np.savez_compressed(
+        arrays_path,
+        component_dimensions=dimensions,
+        component_boundaries=boundaries,
+        selected_update_columns=selected,
+        dependent_update_columns=dependent,
+        relation_component_edges=np.asarray(sorted(relation_component_edges), dtype=np.int32),
+        active_dependent_components=np.asarray(active_components, dtype=np.int32),
+        fully_dependent_components=np.asarray(fully_dependent_components, dtype=np.int32),
+    )
+    checks = {
+        "G3BZ_G3DI_and_final_G3DV_are_hash_bound_and_passing": True,
+        "the34_update_component_dimensions_sum_to6022": int(dimensions.sum()) == 6022,
+        "the_common_partition_has4748_selected_and1274_dependent_coordinates": selected.size == 4748 and dependent.size == 1274,
+        "all1274_dependent_coordinates_lie_in_exactly16_components": len(active_components) == 16,
+        "five_components_are_entirely_dependent": len(fully_dependent_components) == 5,
+        "every_finite_kernel_relation_uses_only_its_own_or_earlier_components": future_support_terms == 0,
+        "the_component_incidence_DAG_is_lower_triangular_in_the_G3BZ_order": all(source <= target for source, target in relation_component_edges),
+        "no_finite_component_pattern_is_promoted_to_a_Q_gamma_relation": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DW checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dw-h02-kernel-component-triangularity.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DW",
+        "status": "CLOSED_EXACT_H02_KERNEL_COMPONENT_TRIANGULARITY",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {"G3BZ": record(G3BZ), "G3DI": record(G3DI), "G3DV": record(G3DV)},
+        "component_partition": {
+            "components": 34,
+            "dimension": 6022,
+            "selected_coordinates": 4748,
+            "dependent_coordinates": 1274,
+            "dependent_components": active_components,
+            "dependent_component_count": len(active_components),
+            "fully_dependent_components": fully_dependent_components,
+            "fully_dependent_component_count": len(fully_dependent_components),
+            "contiguous_dependent_runs": sum(len(row["dependent_runs"]) for row in component_rows),
+            "future_component_support_terms": future_support_terms,
+            "future_component_support_columns": future_support_columns,
+            "component_rows": component_rows,
+            "arrays": record(arrays_path),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_finite_relations_lift_to_Q_gamma": False,
+            "claims_componentwise_rank_upper_bounds_over_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dwH02KernelComponentTriangularity",
+            "tier": "CLOSED_EXACT_MULTIPRIME_STABLE_COMPONENT_SUPPORT",
+            "statement": "In the frozen 34-component G3BZ update order, all1274 dependent H02 coupling coordinates occur in 16 components, five components are fully dependent, and every normalized finite relation uses only coordinates in its own or earlier components. The exact component incidence is lower triangular. This selects a compact componentwise characteristic-zero proof strategy without asserting that the finite coefficients already lift.",
+        },
+        "frontier_delta": {
+            "before": "The final multiprime audit exposed high coefficient height in a dense normalized kernel representation.",
+            "after": "The defect is localized to 16 of 34 exact update components and is triangular in the existing G3BZ order. The next proof can target local component rank factorizations rather than all46 million dense coefficients.",
+        },
+        "next_required_object": "For each of the16 dependent components, construct an exact Q(gamma) local rank-upper certificate after quotienting already certified earlier components; sum the local selected counts to4748 and combine with the existing finite lower bound.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DW H02 kernel component triangularity: PASS")
+    print(f"components=34 dependent_components=16 fully_dependent=5 selected=4748 dependent=1274")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

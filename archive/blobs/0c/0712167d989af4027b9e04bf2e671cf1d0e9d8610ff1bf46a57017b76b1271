@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Select the 400 recovery-complement rows plus all 38 omitted rows."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+SUBSYSTEM = ROOT / "evidence/ust_g3eq/H02.component16.independent_rows.json"
+RECOVERY = ROOT / "evidence/ust_g3et/H02.component16.checkpoint_recovery_rows.json"
+MATRIX = ROOT / "evidence/ust_g3el/H02.component16.unit_pivot_reduced.number_field.sms"
+OUTPUT = ROOT / "evidence/ust_g3eu/H02.component16.exact_audit_rows.txt"
+OUTPUT_COLUMNS = ROOT / "evidence/ust_g3eu/H02.component16.exact_audit_columns.txt"
+CERTIFICATE = ROOT / "evidence/ust_g3eu/H02.component16.exact_audit_rows.json"
+ROWS = 1238
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main() -> None:
+    subsystem = json.loads(SUBSYSTEM.read_text(encoding="utf-8"))
+    recovery = json.loads(RECOVERY.read_text(encoding="utf-8"))
+    selected = set(subsystem["specialization"]["selected_source_rows_zero_based"])
+    recovery_rows = set(recovery["selected_source_rows_zero_based"])
+    if len(selected) != 1200 or len(recovery_rows) != 800:
+        raise AssertionError("source row dimensions")
+    if not recovery_rows < selected:
+        raise AssertionError("recovery rows must be a proper selected-row subset")
+    selected_audit = sorted(selected - recovery_rows)
+    omitted = sorted(set(range(ROWS)) - selected)
+    audit = sorted(set(selected_audit) | set(omitted))
+    if (len(selected_audit), len(omitted), len(audit)) != (400, 38, 438):
+        raise AssertionError("audit partition")
+
+    active_columns: set[int] = set(range(986, 1007))
+    with MATRIX.open("r", encoding="ascii") as handle:
+        handle.readline()
+        handle.readline()
+        for line in handle:
+            values = line.split()
+            row = int(values[0]) - 1
+            if row in set(audit):
+                active_columns.add(int(values[1]) - 1)
+    selected_columns = sorted(active_columns)
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(
+        f"{len(audit)}\n" + "".join(f"{row + 1}\n" for row in audit),
+        encoding="ascii",
+    )
+    OUTPUT_COLUMNS.write_text(
+        f"{len(selected_columns)}\n"
+        + "".join(f"{column + 1}\n" for column in selected_columns),
+        encoding="ascii",
+    )
+    payload = {
+        "schema": "ust.g3eu.h02.component16.exact-audit-rows.v1",
+        "date": "2026-08-14",
+        "subsystem": SUBSYSTEM.relative_to(ROOT).as_posix(),
+        "subsystem_sha256": sha256(SUBSYSTEM),
+        "recovery": RECOVERY.relative_to(ROOT).as_posix(),
+        "recovery_sha256": sha256(RECOVERY),
+        "recovery_rows": len(recovery_rows),
+        "selected_audit_rows": len(selected_audit),
+        "omitted_rows": len(omitted),
+        "audit_rows": len(audit),
+        "selected_audit_rows_zero_based": selected_audit,
+        "omitted_rows_zero_based": omitted,
+        "audit_rows_zero_based": audit,
+        "audit_or_free_columns": len(selected_columns),
+        "audit_or_free_columns_zero_based": selected_columns,
+        "output": OUTPUT.relative_to(ROOT).as_posix(),
+        "output_sha256": sha256(OUTPUT),
+        "columns_output": OUTPUT_COLUMNS.relative_to(ROOT).as_posix(),
+        "columns_output_sha256": sha256(OUTPUT_COLUMNS),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3EU exact audit-row cutset: PASS recovery=800 audit=400 omitted=38")
+
+
+if __name__ == "__main__":
+    main()

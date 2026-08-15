@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mtt.unified-source.q79-equivariant-generator-descent-certificate.v1",
+  "title": "UST.G3H q79 alpha-twisted E3 generator descent certificate",
+  "type": "object",
+  "required": [
+    "schema",
+    "candidate_id",
+    "source_orbit_id",
+    "source_hash",
+    "alpha_twisted_object",
+    "repaired_object",
+    "generator_maps",
+    "relations",
+    "global_determinantal_data",
+    "physical_rows",
+    "empirical_inputs",
+    "physical_promotion_requested"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mtt.unified-source.q79-equivariant-generator-descent-certificate.v1"
+    },
+    "candidate_id": {"type": "string", "minLength": 1},
+    "source_orbit_id": {"type": "string", "minLength": 1},
+    "source_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "alpha_twisted_object": {"$ref": "#/$defs/object_certificate"},
+    "repaired_object": {
+      "allOf": [
+        {"$ref": "#/$defs/object_certificate"},
+        {
+          "type": "object",
+          "required": ["globally_perfect", "simple", "g3g_restrictions_match"],
+          "properties": {
+            "globally_perfect": {"type": "boolean"},
+            "simple": {"type": "boolean"},
+            "g3g_restrictions_match": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "generator_maps": {
+      "type": "object",
+      "required": ["X", "Z"],
+      "properties": {
+        "X": {"$ref": "#/$defs/map_certificate"},
+        "Z": {"$ref": "#/$defs/map_certificate"}
+      },
+      "additionalProperties": false
+    },
+    "relations": {
+      "type": "object",
+      "required": ["X_cube_identity", "Z_cube_identity", "commutator", "sigma_matches"],
+      "properties": {
+        "X_cube_identity": {"type": "boolean"},
+        "Z_cube_identity": {"type": "boolean"},
+        "commutator": {"enum": ["omega", "omega^2", "1", "open"]},
+        "sigma_matches": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "global_determinantal_data": {
+      "type": "object",
+      "required": [
+        "presentation",
+        "artifact",
+        "sha256",
+        "globally_typed",
+        "generic_corank_one",
+        "smooth_reduced_support",
+        "quotient_cocycle_extracted"
+      ],
+      "properties": {
+        "presentation": {"enum": ["alpha_twisted_6x6_schur", "equivalent_perfect_complex", "open"]},
+        "artifact": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+        "globally_typed": {"type": "boolean"},
+        "generic_corank_one": {"type": "boolean"},
+        "smooth_reduced_support": {"type": "boolean"},
+        "quotient_cocycle_extracted": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "physical_rows": {
+      "type": "object",
+      "required": ["rank", "group", "c1", "c2", "c3", "determinant_one", "torsion_lift_k"],
+      "properties": {
+        "rank": {"type": "integer"},
+        "group": {"type": "string"},
+        "c1": {"type": "string"},
+        "c2": {"type": "string"},
+        "c3": {"type": "string"},
+        "determinant_one": {"type": "boolean"},
+        "torsion_lift_k": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "empirical_inputs": {"type": "array", "items": {"type": "string"}},
+    "physical_promotion_requested": {"type": "boolean"}
+  },
+  "$defs": {
+    "object_certificate": {
+      "type": "object",
+      "required": ["artifact", "sha256", "source_hash", "alpha_triple_law_verified"],
+      "properties": {
+        "artifact": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+        "source_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "alpha_triple_law_verified": {"type": "boolean"}
+      }
+    },
+    "map_certificate": {
+      "type": "object",
+      "required": ["artifact", "sha256", "is_global_chain_isomorphism", "source_hash"],
+      "properties": {
+        "artifact": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+        "is_global_chain_isomorphism": {"type": "boolean"},
+        "source_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

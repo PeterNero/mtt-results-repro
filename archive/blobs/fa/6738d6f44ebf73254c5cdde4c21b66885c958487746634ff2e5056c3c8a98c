@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""Verify UST.G3H and compile an optional global generator-descent packet."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3h_qutrit_determinantal_torsion.packet.json"
+G3G = ROOT / "state" / "ust_g3g_two_fiber_stable_recombination.packet.json"
+LOCK = ROOT / "state" / "upstream-lock.json"
+SCHEMA = ROOT / "state" / "ust_g3h_equivariant_descent.schema.json"
+TEMPLATE = ROOT / "state" / "ust_g3h_candidate.template.json"
+
+RESULT_SCHEMA = "mtt.unified-source.q79-qutrit-determinantal-torsion-result.v1"
+CANDIDATE_SCHEMA = "mtt.unified-source.q79-equivariant-generator-descent-certificate.v1"
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def reduce_omega(expression: sp.Expr, omega: sp.Symbol) -> sp.Expr:
+    polynomial = sp.Poly(sp.expand(expression), omega)
+    modulus = sp.Poly(omega**2 + omega + 1, omega)
+    return sp.expand(sp.rem(polynomial, modulus).as_expr())
+
+
+def reduce_matrix(matrix: sp.Matrix, omega: sp.Symbol) -> sp.Matrix:
+    return matrix.applyfunc(lambda item: reduce_omega(item, omega))
+
+
+def matrix_equal(left: sp.Matrix, right: sp.Matrix, omega: sp.Symbol) -> bool:
+    return reduce_matrix(left - right, omega) == sp.zeros(*left.shape)
+
+
+def weyl(
+    a: int,
+    b: int,
+    X: sp.Matrix,
+    Z: sp.Matrix,
+) -> sp.Matrix:
+    return (X ** (a % 3)) * (Z ** (b % 3))
+
+
+def verify_exact_theorem() -> dict[str, Any]:
+    packet = load(PACKET)
+    lock = load(LOCK)
+    require(packet["schema"] == RESULT_SCHEMA, "result schema")
+    require(packet["theorem_id"] == "UST.G3H", "theorem id")
+
+    local = packet["source"]["local_g3g_packet"]
+    require(local["path"] == "state/ust_g3g_two_fiber_stable_recombination.packet.json", "G3G path")
+    require(hashlib.sha256(G3G.read_bytes()).hexdigest() == local["sha256"], "G3G hash")
+
+    qg = next(item for item in lock["repositories"] if item["id"] == "q79-quantum-gravity")
+    require(qg["commit"] == packet["source"]["q79_quantum_gravity_commit"], "q79 commit")
+    locked = {item["path"]: item for item in qg["sources"]}
+    for artifact in packet["source"]["artifacts"]:
+        require(artifact["path"] in locked, f"unlocked artifact: {artifact['path']}")
+        require(locked[artifact["path"]]["sha256"] == artifact["sha256"], f"artifact hash: {artifact['path']}")
+
+    omega, u, v, w = sp.symbols("omega u v w")
+    I = sp.eye(3)
+    X = sp.Matrix(((0, 1, 0), (0, 0, 1), (1, 0, 0)))
+    Z = sp.diag(1, omega, omega**2)
+    require(matrix_equal(X**3, I, omega), "X order")
+    require(matrix_equal(Z**3, I, omega), "Z order")
+    require(matrix_equal(X * Z, omega * Z * X, omega), "clock-shift relation")
+
+    M = u * I + v * X + w * Z
+    determinant = reduce_omega(M.det(), omega)
+    fermat = u**3 + v**3 + w**3
+    require(sp.expand(determinant - fermat) == 0, "Fermat determinant")
+
+    v_squared_minor = sp.expand(M.extract((0, 1), (1, 2)).det())
+    require(v_squared_minor == v**2, "rank cutset minor")
+    diagonal_factors = (u + w, u + omega * w, u + omega**2 * w)
+    for first in range(3):
+        for second in range(first + 1, 3):
+            coefficient_matrix = sp.Matrix((
+                (sp.expand(diagonal_factors[first]).coeff(u), sp.expand(diagonal_factors[first]).coeff(w)),
+                (sp.expand(diagonal_factors[second]).coeff(u), sp.expand(diagonal_factors[second]).coeff(w)),
+            ))
+            require(reduce_omega(coefficient_matrix.det(), omega) != 0, "distinct diagonal factors")
+
+    operators: dict[tuple[int, int], sp.Matrix] = {}
+    for a in range(3):
+        for b in range(3):
+            operators[(a, b)] = reduce_matrix(weyl(a, b, X, Z), omega)
+
+    for (a, b), left in operators.items():
+        for (c, d), right in operators.items():
+            phase = omega ** ((-c * b) % 3)
+            target = phase * operators[((a + c) % 3, (b + d) % 3)]
+            require(matrix_equal(left * right, target, omega), "Weyl product")
+
+    associativity_count = 0
+    labels = tuple(operators)
+    for g in labels:
+        for h in labels:
+            for k in labels:
+                left = operators[g] * operators[h] * operators[k]
+                right = operators[g] * (operators[h] * operators[k])
+                require(matrix_equal(left, right, omega), "Weyl associativity")
+                associativity_count += 1
+    require(associativity_count == 729, "associativity count")
+
+    for g, operator in operators.items():
+        for h, other in operators.items():
+            inverse = (Z ** ((-g[1]) % 3)) * (X ** ((-g[0]) % 3))
+            trace = reduce_omega((inverse * other).trace(), omega)
+            if g == h:
+                require(trace == 3, "Weyl self trace")
+            else:
+                require(trace == 0, "Weyl orthogonality")
+
+    p0 = {u: -1, v: 0, w: 1}
+    p1 = {u: -omega, v: 0, w: 1}
+    p2 = {u: -omega**2, v: 0, w: 1}
+    for point in (p0, p1, p2):
+        require(reduce_omega(fermat.subs(point), omega) == 0, "point on Fermat cubic")
+    b_factor = u + omega * w
+    c_factor = u + omega**2 * w
+    require(reduce_omega(b_factor.subs(p1), omega) == 0, "p1 divisor factor")
+    require(reduce_omega(c_factor.subs(p1), omega) != 0, "p1 complementary unit")
+    require(reduce_omega(c_factor.subs(p2), omega) == 0, "p2 divisor factor")
+    require(reduce_omega(b_factor.subs(p2), omega) != 0, "p2 complementary unit")
+
+    n = sp.symbols("n", integer=True)
+    chi_n_minus_1 = n * (n + 1) / 2
+    chi_n_minus_2 = n * (n - 1) / 2
+    hilbert = sp.expand(3 * (chi_n_minus_1 - chi_n_minus_2))
+    require(hilbert == 3 * n, "degree-zero Hilbert polynomial")
+
+    line = packet["cokernel_line"]
+    require(line["degree"] == 0 and line["exact_order"] == 3, "torsion line rows")
+    require(line["first_twisted_section_divisor"] == "2*p1+p2", "section divisor")
+    require(line["hyperplane_divisor"] == "p0+p1+p2", "hyperplane divisor")
+    require(line["class"] == "O_E(p1-p0)", "line class")
+
+    binding = packet["g3g_binding"]
+    require(binding["degree_L"] == binding["degree_N"] == 3, "degree-three lines")
+    require(binding["degree_P"] == 0, "degree-zero factor")
+    require(binding["global_alpha_twisted_family_constructed"] is False, "global boundary")
+
+    categorical = packet["poincare_categorical_binding"]
+    require(categorical["difference_line"] == "L_g_omega=P_omega", "Poincare line binding")
+    require(categorical["orbit_lines"] == ["O", "P_omega", "P_omega^2"], "torsion orbit")
+    require(categorical["orbit_period"] == 3, "torsion orbit period")
+    require(categorical["local_generator_restriction_fixed"] is True, "local generator restriction")
+    require(categorical["global_generator_chain_map_constructed"] is False, "global generator boundary")
+
+    generator = packet["generator_reduction"]
+    require(generator["generated_group_maps"] == 9, "generated maps")
+    require(generator["pair_products"] == 81, "pair products")
+    require(generator["associativity_equations"] == 729, "group coherences")
+    require(generator["analytic_alpha_and_finite_sigma_are_identified"] is False, "twist separation")
+    require(not any(packet["promotion_boundary"].values()), "physical promotion boundary")
+    return packet
+
+
+def validate_candidate(candidate: dict[str, Any]) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if candidate.get("schema") != CANDIDATE_SCHEMA:
+        reasons.append("schema")
+    source_hash = candidate.get("source_hash", "")
+    if not isinstance(source_hash, str) or HEX64.fullmatch(source_hash) is None or set(source_hash) == {"0"}:
+        reasons.append("source_hash")
+
+    alpha = candidate.get("alpha_twisted_object", {})
+    repaired = candidate.get("repaired_object", {})
+    maps = candidate.get("generator_maps", {})
+    relations = candidate.get("relations", {})
+    determinant = candidate.get("global_determinantal_data", {})
+    rows = candidate.get("physical_rows", {})
+
+    objects = (alpha, repaired, maps.get("X", {}), maps.get("Z", {}))
+    if source_hash and any(item.get("source_hash") != source_hash for item in objects):
+        reasons.append("same_source")
+    if alpha.get("alpha_triple_law_verified") is not True:
+        reasons.append("alpha_triple_law")
+    for key in ("globally_perfect", "simple", "g3g_restrictions_match", "alpha_triple_law_verified"):
+        if repaired.get(key) is not True:
+            reasons.append(f"repaired_object.{key}")
+    for key in ("X", "Z"):
+        item = maps.get(key, {})
+        if item.get("is_global_chain_isomorphism") is not True:
+            reasons.append(f"generator_maps.{key}")
+        if HEX64.fullmatch(item.get("sha256", "")) is None:
+            reasons.append(f"generator_maps.{key}.sha256")
+    if relations != {
+        "X_cube_identity": True,
+        "Z_cube_identity": True,
+        "commutator": "omega",
+        "sigma_matches": True,
+    }:
+        reasons.append("generator_relations")
+    if determinant.get("presentation") not in {"alpha_twisted_6x6_schur", "equivalent_perfect_complex"}:
+        reasons.append("global_presentation")
+    for key in ("globally_typed", "generic_corank_one", "smooth_reduced_support", "quotient_cocycle_extracted"):
+        if determinant.get(key) is not True:
+            reasons.append(f"global_determinantal_data.{key}")
+    if HEX64.fullmatch(determinant.get("sha256", "")) is None:
+        reasons.append("global_determinantal_data.sha256")
+    expected_rows = {
+        "rank": 9,
+        "group": "P(3,9)",
+        "c1": "0",
+        "c2": "-9u",
+        "c3": "0",
+        "determinant_one": True,
+        "torsion_lift_k": 0,
+    }
+    if rows != expected_rows:
+        reasons.append("physical_rows")
+    if candidate.get("empirical_inputs") != []:
+        reasons.append("empirical_inputs")
+    if candidate.get("physical_promotion_requested") is not True:
+        reasons.append("physical_promotion_requested")
+    return not reasons, reasons
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--candidate", type=Path)
+    arguments = parser.parse_args()
+
+    packet = verify_exact_theorem()
+    require(load(SCHEMA)["$id"] == CANDIDATE_SCHEMA, "candidate schema id")
+    require(load(TEMPLATE)["schema"] == CANDIDATE_SCHEMA, "template schema")
+
+    print("UST.G3H qutrit determinantal torsion: PASS")
+    print("M_omega determinant: Fermat cubic; corank exactly one on support")
+    print("cokernel: P_omega=O_E(p1-p0), primitive order 3")
+    print("finite E[3] coherence: two generators imply 81 products and 729 associativities")
+    print("global object/maps are open in G3H; closed downstream by G3R")
+
+    if arguments.candidate is not None:
+        candidate_path = arguments.candidate
+        if not candidate_path.is_absolute():
+            candidate_path = ROOT / candidate_path
+        accepted, reasons = validate_candidate(load(candidate_path))
+        print(f"candidate accepted: {str(accepted).lower()}")
+        if reasons:
+            print("open/rejected rows: " + ", ".join(reasons))
+        if not accepted and candidate_path.resolve() != TEMPLATE.resolve():
+            raise AssertionError("candidate does not close UST.G3H descent")
+
+    require(packet["promotion_boundary"]["B_HS_01_closed"] is False, "B.HS guardrail")
+
+
+if __name__ == "__main__":
+    main()

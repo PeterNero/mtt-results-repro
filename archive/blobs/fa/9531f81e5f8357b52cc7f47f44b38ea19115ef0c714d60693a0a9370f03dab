@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Replay the non-authoritative H-major/L-truncated Hilbert hint."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ap_hmajor_ltrunc_hilbert_hint as builder
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet, hilbert = builder.load_hint()
+    script = ROOT / packet["execution"]["script"]["path"]
+    output = ROOT / packet["execution"]["output"]["path"]
+    require(
+        script.is_file()
+        and sha256(script) == packet["execution"]["script"]["sha256"],
+        "hint script hash",
+    )
+    require(
+        output.is_file()
+        and sha256(output) == packet["execution"]["output"]["sha256"],
+        "hint output hash",
+    )
+    leaders = builder.predecessor_leaders()
+    require(
+        script.read_text(encoding="ascii") == builder.hint_script(leaders),
+        "hint script reconstruction",
+    )
+    raw = output.read_text(encoding="utf-8")
+    require("G3AP_HMAJOR_LTRUNC_HINT_PASS" in raw, "hint process marker")
+    require(builder.parse_hilbert(raw) == hilbert, "Hilbert numerator replay")
+    require(len(leaders) == 17483, "predecessor leader count")
+    require(packet["truncation"]["minimal_L_boundary_generators"] == 165, "L boundaries")
+    print(
+        "UST.G3AP H-major/L-truncated Hilbert hint: PASS "
+        f"leaders=17648 numerator_terms={len(hilbert)} authoritative=false"
+    )
+
+
+if __name__ == "__main__":
+    main()

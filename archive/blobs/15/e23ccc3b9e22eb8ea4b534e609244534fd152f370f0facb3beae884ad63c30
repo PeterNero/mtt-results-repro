@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+"""Extract the exact square G3AP minor selected by sparse elimination."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import ust_f1016_sparse_minor as minor
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+CAMPAIGN = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.packet.json"
+EXACT_OUTPUT = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.minor.out"
+MATRIX = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.minor.packed-sms"
+FUNCTIONAL = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.quotient-functional.packed-vector"
+BODY = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.minor.body.tmp"
+PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.minor.packet.json"
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--campaign", type=Path, default=CAMPAIGN)
+    parser.add_argument("--minor-output", type=Path, default=EXACT_OUTPUT)
+    parser.add_argument("--matrix-output", type=Path, default=MATRIX)
+    parser.add_argument("--functional-output", type=Path, default=FUNCTIONAL)
+    parser.add_argument("--body-output", type=Path, default=BODY)
+    parser.add_argument("--packet-output", type=Path, default=PACKET)
+    parser.add_argument(
+        "--column-order", choices=("natural", "pivot"), default="natural"
+    )
+    args = parser.parse_args()
+    campaign_path = args.campaign.resolve()
+    minor_output = args.minor_output.resolve()
+    matrix_output = args.matrix_output.resolve()
+    functional_output = args.functional_output.resolve()
+    body_output = args.body_output.resolve()
+    packet_output = args.packet_output.resolve()
+    for path in (
+        campaign_path,
+        minor_output,
+        matrix_output,
+        functional_output,
+        body_output,
+        packet_output,
+    ):
+        require(path == ROOT or ROOT in path.parents, f"artifact outside repository: {path}")
+    for path in (matrix_output, functional_output, body_output, packet_output):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    campaign = json.loads(campaign_path.read_text(encoding="ascii"))
+    require(
+        campaign["schema"]
+        in (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v1",
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v2",
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v3",
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-full-reused.v1",
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-incremental-full-submap.v1",
+        ),
+        "campaign schema",
+    )
+    source = campaign["inputs"]["selected_source"]
+    require(
+        source["path"] == macaulay.relative(macaulay.SOURCE)
+        and source["sha256"] == macaulay.sha256(macaulay.SOURCE),
+        "selected source binding",
+    )
+    full_matrix = ROOT / campaign["matrix"]["path"]
+    require(
+        full_matrix.is_file()
+        and sha256(full_matrix) == campaign["matrix"]["sha256"],
+        "campaign matrix binding",
+    )
+
+    scalars, vectors = minor.parse_output(minor_output)
+    require(
+        scalars["SCHEMA"] == "MTTF1016SparseColumnMinorExactOutput.v2"
+        and scalars["STATUS"] == "EXACT_F1016_NONZERO_MINOR_FOUND",
+        "minor output status",
+    )
+    require(
+        int(scalars["FIELD_PRIME"]) == minor.PRIME
+        and int(scalars["FIELD_DEGREE"]) == minor.DEGREE
+        and scalars["FIELD_MINPOLY_PACKED_LOWER"] == "64,16,33,44,89,24",
+        "selected coefficient field",
+    )
+    require(
+        int(scalars["SOURCE_ROWS"]) == campaign["matrix"]["rows"]
+        and int(scalars["TARGET_COORDINATES"]) == macaulay.EXPECTED_TARGET_COORDINATES
+        and int(scalars["MATRIX_NONZEROS"]) == campaign["matrix"]["nonzeros"]
+        and int(scalars["MINOR_SIZE"]) == TARGET_RANK,
+        "minor dimensions",
+    )
+    selected_rows = vectors["SELECTED_SOURCE_ROWS_ZERO_BASED"]
+    pivot_columns = vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"]
+    pivot_coefficients = vectors["PIVOT_COEFFICIENTS_PACKED"]
+    quotient_functional = vectors["QUOTIENT_FUNCTIONAL_PACKED"]
+    require(
+        len(selected_rows) == len(pivot_columns) == len(pivot_coefficients) == TARGET_RANK,
+        "minor vector sizes",
+    )
+    require(
+        len(set(selected_rows)) == TARGET_RANK
+        and all(0 <= row < campaign["matrix"]["rows"] for row in selected_rows),
+        "selected source rows",
+    )
+    require(
+        len(set(pivot_columns)) == TARGET_RANK
+        and all(0 <= column < macaulay.EXPECTED_TARGET_COORDINATES for column in pivot_columns),
+        "pivot target coordinates",
+    )
+    normalization_coordinate = int(
+        scalars["QUOTIENT_NORMALIZATION_TARGET_COORDINATE_ZERO_BASED"]
+    )
+    require(
+        int(scalars["QUOTIENT_FUNCTIONAL_EMITTED"]) == 1
+        and len(quotient_functional) == macaulay.EXPECTED_TARGET_COORDINATES
+        and all(0 <= value < minor.FIELD_ORDER for value in quotient_functional)
+        and 0 <= normalization_coordinate < len(quotient_functional)
+        and quotient_functional[normalization_coordinate] == 1
+        and int(scalars["QUOTIENT_FUNCTIONAL_VERIFIED_SOURCE_ROWS"])
+        == campaign["matrix"]["rows"]
+        and int(scalars["QUOTIENT_FUNCTIONAL_VERIFIED_MATRIX_NONZEROS"])
+        == campaign["matrix"]["nonzeros"],
+        "normalized quotient functional replay",
+    )
+    determinant = minor.determinant(pivot_columns, pivot_coefficients)
+    require(
+        determinant == int(scalars["MINOR_DETERMINANT_PACKED"]) != 0,
+        "independent pivot determinant replay",
+    )
+    functional_output.write_text(
+        f"{len(quotient_functional)}\n"
+        + " ".join(str(value) for value in quotient_functional)
+        + "\n",
+        encoding="ascii",
+    )
+
+    row_map = {row + 1: index + 1 for index, row in enumerate(selected_rows)}
+    natural_columns = sorted(pivot_columns)
+    displayed_columns = (
+        natural_columns if args.column_order == "natural" else pivot_columns
+    )
+    column_map = {
+        column + 1: index + 1 for index, column in enumerate(displayed_columns)
+    }
+    nonzeros = 0
+    with full_matrix.open("r", encoding="ascii") as source_matrix:
+        header = [int(value) for value in source_matrix.readline().split()]
+        require(
+            header
+            == [
+                campaign["matrix"]["rows"],
+                campaign["matrix"]["columns"],
+                campaign["matrix"]["nonzeros"],
+            ],
+            "full matrix header",
+        )
+        with body_output.open("w", encoding="ascii") as body:
+            for line in source_matrix:
+                row_text, column_text, packed_text = line.split()
+                row = int(row_text)
+                column = int(column_text)
+                if row not in row_map or column not in column_map:
+                    continue
+                body.write(
+                    f"{row_map[row]} {column_map[column]} {packed_text}\n"
+                )
+                nonzeros += 1
+
+    with matrix_output.open("wb") as output:
+        output.write(f"{TARGET_RANK} {TARGET_RANK} {nonzeros}\n".encode("ascii"))
+        with body_output.open("rb") as body:
+            while True:
+                block = body.read(8 * 1024 * 1024)
+                if not block:
+                    break
+                output.write(block)
+    body_output.unlink()
+
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-minor.v1",
+        "date": "2026-08-11",
+        "status": "CANDIDATE_EXACT_NONZERO_PIVOT_TRANSCRIPT_REQUIRES_INDEPENDENT_MINOR_RANK",
+        "inputs": {
+            "campaign": {
+                "path": relative(campaign_path),
+                "sha256": sha256(campaign_path),
+            },
+            "campaign_matrix": {
+                "path": relative(full_matrix),
+                "sha256": sha256(full_matrix),
+            },
+            "exact_minor_output": {
+                "path": relative(minor_output),
+                "sha256": sha256(minor_output),
+            },
+        },
+        "minor": {
+            "path": relative(matrix_output),
+            "sha256": sha256(matrix_output),
+            "bytes": matrix_output.stat().st_size,
+            "size": TARGET_RANK,
+            "nonzeros": nonzeros,
+            "determinant_packed_from_pivot_transcript": determinant,
+            "selected_source_rows_sha256": hashlib.sha256(
+                json.dumps(selected_rows, separators=(",", ":")).encode("ascii")
+            ).hexdigest(),
+            "pivot_target_coordinates_sha256": hashlib.sha256(
+                json.dumps(pivot_columns, separators=(",", ":")).encode("ascii")
+            ).hexdigest(),
+            "displayed_target_coordinate_order": args.column_order,
+            "displayed_target_coordinates_sha256": hashlib.sha256(
+                json.dumps(displayed_columns, separators=(",", ":")).encode("ascii")
+            ).hexdigest(),
+            "displayed_target_coordinates_natural_order_sha256": hashlib.sha256(
+                json.dumps(natural_columns, separators=(",", ":")).encode("ascii")
+            ).hexdigest(),
+            "quotient_functional": {
+                "path": relative(functional_output),
+                "sha256": sha256(functional_output),
+                "bytes": functional_output.stat().st_size,
+                "coordinates": len(quotient_functional),
+                "normalization_target_coordinate_zero_based": normalization_coordinate,
+                "packed_coefficients_sha256": hashlib.sha256(
+                    json.dumps(
+                        quotient_functional, separators=(",", ":")
+                    ).encode("ascii")
+                ).hexdigest(),
+                "nonzero_coefficients": sum(
+                    coefficient != 0 for coefficient in quotient_functional
+                ),
+            },
+        },
+        "checks": {
+            "the_campaign_matrix_is_hash_bound_to_the_selected_source": True,
+            "the_sparse_eliminator_emits39725_distinct_source_rows": True,
+            "the_sparse_eliminator_emits39725_distinct_target_pivots": True,
+            "the_pivot_product_and_permutation_sign_recompute_the_nonzero_F1016_determinant": True,
+            "the_displayed_square_minor_uses_the_selected_rows_and_naturally_ordered_target_columns": True,
+            "the_unique_normalized_quotient_functional_annihilates_every_campaign_row": True,
+        },
+        "guardrails": {
+            "claims_independent_minor_rank_replay": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Run an independent exact F_101^6 rank implementation on the extracted "
+            "39725-square minor and bind its full-rank output."
+        ),
+    }
+    require(all(packet["checks"].values()), "minor extraction checks")
+    packet_output.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP target Macaulay minor extraction: PASS "
+        f"size={TARGET_RANK} nonzeros={nonzeros} independent_rank=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

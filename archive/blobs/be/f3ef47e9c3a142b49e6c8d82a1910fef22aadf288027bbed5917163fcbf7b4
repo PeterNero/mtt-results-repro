@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Independently verify the G3CM matrix-free full-carrier replay."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cm_matrix_free_selected_state_action.packet.json"
+PRIME = 11
+DIMENSION = 1509
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def local(record: dict) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record["bytes"], f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def action(blocks: tuple[sparse.csc_matrix, ...], vector: np.ndarray) -> np.ndarray:
+    value = (
+        blocks[0] @ vector[:248].astype(np.int64)
+        + blocks[1] @ vector[248:1261].astype(np.int64)
+        + blocks[2] @ vector[1261:].astype(np.int64)
+    ) % PRIME
+    return np.asarray(value, dtype=np.uint8).reshape(DIMENSION)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_GF11_MATRIX_FREE_FULL_CARRIER_ACTION_EQUIVALENCE_FAMILY_ORACLE_EXECUTION_OPEN",
+        "status",
+    )
+    g3cd = load(local(packet["inputs"]["G3CD"]))
+    g3cj = load(local(packet["inputs"]["G3CJ"]))
+    g3cl = load(local(packet["inputs"]["G3CL"]))
+    for label, source_packet in (("G3CD", g3cd), ("G3CJ", g3cj), ("G3CL", g3cl)):
+        require(all(source_packet["checks"].values()), f"{label} checks")
+
+    blocks = tuple(
+        sparse.load_npz(local(g3cd["source_blocks"][name]["NPZ"])).tocsc().astype(np.int64)
+        for name in ("H20", "H11", "H02")
+    )
+    require([list(block.shape) for block in blocks] == packet["sector_action"]["block_shapes"], "block shapes")
+    require([int(block.nnz) for block in blocks] == packet["sector_action"]["block_nonzero_entries"], "block supports")
+
+    dense_path = local(g3cd["correction_operator"]["dense_uint8"])
+    dense = np.fromfile(dense_path, dtype=np.uint8).reshape(DIMENSION, DIMENSION)
+    assembled = sparse.hstack(blocks, format="csc")
+    require(assembled.shape == dense.shape, "assembled shape")
+    require(np.array_equal((assembled.toarray() % PRIME).astype(np.uint8), dense), "full block/dense equality")
+
+    source = np.load(local(g3cd["selected_affine_source"]["source_vector"]), allow_pickle=False).astype(np.uint8)
+    frame = np.load(local(g3cj["homogeneous_cyclic_frame"]["frame"]), allow_pickle=False).astype(np.uint8)
+    recurrence = np.load(local(g3cj["homogeneous_companion"]["recurrence_coefficients"]), allow_pickle=False).astype(np.uint8)
+    current = source.copy()
+    mismatches = 0
+    first = None
+    for column in range(DIMENSION):
+        mismatches += int(not np.array_equal(current, frame[:, column]))
+        current = action(blocks, current)
+        if column == 0:
+            first = current.copy()
+    require(first is not None and mismatches == 0, "independent Krylov replay")
+    recurrence_residual = int(
+        np.count_nonzero(
+            (frame.astype(np.int64) @ recurrence.astype(np.int64) - current.astype(np.int64))
+            % PRIME
+        )
+    )
+    require(recurrence_residual == 0, "independent recurrence")
+    require(np.array_equal(first, np.load(local(packet["complete_replay"]["first_action"]), allow_pickle=False)), "first action evidence")
+    require(np.array_equal(current, np.load(local(packet["complete_replay"]["K_power1509_source"]), allow_pickle=False)), "next action evidence")
+    require(packet["complete_replay"]["mismatched_columns"] == 0, "packet column mismatches")
+    require(packet["complete_replay"]["terminal_recurrence_residual_nonzeros"] == 0, "packet recurrence")
+    require(packet["family_executor_contract"]["RHS_columns_per_connection_evaluation"] == 3, "three-sector contract")
+    require(packet["family_executor_contract"]["full_operator_columns_not_required_per_evaluation"] == 1509, "column materialization boundary")
+    require(not packet["guardrails"]["claims_the_GF11_terminal_blocks_are_the_characteristic_zero_path_oracle"], "family guardrail")
+    require(not packet["guardrails"]["claims_path_integration_integral_marking_or_beta_C"], "physical guardrail")
+    print("UST.G3CM matrix-free selected-state action verifier: PASS")
+    print("dense_block_identity=true krylov_columns=1509 mismatches=0 recurrence_residual=0")
+
+
+if __name__ == "__main__":
+    main()

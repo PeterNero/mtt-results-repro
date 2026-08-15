@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""Independently certify the full reused G3AP target-Macaulay source matrix."""
+
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+from pathlib import Path
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_full_reuse as assembler
+import build_ust_g3ap_selected_cayley_target_macaulay_complement_chunk as complement
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import certify_ust_g3ap_selected_cayley_target_macaulay_candidate as certifier
+import ust_f1016_sparse_minor as minor
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+OUT = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_full_reused.source-certified.packet.json"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {"path": relative(path), "sha256": sha256(path), "bytes": path.stat().st_size}
+
+
+def checked(item: dict[str, object], label: str) -> Path:
+    path = ROOT / str(item["path"])
+    require(
+        path.is_file()
+        and sha256(path) == item["sha256"]
+        and path.stat().st_size == item.get("bytes", path.stat().st_size),
+        label,
+    )
+    return path
+
+
+def replay_raw(
+    raw_output: Path,
+    start: int,
+    stop: int,
+    target_index: dict[tuple[int, tuple[int, ...]], int],
+) -> tuple[int, str]:
+    marker = f"G3AP_MACAULAY_EXPORT_ROWS={stop - start}"
+    marker_seen = False
+    pass_seen = False
+    errors: list[str] = []
+    count = 0
+    digest = hashlib.sha256()
+    with gzip.open(raw_output, "rt", encoding="utf-8") as stream:
+        for line in stream:
+            stripped = line.rstrip()
+            if stripped == marker:
+                marker_seen = True
+            elif stripped == "G3AP_MACAULAY_EXPORT_PASS":
+                pass_seen = True
+            if line.lstrip().startswith("?"):
+                errors.append(stripped)
+            if not line.startswith("G3AP_MACAULAY_TERM="):
+                continue
+            row_text, component_text, exponent_text, coefficient_text = (
+                stripped.split("=", 1)[1].split("|", 3)
+            )
+            local_row = int(row_text)
+            coordinate = (
+                int(component_text),
+                tuple(int(value) for value in exponent_text.split(",")),
+            )
+            require(
+                1 <= local_row <= stop - start and coordinate in target_index,
+                "raw complement coordinate",
+            )
+            packed = certifier.independently_pack_raw_coefficient(coefficient_text)
+            require(0 < packed < minor.FIELD_ORDER, "raw complement coefficient")
+            union_row = complement.REUSED_ROWS + start + local_row
+            digest.update(
+                f"{union_row} {target_index[coordinate]} {packed}\n".encode("ascii")
+            )
+            count += 1
+    require(marker_seen and pass_seen and not errors, "raw complement completion")
+    return count, digest.hexdigest()
+
+
+def main() -> None:
+    certifier.self_test_raw_coefficient_parser()
+    require(
+        certifier.RAW_COEFFICIENT_PRIME == minor.PRIME
+        and certifier.RAW_COEFFICIENT_BASIS_DEGREE == minor.DEGREE,
+        "independent coefficient parser field",
+    )
+    campaign = json.loads(assembler.PACKET.read_text(encoding="ascii"))
+    require(
+        campaign["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-full-reused.v1"
+        and all(campaign["checks"].values())
+        and not any(campaign["guardrails"].values()),
+        "full reused campaign",
+    )
+    checked(campaign["inputs"]["selected_source"], "selected source")
+    base_path = checked(campaign["inputs"]["base_coordinate_packet"], "base packet")
+    base_packet = json.loads(base_path.read_text(encoding="ascii"))
+
+    leaders = [
+        tuple(int(value) for value in item)
+        for item in base_packet["base_leading_exponents"]
+    ]
+    targets, _ = macaulay.coordinate_data(leaders)
+    target_index = {value: index for index, value in enumerate(targets, start=1)}
+    full, balanced, missing = complement.selections(leaders)
+    require(
+        campaign["selection"]["natural_full_source_sha256"]
+        == complement.source_hash(full)
+        and campaign["selection"]["reused_balanced_source_sha256"]
+        == complement.source_hash(balanced)
+        and campaign["selection"]["complement_source_sha256"]
+        == complement.source_hash(missing)
+        and campaign["selection"]["union_source_order_sha256"]
+        == complement.source_hash(balanced + missing)
+        and campaign["selection"]["union_is_a_permutation_of_all_selected_sources"],
+        "full source permutation",
+    )
+
+    balanced_packet_path = checked(
+        campaign["inputs"]["reused_balanced_campaign"], "balanced campaign"
+    )
+    balanced_packet = json.loads(balanced_packet_path.read_text(encoding="ascii"))
+    replayed_targets, balanced_nonzeros = certifier.validate_campaign(
+        balanced_packet, base_packet
+    )
+    require(replayed_targets == targets, "reused target coordinates")
+    balanced_matrix = checked(
+        campaign["inputs"]["reused_balanced_matrix"], "balanced matrix"
+    )
+
+    expected_hash = hashlib.sha256()
+    expected_hash.update(
+        f"{len(full)} {len(targets)} {campaign['matrix']['nonzeros']}\n".encode(
+            "ascii"
+        )
+    )
+    with balanced_matrix.open("rb") as stream:
+        header = [int(value) for value in stream.readline().split()]
+        require(
+            header == [len(balanced), len(targets), balanced_nonzeros],
+            "balanced matrix header",
+        )
+        while block := stream.read(8 * 1024 * 1024):
+            expected_hash.update(block)
+
+    total_complement_nonzeros = 0
+    expected_start = 0
+    source_text = macaulay.SOURCE.read_text(encoding="ascii")
+    packet_records = campaign["inputs"]["complement_packets"]
+    for index, packet_record in enumerate(packet_records):
+        packet_path = checked(packet_record, f"complement packet {index}")
+        packet = json.loads(packet_path.read_text(encoding="ascii"))
+        selection = packet["selection"]
+        start = int(selection["complement_start_zero_based"])
+        stop = int(selection["complement_stop_exclusive_zero_based"])
+        require(
+            packet["schema"]
+            == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-complement-chunk.v1"
+            and all(packet["checks"].values())
+            and not any(packet["guardrails"].values())
+            and start == expected_start
+            and stop > start
+            and selection["chunk_index"] == index
+            and selection["chunk_count"] == len(packet_records)
+            and selection["chunk_source_sha256"]
+            == complement.source_hash(missing[start:stop]),
+            f"complement identity {index}",
+        )
+        script = checked(packet["execution"]["script"], f"complement script {index}")
+        require(
+            script.read_text(encoding="ascii")
+            == macaulay.export_script(source_text, missing[start:stop]),
+            f"complement script reconstruction {index}",
+        )
+        raw_output = checked(
+            packet["execution"]["compressed_output"], f"complement raw {index}"
+        )
+        triples = checked(
+            packet["execution"]["packed_triples"], f"complement triples {index}"
+        )
+        counted = 0
+        previous_row = complement.REUSED_ROWS + start
+        seen_columns: set[int] = set()
+        semantic_hash = hashlib.sha256()
+        with triples.open("rb") as stream:
+            for raw_line in stream:
+                row_text, column_text, packed_text = raw_line.split()
+                row = int(row_text)
+                column = int(column_text)
+                packed = int(packed_text)
+                require(
+                    complement.REUSED_ROWS + start + 1 <= row
+                    <= complement.REUSED_ROWS + stop
+                    and row >= previous_row
+                    and 1 <= column <= len(targets)
+                    and 0 < packed < minor.FIELD_ORDER,
+                    f"complement exact triple {index}",
+                )
+                if row != previous_row:
+                    seen_columns.clear()
+                    previous_row = row
+                require(column not in seen_columns, f"complement duplicate {index}")
+                seen_columns.add(column)
+                semantic_hash.update(
+                    f"{row} {column} {packed}\n".encode("ascii")
+                )
+                expected_hash.update(raw_line)
+                counted += 1
+        replayed_count, replayed_hash = replay_raw(
+            raw_output, start, stop, target_index
+        )
+        require(
+            counted == packet["execution"]["nonzeros"]
+            and replayed_count == counted
+            and replayed_hash == semantic_hash.hexdigest(),
+            f"complement raw-to-triple replay {index}",
+        )
+        total_complement_nonzeros += counted
+        expected_start = stop
+    require(expected_start == len(missing), "complete complement source cover")
+
+    full_matrix = ROOT / str(campaign["matrix"]["path"])
+    require(
+        campaign["matrix"]["rows"] == len(full)
+        and campaign["matrix"]["columns"] == len(targets)
+        and campaign["matrix"]["reused_nonzeros"] == balanced_nonzeros
+        and campaign["matrix"]["complement_nonzeros"]
+        == total_complement_nonzeros
+        and campaign["matrix"]["nonzeros"]
+        == balanced_nonzeros + total_complement_nonzeros
+        and full_matrix.is_file()
+        and sha256(full_matrix) == campaign["matrix"]["sha256"]
+        and expected_hash.hexdigest() == campaign["matrix"]["sha256"],
+        "full exact matrix body replay",
+    )
+
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-full-source-certified.v1",
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AP.FULL-SOURCE-PROVENANCE",
+        "status": "CLOSED_EXACT_FULL_92979_ROW_SELECTED_MACAULAY_SOURCE_PROVENANCE_NOT_RANK",
+        "inputs": {
+            "assembly_campaign": record(assembler.PACKET),
+            "full_matrix": record(full_matrix),
+            "selected_source": record(macaulay.SOURCE),
+            "base_coordinate_packet": record(base_path),
+        },
+        "matrix": {
+            "rows": len(full),
+            "columns": len(targets),
+            "nonzeros": campaign["matrix"]["nonzeros"],
+            "source_order": "balanced50000_then_exact_complement42979",
+            "source_order_is_a_permutation_of_the_full_selected_map": True,
+        },
+        "checks": {
+            "the_reused_balanced_campaign_is_independently_source_replayed": True,
+            "every_complement_script_is_reconstructed_from_the_selected_source": True,
+            "every_complement_raw_coefficient_is_independently_parsed": True,
+            "every_complement_raw_stream_replays_to_its_packed_triples": True,
+            "the_source_partition_is_exact_disjoint_and_exhaustive": True,
+            "the_full_matrix_hash_is_recomputed_from_the_header_and_all_bodies": True,
+            "the_full_92979_row_matrix_has_exact_selected_source_provenance": True,
+        },
+        "guardrails": {
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Emit and independently replay a nonzero 39,725-minor of this full "
+            "source-certified matrix, plus its normalized quotient functional."
+        ),
+    }
+    require(all(packet["checks"].values()), "source certificate checks")
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP full reused source verification: PASS "
+        f"rows={len(full)} columns={len(targets)} rank=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Independently verify the UST.G3FF conic fourth-normal certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3ff/H02.component20.conic_fourth_normal_source.json"
+
+PRIMES = (21817, 33863, 37493, 38113, 68213, 69011, 72271, 73673)
+COLON_PROFILE = (100, 69, 42, 19, 0, 0, 0, 0)
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+
+G3_TERMS = {
+    (3, 0, 0): -2,
+    (2, 0, 1): -2,
+    (1, 2, 0): 1,
+    (1, 1, 1): 1,
+    (1, 0, 2): 2,
+    (0, 3, 0): -1,
+    (0, 1, 2): -2,
+    (0, 0, 3): -1,
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound artifact exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def source_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in reversed(range(degree + 1))
+        for y_power in reversed(range(degree - x_power + 1))
+    ]
+
+
+def add_vector(
+    polynomial: dict[tuple[int, int, int], np.ndarray],
+    exponent: tuple[int, int, int],
+    vector: np.ndarray,
+) -> None:
+    updated = polynomial.get(exponent, np.zeros(6, dtype=np.int64)) + vector
+    if np.any(updated):
+        polynomial[exponent] = updated
+    else:
+        polynomial.pop(exponent, None)
+
+
+def restricted_source(
+    coefficients: list[list[int]], theta: int
+) -> dict[tuple[int, int, int], np.ndarray]:
+    polynomial: dict[tuple[int, int, int], np.ndarray] = {}
+    offset = 83 * theta
+    for local, exponent in enumerate(source_exponents(9)):
+        add_vector(
+            polynomial,
+            exponent,
+            np.asarray(coefficients[offset + local], dtype=np.int64),
+        )
+    for local, exponent in enumerate(source_exponents(6)):
+        value = np.asarray(coefficients[offset + 55 + local], dtype=np.int64)
+        for g3_exponent, coefficient in G3_TERMS.items():
+            product = tuple(
+                exponent[index] + g3_exponent[index] for index in range(3)
+            )
+            add_vector(polynomial, product, -coefficient * value)
+    return polynomial
+
+
+def selected_difference(coefficients: list[list[int]]) -> np.ndarray:
+    left = restricted_source(coefficients, 0)
+    right = restricted_source(coefficients, 1)
+    return np.asarray(
+        [
+            left.get(exponent, np.zeros(6, dtype=np.int64))
+            - right.get(exponent, np.zeros(6, dtype=np.int64))
+            for exponent in exponents(9)
+        ],
+        dtype=np.int64,
+    )
+
+
+def multiply_by_conic(d7: np.ndarray) -> np.ndarray:
+    basis7 = exponents(7)
+    basis9 = exponents(9)
+    lookup9 = {exponent: index for index, exponent in enumerate(basis9)}
+    result = np.zeros((55, 6), dtype=np.int64)
+    for row, exponent in enumerate(basis7):
+        xz = (exponent[0] + 1, exponent[1], exponent[2] + 1)
+        y2 = (exponent[0], exponent[1] + 2, exponent[2])
+        result[lookup9[xz]] += d7[row]
+        result[lookup9[y2]] -= d7[row]
+    return result
+
+
+def conic_power_matrix(power: int) -> np.ndarray:
+    source = exponents(15 - 2 * power)
+    target = exponents(15)
+    lookup = {exponent: index for index, exponent in enumerate(target)}
+    matrix = np.zeros((136, len(source)), dtype=np.int64)
+    for column, exponent in enumerate(source):
+        for y_pair_count in range(power + 1):
+            shifted = (
+                exponent[0] + power - y_pair_count,
+                exponent[1] + 2 * y_pair_count,
+                exponent[2] + power - y_pair_count,
+            )
+            matrix[lookup[shifted], column] += (
+                math.comb(power, y_pair_count) * (-1) ** y_pair_count
+            )
+    return matrix
+
+
+def rank_mod(matrix: np.ndarray, prime: int) -> int:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    rows, columns = work.shape
+    pivot_row = 0
+    for column in range(columns):
+        choices = np.flatnonzero(work[pivot_row:, column])
+        if choices.size == 0:
+            continue
+        selected = pivot_row + int(choices[0])
+        if selected != pivot_row:
+            work[[pivot_row, selected]] = work[[selected, pivot_row]]
+        work[pivot_row] = (
+            work[pivot_row] * pow(int(work[pivot_row, column]), -1, prime)
+        ) % prime
+        below = np.flatnonzero(work[pivot_row + 1 :, column]) + pivot_row + 1
+        if below.size:
+            factors = work[below, column].copy()
+            work[below] = (work[below] - factors[:, None] * work[pivot_row]) % prime
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    return pivot_row
+
+
+def component_kernel(row: dict[str, object], prime: int) -> np.ndarray:
+    kernel_path = bound_path(row["kernel"])
+    payload = kernel_runtime.read_kernel(kernel_path)
+    require(int(payload["prime"]) == prime, f"kernel prime: {kernel_path.name}")
+    dependent = payload["dependent"]
+    selected = np.flatnonzero(
+        (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+    )
+    kernel = (
+        payload["matrix"][COMPONENT_START:COMPONENT_PAST, :][:, selected]
+        .toarray()
+        .astype(np.int64)
+        % prime
+    )
+    require(kernel.shape == (136, 100), f"kernel shape: {kernel_path.name}")
+    require(rank_mod(kernel, prime) == 100, f"kernel rank: {kernel_path.name}")
+    return kernel
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(
+        packet["schema"]
+        == "ust.g3ff.h02.component20.conic-fourth-normal-source.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+
+    g3bi_path = bound_path(packet["inputs"]["G3BI"])
+    bound_path(packet["inputs"]["G3FE"])
+    split_paths = [bound_path(row) for row in packet["inputs"]["split_prime_packets"]]
+    artifact_path = bound_path(
+        packet["exact_characteristic_zero_source"]["normal_source_artifact"]
+    )
+
+    artifact = np.load(artifact_path, allow_pickle=False)
+    d7 = artifact["D7_gamma_coordinates"].astype(np.int64)
+    q4 = artifact["q4_Sym7_basis"].astype(np.int64)
+    require(d7.shape == (36, 6), "D7 shape")
+    require(q4.shape == (136, 36), "q4 Sym7 shape")
+    require(
+        np.array_equal(artifact["degree7_exponents"], np.asarray(exponents(7))),
+        "degree-seven basis order",
+    )
+    require(
+        np.array_equal(artifact["degree15_exponents"], np.asarray(exponents(15))),
+        "degree-fifteen basis order",
+    )
+    require(np.array_equal(q4, conic_power_matrix(4)), "independent q4 construction")
+    require(rank_mod(q4, 104729) == 36, "q4 rational full-column-rank witness")
+
+    g3bi = json.loads(g3bi_path.read_text(encoding="utf-8"))
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    coefficients = g3bi["selected_source"]["coefficient_vectors"]
+    require(len(coefficients) == 249, "G3BI coefficient count")
+    difference = selected_difference(coefficients)
+    require(np.array_equal(difference, multiply_by_conic(d7)), "exact qD7 identity")
+    require(int(np.count_nonzero(np.any(difference != 0, axis=1))) == 49, "difference support")
+    require(int(np.count_nonzero(np.any(d7 != 0, axis=1))) == 35, "D7 support")
+    require(int(np.max(np.abs(d7))) == 590, "D7 height")
+
+    powers = [conic_power_matrix(power) for power in range(8)]
+    observed_profiles: list[tuple[int, ...]] = []
+    observed_primes: list[int] = []
+    fibers = 0
+    for split_path in split_paths:
+        source = json.loads(split_path.read_text(encoding="utf-8"))
+        require(all(source["checks"].values()), f"split checks: {split_path.name}")
+        prime = int(source["field"]["prime"])
+        observed_primes.append(prime)
+        roots = tuple(int(value) for value in source["field"]["roots"])
+        rows = {int(row["gamma_root"]): row for row in source["root_kernels"]}
+        require(tuple(rows) == roots and len(roots) == 6, f"root order p={prime}")
+        for root in roots:
+            kernel = component_kernel(rows[root], prime)
+            profile = tuple(
+                100
+                + power_matrix.shape[1]
+                - rank_mod(
+                    np.concatenate((kernel, power_matrix % prime), axis=1),
+                    prime,
+                )
+                for power_matrix in powers
+            )
+            require(profile == COLON_PROFILE, f"colon profile p={prime} root={root}")
+            require(
+                rank_mod(np.concatenate((kernel, q4 % prime), axis=1), prime)
+                == 136,
+                f"fourth-normal direct sum p={prime} root={root}",
+            )
+            observed_profiles.append(profile)
+            fibers += 1
+
+    require(tuple(observed_primes) == PRIMES, "prime order")
+    require(fibers == 48 and len(set(observed_profiles)) == 1, "48-fiber uniformity")
+    require(
+        tuple(COLON_PROFILE[index] - COLON_PROFILE[index + 1] for index in range(4))
+        == (31, 27, 23, 19),
+        "normal-layer dimensions",
+    )
+    require(packet["finite_conic_normal_filtration"]["campaign"][-1]["prime"] == 73673, "campaign closure")
+    print(
+        "UST.G3FF independent verification: PASS "
+        "exact_qD7=yes fibers=48 profile=100,69,42,19,0 complement=36"
+    )
+
+
+if __name__ == "__main__":
+    main()

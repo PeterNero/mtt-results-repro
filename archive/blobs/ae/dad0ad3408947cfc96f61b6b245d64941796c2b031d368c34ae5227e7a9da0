@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+"""Independently replay the UST.G3AG full three-graph first-order lift."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import verify_ust_g3ad_fixed_fq_second_h_graph_obstruction as arithmetic
+import verify_ust_g3ae_second_h_joint_coefficient_lift as g3ae
+import verify_ust_g3af_two_h_joint_coefficient_lift as g3af
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3ag_three_graph_joint_coefficient_lift.packet.json"
+P = 101
+P2 = P * P
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def qconstant(value, modulus, degree):
+    return arithmetic.qelement((int(value),), modulus, degree)
+
+
+def cp_add_term(polynomial, exponent, coefficient, modulus, zero):
+    value = arithmetic.qadd(polynomial.get(exponent, zero), coefficient, modulus)
+    if value == zero:
+        polynomial.pop(exponent, None)
+    else:
+        polynomial[exponent] = value
+
+
+def cp_reduce(polynomial, relation, modulus, zero, degree):
+    work = dict(polynomial)
+    minus_one = qconstant(-1, modulus, degree)
+    three_over_eight = qconstant(3 * pow(8, -1, modulus), modulus, degree)
+    while True:
+        reducible = next(
+            (exponent for exponent in sorted(work, reverse=True) if exponent[0] >= 4),
+            None,
+        )
+        if reducible is None:
+            return work
+        coefficient = work.pop(reducible)
+        x_power, y_power, z_power = reducible
+        rows = (
+            (
+                (x_power - 2, y_power + 1, z_power + 1),
+                arithmetic.qmul(coefficient, minus_one, relation, modulus),
+            ),
+            (
+                (x_power - 3, y_power + 3, z_power),
+                arithmetic.qmul(coefficient, minus_one, relation, modulus),
+            ),
+            (
+                (x_power - 3, y_power, z_power + 3),
+                arithmetic.qmul(coefficient, three_over_eight, relation, modulus),
+            ),
+            (
+                (x_power - 4, y_power + 2, z_power + 2),
+                arithmetic.qmul(coefficient, minus_one, relation, modulus),
+            ),
+        )
+        for exponent, value in rows:
+            cp_add_term(work, exponent, value, modulus, zero)
+
+
+def cp_add(left, right, relation, modulus, zero, degree):
+    result = dict(left)
+    for exponent, coefficient in right.items():
+        cp_add_term(result, exponent, coefficient, modulus, zero)
+    return cp_reduce(result, relation, modulus, zero, degree)
+
+
+def cp_neg(value, modulus):
+    return {exponent: arithmetic.qneg(coefficient, modulus) for exponent, coefficient in value.items()}
+
+
+def cp_sub(left, right, relation, modulus, zero, degree):
+    return cp_add(left, cp_neg(right, modulus), relation, modulus, zero, degree)
+
+
+def cp_scale(value, scalar, relation, modulus, zero, degree):
+    return cp_reduce(
+        {
+            exponent: arithmetic.qmul(coefficient, scalar, relation, modulus)
+            for exponent, coefficient in value.items()
+            if arithmetic.qmul(coefficient, scalar, relation, modulus) != zero
+        },
+        relation,
+        modulus,
+        zero,
+        degree,
+    )
+
+
+def cp_mul(left, right, relation, modulus, zero, degree):
+    result = {}
+    for left_exponent, left_coefficient in left.items():
+        for right_exponent, right_coefficient in right.items():
+            exponent = tuple(a + b for a, b in zip(left_exponent, right_exponent))
+            cp_add_term(
+                result,
+                exponent,
+                arithmetic.qmul(left_coefficient, right_coefficient, relation, modulus),
+                modulus,
+                zero,
+            )
+    return cp_reduce(result, relation, modulus, zero, degree)
+
+
+def cp_power(value, exponent, relation, modulus, zero, one, degree):
+    result = {(0, 0, 0): one}
+    base = value
+    while exponent:
+        if exponent & 1:
+            result = cp_mul(result, base, relation, modulus, zero, degree)
+        base = cp_mul(base, base, relation, modulus, zero, degree)
+        exponent //= 2
+    return result
+
+
+def homogeneous_basis(homogeneous_degree):
+    return [
+        (x_power, y_power, homogeneous_degree - x_power - y_power)
+        for x_power in range(min(3, homogeneous_degree) + 1)
+        for y_power in range(homogeneous_degree - x_power + 1)
+    ]
+
+
+def serialize(value):
+    return [
+        {"powers_xyz": list(exponent), "gamma_coefficients": list(value[exponent])}
+        for exponent in sorted(value)
+    ]
+
+
+def target_forms(relation, modulus, rho, mu):
+    degree = len(relation) - 1
+    zero = arithmetic.qzero(degree)
+    one = arithmetic.qone(degree)
+    x = {(1, 0, 0): one}
+    y = {(0, 1, 0): one}
+    z = {(0, 0, 1): one}
+
+    def add(left, right):
+        return cp_add(left, right, relation, modulus, zero, degree)
+
+    def mul(left, right):
+        return cp_mul(left, right, relation, modulus, zero, degree)
+
+    def power(value, exponent):
+        return cp_power(value, exponent, relation, modulus, zero, one, degree)
+
+    def scale(value, scalar):
+        return cp_scale(value, scalar, relation, modulus, zero, degree)
+
+    a = mul(y, z)
+    b = power(y, 3)
+    x2 = power(x, 2)
+    x4 = power(x, 4)
+    a2 = power(a, 2)
+    a3 = power(a, 3)
+    bx = mul(b, x)
+    ax2 = mul(a, x2)
+    g_num = add(
+        add(scale(bx, qconstant(2, modulus, degree)), scale(x4, qconstant(2, modulus, degree))),
+        add(scale(ax2, qconstant(2, modulus, degree)), a2),
+    )
+    h_num = scale(
+        add(add(bx, x4), add(ax2, a2)), qconstant(2, modulus, degree)
+    )
+    u_num = add(scale(g_num, qconstant(2, modulus, degree)), a2)
+    v_num = add(
+        add(
+            scale(mul(h_num, x2), qconstant(8, modulus, degree)),
+            scale(mul(g_num, a), qconstant(4, modulus, degree)),
+        ),
+        scale(a3, qconstant(7, modulus, degree)),
+    )
+    rho2_inverse = qconstant(pow(pow(rho, 2, modulus), -1, modulus), modulus, degree)
+    rho3_inverse = qconstant(pow(pow(rho, 3, modulus), -1, modulus), modulus, degree)
+    g0 = scale(a3, qconstant(36, modulus, degree))
+    g1 = scale(
+        v_num,
+        arithmetic.qmul(qconstant(-12, modulus, degree), rho3_inverse, relation, modulus),
+    )
+    g2 = scale(
+        mul(u_num, a),
+        arithmetic.qmul(qconstant(72, modulus, degree), rho2_inverse, relation, modulus),
+    )
+    mu_g1 = scale(g1, mu)
+    targets = [
+        add(g0, mu_g1),
+        cp_sub(g0, mu_g1, relation, modulus, zero, degree),
+        g2,
+    ]
+    fermat = {}
+    for target in targets:
+        fermat = add(fermat, power(target, 3))
+    require(fermat == {}, "independent 4H Fermat identity")
+    return targets
+
+
+def coefficient_components(source, basis, relation, modulus, correction=None):
+    degree = len(relation) - 1
+    zero = arithmetic.qzero(degree)
+    coefficients = {
+        (
+            row["target_coordinate"],
+            row["basis_kind"],
+            tuple(row["powers_xyz"]),
+        ): arithmetic.qelement(row["gamma_coefficients_ascending"], modulus, degree)
+        for row in source["fixed_FQ"]["nonzero_gamma_rows"]
+    }
+    components = [({}, {}) for _ in range(3)]
+    for index, basis_row in enumerate(basis):
+        key = (
+            basis_row["target_coordinate"],
+            basis_row["basis_kind"],
+            tuple(basis_row["powers_xyz"]),
+        )
+        coefficient = coefficients.get(key, zero)
+        if correction is not None:
+            coefficient = arithmetic.qadd(
+                coefficient,
+                arithmetic.qscale(
+                    arithmetic.qelement(correction[index], modulus, degree), P, modulus
+                ),
+                modulus,
+            )
+        if coefficient == zero:
+            continue
+        monomial = cp_reduce(
+            {tuple(basis_row["powers_xyz"]): coefficient},
+            relation,
+            modulus,
+            zero,
+            degree,
+        )
+        coordinate = basis_row["target_coordinate"]
+        even, odd = components[coordinate]
+        if basis_row["basis_kind"] == "base_degree9":
+            even = cp_add(even, monomial, relation, modulus, zero, degree)
+        else:
+            odd = cp_add(odd, monomial, relation, modulus, zero, degree)
+        components[coordinate] = (even, odd)
+    return components
+
+
+def four_h_restriction(components, targets, relation, modulus):
+    degree = len(relation) - 1
+    zero = arithmetic.qzero(degree)
+    even = {}
+    odd = {}
+    for component, target in zip(components, targets):
+        even = cp_add(
+            even,
+            cp_mul(component[0], target, relation, modulus, zero, degree),
+            relation,
+            modulus,
+            zero,
+            degree,
+        )
+        odd = cp_add(
+            odd,
+            cp_mul(component[1], target, relation, modulus, zero, degree),
+            relation,
+            modulus,
+            zero,
+            degree,
+        )
+    return [even.get(exponent, zero) for exponent in homogeneous_basis(15)] + [
+        odd.get(exponent, zero) for exponent in homogeneous_basis(12)
+    ]
+
+
+def four_h_column(basis_row, targets, relation, modulus):
+    degree = len(relation) - 1
+    zero = arithmetic.qzero(degree)
+    one = arithmetic.qone(degree)
+    monomial = cp_reduce(
+        {tuple(basis_row["powers_xyz"]): one}, relation, modulus, zero, degree
+    )
+    value = cp_mul(
+        monomial,
+        targets[basis_row["target_coordinate"]],
+        relation,
+        modulus,
+        zero,
+        degree,
+    )
+    if basis_row["basis_kind"] == "base_degree9":
+        return [value.get(exponent, zero) for exponent in homogeneous_basis(15)] + [
+            zero
+        ] * 46
+    return [zero] * 58 + [
+        value.get(exponent, zero) for exponent in homogeneous_basis(12)
+    ]
+
+
+def four_h_matrix(basis, targets, relation, modulus):
+    columns = [four_h_column(row, targets, relation, modulus) for row in basis]
+    return [[columns[column][row] for column in range(249)] for row in range(104)]
+
+
+def main() -> None:
+    packet = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AG", "theorem id")
+    require(
+        packet["status"] == "CLOSED_EXACT_THREE_GRAPH_FIRST_ORDER_JOINT_COEFFICIENT_LIFT",
+        "status",
+    )
+    expected_sources = {
+        "four_H_carrier": (
+            "q79_explicit_4h_degree6_quotient_carrier.packet.json",
+            "5795bbf07fb7da6f0216ea4efc43a83cbd437a8dd09e8e82d4f16ef58d052707",
+            "e841d94b11f8cd377eba0760f0b8ba0540f1f875",
+        ),
+        "four_H_component_lift": (
+            "q79_eta9_4h_component_evaluation_lift.packet.json",
+            "1441e937365f38c8fc0119413a1060235a9f78ee97245382198ed6381d22bd22",
+            "caa83119bdcd97c1e3cd550929c01da786d29f85",
+        ),
+        "four_H_executable_formula": (
+            "build_q79_eta9_4h_component_evaluation_lift.py",
+            "d5fd433ffd862ef7709ddaa35bc178bacf8c5d8d4ca451b83b7c086f9f48d379",
+            "65b89fb01c92326641ce47895f2595f19b024931",
+        ),
+    }
+    for name, (path, digest, blob) in expected_sources.items():
+        require(
+            packet["inputs"][name]
+            == {
+                "repository": "20 Mathematical Language Discovery Program",
+                "repository_commit": "bc0c9f9e852b41bae9d26a9ac0a17b6cd9de2692",
+                "source_path": path,
+                "sha256": digest,
+                "git_blob": blob,
+                "hash_convention": "UTF-8 bytes with CRLF normalized to LF (Git blob content)",
+            },
+            f"external source lock: {name}",
+        )
+    g3ad_lock = packet["inputs"]["local_G3AD_packet"]
+    g3af_lock = packet["inputs"]["local_G3AF_packet"]
+    g3ad_path = ROOT / g3ad_lock["path"]
+    g3af_path = ROOT / g3af_lock["path"]
+    require(sha256(g3ad_path) == g3ad_lock["sha256"], "G3AD source hash")
+    require(sha256(g3af_path) == g3af_lock["sha256"], "G3AF source hash")
+    source = json.loads(g3ad_path.read_text(encoding="utf-8"))
+    prior = json.loads(g3af_path.read_text(encoding="utf-8"))
+    require(source["theorem_id"] == "UST.G3AD", "G3AD source")
+    require(prior["theorem_id"] == "UST.G3AF", "G3AF source")
+
+    relation = tuple(source["completion_ring"]["gamma_relation_coefficients_ascending"])
+    degree = len(relation) - 1
+    zero = arithmetic.qzero(degree)
+    one = arithmetic.qone(degree)
+    zero2 = arithmetic.qzero(degree)
+    one2 = arithmetic.qone(degree)
+    mu = arithmetic.qelement(
+        source["completion_ring"]["mu_residue_gamma_coordinates"], P, degree
+    )
+    mu2 = arithmetic.qelement(
+        source["completion_ring"]["mu_hensel_lift_gamma_coordinates_mod1012"],
+        P2,
+        degree,
+    )
+    require(
+        arithmetic.qadd(arithmetic.qpow(mu, 2, relation, P), qconstant(3, P, degree), P)
+        == zero,
+        "mu residue",
+    )
+    require(
+        arithmetic.qadd(arithmetic.qpow(mu2, 2, relation, P2), qconstant(3, P2, degree), P2)
+        == zero2,
+        "mu lift",
+    )
+    rho_residual = (pow(28, 6, P2) - 13) % P2
+    rho_correction = (-(rho_residual // P) * pow(6 * pow(28, 5, P) % P, -1, P)) % P
+    rho2 = 28 + P * rho_correction
+    graph = packet["selected_four_H_graph"]
+    require(rho_correction == graph["rho_hensel_correction_mod101"] == 15, "rho correction")
+    require(rho2 == graph["rho_mod1012"] == 1543, "rho lift")
+    require(pow(rho2, 6, P2) == 13, "rho equation")
+    targets = target_forms(relation, P, 28, mu)
+    targets2 = target_forms(relation, P2, rho2, mu2)
+    target_serialized = [serialize(value) for value in targets2]
+    require(target_serialized == graph["target_coordinates_mod1012"], "target coordinates")
+    require(canonical_hash(target_serialized) == graph["target_coordinates_sha256"], "target hash")
+
+    basis = g3ae.coefficient_basis()
+    system = packet["simultaneous_linear_system"]
+    require(system["column_basis"] == basis, "coefficient basis")
+    require(system["shape"] == [168, 249], "system shape")
+    matrix_four = four_h_matrix(basis, targets, relation, P)
+    matrix_four_serialized = [[list(value) for value in row] for row in matrix_four]
+    require(canonical_hash(matrix_four_serialized) == system["four_H_matrix_sha256"], "4H matrix hash")
+
+    fixed_four = four_h_restriction(
+        coefficient_components(source, basis, relation, P2), targets2, relation, P2
+    )
+    require(
+        all(coordinate % P == 0 for value in fixed_four for coordinate in value),
+        "4H special fiber",
+    )
+    obstruction_four = [
+        arithmetic.qelement(((coordinate // P) % P for coordinate in value), P, degree)
+        for value in fixed_four
+    ]
+    obstruction_rows = [
+        {
+            "sheet_parity": "base" if index < 58 else "K3_sheet",
+            "basis_index": index if index < 58 else index - 58,
+            "powers_xyz": list((homogeneous_basis(15) + homogeneous_basis(12))[index]),
+            "gamma_coefficients_mod101": list(value),
+        }
+        for index, value in enumerate(obstruction_four)
+    ]
+    restriction_record = packet["four_H_fixed_lift_restriction"]
+    require(obstruction_rows == restriction_record["first_order_rows"], "4H obstruction rows")
+    require(canonical_hash(obstruction_rows) == restriction_record["first_order_rows_sha256"], "4H obstruction hash")
+    require(sum(value != zero for value in obstruction_four) == restriction_record["nonzero_first_order_row_count"] == 75, "4H obstruction count")
+
+    first = g3af.first_graph_values(prior, relation, P)
+    second = g3ae.graph_values(source, relation, P)
+    matrix_first = g3af.graph_matrix(basis, first, relation, P, one, zero)
+    matrix_second = g3af.graph_matrix(basis, second, relation, P, one, zero)
+    stacked = matrix_first + matrix_second + matrix_four
+    stacked_serialized = [[list(value) for value in row] for row in stacked]
+    require(canonical_hash(stacked_serialized) == system["stacked_matrix_sha256"], "stacked matrix hash")
+    obstruction_first = [
+        arithmetic.qelement(row["gamma_coefficients_mod101"], P, degree)
+        for row in prior["first_H_fixed_lift_restriction"]["first_order_rows"]
+    ]
+    obstruction_second = [
+        arithmetic.qelement(row["gamma_coefficients_mod101"], P, degree)
+        for row in source["restriction_test"]["first_order_rows"]
+    ]
+    rhs = [
+        arithmetic.qneg(value, P)
+        for value in obstruction_first + obstruction_second + obstruction_four
+    ]
+    require(canonical_hash([list(value) for value in rhs]) == system["rhs_sha256"], "rhs hash")
+
+    _, four_pivots = g3ae.rref(matrix_four, [zero] * 104, relation, P, zero)
+    canonical_solution, stacked_pivots = g3ae.rref(stacked, rhs, relation, P, zero)
+    require(len(four_pivots) == system["four_H_rank"] == 74, "4H rank")
+    require(system["two_H_stacked_rank"] == 52, "two-H rank")
+    require(stacked_pivots == system["three_graph_pivot_columns"], "three-graph pivots")
+    require(len(stacked_pivots) == system["three_graph_stacked_rank"] == 126, "three-graph rank")
+    require(system["three_graph_nullity"] == 249 - 126 == 123, "three-graph nullity")
+    require(
+        system["three_graph_coordinate_row_redundancy"] == 168 - 126 == 42,
+        "three-graph coordinate-row redundancy",
+    )
+
+    emitted = [zero] * 249
+    for row in packet["canonical_correction"]["sparse_rows"]:
+        index = row["coefficient_index"]
+        require(
+            {key: row[key] for key in ("target_coordinate", "basis_kind", "powers_xyz")}
+            == basis[index],
+            "sparse basis row",
+        )
+        require(emitted[index] == zero, "unique correction index")
+        emitted[index] = arithmetic.qelement(row["gamma_coefficients_mod101"], P, degree)
+    correction_record = packet["canonical_correction"]
+    require(emitted == canonical_solution, "canonical correction")
+    require(canonical_hash([list(value) for value in emitted]) == correction_record["full_solution_sha256"], "correction hash")
+    require(sum(value != zero for value in emitted) == correction_record["nonzero_coefficient_count"] == 126, "correction support")
+    require(g3ae.matrix_vector(stacked, emitted, relation, P, zero) == rhs, "correction equation")
+
+    first2 = g3af.first_graph_values(prior, relation, P2)
+    second2 = g3ae.graph_values(source, relation, P2)
+    corrected_first = g3af.restriction(source, basis, emitted, first2, relation, P2, one2, zero2)
+    corrected_second = g3af.restriction(source, basis, emitted, second2, relation, P2, one2, zero2)
+    corrected_four = four_h_restriction(
+        coefficient_components(source, basis, relation, P2, emitted),
+        targets2,
+        relation,
+        P2,
+    )
+    require(all(value == zero2 for value in corrected_first), "corrected first H")
+    require(all(value == zero2 for value in corrected_second), "corrected second H")
+    require(all(value == zero2 for value in corrected_four), "corrected 4H")
+
+    result = packet["joint_lift_result"]
+    require(result["all_168_restriction_rows_zero_mod1012"] is True, "168-row result")
+    require(result["same_global_coefficient_correction_used_for_all_three_graphs"] is True, "same correction")
+    frontier = packet["frontier_delta"]
+    require(frontier["all_three_G3AC_graph_components_lifted_together_mod1012"] is True, "frontier closure")
+    require(frontier["all_orders_or_characteristic_zero_member_selected"] is False, "convergence overreach")
+    require(frontier["beta_C_computed"] is False, "beta overreach")
+    for label, value in packet["guardrails"].items():
+        require(value is False, f"guardrail violated: {label}")
+
+    print("UST.G3AG three-graph joint coefficient lift: PASS")
+    print("4H rho/mu completion and marked Fermat map: exact modulo 101^2")
+    print("restriction ranks: 26 + 26 + 74 = 126/168")
+    print("canonical correction: 126 nonzero coefficients; stacked nullity 123")
+    print("same eta9 coefficient lift contains all three G3AC graphs modulo 101^2")
+    print("open: iteration/convergence, smooth characteristic-zero member, beta_C and visible HYM")
+
+
+if __name__ == "__main__":
+    main()

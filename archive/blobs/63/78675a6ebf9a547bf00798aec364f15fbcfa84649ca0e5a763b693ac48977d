@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Run the long selected-carrier UST.G3AL Singular basis calculation."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+SCRIPT = ROOT / "state" / "ust_g3al_selected_cayley_basis.sing"
+OUTPUT = ROOT / "state" / "ust_g3al_selected_cayley_basis.singular.out"
+CACHE = ROOT / "state" / "ust_g3al_selected_cayley_basis.ssi"
+RESULT = ROOT / "state" / "ust_g3al_selected_cayley_basis.result.json"
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def command() -> list[str]:
+    return singular_command(ROOT, SCRIPT)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=86400)
+    args = parser.parse_args()
+    if not SCRIPT.is_file():
+        raise FileNotFoundError(SCRIPT)
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            command(),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        output = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        raw = error.stdout or b""
+        output = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+        returncode = 124
+    OUTPUT.write_text(output, encoding="utf-8")
+    elapsed = time.time() - started
+    passed = (
+        not timed_out
+        and returncode == 0
+        and "G3AL_SELECTED_CAYLEY_BASIS_PASS" in output
+        and "G3AL_SOCLE_ZERO=0" in output
+        and CACHE.is_file()
+        and CACHE.stat().st_size > 0
+    )
+    result = {
+        "schema": "mtt.unified-source.g3al-selected-cayley-basis-result.v1",
+        "script": {"path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SCRIPT)},
+        "output": {"path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(OUTPUT)},
+        "cache": (
+            {"path": str(CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(CACHE), "bytes": CACHE.stat().st_size}
+            if CACHE.is_file()
+            else None
+        ),
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "passed": passed,
+    }
+    RESULT.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(f"G3AL selected Cayley basis passed={passed} elapsed={elapsed:.1f}s")
+    if not passed:
+        raise SystemExit(returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

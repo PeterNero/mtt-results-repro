@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""Apply exact geometric unit pivots to the component-20 presentation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    ONE,
+    ZERO,
+    coefficient_add,
+    coefficient_multiply,
+    coefficient_scale,
+    load,
+    runtime,
+    write_number_field_matrix,
+)
+from build_ust_g3el_h02_component16_unit_pivot_reduction import finite_rank
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "evidence/ust_g3ex/H02.component20.cohomological.number_field.sms"
+SOURCE_PACKET = ROOT / "evidence/ust_g3ex/H02.component20.cohomological_source_presentation.json"
+SOURCE_INDICES = ROOT / "evidence/ust_g3ex/H02.component20.cohomological.indices.npz"
+OUTPUT = ROOT / "evidence/ust_g3ey/H02.component20.geometric_unit_reduced.number_field.sms"
+CERTIFICATE = ROOT / "evidence/ust_g3ey/H02.component20.geometric_unit_reduction.json"
+
+PRIME = 21817
+GAMMA = 5
+AMBIENT_ROWS = 42706
+SOURCE_COLUMNS = 2523
+LIFT_COLUMNS = 6523
+QUOTIENT_COLUMNS = 227
+INPUT_COLUMNS = SOURCE_COLUMNS + LIFT_COLUMNS + QUOTIENT_COLUMNS
+MINIMAL = (64, 16, 33, 44, 89, 24, 1)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def parse_matrix() -> list[dict[int, tuple[int, ...]]]:
+    with SOURCE.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require((rows, columns, degree, minimal) == (AMBIENT_ROWS, INPUT_COLUMNS, 6, MINIMAL), "matrix header")
+        result: list[dict[int, tuple[int, ...]]] = [dict() for _ in range(columns)]
+        count = 0
+        for line in handle:
+            values = list(map(int, line.split()))
+            row = values[0] - 1
+            column = values[1] - 1
+            coefficient = tuple(values[2:])
+            require(coefficient != ZERO, "stored zero")
+            result[column][row] = coefficient
+            count += 1
+    require(count == declared, "declared entries")
+    return result
+
+
+def add_to_column(
+    target: dict[int, tuple[int, ...]],
+    source: dict[int, tuple[int, ...]],
+    scalar: tuple[int, ...],
+) -> set[int]:
+    touched: set[int] = set()
+    for row, value in source.items():
+        touched.add(row)
+        updated = coefficient_add(
+            target.get(row, ZERO), coefficient_multiply(scalar, value)
+        )
+        if updated == ZERO:
+            target.pop(row, None)
+        else:
+            target[row] = updated
+    return touched
+
+
+def main() -> None:
+    packet = load(SOURCE_PACKET)
+    require(all(packet["checks"].values()), "source checks")
+    require(packet["exact_presentation"]["shape"] == [AMBIENT_ROWS, INPUT_COLUMNS], "source shape")
+    require(packet["exact_presentation"]["good_reduction_nullity"] == 386, "source finite nullity")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json")
+    factor = load(mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json")
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+
+    indices = np.load(SOURCE_INDICES, allow_pickle=False)
+    lift_support = indices["lift_support"].astype(np.int32)
+    dependent_local_columns = indices["dependent_local_columns"].astype(np.int32)
+    require(lift_support.size == LIFT_COLUMNS, "lift support")
+    require(dependent_local_columns.size == 100, "protected target columns")
+
+    columns = parse_matrix()
+    active = [True] * INPUT_COLUMNS
+    row_to_columns: dict[int, set[int]] = defaultdict(set)
+    for column, entries in enumerate(columns):
+        for row in entries:
+            row_to_columns[row].add(column)
+
+    by_generator: dict[int, dict[tuple[int, ...], int]] = defaultdict(dict)
+    for local, coordinate in enumerate(lift_support):
+        generator, multiplier = descriptors[int(coordinate)]
+        column = SOURCE_COLUMNS + local
+        require(multiplier not in by_generator[generator], "unique lift descriptor")
+        by_generator[generator][multiplier] = column
+    require(
+        {generator: len(values) for generator, values in by_generator.items()}
+        == {1: 348, 2: 348, 3: 434, 4: 324, 5: 1103, 6: 1103, 7: 2029, 8: 834},
+        "lift generator profile",
+    )
+
+    unit_candidates: list[tuple[tuple[int, ...], int, int, int]] = []
+    for generator, variable, power in ((7, 3, 2), (8, 4, 3)):
+        for multiplier, column in by_generator[generator].items():
+            exponent = list(multiplier)
+            exponent[variable] += power
+            pivot_exponent = tuple(exponent)
+            pivot_row = target_lookup[pivot_exponent]
+            require(columns[column].get(pivot_row) == ONE, "geometric monic pivot")
+            unit_candidates.append((pivot_exponent, column, pivot_row, generator))
+    require(len(unit_candidates) == 2863, "unit candidate count")
+
+    unit_pivots: list[dict[str, int]] = []
+    for _exponent, pivot_column, pivot_row, generator in sorted(unit_candidates, reverse=True):
+        require(active[pivot_column], "active unit pivot column")
+        require(columns[pivot_column].get(pivot_row) == ONE, "surviving monic pivot")
+        affected = sorted(row_to_columns[pivot_row] - {pivot_column})
+        for other in affected:
+            require(active[other], "active affected column")
+            scalar = coefficient_scale(columns[other][pivot_row], -1)
+            old_rows = set(columns[other])
+            touched = add_to_column(columns[other], columns[pivot_column], scalar)
+            require(pivot_row not in columns[other], "unit pivot cancellation")
+            for row in old_rows | touched:
+                if row in columns[other]:
+                    row_to_columns[row].add(other)
+                else:
+                    row_to_columns[row].discard(other)
+        for row in list(columns[pivot_column]):
+            row_to_columns[row].discard(pivot_column)
+        active[pivot_column] = False
+        unit_pivots.append(
+            {
+                "generator": generator,
+                "removed_column": pivot_column,
+                "pivot_row": pivot_row,
+                "affected_columns": len(affected),
+            }
+        )
+
+    pair_candidates: list[tuple[tuple[int, ...], int, int, int]] = []
+    for multiplier5, column5 in by_generator[5].items():
+        multiplier6 = list(multiplier5)
+        multiplier6[5] += 2
+        multiplier6[6] -= 2
+        multiplier6_tuple = tuple(multiplier6)
+        if min(multiplier6) < 0 or multiplier6_tuple not in by_generator[6]:
+            continue
+        exponent = list(multiplier5)
+        exponent[5] += 2
+        exponent[8] += 1
+        pivot_exponent = tuple(exponent)
+        pair_candidates.append(
+            (
+                pivot_exponent,
+                column5,
+                by_generator[6][multiplier6_tuple],
+                target_lookup[pivot_exponent],
+            )
+        )
+    require(len(pair_candidates) == 933, "paired t1/t2 candidates")
+    pair_pivots: list[dict[str, int]] = []
+    for _exponent, column5, column6, pivot_row in sorted(pair_candidates, reverse=True):
+        require(active[column5] and active[column6], "active pair columns")
+        require(columns[column5].get(pivot_row) == (3, 0, 0, 0, 0, 0), "t1 elliptic pivot")
+        require(columns[column6].get(pivot_row) == (3, 0, 0, 0, 0, 0), "t2 elliptic pivot")
+        occupants = set(row_to_columns[pivot_row])
+        extras = occupants - {column5, column6}
+        require(len(extras) <= 1, "pair or t0/t1/t2 triple")
+        pivot_column = column5
+        target_columns = tuple(sorted(occupants - {pivot_column}))
+        if extras:
+            extra = next(iter(extras))
+            require(extra in set(by_generator[4].values()), "transformed t0 column")
+            pivot_kind = "t0_t1_t2_triple"
+        else:
+            pivot_kind = "t1_t2_pair"
+        require(occupants == {pivot_column, *target_columns}, "clean elliptic pivot row")
+        for target_column in target_columns:
+            old_rows = set(columns[target_column])
+            touched = set(columns[pivot_column])
+            target_coefficient = columns[target_column][pivot_row]
+            require(
+                target_coefficient[1:] == (0, 0, 0, 0, 0)
+                and target_coefficient[0] % 3 == 0,
+                "integral elliptic pivot ratio",
+            )
+            scalar = (-target_coefficient[0] // 3, 0, 0, 0, 0, 0)
+            add_to_column(
+                columns[target_column],
+                columns[pivot_column],
+                scalar,
+            )
+            require(pivot_row not in columns[target_column], "elliptic pivot cancellation")
+            for row in old_rows | touched:
+                if row in columns[target_column]:
+                    row_to_columns[row].add(target_column)
+                else:
+                    row_to_columns[row].discard(target_column)
+        for row in list(columns[pivot_column]):
+            row_to_columns[row].discard(pivot_column)
+        active[pivot_column] = False
+        pair_pivots.append(
+            {
+                "kind": pivot_kind,
+                "removed_pivot_column": pivot_column,
+                "retained_difference_columns": list(target_columns),
+                "pivot_row": pivot_row,
+            }
+        )
+
+    retained_old_columns = [index for index, value in enumerate(active) if value]
+    require(
+        set(int(value) for value in dependent_local_columns) <= set(retained_old_columns),
+        "protected target source columns retained",
+    )
+    retained_rows = sorted(
+        {row for column in retained_old_columns for row in columns[column]}
+    )
+    row_lookup = {old: new for new, old in enumerate(retained_rows)}
+    reduced_columns = [
+        {row_lookup[row]: value for row, value in columns[old].items()}
+        for old in retained_old_columns
+    ]
+    entries = {
+        (row, column): value
+        for column, values in enumerate(reduced_columns)
+        for row, value in values.items()
+    }
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    write_number_field_matrix(OUTPUT, entries, (len(retained_rows), len(reduced_columns)))
+
+    pattern = sparse.csr_matrix(
+        (
+            np.ones(len(entries), dtype=np.uint8),
+            (
+                np.asarray([row for row, _ in entries], dtype=np.int32),
+                np.asarray([column for _, column in entries], dtype=np.int32),
+            ),
+        ),
+        shape=(len(retained_rows), len(reduced_columns)),
+    )
+    structural_rank = int(
+        np.count_nonzero(maximum_bipartite_matching(pattern, perm_type="column") >= 0)
+    )
+    rank = finite_rank(reduced_columns, len(retained_rows))
+    finite_nullity = len(reduced_columns) - rank
+    expected_rank_drop = len(unit_pivots) + len(pair_pivots)
+    require(expected_rank_drop == 3796, "rank-preserving contraction count")
+    require(8887 - rank == expected_rank_drop, "finite rank preservation")
+    require(finite_nullity == 386, "finite nullity preservation")
+    require(9211 - structural_rank == expected_rank_drop, "structural rank preservation")
+
+    certificate = {
+        "schema": "ust.g3ey.h02.component20.geometric-unit-reduction.v1",
+        "date": "2026-08-14",
+        "status": "CLOSED_EXACT_COMPONENT20_GEOMETRIC_CONTRACTION_CHARZERO_KERNEL_OPEN",
+        "source_packet": record(SOURCE_PACKET),
+        "source_matrix": record(SOURCE),
+        "source_indices": record(SOURCE_INDICES),
+        "input_shape": [AMBIENT_ROWS, INPUT_COLUMNS],
+        "input_structural_rank": 9211,
+        "input_finite_rank": 8887,
+        "input_finite_nullity": 386,
+        "monic_geometric_pivots": {
+            "generator7_w_square": sum(row["generator"] == 7 for row in unit_pivots),
+            "generator8_t0_cube": sum(row["generator"] == 8 for row in unit_pivots),
+            "total": len(unit_pivots),
+            "data": unit_pivots,
+        },
+        "paired_t1_t2_pivots": {
+            "pairs": len(pair_pivots),
+            "two_column_rows": sum(row["kind"] == "t1_t2_pair" for row in pair_pivots),
+            "three_column_rows": sum(row["kind"] == "t0_t1_t2_triple" for row in pair_pivots),
+            "removed_columns": len(pair_pivots),
+            "retained_difference_columns": sum(
+                len(row["retained_difference_columns"]) for row in pair_pivots
+            ),
+            "data": pair_pivots,
+        },
+        "output": {
+            "shape": [len(retained_rows), len(reduced_columns)],
+            "entries": len(entries),
+            "structural_rank": structural_rank,
+            "finite_rank_at_p21817_gamma5": rank,
+            "finite_nullity": finite_nullity,
+            "structural_nullity": len(reduced_columns) - structural_rank,
+            "retained_old_columns": retained_old_columns,
+            "retained_ambient_rows": retained_rows,
+            "protected_target_columns": [
+                retained_old_columns.index(int(column)) for column in dependent_local_columns
+            ],
+            "matrix": record(OUTPUT),
+        },
+        "checks": {
+            "all2029_generator7_w_square_pivots_are_exact": len(by_generator[7]) == 2029,
+            "all834_generator8_t0_cube_pivots_are_exact": len(by_generator[8]) == 834,
+            "all933_clean_t1_t2_pairs_are_removed_exactly": len(pair_pivots) == 933,
+            "all3796_rank_pivots_are_kernel_preserving": expected_rank_drop == 3796,
+            "the100_target_source_coordinates_are_retained": len(dependent_local_columns) == 100,
+            "finite_nullity_is_preserved_at386": finite_nullity == 386,
+            "structural_nullity_is_preserved_at62": len(reduced_columns) - structural_rank == 62,
+        },
+        "guardrails": {
+            "claims_characteristic_zero_kernel_dimension386": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Separate the 62 structural kernel directions and the additional finite "
+            "directions from the protected 100-dimensional component projection, then "
+            "construct a smaller exact quotient presentation with literal kernel replay."
+        ),
+    }
+    require(all(certificate["checks"].values()), "checks")
+    require(not any(certificate["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(certificate, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3EY component20 geometric reduction: PASS "
+        f"pivots={len(unit_pivots)}+{len(pair_pivots)} "
+        f"output={len(retained_rows)}x{len(reduced_columns)} "
+        f"structural={structural_rank} finite_rank={rank} nullity={finite_nullity}"
+    )
+
+
+if __name__ == "__main__":
+    main()

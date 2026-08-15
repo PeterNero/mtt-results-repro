@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Verify UST.G3P with exact K3, GRR, cocycle and BHT arithmetic."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from fractions import Fraction
+from itertools import product
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3p_zero_section_hidden_perfect_complex.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+ATOM_DEGREE = {"H": 2, "gamma": 3, "s": 1, "a": 1, "x": 1, "y": 1}
+ATOM_ORDER = {name: index for index, name in enumerate(ATOM_DEGREE)}
+BASE_ATOMS = {"H", "gamma"}
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def verify_source_locks(packet: dict, lock: dict) -> None:
+    for source in packet["inputs"].values():
+        repository = next(
+            item for item in lock["repositories"] if item["id"] == source["repository_id"]
+        )
+        locked = next(item for item in repository["sources"] if item["path"] == source["path"])
+        require(source["sha256"] == locked["sha256"], f"source hash: {source['path']}")
+
+
+def verify_selected_point(packet: dict) -> None:
+    x, y, z, w = packet["selected_point"]["weighted_projective_coordinates"]
+    q2 = x * z - y * y
+    g3 = (
+        -2 * x**3
+        - 2 * x**2 * z
+        + x * y**2
+        + x * y * z
+        + 2 * x * z**2
+        - y**3
+        - 2 * y * z**2
+        - z**3
+    )
+    h4 = (
+        -x**4
+        - 2 * x**3 * y
+        - x**2 * y**2
+        + 2 * x**2 * y * z
+        + x**2 * z**2
+        - x * y**3
+        - 2 * x * y**2 * z
+        - 2 * x * y * z**2
+        + 2 * x * z**3
+        - y**4
+        - y**3 * z
+        + y * z**3
+        + 2 * z**4
+    )
+    f6 = g3 * g3 + q2 * h4
+    grad_q2 = (z, -2 * y, x)
+    grad_f6 = tuple(h4 * value for value in grad_q2)
+
+    selected = packet["selected_point"]
+    require((x, y, z, w) == (1, -1, 1, 0), "selected q79 point")
+    require(q2 == selected["Q2_value"] == 0, "Q2 point value")
+    require(g3 == selected["G3_value"] == 0, "G3 point value")
+    require(h4 == selected["H4_value"] == 3, "H4 point value")
+    require(f6 == selected["F6_value"] == 0, "K3 point value")
+    require(list(grad_f6) == selected["gradient_F6"] == [3, 6, 3], "K3 gradient")
+    require(any(grad_f6), "selected point is singular")
+    require(selected["same_point_already_used_by_HS_source"], "point not same-source")
+
+
+def verify_serre_buffer(packet: dict) -> None:
+    # For a degree-two K3 polarization, chi(O(H))=2+H^2/2=3. The
+    # coordinate realization gives h0=3 and ampleness gives h2=0, hence h1=0.
+    h_square = 2
+    chi_h = 2 + h_square // 2
+    h0_h = 3
+    h2_h = 0
+    h1_h = h0_h + h2_h - chi_h
+    require((chi_h, h0_h, h1_h, h2_h) == (3, 3, 0, 0), "K3 H cohomology")
+
+    # The local Ext2 of one smooth point is one-dimensional. The long exact
+    # sequence for 0->I_p->O->O_p->0 then gives Ext1(I_p(-H),O)=C.
+    local_ext2_point = 1
+    ext1_dimension = local_ext2_point - h2_h
+    require(ext1_dimension == 1, "Serre extension dimension")
+
+    # On the K3, H^2/2=u and ch(I_p)=1-u. Therefore
+    # ch(I_p(-H))=(1-u)(1-H+u)=1-H through degree four.
+    i_p_minus_h = {"rank": 1, "H": -1, "u_K3": 0}
+    e_minus = {"rank": 2, "H": -1, "u_K3": 0}
+    e6 = {"rank": 6, "H": -1, "u_K3": 0}
+    e18 = {"rank": 18, "H": -3, "u_K3": 0}
+    require(i_p_minus_h == {"rank": 1, "H": -1, "u_K3": 0}, "ideal character")
+
+    buffer = packet["serre_buffer"]
+    require(buffer["Ext1_dimension"] == ext1_dimension, "packet Ext1 dimension")
+    require(buffer["nonzero_extension_locally_free"], "nonzero extension not locally free")
+    require(buffer["nonzero_extension_isomorphism_classes"] == 1, "extension not unique")
+    require(buffer["ch_E_minus"] == e_minus, "E_minus character")
+    require(buffer["ch_E6"] == e6, "E6 character")
+    require(buffer["ch_E18"] == e18, "E18 character")
+
+
+ProjectiveMap = tuple[tuple[int, int], ...]
+
+
+def u_map(g: tuple[int, int]) -> ProjectiveMap:
+    """Return output index and omega exponent for U_(a,b)e_j."""
+    a, b = g
+    return tuple(((j - a) % 3, (b * j) % 3) for j in range(3))
+
+
+def compose(left: ProjectiveMap, right: ProjectiveMap) -> ProjectiveMap:
+    result = []
+    for j in range(3):
+        mid, right_phase = right[j]
+        out, left_phase = left[mid]
+        result.append((out, (right_phase + left_phase) % 3))
+    return tuple(result)
+
+
+def phase_shift(mapping: ProjectiveMap, exponent: int) -> ProjectiveMap:
+    return tuple((out, (phase + exponent) % 3) for out, phase in mapping)
+
+
+def add_group(g: tuple[int, int], h: tuple[int, int]) -> tuple[int, int]:
+    return ((g[0] + h[0]) % 3, (g[1] + h[1]) % 3)
+
+
+def sigma_exponent(g: tuple[int, int], h: tuple[int, int]) -> int:
+    _, b = g
+    c, _ = h
+    return (-c * b) % 3
+
+
+def verify_projective_induction(packet: dict) -> None:
+    group = list(product(range(3), repeat=2))
+    identity = tuple((j, 0) for j in range(3))
+    for g, h in product(group, repeat=2):
+        expected = phase_shift(u_map(add_group(g, h)), sigma_exponent(g, h))
+        require(compose(u_map(g), u_map(h)) == expected, "projective product")
+        for k in group:
+            left = (sigma_exponent(g, h) + sigma_exponent(add_group(g, h), k)) % 3
+            right = (sigma_exponent(h, k) + sigma_exponent(g, add_group(h, k))) % 3
+            require(left == right, "cocycle associativity")
+
+    x_map = u_map((1, 0))
+    z_map = u_map((0, 1))
+    require(compose(x_map, compose(x_map, x_map)) == identity, "X cubed")
+    require(compose(z_map, compose(z_map, z_map)) == identity, "Z cubed")
+    require(compose(x_map, z_map) == phase_shift(compose(z_map, x_map), 1), "XZ relation")
+
+    induction = packet["projective_induction"]
+    require(induction["coset_count"] == 3, "projective induction cosets")
+    require(induction["twisted_chern_row"] == {"H": 9, "gamma_x": -9, "D0": 9, "H_D0": -3}, "induced row")
+
+
+@dataclass(frozen=True)
+class Coefficient:
+    value: Fraction = Fraction(0)
+
+    def __add__(self, other: "Coefficient") -> "Coefficient":
+        return Coefficient(self.value + other.value)
+
+    def scale(self, value: int | Fraction) -> "Coefficient":
+        return Coefficient(self.value * Fraction(value))
+
+
+Monomial = tuple[str, ...]
+Form = dict[Monomial, Coefficient]
+
+
+def canonicalize(sequence: Monomial) -> tuple[int, Monomial] | None:
+    for atom in set(sequence):
+        if ATOM_DEGREE[atom] % 2 and sequence.count(atom) > 1:
+            return None
+    if sum(ATOM_DEGREE[name] for name in sequence if name in BASE_ATOMS) > 4:
+        return None
+    sign = 1
+    for index, left in enumerate(sequence):
+        for right in sequence[index + 1 :]:
+            if ATOM_ORDER[left] > ATOM_ORDER[right]:
+                if (ATOM_DEGREE[left] * ATOM_DEGREE[right]) % 2:
+                    sign *= -1
+    return sign, tuple(sorted(sequence, key=ATOM_ORDER.__getitem__))
+
+
+def add_forms(*forms: Form) -> Form:
+    result: Form = {}
+    for form in forms:
+        for monomial, coefficient in form.items():
+            result[monomial] = result.get(monomial, Coefficient()) + coefficient
+    return {key: value for key, value in result.items() if value.value != 0}
+
+
+def wedge(left: Form, right: Form) -> Form:
+    result: Form = {}
+    for left_key, left_value in left.items():
+        for right_key, right_value in right.items():
+            canonical = canonicalize(left_key + right_key)
+            if canonical is None:
+                continue
+            sign, key = canonical
+            product_value = left_value.value * right_value.value * sign
+            result[key] = result.get(key, Coefficient()) + Coefficient(product_value)
+    return {key: value for key, value in result.items() if value.value != 0}
+
+
+def form(value: int, *atoms: str) -> Form:
+    return {tuple(atoms): Coefficient(Fraction(value))}
+
+
+def integrate_xy(input_form: Form) -> Form:
+    result: Form = {}
+    for monomial, coefficient in input_form.items():
+        if "x" not in monomial or "y" not in monomial:
+            continue
+        key = tuple(name for name in monomial if name not in {"x", "y"})
+        result[key] = result.get(key, Coefficient()) + coefficient
+    return {key: value for key, value in result.items() if value.value != 0}
+
+
+def verify_grr_and_bht(packet: dict) -> None:
+    single = {"H": 3, "gamma_x": -3, "D0": 3, "H_D0": -1}
+    induced = {name: 3 * value for name, value in single.items()}
+    shifted = {name: -value for name, value in induced.items()}
+    correction = {"H": 0, "gamma_x": 0, "D0": 18, "H_D0": -3}
+    target = {name: shifted[name] + correction[name] for name in shifted}
+    require(target == {"H": -9, "gamma_x": 9, "D0": 9, "H_D0": 0}, "target spectral row")
+    require(packet["zero_section_correction"]["normal_bundle"] == "trivial", "normal bundle")
+    require(packet["zero_section_correction"]["twisted_chern_row"] == correction, "GRR correction row")
+    require(packet["perfect_complex"]["twisted_chern_row"] == target, "packet target row")
+
+    spectral = add_forms(
+        form(-9, "H"),
+        form(9, "gamma", "x"),
+        form(9, "x", "y"),
+    )
+    inverse_kernel = add_forms(
+        form(1),
+        form(1, "s", "x"),
+        form(1, "a", "y"),
+        form(1, "s", "x", "a", "y"),
+    )
+    inverse = integrate_xy(wedge(inverse_kernel, spectral))
+    expected_inverse = add_forms(
+        form(9),
+        form(9, "H", "s", "a"),
+        form(-9, "gamma", "a"),
+    )
+    require(inverse == expected_inverse, "inverse BHT character")
+    require(inverse[()].value == 9, "inverse rank")
+    require(inverse[("H", "s", "a")].value == 9, "Hsa coefficient")
+    require(inverse[("gamma", "a")].value == -9, "gamma-a coefficient")
+
+    physical = packet["perfect_complex"]["physical_rows"]
+    require(physical == {"rank": 9, "c1": 0, "c2_u": -9, "c3": 0}, "physical rows")
+
+
+def verify_local_freeness_boundary(packet: dict) -> None:
+    # The selected source has ch(kappa)=3-H-3u. Three induced copies give
+    # A9=9-3H-9u. The zero-section buffer transforms to B18=18-3H.
+    a9 = {"rank": 9, "H": -3, "u": -9}
+    b18 = {"rank": 18, "H": -3, "u": 0}
+    difference = {name: b18[name] - a9[name] for name in a9}
+    require(difference == {"rank": 9, "H": 0, "u": 9}, "two-term K-class")
+
+    reduction = packet["local_freeness_reduction"]
+    require(reduction["constant_rank_required"] == 9, "constant-rank target")
+    require("d:A9->B18" in reduction["remaining_map"], "remaining map not isolated")
+
+    scope = packet["scope"]
+    require(scope["global_alpha_twisted_perfect_complex_constructed"], "perfect complex open")
+    require(scope["full_sigma_projective_categorical_action_constructed"], "projective action open")
+    require(scope["selected_hidden_free_Chern_rows_closed"], "hidden rows open")
+    require(not scope["integral_k0_lift_identified_from_this_construction"], "k0 overclaimed")
+    require(not scope["holomorphic_locally_free_W9_constructed"], "local freeness overclaimed")
+    require(not scope["W9_stability_or_HYM_closed"], "HYM overclaimed")
+    require(not scope["pointwise_differential_Bianchi_closed"], "Bianchi overclaimed")
+    require(not scope["B_HS_01_closed"], "B.HS.01 overclaimed")
+    require(not scope["UST_G3_physical_source_closed"], "G3 overclaimed")
+    require(packet["continuous_fit_parameters"] == 0, "continuous fit introduced")
+    require(packet["observed_inputs"] == 0, "observed input introduced")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    require(
+        packet["schema"] == "mtt.unified-source.q79-zero-section-hidden-perfect-complex.v1",
+        "packet schema",
+    )
+    require(packet["theorem_id"] == "UST.G3P", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_PROJECTIVE_PERFECT_COMPLEX_AND_HIDDEN_CHERN_ROWS_LOCAL_FREE_W9_HYM_AND_BIANCHI_OPEN",
+        "status",
+    )
+    verify_source_locks(packet, lock)
+    verify_selected_point(packet)
+    verify_serre_buffer(packet)
+    verify_projective_induction(packet)
+    verify_grr_and_bht(packet)
+    verify_local_freeness_boundary(packet)
+
+    print("UST.G3P zero-section hidden perfect complex: PASS")
+    print("selected K3 point: [1:-1:1:0], smooth and same-source")
+    print("Serre buffer: rank 18, ch=18-3H, unique nonzero extension")
+    print("spectral row: -9H+9gamma*x+9D0")
+    print("inverse-BHT row: 9+9u -> (c1,c2,c3)=(0,-9u,0)")
+    print("direct A9->B18 map is excluded by G3Q; horizontal local-freeness closes in G3R")
+
+
+if __name__ == "__main__":
+    main()

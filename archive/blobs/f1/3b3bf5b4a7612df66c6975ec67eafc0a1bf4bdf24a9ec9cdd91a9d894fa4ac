@@ -1,0 +1,148 @@
+# UST.G3CE Hodge Schur Affine Reduction Theorem v1
+
+Date: 2026-08-13
+Status: `CLOSED_EXACT_GF11_STATIC_1510_TO249_AFFINE_SCHUR_OBSTRUCTION_REDUCTION_DYNAMIC_PATH_REDUCTION_OPEN`
+
+## Setting
+
+Use the G3CD terminal good-fiber operator at `(11, gamma - 3)` and split its
+B103 Hodge ordering after the first 248 H20 coordinates:
+
+```text
+K_C = [[A, U],
+       [L, J]],
+
+H20 dimension       = 248,
+H11 + H02 dimension = 1261.
+```
+
+The selected G3CC source has no H20 component, so write it as
+
+```text
+b_C = (0, b_lower).
+```
+
+This is an exact block decomposition of the emitted G3CD matrix. It does not
+truncate a residue sector or alter the selected source.
+
+## Theorem
+
+The lower H11+H02 block satisfies
+
+```text
+det(J) = 4 mod 11.
+```
+
+Hence `J` is invertible over `GF(11)`. Define the exact response and source
+solutions
+
+```text
+X = J^-1 L,
+y = J^-1 b_lower,
+```
+
+and the H20 Schur data
+
+```text
+S_C   = A - U X,
+b_eff = -U y.
+```
+
+The emitted objects have
+
+```text
+S_C in Mat_248(GF(11)),   nnz(S_C)   = 55,881,
+b_eff in GF(11)^248,      nnz(b_eff) = 226.
+```
+
+Their exact ranks and obstruction are
+
+```text
+rank(S_C) = 247,
+ell_S^T b_eff = 2 mod 11,
+rank([[S_C, b_eff], [0, 0]]) = 248.
+```
+
+The rank-247 statement is certified above by a normalized nonzero right-null
+vector and below by a 247-square minor with determinant `6 mod 11`. The left
+null vector is normalized independently. Adjoining `b_eff` gives a nonzero
+248-square minor, so the reduced affine rank is exactly 248.
+
+Finally, the reduced witnesses reconstruct the full G3CD witnesses:
+
+```text
+r_C   = (r_S,   -J^-1 L r_S),
+ell_C = (ell_S, -J^-T U^T ell_S),
+
+ell_C^T b_C = ell_S^T b_eff = 2 mod 11.
+```
+
+Thus the static rank/cokernel problem for the 249-dimensional affine Schur
+matrix is exactly equivalent to that for the complete 1,510-dimensional G3CD
+affine matrix at this fiber. No kernel, cokernel, or selected-source
+obstruction is lost.
+
+## Proof
+
+Apply the invertible block row operation
+
+```text
+R_top <- R_top - U J^-1 R_lower
+```
+
+to the augmented G3CD matrix
+
+```text
+[[A, U, 0      ],
+ [L, J, b_lower]].
+```
+
+It gives
+
+```text
+[[S_C, 0, b_eff ],
+ [L,   J, b_lower]].
+```
+
+Because `J` is invertible, the lower 1,261 coordinates can be solved uniquely
+and eliminated. The remaining affine rank contribution is therefore exactly
+the rank of `[S_C | b_eff]`. The emitted null formulas are the corresponding
+back-substitution identities.
+
+The independent verifier recomputes `det(J)` from the original G3CD dense
+matrix, checks all 249 stored lower solves by direct multiplication, rebuilds
+`S_C` and `b_eff`, recomputes the rank minors, and verifies both full null
+reconstructions and the common pairing.
+
+## Interpretation and boundary
+
+G3CE removes a computational obstacle for static obstruction tests rather than
+a physical hypothesis. It does **not** by itself reduce the selected
+rank-1,510 transport equation. Block row elimination preserves matrix rank and
+cokernel, but a connection ODE is preserved only by a differentiable gauge or
+invariant-graph transformation, including the derivative of that
+transformation. A separate Riccati identity is required before the lower 1,261
+dynamic coordinates can be eliminated.
+
+The unit reduction of `det(J)` also proves that the corresponding canonical
+lower block has nonzero characteristic-zero determinant wherever this chart
+model is defined. It does not reconstruct the characteristic-zero entries of
+`J^-1`, prove that the rank-247 Schur defect persists in characteristic zero,
+or establish invertibility at every point of the G3BJ path.
+
+G3CE therefore does not integrate the selected path, reduce its transport
+dimension, provide an integral B89 marking, or decide `beta_C`. The next
+object is the dynamic invariant-graph/Riccati test. If it fails, the full
+rank-1,510 affine continuation remains necessary, with G3CE serving as a
+static obstruction certificate and possible preconditioner.
+
+## Reproduction
+
+```text
+python build_ust_g3ce_hodge_schur_affine_reduction.py
+python verify_ust_g3ce_hodge_schur_affine_reduction.py
+```
+
+The canonical packet is
+`state/ust_g3ce_hodge_schur_affine_reduction.packet.json`; its exact response,
+Schur, source, null, affine and minor payloads are under `evidence/ust_g3ce/`.

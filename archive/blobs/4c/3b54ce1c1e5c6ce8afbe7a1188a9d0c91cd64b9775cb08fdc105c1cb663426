@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+"""Emit the canonical terminal F3 -> F2 differential for component 20."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fp_component20_canonical_d2_source as g3fp
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3fq"
+ARRAYS = EVIDENCE / "H02.component20.canonical_d3_source.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.canonical_d3_source.json"
+G3FO = ROOT / "evidence/ust_g3fo/H02.component20.artinian_resolution.json"
+G3FP = ROOT / "evidence/ust_g3fp/H02.component20.canonical_d2_source.json"
+G3FP_ARRAYS = ROOT / "evidence/ust_g3fp/H02.component20.canonical_d2_source.npz"
+
+F2_BLOCKS = ((12, 1), (13, 1), (16, 40), (17, 7))
+F3_BLOCKS = ((18, 18), (19, 1), (22, 1))
+EXPECTED_D2_KERNELS = {18: 18, 19: 55, 20: 111, 21: 186, 22: 281}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def f2_keys(degree: int) -> list[tuple[int, int, tuple[int, int, int]]]:
+    return [
+        (shift, generator, exponent)
+        for shift, count in F2_BLOCKS
+        if degree >= shift
+        for generator in range(count)
+        for exponent in graded.homogeneous_exponents(degree - shift)
+    ]
+
+
+def d2_matrix(
+    d2_columns: dict[int, np.ndarray], degree: int, prime: int
+) -> np.ndarray:
+    blocks = [
+        g3fp.multiply_module_vectors(d2_columns[shift], shift, degree, prime)
+        for shift, _ in F2_BLOCKS
+        if degree >= shift
+    ]
+    require(blocks, "nonempty d2 matrix")
+    return np.concatenate(blocks, axis=1) % prime
+
+
+def multiply_f2_vectors(
+    vectors: np.ndarray,
+    source_degree: int,
+    target_degree: int,
+    prime: int,
+) -> np.ndarray:
+    source = f2_keys(source_degree)
+    target = f2_keys(target_degree)
+    require(vectors.shape[0] == len(source), "F2 source shape")
+    lookup = {key: row for row, key in enumerate(target)}
+    multipliers = graded.homogeneous_exponents(target_degree - source_degree)
+    result = np.zeros(
+        (len(target), vectors.shape[1] * len(multipliers)), dtype=np.int64
+    )
+    for column in range(vectors.shape[1]):
+        for multiplier_index, multiplier in enumerate(multipliers):
+            output = column * len(multipliers) + multiplier_index
+            for row, (shift, generator, exponent) in enumerate(source):
+                product = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                result[lookup[(shift, generator, product)], output] = vectors[row, column]
+    return result % prime
+
+
+def top_quotient_column(
+    matrix22: np.ndarray,
+    degree18: np.ndarray,
+    degree19: np.ndarray,
+    prime: int,
+) -> tuple[np.ndarray, tuple[int, ...], int]:
+    inherited = np.concatenate(
+        (
+            multiply_f2_vectors(degree18, 18, 22, prime),
+            multiply_f2_vectors(degree19, 19, 22, prime),
+        ),
+        axis=1,
+    )
+    inherited_rank, inherited_columns, _ = graded.rref(inherited, prime)
+    require(inherited_rank == inherited.shape[1] == 280, "280 inherited d3 columns")
+    base = inherited[:, inherited_columns]
+    pivot_rank, pivot_rows, _ = graded.rref(base.T, prime)
+    require(pivot_rank == 280, "top inherited pivot rows")
+    pivot_set = set(pivot_rows)
+    outside = np.asarray(
+        [row for row in range(matrix22.shape[1]) if row not in pivot_set],
+        dtype=np.int64,
+    )
+    require(outside.size == 1108, "top quotient coordinate count")
+    reduced = matrix22[:, outside]
+    reduced_rank, _, nullspace = graded.rref(
+        reduced, prime, emit_nullspace=True
+    )
+    require(
+        reduced_rank == 1107 and nullspace is not None and nullspace.shape == (1108, 1),
+        "one-dimensional top quotient kernel",
+    )
+    result = np.zeros((matrix22.shape[1], 1), dtype=np.int64)
+    result[outside] = nullspace
+    support = np.flatnonzero(result[:, 0])
+    require(support.size > 0, "top syzygy support")
+    normalization = int(support[0])
+    result = result * pow(int(result[normalization, 0]), -1, prime) % prime
+    require(np.count_nonzero(matrix22 @ result % prime) == 0, "top complex identity")
+    require(
+        graded.rref(np.concatenate((base, result), axis=1), prime)[0] == 281,
+        "new top terminal class",
+    )
+    return result, tuple(int(value) for value in pivot_rows), normalization
+
+
+def fiber_d3(
+    d2_columns: dict[int, np.ndarray], prime: int
+) -> tuple[dict[int, np.ndarray], tuple[object, ...]]:
+    matrix18 = d2_matrix(d2_columns, 18, prime)
+    rank18, _, kernel18 = graded.rref(matrix18, prime, emit_nullspace=True)
+    require(rank18 == 292 and kernel18 is not None and kernel18.shape == (310, 18), "d3 degree18")
+    degree18, inherited18, quotient18 = g3fp.canonical_quotient_basis(
+        kernel18, np.zeros((310, 0), dtype=np.int64), prime
+    )
+
+    matrix19 = d2_matrix(d2_columns, 19, prime)
+    rank19, _, kernel19 = graded.rref(matrix19, prime, emit_nullspace=True)
+    require(rank19 == 451 and kernel19 is not None and kernel19.shape == (506, 55), "d3 degree19")
+    inherited19 = multiply_f2_vectors(kernel18, 18, 19, prime)
+    degree19, inherited_rows19, quotient19 = g3fp.canonical_quotient_basis(
+        kernel19, inherited19, prime
+    )
+    require(degree18.shape == (310, 18) and degree19.shape == (506, 1), "minimal d3 low shifts")
+
+    matrix22 = d2_matrix(d2_columns, 22, prime)
+    degree22, inherited_rows22, normalization22 = top_quotient_column(
+        matrix22, degree18, degree19, prime
+    )
+
+    minimal = {18: degree18, 19: degree19, 22: degree22}
+    for degree, expected in EXPECTED_D2_KERNELS.items():
+        matrix = d2_matrix(d2_columns, degree, prime)
+        generated = np.concatenate(
+            [
+                multiply_f2_vectors(minimal[shift], shift, degree, prime)
+                for shift, _ in F3_BLOCKS
+                if shift <= degree
+            ],
+            axis=1,
+        )
+        require(generated.shape[1] == expected, f"d3 column count degree{degree}")
+        require(
+            np.count_nonzero(matrix @ generated % prime) == 0,
+            f"d2*d3 degree{degree}",
+        )
+
+    profile = (
+        inherited18,
+        quotient18,
+        inherited_rows19,
+        quotient19,
+        inherited_rows22,
+        normalization22,
+    )
+    return minimal, profile
+
+
+def main() -> None:
+    g3fp_packet = json.loads(G3FP.read_text(encoding="utf-8"))
+    require(all(g3fp_packet["checks"].values()), "G3FP checks")
+    d2_arrays = np.load(G3FP_ARRAYS)
+    split_packets = [conic.load(path) for path in conic.SPLIT_PACKETS]
+    primes = tuple(int(value) for value in d2_arrays["primes"])
+    require(primes == conic.EXPECTED_PRIMES, "prime order")
+
+    values = {
+        18: np.zeros((8, 6, 310, 18), dtype=np.uint32),
+        19: np.zeros((8, 6, 506, 1), dtype=np.uint32),
+        22: np.zeros((8, 6, 1388, 1), dtype=np.uint32),
+    }
+    residue_rows: list[np.ndarray] = []
+    normalization_profiles: list[tuple[object, ...]] = []
+    campaign_rows: list[dict[str, object]] = []
+
+    for prime_index, (packet_path, packet, prime) in enumerate(
+        zip(conic.SPLIT_PACKETS, split_packets, primes, strict=True)
+    ):
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        local = {degree: [] for degree in values}
+        local_profiles: list[tuple[object, ...]] = []
+        for root_index, root in enumerate(roots):
+            d2_columns = {
+                degree: d2_arrays[f"degree{degree}_values"][prime_index, root_index]
+                .astype(np.int64)
+                % prime
+                for degree in (12, 13, 16, 17)
+            }
+            d3, profile = fiber_d3(d2_columns, prime)
+            for degree in values:
+                values[degree][prime_index, root_index] = d3[degree].astype(np.uint32)
+                local[degree].append(d3[degree])
+            local_profiles.append(profile)
+            normalization_profiles.append(profile)
+            print(
+                f"G3FQ p={prime} gamma={root}: d3=18@18+1@19+1@22",
+                flush=True,
+            )
+        require(len(set(local_profiles)) == 1, f"common root chart p={prime}")
+        coefficient_blocks = [
+            g3fe.interpolate(np.stack(local[degree]), roots, prime).ravel()
+            for degree in values
+        ]
+        residues = np.concatenate(coefficient_blocks).astype(np.uint32)
+        residue_rows.append(residues)
+        campaign_rows.append(
+            {
+                "prime": prime,
+                "roots": list(roots),
+                "power_basis_slots": int(residues.size),
+                "normalization_profile_sha256": hashlib.sha256(
+                    repr(local_profiles[0]).encode("ascii")
+                ).hexdigest(),
+                "source_packet": record(packet_path),
+            }
+        )
+
+    require(len(set(normalization_profiles)) == 1, "common chart across 48 fibers")
+    residue_matrix = np.stack(residue_rows)
+    require(residue_matrix.shape == (8, 44844), "d3 residue shape")
+    reconstruction = g3fe.reconstruction_audit(residue_matrix, primes)
+    valid_mask = reconstruction.pop("valid_mask")
+    pass_mask = reconstruction.pop("pass_mask")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ARRAYS,
+        primes=np.asarray(primes, dtype=np.uint32),
+        roots=np.asarray([packet["field"]["roots"] for packet in split_packets], dtype=np.uint32),
+        degree18_values=values[18],
+        degree19_values=values[19],
+        degree22_values=values[22],
+        power_basis_residues=residue_matrix,
+        reconstruction_valid=np.packbits(valid_mask),
+        reconstruction_pass=np.packbits(pass_mask),
+    )
+
+    packet = {
+        "schema": "ust.g3fq.h02.component20.canonical-d3-source.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FQ",
+        "status": "CLOSED_EXACT_48_FIBER_CANONICAL_D3_SOURCE_QGAMMA_GEOMETRIC_LIFT_OPEN",
+        "inputs": {
+            "G3FO": record(G3FO),
+            "G3FP": record(G3FP),
+            "G3FP_arrays": record(G3FP_ARRAYS),
+            "split_prime_packets": [record(path) for path in conic.SPLIT_PACKETS],
+        },
+        "differential": {
+            "map": "d3:F3->F2",
+            "F2": "R(-12)+R(-13)+R(-16)^40+R(-17)^7",
+            "F3": "R(-18)^18+R(-19)+R(-22)",
+            "minimal_columns_by_total_degree": {"18": 18, "19": 1, "22": 1},
+            "coefficient_slots_per_field_element": 7474,
+            "power_basis_slots_per_prime": 44844,
+            "top_column_construction": (
+                "At degree22, quotient the 1388 coordinates by the 280 inherited "
+                "columns from shifts18 and19. The restricted d2 matrix has rank1107 "
+                "on1108 remaining coordinates, yielding one normalized top class."
+            ),
+            "complex_identity": "d2*d3=0 literally in degrees18 through22 at every fiber",
+        },
+        "campaign": {
+            "fibers": 48,
+            "common_normalization_chart": True,
+            "rows": campaign_rows,
+            "artifact": record(ARRAYS),
+        },
+        "numeric_promotion_audit": reconstruction,
+        "checks": {
+            "all48_fibers_have_the_same_canonical_d3_chart": True,
+            "the_minimal_d3_columns_are18_1_1_in_degrees18_19_22": True,
+            "the_degree22_quotient_system_has_shape1383_by1108_and_rank1107": True,
+            "d2_times_d3_is_zero_in_degrees18_through22_at_every_fiber": True,
+            "the_d3_image_equals_the_G3FO_predicted_d2_kernel_through_degree22": True,
+            "the_power_basis_payload_has44844_slots_per_prime": True,
+        },
+        "guardrails": {
+            "claims_the_d3_columns_are_lifted_to_Qgamma": False,
+            "claims_the_d3_columns_are_derived_from_G3FK": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_continuum_intertwiner": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fqComponent20CanonicalD3Source",
+            "tier": "CLOSED_EXACT_48_FIBER_CANONICAL_TERMINAL_DIFFERENTIAL",
+            "statement": (
+                "At all 48 archived split fibers, one common quotient chart emits "
+                "the 20 minimal terminal columns in shifts18,19,22. Their generated "
+                "image is exactly ker(d2) through the regularity bound and d2*d3=0 "
+                "literally."
+            ),
+        },
+        "next_required_object": (
+            "Derive d1,d2,d3 as one Cox-homogeneous complex from G3FK over "
+            "Q(gamma), replay its degree15 image as the G3EX 100-plane, and use "
+            "that formula to certify the residual component rank36."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FQ: PASS fibers=48 d3_columns=20 power_basis_slots=44844",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

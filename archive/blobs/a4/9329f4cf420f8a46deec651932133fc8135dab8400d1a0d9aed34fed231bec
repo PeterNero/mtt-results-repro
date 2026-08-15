@@ -1,0 +1,262 @@
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <flint/flint.h>
+#include <flint/fmpz.h>
+#include <flint/nmod.h>
+#include <flint/nmod_mat.h>
+#include <flint/ulong_extras.h>
+
+static void die(const char *message)
+{
+    fprintf(stderr, "ust_nf_kernel_modular_cutset: %s\n", message);
+    exit(EXIT_FAILURE);
+}
+
+static slong read_slong(FILE *input, fmpz_t value, const char *label)
+{
+    if (!fmpz_fread(input, value))
+        die(label);
+    if (!fmpz_fits_si(value))
+        die("integer does not fit slong");
+    return fmpz_get_si(value);
+}
+
+static ulong parse_ulong(const char *text, const char *label)
+{
+    char *end;
+    unsigned long value;
+    errno = 0;
+    value = strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0')
+        die(label);
+    return (ulong) value;
+}
+
+static ulong read_integer_mod(FILE *input, fmpz_t value, ulong prime)
+{
+    if (!fmpz_fread(input, value))
+        die("truncated integer coefficient");
+    return fmpz_fdiv_ui(value, prime);
+}
+
+static ulong read_rational_mod(
+    FILE *input,
+    fmpz_t numerator,
+    fmpz_t denominator,
+    nmod_t mod)
+{
+    int separator;
+    ulong numerator_mod, denominator_mod;
+    if (!fmpz_fread(input, numerator))
+        die("truncated rational numerator");
+    separator = fgetc(input);
+    if (separator != '/')
+        die("missing rational separator");
+    if (!fmpz_fread(input, denominator))
+        die("truncated rational denominator");
+    denominator_mod = fmpz_fdiv_ui(denominator, mod.n);
+    if (denominator_mod == 0)
+        die("specialization divides a kernel denominator");
+    numerator_mod = fmpz_fdiv_ui(numerator, mod.n);
+    return nmod_div(numerator_mod, denominator_mod, mod);
+}
+
+static ulong evaluate_integer_polynomial(
+    FILE *input,
+    fmpz_t coefficient,
+    slong degree,
+    ulong gamma,
+    nmod_t mod)
+{
+    slong k;
+    ulong *coefficients;
+    ulong value = 0;
+    coefficients = (ulong *) flint_malloc(degree * sizeof(ulong));
+    for (k = 0; k < degree; k++)
+        coefficients[k] = read_integer_mod(input, coefficient, mod.n);
+    for (k = degree; k-- > 0;)
+        value = nmod_add(nmod_mul(value, gamma, mod), coefficients[k], mod);
+    flint_free(coefficients);
+    return value;
+}
+
+static ulong evaluate_rational_polynomial(
+    FILE *input,
+    fmpz_t numerator,
+    fmpz_t denominator,
+    slong degree,
+    ulong gamma,
+    nmod_t mod)
+{
+    slong k;
+    ulong *coefficients;
+    ulong value = 0;
+    coefficients = (ulong *) flint_malloc(degree * sizeof(ulong));
+    for (k = 0; k < degree; k++)
+        coefficients[k] = read_rational_mod(input, numerator, denominator, mod);
+    for (k = degree; k-- > 0;)
+        value = nmod_add(nmod_mul(value, gamma, mod), coefficients[k], mod);
+    flint_free(coefficients);
+    return value;
+}
+
+int main(int argc, char **argv)
+{
+    FILE *matrix_input, *kernel_input, *cutset_input, *output;
+    slong rows, columns, degree, entries, kernel_rows, relations, kernel_degree;
+    slong cutset_count, index, row, column, relation, cutset_row;
+    slong *row_to_cutset, *source_rows;
+    ulong prime, gamma, minimal_value, coefficient, value;
+    slong residual_rank, nonzero_slots;
+    fmpz_t integer, numerator, denominator;
+    nmod_t mod;
+    nmod_mat_t kernel, residual;
+
+    if (argc != 7)
+        die("usage: MATRIX.sms KERNEL.nfk CUTSET.txt PRIME GAMMA OUTPUT.nmr");
+    prime = parse_ulong(argv[4], "invalid prime");
+    gamma = parse_ulong(argv[5], "invalid gamma") % prime;
+    if (!n_is_prime(prime))
+        die("modulus is not prime");
+    nmod_init(&mod, prime);
+
+    matrix_input = fopen(argv[1], "r");
+    kernel_input = fopen(argv[2], "r");
+    cutset_input = fopen(argv[3], "r");
+    if (matrix_input == NULL || kernel_input == NULL || cutset_input == NULL)
+        die("cannot open an input file");
+
+    fmpz_init(integer);
+    fmpz_init(numerator);
+    fmpz_init(denominator);
+    rows = read_slong(matrix_input, integer, "missing matrix row count");
+    columns = read_slong(matrix_input, integer, "missing matrix column count");
+    degree = read_slong(matrix_input, integer, "missing field degree");
+    entries = read_slong(matrix_input, integer, "missing matrix entry count");
+    if (rows <= 0 || columns <= 0 || degree <= 0 || entries < 0)
+        die("invalid matrix dimensions");
+
+    minimal_value = 0;
+    for (index = 0; index <= degree; index++)
+    {
+        coefficient = read_integer_mod(matrix_input, integer, prime);
+        value = 1;
+        for (row = 0; row < index; row++)
+            value = nmod_mul(value, gamma, mod);
+        minimal_value = nmod_add(minimal_value, nmod_mul(coefficient, value, mod), mod);
+    }
+    if (minimal_value != 0)
+        die("gamma is not a root of the minimal polynomial");
+
+    cutset_count = read_slong(cutset_input, integer, "missing cutset count");
+    if (cutset_count <= 0 || cutset_count > rows)
+        die("invalid cutset count");
+    row_to_cutset = (slong *) flint_malloc(rows * sizeof(slong));
+    source_rows = (slong *) flint_malloc(cutset_count * sizeof(slong));
+    for (row = 0; row < rows; row++)
+        row_to_cutset[row] = -1;
+    for (cutset_row = 0; cutset_row < cutset_count; cutset_row++)
+    {
+        row = read_slong(cutset_input, integer, "truncated cutset row") - 1;
+        if (row < 0 || row >= rows || row_to_cutset[row] >= 0)
+            die("invalid or duplicate cutset row");
+        row_to_cutset[row] = cutset_row;
+        source_rows[cutset_row] = row;
+    }
+    fclose(cutset_input);
+
+    kernel_rows = read_slong(kernel_input, integer, "missing kernel row count");
+    relations = read_slong(kernel_input, integer, "missing relation count");
+    kernel_degree = read_slong(kernel_input, integer, "missing kernel degree");
+    if (kernel_rows != columns || relations <= 0 || kernel_degree != degree)
+        die("kernel shape mismatch");
+    nmod_mat_init(kernel, kernel_rows, relations, prime);
+    nmod_mat_init(residual, cutset_count, relations, prime);
+    for (row = 0; row < kernel_rows; row++)
+    {
+        for (relation = 0; relation < relations; relation++)
+        {
+            if (read_slong(kernel_input, integer, "truncated kernel row") != row + 1)
+                die("kernel row order mismatch");
+            if (read_slong(kernel_input, integer, "truncated kernel column") != relation + 1)
+                die("kernel column order mismatch");
+            nmod_mat_entry(kernel, row, relation) = evaluate_rational_polynomial(
+                kernel_input, numerator, denominator, degree, gamma, mod);
+        }
+    }
+    fclose(kernel_input);
+
+    for (index = 0; index < entries; index++)
+    {
+        row = read_slong(matrix_input, integer, "truncated matrix row") - 1;
+        column = read_slong(matrix_input, integer, "truncated matrix column") - 1;
+        if (row < 0 || row >= rows || column < 0 || column >= columns)
+            die("matrix index out of range");
+        coefficient = evaluate_integer_polynomial(
+            matrix_input, integer, degree, gamma, mod);
+        cutset_row = row_to_cutset[row];
+        if (cutset_row < 0 || coefficient == 0)
+            continue;
+        for (relation = 0; relation < relations; relation++)
+        {
+            value = nmod_mul(coefficient, nmod_mat_entry(kernel, column, relation), mod);
+            nmod_mat_entry(residual, cutset_row, relation) = nmod_add(
+                nmod_mat_entry(residual, cutset_row, relation), value, mod);
+        }
+    }
+    fclose(matrix_input);
+
+    residual_rank = nmod_mat_rank(residual);
+    nonzero_slots = 0;
+    for (cutset_row = 0; cutset_row < cutset_count; cutset_row++)
+        for (relation = 0; relation < relations; relation++)
+            nonzero_slots += nmod_mat_entry(residual, cutset_row, relation) != 0;
+
+    output = fopen(argv[6], "w");
+    if (output == NULL)
+        die("cannot open output");
+    fprintf(
+        output,
+        "%ld %ld %lu %lu %ld %ld\n",
+        (long) cutset_count,
+        (long) relations,
+        (unsigned long) prime,
+        (unsigned long) gamma,
+        (long) residual_rank,
+        (long) nonzero_slots);
+    for (cutset_row = 0; cutset_row < cutset_count; cutset_row++)
+    {
+        for (relation = 0; relation < relations; relation++)
+        {
+            fprintf(
+                output,
+                "%ld %ld %lu\n",
+                (long) (source_rows[cutset_row] + 1),
+                (long) (relation + 1),
+                (unsigned long) nmod_mat_entry(residual, cutset_row, relation));
+        }
+    }
+    fclose(output);
+
+    printf(
+        "ust_nf_kernel_modular_cutset: PASS prime=%lu gamma=%lu rows=%ld "
+        "relations=%ld nonzero=%ld rank=%ld\n",
+        (unsigned long) prime,
+        (unsigned long) gamma,
+        (long) cutset_count,
+        (long) relations,
+        (long) nonzero_slots,
+        (long) residual_rank);
+
+    nmod_mat_clear(residual);
+    nmod_mat_clear(kernel);
+    flint_free(source_rows);
+    flint_free(row_to_cutset);
+    fmpz_clear(denominator);
+    fmpz_clear(numerator);
+    fmpz_clear(integer);
+    flint_cleanup_master();
+    return EXIT_SUCCESS;
+}

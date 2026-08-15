@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""Prove or sharply screen the exact uniform update rank of the corrected H02 core."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from array import array
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as endpoint
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3by"
+OUT = ROOT / "state" / "ust_g3by_g3bi_h02_exact_update_rank.packet.json"
+PRIME = 21817
+ANCHOR = 5
+SPECIALIZATION = 1971
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    repository = repository.resolve()
+    try:
+        relative = resolved.relative_to(repository)
+    except ValueError:
+        repository = next(
+            (
+                candidate
+                for candidate in (resolved.parent, *resolved.parents)
+                if (candidate / ".git").exists()
+            ),
+            resolved.parent,
+        )
+        relative = resolved.relative_to(repository)
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository),
+        "repository_relative_path": relative.as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def evaluate(coefficients: tuple[int, ...], value: int, prime: int) -> int:
+    result = 0
+    for coefficient in reversed(coefficients):
+        result = (result * value + coefficient) % prime
+    return result
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bw_path = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+    g3bx_path = ROOT / "state" / "ust_g3bx_g3bi_h02_structural_intertwiner.packet.json"
+    g3bt_path = ROOT / "state" / "ust_g3bt_h02_endpoint_action_one_split_prime.packet.json"
+    g3bi = load(g3bi_path)
+    g3bw = load(g3bw_path)
+    g3bx = load(g3bx_path)
+    g3bt = load(g3bt_path)
+    for packet, label in ((g3bi, "G3BI"), (g3bw, "G3BW"), (g3bx, "G3BX"), (g3bt, "G3BT")):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    csc_path = mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay = load(macaulay_path)
+    csc = load(csc_path)
+    factor = load(factor_path)
+    base_packet = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, _, _ = oracle.exact_generators(base_packet, global_f0, b89)
+    corrections = endpoint.correction_derivatives_exact(g3bi)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = {int(value) for value in csc["binary"]["quotient_unit_rows"]}
+    complement_rows = np.asarray(
+        [row for row in range(len(target)) if row not in quotient_rows], dtype=np.int32
+    )
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+
+    dm_arrays_path = ROOT / g3bw["DM_reduction"]["arrays"]["path"]
+    dm = np.load(dm_arrays_path, allow_pickle=False)
+    require(np.array_equal(complement_rows, dm["complement_rows"]), "canonical complement rows")
+    component_sizes = dm["component_sizes"]
+    nontrivial = np.flatnonzero(component_sizes > 1)
+    require(nontrivial.size == 1, "unique nontrivial component")
+    core = int(nontrivial[0])
+    core_global_columns = np.flatnonzero(dm["component_by_column"] == core).astype(np.int32)
+    core_complement_rows = np.flatnonzero(dm["component_by_row"] == core).astype(np.int32)
+    core_ambient_rows = complement_rows[core_complement_rows]
+    core_row_lookup = {int(row): index for index, row in enumerate(core_ambient_rows.tolist())}
+    core_size = int(component_sizes[core])
+    require(core_size == core_global_columns.size == core_ambient_rows.size == 24767, "core dimensions")
+
+    combined_rows = array("i")
+    combined_columns = array("i")
+    combined_values = array("I")
+    difference_rows = array("i")
+    difference_columns = array("i")
+    difference_values = array("I")
+    dependent_global_columns: list[int] = []
+    for position, global_column in enumerate(core_global_columns.tolist(), start=1):
+        exact = endpoint.endpoint_column(
+            descriptors[global_column], generators0, corrections, target_lookup, oracle
+        )
+        restricted = [
+            (core_row_lookup[ambient_row], coefficients)
+            for ambient_row, coefficients in exact.items()
+            if ambient_row in core_row_lookup
+        ]
+        if not any(any(coefficients[power] for power in range(1, 6)) for _, coefficients in restricted):
+            continue
+        dependent_offset = len(dependent_global_columns)
+        dependent_global_columns.append(global_column)
+        for local_row, coefficients in restricted:
+            for power in range(1, 6):
+                if coefficients[power]:
+                    combined_rows.append(local_row)
+                    combined_columns.append((power - 1) * 17676 + dependent_offset)
+                    combined_values.append(coefficients[power] % PRIME)
+            value = (evaluate(coefficients, SPECIALIZATION, PRIME) - evaluate(coefficients, ANCHOR, PRIME)) % PRIME
+            if value:
+                difference_rows.append(local_row)
+                difference_columns.append(dependent_offset)
+                difference_values.append(value)
+        if position % 4000 == 0:
+            print(f"G3BY exact core columns {position}/{core_size}", flush=True)
+    dependent_count = len(dependent_global_columns)
+    require(dependent_count == 17676, "dependent core columns")
+
+    combined_row_array = np.frombuffer(combined_rows, dtype=np.int32)
+    combined_column_array = np.frombuffer(combined_columns, dtype=np.int32)
+    combined_value_array = np.frombuffer(combined_values, dtype=np.uint32)
+    combined = sparse.csr_matrix(
+        (
+            combined_value_array,
+            (combined_row_array, combined_column_array),
+        ),
+        shape=(core_size, 5 * dependent_count),
+        dtype=np.uint32,
+    )
+    combined.sum_duplicates()
+    combined.data %= PRIME
+    combined.eliminate_zeros()
+    combined_pattern = combined.copy()
+    combined_pattern.data = np.ones(combined_pattern.nnz, dtype=np.uint8)
+    combined_pattern.sum_duplicates()
+    combined_pattern.data[:] = 1
+    combined_matching = maximum_bipartite_matching(
+        combined_pattern, perm_type="column"
+    ).astype(np.int32)
+    combined_structural_rank = int(np.count_nonzero(combined_matching >= 0))
+
+    difference_row_array = np.frombuffer(difference_rows, dtype=np.int32)
+    difference_column_array = np.frombuffer(difference_columns, dtype=np.int32)
+    difference_value_array = np.frombuffer(difference_values, dtype=np.uint32)
+    difference = sparse.csr_matrix(
+        (difference_value_array, (difference_row_array, difference_column_array)),
+        shape=(core_size, dependent_count),
+        dtype=np.uint32,
+    )
+    difference.sum_duplicates()
+    difference.data %= PRIME
+    difference.eliminate_zeros()
+    difference_pattern = difference.copy()
+    difference_pattern.data = np.ones(difference_pattern.nnz, dtype=np.uint8)
+    specialization_matching = maximum_bipartite_matching(
+        difference_pattern, perm_type="column"
+    ).astype(np.int32)
+    specialization_structural_rank = int(np.count_nonzero(specialization_matching >= 0))
+    require(combined_structural_rank <= 15158, "combined structural upper bound")
+    require(specialization_structural_rank <= combined_structural_rank, "specialization pattern bound")
+
+    matched_rows = np.flatnonzero(combined_matching >= 0).astype(np.int32)
+    matched_columns = combined_matching[matched_rows].astype(np.int32)
+    require(np.unique(matched_columns).size == matched_columns.size, "matching columns unique")
+    minor = combined[matched_rows, :][:, matched_columns].tocsc()
+    require(minor.shape == (combined_structural_rank, combined_structural_rank), "square minor")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    arrays_path = EVIDENCE / "G3BI_H02_core_update_rank_arrays.npz"
+    np.savez_compressed(
+        arrays_path,
+        core_global_columns=core_global_columns,
+        core_ambient_rows=core_ambient_rows,
+        dependent_global_columns=np.asarray(dependent_global_columns, dtype=np.int32),
+        combined_matching_column_by_row=combined_matching,
+        specialization_matching_column_by_row=specialization_matching,
+        matched_rows=matched_rows,
+        matched_columns=matched_columns,
+    )
+    minor_path = EVIDENCE / "H02.G3BI.core_uniform_update.rank_minor.chart.bin"
+    rhs_path = EVIDENCE / "H02.G3BI.core_uniform_update.unit.rhs.bin"
+    log_path = EVIDENCE / "H02.G3BI.core_uniform_update.rank_minor.log"
+    exporter.write_chart(
+        minor_path,
+        PRIME,
+        combined_structural_rank,
+        0,
+        combined_structural_rank,
+        minor.indptr.astype(np.uint64).tolist(),
+        minor.indices.astype(np.uint32).tolist(),
+        minor.data.astype(np.uint32).tolist(),
+    )
+    exporter.write_rhs(rhs_path, PRIME, combined_structural_rank, [0, 1], [0], [1])
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    command = [
+        "wsl",
+        runtime.wsl_path(solver),
+        "--chart",
+        runtime.wsl_path(minor_path),
+        "--rhs",
+        runtime.wsl_path(rhs_path),
+        "--log",
+        runtime.wsl_path(log_path),
+        "--determinant-only",
+    ]
+    completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+    if completed.returncode == 0:
+        fields = initializer.parse_log(log_path)
+        require(fields.get("STATUS") == "SUCCESS", "minor determinant status")
+        determinant = int(fields["CHART_DETERMINANT"])
+        dependent_column = None
+    else:
+        transcript = completed.stdout + completed.stderr
+        match = re.search(
+            r"(?:selected chart became dependent at column|dependent selected chart column) (\d+)",
+            transcript,
+        )
+        require(match is not None, transcript)
+        determinant = 0
+        dependent_column = int(match.group(1))
+        log_path.write_text(
+            "SCHEMA MTTUnifiedSourceG3byRankMinor.v1\n"
+            "STATUS SINGULAR_EXACT_DEPENDENT_COLUMN\n"
+            f"PRIME {PRIME}\n"
+            f"ROWS {combined_structural_rank}\n"
+            "CHART_DETERMINANT 0\n"
+            f"DEPENDENT_COLUMN {dependent_column}\n"
+            "END_CERTIFICATE\n",
+            encoding="ascii",
+        )
+    exact_rank_closed = (
+        determinant != 0
+    )
+    exact_rank = combined_structural_rank if exact_rank_closed else None
+    checks = {
+        "the_unique24767_corrected_H02_core_is_reconstructed_exactly": True,
+        "all_five_nonconstant_coefficient_matrices_are_combined": True,
+        "the_combined_update_pattern_has_an_exact_matching_upper_bound": True,
+        "the_independent_root_difference_is_evaluated_exactly_mod21817": True,
+        "the_specialized_matching_minor_is_decided_by_exact_sparse_factorization": True,
+        "no_rank_is_promoted_without_matching_upper_and_modular_lower_bounds": True,
+    }
+    require(all(checks.values()), "G3BY checks")
+    status = (
+        "EXACT_SELECTED_G3BI_H02_UNIFORM_UPDATE_RANK_CLOSED"
+        if exact_rank_closed
+        else "SELECTED_G3BI_H02_UPDATE_RANK_UPPER_BOUND_CLOSED_LOWER_BOUND_OPEN"
+    )
+    packet = {
+        "schema": "mtt.unified-source.g3by-g3bi-h02-exact-update-rank.v1",
+        "date": "2026-08-12",
+        "status": status,
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BW": record(g3bw_path),
+            "G3BX": record(g3bx_path),
+            "G3BT": record(g3bt_path),
+            "G3BW_arrays": record(dm_arrays_path),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_CSC": external_record(csc_path, mld),
+            "H02_factorization": external_record(factor_path, mld),
+            "base": external_record(oracle.BASE, mld),
+            "global_F0": external_record(oracle.GLOBAL_F0, mld),
+            "B89": external_record(oracle.B89, mld),
+            "split_prime_solver": external_record(solver, mld),
+        },
+        "uniform_update": {
+            "definition": "H=[B1 B2 B3 B4 B5] for A(gamma)=B0+sum_(k=1)^5 gamma^k Bk on the unique H02 DM core",
+            "core_dimension": core_size,
+            "dependent_columns": dependent_count,
+            "combined_shape": [core_size, 5 * dependent_count],
+            "combined_pattern_nonzeros": int(combined_pattern.nnz),
+            "structural_rank_upper_bound": combined_structural_rank,
+            "reduction_prime": PRIME,
+            "selected_minor_shape": list(minor.shape),
+            "selected_minor_nonzero_entries": int(minor.nnz),
+            "selected_minor_determinant_mod21817": determinant,
+            "dependent_column_if_singular": dependent_column,
+            "selected_minor": record(minor_path),
+            "unit_RHS": record(rhs_path),
+            "factorization_log": record(log_path),
+        },
+        "independent_root_difference_screen": {
+            "prime": PRIME,
+            "anchor": ANCHOR,
+            "specialization": SPECIALIZATION,
+            "difference_formula": f"A({SPECIALIZATION})-A({ANCHOR})",
+            "difference_shape": [core_size, dependent_count],
+            "difference_nonzero_entries": int(difference.nnz),
+            "specialization_structural_rank": specialization_structural_rank,
+        },
+        "rank_decision": {
+            "exact_Q_rank_closed": exact_rank_closed,
+            "exact_Q_rank": exact_rank,
+            "logic": (
+                "The matching bounds rank_Q(H) from above. The same selected coefficient "
+                "minor reduced modulo 21817 bounds rank_Q(H) from below when its determinant "
+                "is nonzero."
+            ),
+        },
+        "construction_arrays": record(arrays_path),
+        "checks": checks,
+        "guardrails": {
+            "claims_the_Woodbury_kernel_is_evaluated": False,
+            "claims_characteristic_zero_inverse_values": False,
+            "claims_the_rank42_homology_source_is_an_H02_derivative_column": False,
+            "claims_integral_transport_or_terminal_readout": False,
+        },
+        "theorem": {
+            "name": "ustG3bySelectedG3biH02ExactUpdateRank",
+            "tier": "CLOSED_EXACT_UNIFORM_UPDATE_RANK" if exact_rank_closed else "CLOSED_UPPER_BOUND_LOWER_BOUND_OPEN",
+            "statement": (
+                f"The corrected selected-G3BI H02 core uniform coefficient update has "
+                f"structural rank at most {combined_structural_rank}. "
+                + (
+                    f"The emitted {combined_structural_rank}-square coefficient minor has nonzero "
+                    f"determinant {determinant} modulo {PRIME}; therefore the exact rational "
+                    f"uniform update rank is {exact_rank}."
+                    if exact_rank_closed
+                    else "The selected specialization minor is singular, so a matching lower-bound certificate remains open."
+                )
+            ),
+        },
+        "next_required_object": (
+            "Because the generic uniform update dimension is now exact, reduce only the "
+            "selected source-reachable Krylov/action subspace and build the A(5)-anchored "
+            "coefficient-level Woodbury action; do not search for a smaller generic row support."
+            if exact_rank_closed
+            else "Choose an independent specialization or an exact pivot-repair minor to close the lower bound."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BY selected G3BI H02 exact update rank: PASS")
+    print(
+        f"combined={combined_pattern.shape} nnz={combined_pattern.nnz} upper={combined_structural_rank} "
+        f"difference_rank_screen={specialization_structural_rank} minor={minor.shape[0]} "
+        f"det={determinant} exact_rank={exact_rank}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

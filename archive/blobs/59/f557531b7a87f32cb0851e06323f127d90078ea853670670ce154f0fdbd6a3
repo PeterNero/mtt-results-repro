@@ -1,0 +1,478 @@
+#!/usr/bin/env python3
+"""Audit the G3FD graded generators across all eight archived split primes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+
+
+ROOT = Path(__file__).resolve().parent
+PACKETS = (
+    ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dj_h02_second_prime_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dk_h02_third_prime_kernel_relations.packet.json",
+    ROOT / "state/ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3do_h02_fifth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3dq_h02_sixth_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3ds_h02_seventh_prime_holdout_kernel.packet.json",
+    ROOT / "state/ust_g3du_h02_eighth_prime_holdout_kernel.packet.json",
+)
+EVIDENCE = ROOT / "evidence/ust_g3fe"
+RESIDUES = EVIDENCE / "H02.component20.graded_generator_eight_prime_residues.npz"
+AUDIT_ARRAYS = EVIDENCE / "H02.component20.graded_generator_reconstruction_audit.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.eight_prime_graded_promotion_audit.json"
+
+EXPECTED_PRIMES = (21817, 33863, 37493, 38113, 68213, 69011, 72271, 73673)
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def interpolate(values: np.ndarray, roots: tuple[int, ...], prime: int) -> np.ndarray:
+    require(values.shape[0] == len(roots) == 6, "six split values")
+    vandermonde = np.asarray(
+        [[pow(root, degree, prime) for degree in range(6)] for root in roots],
+        dtype=np.int64,
+    )
+    augmented = np.concatenate((vandermonde, np.eye(6, dtype=np.int64)), axis=1)
+    for column in range(6):
+        choices = np.flatnonzero(augmented[column:, column])
+        require(choices.size > 0, "Vandermonde pivot")
+        selected = column + int(choices[0])
+        augmented[[column, selected]] = augmented[[selected, column]]
+        augmented[column] = (
+            augmented[column]
+            * pow(int(augmented[column, column]), -1, prime)
+        ) % prime
+        for row in range(6):
+            if row != column and augmented[row, column]:
+                augmented[row] = (
+                    augmented[row]
+                    - int(augmented[row, column]) * augmented[column]
+                ) % prime
+    inverse = augmented[:, 6:]
+    coefficients = np.empty(values.shape, dtype=np.int64)
+    for degree in range(6):
+        accumulator = np.zeros(values.shape[1:], dtype=np.int64)
+        for root_index in range(6):
+            accumulator = (
+                accumulator
+                + values[root_index] * int(inverse[degree, root_index])
+            ) % prime
+        coefficients[degree] = accumulator
+    return coefficients
+
+
+def linear_syzygy_multiples(syzygy: np.ndarray, prime: int) -> np.ndarray:
+    basis1 = graded.homogeneous_exponents(1)
+    basis2 = graded.homogeneous_exponents(2)
+    lookup2 = {exponent: index for index, exponent in enumerate(basis2)}
+    result = np.zeros((24, 3), dtype=np.int64)
+    for multiplier_index, multiplier in enumerate(basis1):
+        for generator in range(4):
+            for coefficient_index, exponent in enumerate(basis1):
+                product = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                result[
+                    generator * len(basis2) + lookup2[product], multiplier_index
+                ] = syzygy[generator * len(basis1) + coefficient_index, 0]
+    return result % prime
+
+
+def extract_fiber(
+    kernel_path: Path, prime: int
+) -> tuple[dict[int, np.ndarray], np.ndarray, tuple[object, ...]]:
+    payload = kernel_runtime.read_kernel(kernel_path)
+    require(payload["prime"] == prime, "kernel prime")
+    dependent = payload["dependent"]
+    relation_indices = np.flatnonzero(
+        (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+    )
+    require(relation_indices.size == 100, "canonical component relation count")
+    kernel = (
+        payload["matrix"][COMPONENT_START:COMPONENT_PAST, :][:, relation_indices]
+        .toarray()
+        .astype(np.int64)
+        % prime
+    )
+    kernel_rank, _, annihilator_columns = graded.rref(
+        kernel.T, prime, emit_nullspace=True
+    )
+    require(kernel_rank == 100 and annihilator_columns is not None, "kernel rank")
+    annihilator = annihilator_columns.T
+
+    pieces: dict[int, np.ndarray] = {}
+    charts: dict[int, tuple[tuple[int, ...], tuple[int, ...]]] = {}
+    for degree, expected in ((11, 4), (12, 11), (13, 20), (14, 46)):
+        piece, pivots, free = graded.ideal_piece(annihilator, degree, prime)
+        require(piece.shape[1] == expected, f"ideal dimension degree{degree}")
+        pieces[degree] = piece
+        charts[degree] = (pivots, free)
+
+    generators11 = pieces[11]
+    generated14 = graded.multiply_space(generators11, 11, 14, prime)
+    generators14, selected14, rank14 = graded.complement_columns(
+        generated14, pieces[14], prime
+    )
+    require((generated14.shape[1], graded.rref(generated14, prime)[0]) == (40, 31), "degree14 prior")
+    require((generators14.shape[1], rank14) == (15, 46), "degree14 complement")
+
+    prior15 = np.concatenate(
+        (
+            graded.multiply_space(generators11, 11, 15, prime),
+            graded.multiply_space(generators14, 14, 15, prime),
+        ),
+        axis=1,
+    )
+    generators15, selected15, rank15 = graded.complement_columns(
+        prior15, kernel, prime
+    )
+    require((graded.rref(prior15, prime)[0], generators15.shape[1], rank15) == (89, 11, 100), "degree15 complement")
+
+    map12 = graded.multiply_space(generators11, 11, 12, prime)
+    rank12, pivots12, syzygy12 = graded.rref(
+        map12, prime, emit_nullspace=True
+    )
+    map13 = graded.multiply_space(generators11, 11, 13, prime)
+    rank13, pivots13, syzygies13 = graded.rref(
+        map13, prime, emit_nullspace=True
+    )
+    require(
+        rank12 == 11
+        and syzygy12 is not None
+        and syzygy12.shape == (12, 1),
+        "one linear syzygy",
+    )
+    require(
+        rank13 == 20
+        and syzygies13 is not None
+        and syzygies13.shape == (24, 4),
+        "four quadratic-level syzygies",
+    )
+    inherited13 = linear_syzygy_multiples(syzygy12, prime)
+    syzygy13, selected13, syzygy_rank13 = graded.complement_columns(
+        inherited13, syzygies13, prime
+    )
+    require(
+        graded.rref(inherited13, prime)[0] == 3
+        and syzygy13.shape == (24, 1)
+        and syzygy_rank13 == 4,
+        "one new quadratic syzygy",
+    )
+
+    generator_blocks = {11: generators11, 14: generators14, 15: generators15}
+    syzygy_block = np.concatenate((syzygy12.ravel(), syzygy13.ravel()))
+    profile = (
+        charts[11],
+        charts[12],
+        charts[13],
+        charts[14],
+        selected14,
+        selected15,
+        pivots12,
+        pivots13,
+        selected13,
+    )
+    return generator_blocks, syzygy_block, profile
+
+
+def rational_reconstruct(
+    residue: int, modulus: int, bound: int
+) -> tuple[int, int, bool]:
+    old_remainder = modulus
+    remainder = residue
+    old_denominator = 0
+    denominator = 1
+    while abs(remainder) > bound:
+        quotient = old_remainder // remainder
+        old_remainder, remainder = (
+            remainder,
+            old_remainder - quotient * remainder,
+        )
+        old_denominator, denominator = (
+            denominator,
+            old_denominator - quotient * denominator,
+        )
+    numerator = remainder
+    if denominator < 0:
+        numerator = -numerator
+        denominator = -denominator
+    valid = (
+        denominator > 0
+        and denominator <= bound
+        and abs(numerator) <= bound
+        and math.gcd(numerator, denominator) == 1
+    )
+    return numerator, denominator, valid
+
+
+def reconstruction_audit(values: np.ndarray, primes: tuple[int, ...]) -> dict[str, object]:
+    require(values.shape[0] == len(primes) == 8, "eight-prime values")
+    residues = [int(value) for value in values[0]]
+    modulus = primes[0]
+    for prime, row in zip(primes[1:7], values[1:7], strict=True):
+        inverse = pow(modulus % prime, -1, prime)
+        residues = [
+            residue
+            + modulus
+            * (((int(value) - residue % prime) * inverse) % prime)
+            for residue, value in zip(residues, row, strict=True)
+        ]
+        modulus *= prime
+    bound = math.isqrt((modulus - 1) // 2)
+    holdout_prime = primes[7]
+    holdout = values[7]
+    valid = np.zeros(values.shape[1], dtype=bool)
+    passed = np.zeros(values.shape[1], dtype=bool)
+    numerators = np.zeros(values.shape[1], dtype=object)
+    denominators = np.zeros(values.shape[1], dtype=object)
+    for index, (residue, target) in enumerate(zip(residues, holdout, strict=True)):
+        numerator, denominator, candidate = rational_reconstruct(
+            residue, modulus, bound
+        )
+        if not candidate:
+            continue
+        valid[index] = True
+        numerators[index] = numerator
+        denominators[index] = denominator
+        passed[index] = (
+            numerator - int(target) * denominator
+        ) % holdout_prime == 0
+    zeros = passed & np.asarray([value == 0 for value in numerators], dtype=bool)
+    units = passed & np.asarray(
+        [abs(int(value)) == 1 for value in numerators], dtype=bool
+    ) & np.asarray([int(value) == 1 for value in denominators], dtype=bool)
+    integers = passed & np.asarray(
+        [int(value) == 1 for value in denominators], dtype=bool
+    )
+    return {
+        "modulus": modulus,
+        "modulus_bits": modulus.bit_length(),
+        "uniqueness_bound": bound,
+        "coefficients": values.shape[1],
+        "valid_candidates": int(np.count_nonzero(valid)),
+        "holdout_passes": int(np.count_nonzero(passed)),
+        "holdout_aliases": int(np.count_nonzero(valid & ~passed)),
+        "outside_uniqueness_range": int(np.count_nonzero(~valid)),
+        "passing_zeros": int(np.count_nonzero(zeros)),
+        "passing_units": int(np.count_nonzero(units)),
+        "passing_integers": int(np.count_nonzero(integers)),
+        "passing_nontrivial_coefficients": int(np.count_nonzero(passed & ~zeros & ~units)),
+        "valid_mask": valid,
+        "pass_mask": passed,
+    }
+
+
+def main() -> None:
+    packets = [load(path) for path in PACKETS]
+    primes = tuple(int(packet["field"]["prime"]) for packet in packets)
+    require(primes == EXPECTED_PRIMES, "archived split-prime order")
+    require(all(all(packet["checks"].values()) for packet in packets), "packet checks")
+
+    generator_residues: list[np.ndarray] = []
+    syzygy_residues: list[np.ndarray] = []
+    normalization_profiles: list[tuple[object, ...]] = []
+    prime_rows: list[dict[str, object]] = []
+
+    for packet_path, packet, prime in zip(PACKETS, packets, primes, strict=True):
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        root_rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        require(tuple(root_rows) == roots, f"ordered roots p={prime}")
+        generator_values: dict[int, list[np.ndarray]] = {11: [], 14: [], 15: []}
+        syzygy_values: list[np.ndarray] = []
+        local_profiles: list[tuple[object, ...]] = []
+        for root in roots:
+            blocks, syzygies, profile = extract_fiber(
+                ROOT / root_rows[root]["kernel"]["path"], prime
+            )
+            for degree in generator_values:
+                generator_values[degree].append(blocks[degree])
+            syzygy_values.append(syzygies)
+            local_profiles.append(profile)
+        require(len(set(local_profiles)) == 1, f"common root charts p={prime}")
+        normalization_profiles.append(local_profiles[0])
+
+        generator_coefficients = {
+            degree: interpolate(np.stack(values), roots, prime)
+            for degree, values in generator_values.items()
+        }
+        syzygy_coefficients = interpolate(
+            np.stack(syzygy_values), roots, prime
+        )
+        generator_flat = np.concatenate(
+            tuple(generator_coefficients[degree].ravel() for degree in (11, 14, 15))
+        )
+        syzygy_flat = syzygy_coefficients.ravel()
+        require(generator_flat.size == 21648, "generator residue count")
+        require(syzygy_flat.size == 216, "syzygy residue count")
+        generator_residues.append(generator_flat.astype(np.uint32))
+        syzygy_residues.append(syzygy_flat.astype(np.uint32))
+        prime_rows.append(
+            {
+                "prime": prime,
+                "roots": list(roots),
+                "generator_power_basis_residues": int(generator_flat.size),
+                "generator_zero_residues": int(np.count_nonzero(generator_flat == 0)),
+                "syzygy_power_basis_residues": int(syzygy_flat.size),
+                "syzygy_zero_residues": int(np.count_nonzero(syzygy_flat == 0)),
+                "source_packet": record(packet_path),
+            }
+        )
+        print(
+            f"G3FE p={prime}: fibers=6 generators=21648 syzygies=216",
+            flush=True,
+        )
+
+    require(len(set(normalization_profiles)) == 1, "common charts across eight primes")
+    generator_matrix = np.stack(generator_residues)
+    syzygy_matrix = np.stack(syzygy_residues)
+    generator_audit = reconstruction_audit(generator_matrix, primes)
+    syzygy_audit = reconstruction_audit(syzygy_matrix, primes)
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        RESIDUES,
+        primes=np.asarray(primes, dtype=np.uint32),
+        generator_power_basis_residues=generator_matrix,
+        syzygy_power_basis_residues=syzygy_matrix,
+    )
+    np.savez_compressed(
+        AUDIT_ARRAYS,
+        generator_valid=np.packbits(generator_audit.pop("valid_mask")),
+        generator_pass=np.packbits(generator_audit.pop("pass_mask")),
+        syzygy_valid=np.packbits(syzygy_audit.pop("valid_mask")),
+        syzygy_pass=np.packbits(syzygy_audit.pop("pass_mask")),
+    )
+
+    packet = {
+        "schema": "ust.g3fe.h02.component20.eight-prime-graded-promotion-audit.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FE",
+        "status": "CLOSED_EXACT_EIGHT_PRIME_GRADED_PROFILE_NUMERIC_PROMOTION_REJECTED_COLON_MODULE_OPEN",
+        "inputs": {
+            "split_prime_packets": [record(path) for path in PACKETS],
+        },
+        "campaign": {
+            "primes": list(primes),
+            "fibers": 48,
+            "common_normalization_chart": True,
+            "prime_results": prime_rows,
+            "residue_archive": record(RESIDUES),
+        },
+        "graded_free_resolution_through_degree15": {
+            "kernel_carrier": "K_15 subset Sym^15(k^3)",
+            "kernel_dimension": 100,
+            "minimal_generators": {"degree11": 4, "degree14": 15, "degree15": 11},
+            "first_syzygies_visible_through_degree15": {
+                "degree12_linear": 1,
+                "degree13_quadratic_modulo_linear_multiples": 1,
+            },
+            "truncated_presentation": (
+                "R(-12) + R(-13) -> R(-11)^4 + R(-14)^15 + "
+                "R(-15)^11 -> I through degree15"
+            ),
+            "hilbert_identities": {
+                "I11": "4",
+                "I12": "4*3-1=11",
+                "I13": "4*6-1*3-1=20",
+                "I14": "4*10-1*6-1*3+15=46",
+                "I15": "4*15-1*10-1*6+15*3+11=100",
+            },
+        },
+        "seven_prime_construction_eighth_prime_holdout": {
+            "generator_coefficients": generator_audit,
+            "syzygy_coefficients": syzygy_audit,
+            "masks": record(AUDIT_ARRAYS),
+            "verdict": (
+                "The holdout accepts only structural zeros and normalization units. "
+                "No genuinely nontrivial normalized generator or syzygy coefficient "
+                "is promoted by the seven-prime uniqueness-range reconstruction."
+            ),
+        },
+        "checks": {
+            "all_eight_archived_split_primes_and48_fibers_are_consumed": True,
+            "all48_component20_kernels_have_the_same_4_15_11_generator_profile": True,
+            "all48_kernels_have_one_linear_and_one_new_quadratic_syzygy_through_degree15": True,
+            "one_normalization_chart_is_common_to_all48_fibers": True,
+            "the_generator_payload_has21648_and_syzygy_payload216_power_basis_residues_per_prime": True,
+            "the_eighth_prime_rejects_every_nontrivial_seven_prime_generator_candidate": generator_audit["passing_nontrivial_coefficients"] == 0,
+            "the_eighth_prime_rejects_every_nontrivial_seven_prime_syzygy_candidate": syzygy_audit["passing_nontrivial_coefficients"] == 0,
+        },
+        "guardrails": {
+            "claims_finite_profile_stability_proves_characteristic_zero_flatness": False,
+            "claims_the_normalized_coefficients_are_reconstructed_over_Q": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3feComponent20EightPrimeGradedPromotionAudit",
+            "tier": "CLOSED_EXACT_MULTI_PRIME_GRADED_STRUCTURE_AND_NUMERIC_NOGO",
+            "statement": (
+                "All48 archived split fibers have one common normalized graded "
+                "component-20 profile with minimal generators4,15,11 in degrees "
+                "11,14,15 and one new first syzygy in each of degrees12 and13. "
+                "Seven-prime rational reconstruction followed by the eighth-prime "
+                "holdout promotes only structural zeros and normalization units, "
+                "both for the generators and for their compact syzygies. Therefore "
+                "blind prime extension is rejected as the proof route; the remaining "
+                "object is an exact characteristic-zero colon-module/free-resolution "
+                "theorem derived from the selected Macaulay geometry."
+            ),
+        },
+        "next_required_object": (
+            "Construct over Q(gamma) the selected colon module I_d={f : "
+            "f*Sym^(15-d) lies in the ordered prior-source plus Jacobian image}, "
+            "and prove its degree-through15 free-resolution ranks directly from the "
+            "G3EX cohomological presentation."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FE component20 eight-prime graded audit: PASS "
+        f"generator_pass={generator_audit['holdout_passes']}/21648 "
+        f"syzygy_pass={syzygy_audit['holdout_passes']}/216"
+    )
+
+
+if __name__ == "__main__":
+    main()

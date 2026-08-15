@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Emit the exact selected finite-residue left-normal operator N_full=L*N0."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import verify_ust_g3ak_full_graph_incidence_normal_decomposition as arithmetic
+import verify_ust_g3an_selected_cayley_full_response_schur as g3an_verify
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+G3AN = STATE / "ust_g3an_selected_cayley_full_response_schur.packet.json"
+G3AM = STATE / "ust_g3am_selected_cayley_principal_response.packet.json"
+G3AQ = STATE / "ust_g3aq_selected_cayley_relative_residue_promotion.packet.json"
+OUT = STATE / "ust_g3as_selected_finite_normal_operator.packet.json"
+BINARY = STATE / "ust_g3as_selected_finite_normal_operator.f101e6.u8"
+DEGREE = 6
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def encode(matrix: list[list[tuple[int, ...]]]) -> bytes:
+    payload = bytearray()
+    for row in matrix:
+        for value in row:
+            require(len(value) == DEGREE, "extension-field coefficient width")
+            payload.extend(value)
+    return bytes(payload)
+
+
+def sparse_multiply(
+    left: list[list[tuple[int, ...]]],
+    right: list[list[tuple[int, ...]]],
+    relation: tuple[int, ...],
+) -> list[list[tuple[int, ...]]]:
+    require(left and right and len(left[0]) == len(right), "sparse product dimensions")
+    zero = arithmetic.arithmetic.qzero(DEGREE)
+    result = [[zero for _ in range(len(right[0]))] for _ in left]
+    for row_index, row in enumerate(left):
+        for middle, left_value in enumerate(row):
+            if left_value == zero:
+                continue
+            for column, right_value in enumerate(right[middle]):
+                if right_value == zero:
+                    continue
+                result[row_index][column] = arithmetic.add(
+                    result[row_index][column],
+                    arithmetic.mul(left_value, right_value, relation),
+                )
+    return result
+
+
+def main() -> None:
+    g3an = load(G3AN)
+    g3am = load(G3AM)
+    g3aq = load(G3AQ)
+    require(
+        g3an["schema"]
+        == "mtt.unified-source.g3an-selected-cayley-full-response-schur.v1",
+        "G3AN schema",
+    )
+    block = g3an["full_response_schur"]
+    require(
+        block["rank_D"] == 122
+        and block["full_left_nullity"] == 126
+        and block["rank_E"] == 89,
+        "closed full-response dimensions",
+    )
+    require(
+        g3aq["schema"]
+        == "mtt.unified-source.g3aq-selected-cayley-relative-residue-promotion.v1"
+        and g3aq["status"]
+        == "CLOSED_EXACT_SELECTED_CHARACTERISTIC_ZERO_RELATIVE_R1_RESPONSE_RANK122",
+        "G3AQ characteristic-zero response promotion",
+    )
+    require(g3aq["inputs"]["G3AN"]["sha256"] == sha256(G3AN), "G3AQ uses this G3AN")
+    require(
+        g3aq["promotion_result"]["finite_unit_minor_certificate"]["method"]
+        == "block_Gaussian_elimination_with_explicit_R0_and_E0_inverses",
+        "G3AQ unit minor saturation certificate",
+    )
+    field = g3an["residue_field"]
+    require(field["prime"] == 101 and field["extension_degree"] == DEGREE, "selected field")
+    relation = tuple(int(value) for value in field["gamma_relation_coefficients_ascending"])
+    zero = arithmetic.arithmetic.qzero(DEGREE)
+    one = arithmetic.arithmetic.qone(DEGREE)
+
+    bundle = block["binary_artifact"]
+    bundle_path = ROOT / bundle["path"]
+    require(bundle_path.is_file() and sha256(bundle_path) == bundle["sha256"], "G3AN bundle")
+    raw = bundle_path.read_bytes()
+    require(len(raw) == bundle["bytes"], "G3AN bundle bytes")
+    layout = bundle["layout"]
+    n0 = g3an_verify.decode(raw, layout["N0_principal_quotient"], "N0")
+    left = g3an_verify.decode(raw, layout["L_extra_quotient"], "L")
+    quotient_rows = [int(value) for value in block["principal_quotient_rows_zero_based"]]
+    final_rows = [int(value) for value in block["final_normal_rows_in_principal_quotient_zero_based"]]
+    require(
+        all(
+            n0[row][quotient_row] == (one if row == column else zero)
+            for row in range(215)
+            for column, quotient_row in enumerate(quotient_rows)
+        ),
+        "N0 is surjective",
+    )
+    require(
+        all(
+            left[row][final_row] == (one if row == column else zero)
+            for row in range(126)
+            for column, final_row in enumerate(final_rows)
+        ),
+        "L is surjective",
+    )
+
+    n_full = sparse_multiply(left, n0, relation)
+    require((len(n_full), len(n_full[0])) == (126, 248), "N_full shape")
+    # G3AN independently verifies N0*D0=0 and L*N0*D1=L*E=0. Since N0 and
+    # L are both surjective by the displayed identity submatrices, L*N0 is
+    # surjective as well and therefore has exact rank 126.
+    require(all(g3an["checks"].values()), "hash-bound G3AN annihilation checks")
+
+    BINARY.write_bytes(encode(n_full))
+    checks = {
+        "G3AN_full_response_is_hash_bound": True,
+        "G3AQ_unit_minor_makes_the_integral_response_image_saturated": True,
+        "Nfull_is_the_exact_product_L_times_N0": True,
+        "Nfull_has_shape126_by248": True,
+        "N0_and_L_identity_submatrices_prove_Nfull_surjective": True,
+        "Nfull_annihilates_all33_principal_response_columns": True,
+        "Nfull_annihilates_all89_extra_response_columns": True,
+        "Nfull_has_exact_row_rank126_over_F1016": True,
+        "a_nonzero_reduced_residual_would_certify_a_nonzero_integral_residual": True,
+        "a_zero_reduced_residual_is_not_promoted_to_characteristic_zero_equality": True,
+        "no_beta_C_value_or_observed_physics_value_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3as-selected-finite-normal-operator.v1",
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AS",
+        "status": "CLOSED_EXACT_SELECTED_FINITE_RESIDUE_NORMAL_OPERATOR_RANK126",
+        "inputs": {
+            "G3AN": record(G3AN),
+            "G3AM": record(G3AM),
+            "G3AQ": record(G3AQ),
+            "G3AN_binary_bundle": record(bundle_path),
+        },
+        "residue_field": field,
+        "factorization": {
+            "formula": "N_full = L_extra_quotient * N0_principal_quotient",
+            "N0_shape": [215, 248],
+            "L_shape": [126, 215],
+            "Nfull_shape": [126, 248],
+            "Nfull_rank": 126,
+            "principal_response_shape": [248, 33],
+            "extra_response_shape": [248, 89],
+        },
+        "normal_operator": {
+            **record(BINARY),
+            "shape": [126, 248, DEGREE],
+            "encoding": "row-major; one F_101^6 element is six u8 polynomial-basis coefficients",
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "SelectedFiniteResidueNormalOperatorTheorem",
+            "tier": "CLOSED_EXACT_SELECTED_FINITE_RESIDUE_OPERATOR",
+            "statement": "The selected F_101^6 response has an explicit rank-126 left-normal operator N_full=L*N0 that annihilates all 122 response columns. For a hash-bound integral same-source beta_C, a nonzero reduction N_full*beta_bar proves the characteristic-zero residual is nonzero. A zero reduction is only a necessary congruence and does not prove characteristic-zero vanishing.",
+        },
+        "parameter_ledger": {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+        },
+        "guardrails": {
+            "claims_an_explicit_characteristic_zero_normal_matrix": False,
+            "claims_beta_C_is_emitted": False,
+            "claims_modular_zero_implies_characteristic_zero_zero": False,
+            "claims_B_ETA9_01_is_closed": False,
+            "claims_B_ETA9_02_is_closed": False,
+            "claims_the_Hull_Strominger_endpoint_is_closed": False,
+        },
+        "next_required_object": "Reduce a same-source integrally normalized beta_C into this selected F_101^6 row frame. A nonzero normal residual is a rigorous no-go; a zero residual must be followed by an exact characteristic-zero operator/source evaluation or a certified root theorem.",
+    }
+    require(all(checks.values()), "G3AS checks")
+    require(not any(packet["guardrails"].values()), "G3AS guardrails")
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AS selected finite normal operator: PASS shape=126x248 rank=126")
+
+
+if __name__ == "__main__":
+    main()

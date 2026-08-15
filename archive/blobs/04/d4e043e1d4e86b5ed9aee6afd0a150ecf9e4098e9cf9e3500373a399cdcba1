@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+"""Assemble the full GF(11) correction operator and its selected affine source."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cd"
+DIRECT = EVIDENCE / "g3cd_correction_direct_sources.packet.json"
+G3BQ = ROOT / "state" / "ust_g3bq_correction_full_recursive_return.packet.json"
+G3CC = ROOT / "state" / "ust_g3cc_selected_source_terminal_b89_dualization.packet.json"
+OUT = ROOT / "state" / "ust_g3cd_correction_full_affine_operator.packet.json"
+PRIME = 11
+
+H20_H11_COORDINATES = EVIDENCE / "g3cd_H20_H11.coordinates.cscbin"
+H20_H20_COORDINATES = EVIDENCE / "g3cd_H20_H20.coordinates.cscbin"
+H20_LOWER_PACKET = EVIDENCE / "g3cd_H20_recursive_H20_ambient.packet.json"
+H11_H02_COORDINATES = EVIDENCE / "g3cd_H11_H02.coordinates.cscbin"
+H11_H11_COORDINATES = EVIDENCE / "g3cd_H11_H11.coordinates.cscbin"
+H11_H20_COORDINATES = EVIDENCE / "g3cd_H11_H20.coordinates.cscbin"
+H11_LOWER_PACKET = EVIDENCE / "g3cd_H11_recursive_H11_ambient.packet.json"
+H11_TERMINAL_PACKET = EVIDENCE / "g3cd_H11_recursive_H20_ambient.packet.json"
+
+H20_BLOCK = EVIDENCE / "g3cd_correction_H20_full_recursive_block.npz"
+H11_BLOCK = EVIDENCE / "g3cd_correction_H11_full_recursive_block.npz"
+CONNECTION = EVIDENCE / "g3cd_correction_full_operator.npz"
+CONNECTION_DENSE = EVIDENCE / "g3cd_correction_full_operator_target_by_source.u8"
+AFFINE = EVIDENCE / "g3cd_correction_affine_operator.npz"
+AFFINE_DENSE = EVIDENCE / "g3cd_correction_affine_operator.u8"
+SOURCE_1509 = EVIDENCE / "g3cd_selected_source_1509.mod11.npy"
+RIGHT_KERNEL = EVIDENCE / "g3cd_correction_right_kernel.mod11.npy"
+LEFT_COKERNEL = EVIDENCE / "g3cd_correction_left_cokernel.mod11.npy"
+RANK_MINOR = EVIDENCE / "g3cd_correction_rank1508_minor_certificate.npz"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": "20 Mathematical Language Discovery Program",
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def exact_residual_nonzeros(left: sparse.spmatrix, right: sparse.spmatrix) -> int:
+    residual = (left.astype(np.int32) - right.astype(np.int32)).tocsc()
+    residual.data %= PRIME
+    residual.eliminate_zeros()
+    return int(residual.nnz)
+
+
+def require_log(path: Path, rhs_columns: int) -> None:
+    text = path.read_text(encoding="utf-8")
+    require("SUCCESS" in text, f"{path.name} success")
+    require(f"rhs_columns={rhs_columns}" in text, f"{path.name} RHS count")
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc(copy=True)
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def normalized_null_vector(
+    matrix: np.ndarray,
+) -> tuple[np.ndarray, list[int], list[int], int]:
+    """Return one canonical null vector and the pivot columns over GF(11)."""
+    work = np.asarray(matrix, dtype=np.int64).copy() % PRIME
+    rows, columns = work.shape
+    pivot_row = 0
+    pivot_columns: list[int] = []
+    pivot_rows: list[int] = []
+    row_labels = np.arange(rows, dtype=np.int32)
+    pivot_minor_determinant = 1
+    for column in range(columns):
+        candidates = np.flatnonzero(work[pivot_row:, column])
+        if candidates.size == 0:
+            continue
+        selected = pivot_row + int(candidates[0])
+        if selected != pivot_row:
+            work[[pivot_row, selected]] = work[[selected, pivot_row]]
+            row_labels[[pivot_row, selected]] = row_labels[[selected, pivot_row]]
+        pivot = int(work[pivot_row, column])
+        pivot_minor_determinant = pivot_minor_determinant * pivot % PRIME
+        pivot_rows.append(int(row_labels[pivot_row]))
+        work[pivot_row] = work[pivot_row] * pow(pivot, -1, PRIME) % PRIME
+        if pivot_row + 1 < rows:
+            factors = work[pivot_row + 1 :, column].copy()
+            active = np.flatnonzero(factors)
+            if active.size:
+                target_rows = pivot_row + 1 + active
+                work[target_rows] = (
+                    work[target_rows] - factors[active, None] * work[pivot_row]
+                ) % PRIME
+        pivot_columns.append(column)
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    free_columns = [column for column in range(columns) if column not in set(pivot_columns)]
+    require(free_columns, "null vector requires a free column")
+    free = free_columns[0]
+    vector = np.zeros(columns, dtype=np.int64)
+    vector[free] = 1
+    for row in range(len(pivot_columns) - 1, -1, -1):
+        pivot_column = pivot_columns[row]
+        value = int(np.dot(work[row, pivot_column + 1 :], vector[pivot_column + 1 :]) % PRIME)
+        vector[pivot_column] = (-value) % PRIME
+    residual = np.asarray(matrix, dtype=np.int64) @ vector % PRIME
+    require(not np.any(residual), "null-vector residual")
+    first = int(np.flatnonzero(vector)[0])
+    vector = vector * pow(int(vector[first]), -1, PRIME) % PRIME
+    require(int(vector[first]) == 1, "canonical null-vector normalization")
+    return vector.astype(np.uint8), pivot_columns, pivot_rows, pivot_minor_determinant
+
+
+def sector_nonzeros(vector: np.ndarray) -> dict[str, int]:
+    return {
+        "H20": int(np.count_nonzero(vector[:248])),
+        "H11": int(np.count_nonzero(vector[248:1261])),
+        "H02": int(np.count_nonzero(vector[1261:1509])),
+    }
+
+
+def main() -> None:
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_full_recursive_H20_source_block as common
+    import assemble_q79_eta9_gauss_manin_strict_blocks as linear
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    direct = load(DIRECT)
+    g3bq = load(G3BQ)
+    g3cc = load(G3CC)
+    require(all(direct["checks"].values()), "direct source checks")
+    require(all(g3bq["checks"].values()), "G3BQ checks")
+    require(all(g3cc["checks"].values()), "G3CC checks")
+    require(direct["field"] == "GF(11) at gamma=3", "common direct field")
+    require(g3bq["field"] == "GF(11) at gamma=3", "common G3BQ field")
+
+    for path, count in (
+        (EVIDENCE / "g3cd_H20_H11.coordinates.solver.out", 248),
+        (EVIDENCE / "g3cd_H20_H20.coordinates.solver.out", 248),
+        (EVIDENCE / "g3cd_H11_H02.coordinates.solver.out", 1013),
+        (EVIDENCE / "g3cd_H11_H11.coordinates.solver.out", 1013),
+        (EVIDENCE / "g3cd_H11_H20.coordinates.solver.out", 1013),
+    ):
+        require_log(path, count)
+
+    h20_h11, h20_h11_q, h20_h11_image = solver_io.read_coordinates(H20_H11_COORDINATES)
+    h20_h20, h20_h20_q, h20_h20_image = solver_io.read_coordinates(H20_H20_COORDINATES)
+    h11_h02, h11_h02_q, h11_h02_image = solver_io.read_coordinates(H11_H02_COORDINATES)
+    h11_h11, h11_h11_q, h11_h11_image = solver_io.read_coordinates(H11_H11_COORDINATES)
+    h11_h20, h11_h20_q, h11_h20_image = solver_io.read_coordinates(H11_H20_COORDINATES)
+    require(h20_h11.shape == (5439, 248) and (h20_h11_q, h20_h11_image) == (1013, 4426), "H20/H11 coordinate shape")
+    require(h20_h20.shape == (282, 248) and (h20_h20_q, h20_h20_image) == (248, 34), "H20/H20 coordinate shape")
+    require(h11_h02.shape == (42706, 1013) and (h11_h02_q, h11_h02_image) == (248, 42458), "H11/H02 coordinate shape")
+    require(h11_h11.shape == (5439, 1013) and (h11_h11_q, h11_h11_image) == (1013, 4426), "H11/H11 coordinate shape")
+    require(h11_h20.shape == (282, 1013) and (h11_h20_q, h11_h20_image) == (248, 34), "H11/H20 coordinate shape")
+
+    h20_lower = load(H20_LOWER_PACKET)
+    h11_lower = load(H11_LOWER_PACKET)
+    h11_terminal = load(H11_TERMINAL_PACKET)
+    for label, packet in (
+        ("H20 lower", h20_lower),
+        ("H11 lower", h11_lower),
+        ("H11 terminal", h11_terminal),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    h11_selected, _ = common.selected_source_matrix("H11")
+    h20_selected, _ = common.selected_source_matrix("H20")
+    h02_selected, _ = common.selected_source_matrix("H02")
+    h20_direct_rhs = sparse.load_npz(ROOT / direct["blocks"]["H20"]["NPZ"]["path"]).tocsc()
+    h11_direct_rhs = sparse.load_npz(ROOT / direct["blocks"]["H11"]["NPZ"]["path"]).tocsc()
+    h20_lower_rhs = sparse.load_npz(Path(h20_lower["lower_pole_ambient_RHS"]["NPZ"]["path"])).tocsc()
+    h11_lower_rhs = sparse.load_npz(Path(h11_lower["lower_pole_ambient_RHS"]["NPZ"]["path"])).tocsc()
+    h11_terminal_rhs = sparse.load_npz(Path(h11_terminal["lower_pole_ambient_RHS"]["NPZ"]["path"])).tocsc()
+
+    h20_direct_reconstruction = normalize(h11_selected @ h20_h11.astype(np.int32))
+    h20_lower_reconstruction = normalize(h20_selected @ h20_h20.astype(np.int32))
+    h20_direct_residual = exact_residual_nonzeros(h20_direct_reconstruction, h20_direct_rhs)
+    h20_lower_residual = exact_residual_nonzeros(h20_lower_reconstruction, h20_lower_rhs)
+    require(h20_direct_residual == h20_lower_residual == 0, "H20 source reconstructions")
+
+    sample_columns = np.asarray([0, 1, 127, 255, 511, 767, 1011, 1012], dtype=np.int32)
+    h11_direct_sample = normalize(
+        h02_selected @ h11_h02[:, sample_columns].astype(np.int32)
+    )
+    h11_direct_sample_residual = exact_residual_nonzeros(
+        h11_direct_sample, h11_direct_rhs[:, sample_columns]
+    )
+    h11_lower_reconstruction = normalize(h11_selected @ h11_h11.astype(np.int32))
+    h11_terminal_reconstruction = normalize(h20_selected @ h11_h20.astype(np.int32))
+    h11_lower_residual = exact_residual_nonzeros(h11_lower_reconstruction, h11_lower_rhs)
+    h11_terminal_residual = exact_residual_nonzeros(h11_terminal_reconstruction, h11_terminal_rhs)
+    require(
+        h11_direct_sample_residual == h11_lower_residual == h11_terminal_residual == 0,
+        "H11 source reconstructions",
+    )
+
+    h20_block = normalize(
+        sparse.vstack(
+            [
+                h20_h20[:h20_h20_q, :],
+                h20_h11[:h20_h11_q, :],
+                sparse.csc_matrix((248, 248), dtype=np.uint8),
+            ],
+            format="csc",
+        )
+    )
+    h11_block = normalize(
+        sparse.vstack(
+            [
+                h11_h20[:h11_h20_q, :],
+                h11_h11[:h11_h11_q, :],
+                h11_h02[:h11_h02_q, :],
+            ],
+            format="csc",
+        )
+    )
+    require(h20_block.shape == (1509, 248), "H20 full block shape")
+    require(h11_block.shape == (1509, 1013), "H11 full block shape")
+
+    h02_record = g3bq["full_block"]["NPZ"]
+    h02_path = ROOT / h02_record["path"]
+    require(sha256(h02_path) == h02_record["sha256"], "G3BQ H02 block hash")
+    h02_block = normalize(sparse.load_npz(h02_path))
+    require(h02_block.shape == (1509, 248), "H02 full block shape")
+
+    sparse.save_npz(H20_BLOCK, h20_block, compressed=True)
+    sparse.save_npz(H11_BLOCK, h11_block, compressed=True)
+    connection = normalize(sparse.hstack([h20_block, h11_block, h02_block], format="csc"))
+    require(connection.shape == (1509, 1509), "full correction operator shape")
+    sparse.save_npz(CONNECTION, connection, compressed=True)
+    connection_dense = connection.toarray().astype(np.uint8)
+    CONNECTION_DENSE.write_bytes(connection_dense.tobytes(order="C"))
+    determinant = linear.determinant_mod_prime(connection_dense)
+    if determinant:
+        connection_rank = 1509
+        connection_pivots = list(range(1509))
+    else:
+        connection_rank, connection_pivots = linear.echelon_pivot_columns(connection_dense)
+
+    source_record = g3cc["terminal_source"]["B103_H02_vector"]
+    source_path = ROOT / source_record["path"]
+    require(sha256(source_path) == source_record["sha256"], "G3CC source hash")
+    source_h02 = np.load(source_path, allow_pickle=False).astype(np.uint8)
+    require(source_h02.shape == (248,), "G3CC H02 vector shape")
+    source_1509 = np.concatenate([np.zeros(1261, dtype=np.uint8), source_h02])
+    np.save(SOURCE_1509, source_1509, allow_pickle=False)
+    source_column = sparse.csc_matrix(source_1509.reshape(-1, 1))
+    affine = normalize(
+        sparse.bmat(
+            [
+                [connection, source_column],
+                [sparse.csc_matrix((1, 1509), dtype=np.uint8), sparse.csc_matrix((1, 1), dtype=np.uint8)],
+            ],
+            format="csc",
+        )
+    )
+    require(affine.shape == (1510, 1510), "affine operator shape")
+    sparse.save_npz(AFFINE, affine, compressed=True)
+    affine_dense = affine.toarray().astype(np.uint8)
+    AFFINE_DENSE.write_bytes(affine_dense.tobytes(order="C"))
+    if connection_rank == 1509:
+        affine_rank = 1509
+        source_in_connection_image = True
+    else:
+        augmented_rank, _ = linear.echelon_pivot_columns(
+            np.column_stack([connection_dense, source_1509])
+        )
+        affine_rank = augmented_rank
+        source_in_connection_image = augmented_rank == connection_rank
+
+    require(connection_rank == 1508, "selected correction operator rank 1508")
+    require(affine_rank == 1509 and not source_in_connection_image, "selected source fills cokernel")
+    right_kernel, right_pivots, right_pivot_rows, rank_minor_determinant = normalized_null_vector(connection_dense)
+    left_cokernel, left_pivots, _, _ = normalized_null_vector(connection_dense.T)
+    require(len(right_pivots) == len(left_pivots) == 1508, "one-dimensional kernel and cokernel")
+    require(not np.any(connection_dense.astype(np.int64) @ right_kernel.astype(np.int64) % PRIME), "right-kernel identity")
+    require(not np.any(left_cokernel.astype(np.int64) @ connection_dense.astype(np.int64) % PRIME), "left-cokernel identity")
+    obstruction_pairing = int(left_cokernel.astype(np.int64) @ source_1509.astype(np.int64) % PRIME)
+    require(obstruction_pairing != 0, "selected affine obstruction is nonzero")
+    np.save(RIGHT_KERNEL, right_kernel, allow_pickle=False)
+    np.save(LEFT_COKERNEL, left_cokernel, allow_pickle=False)
+    np.savez_compressed(
+        RANK_MINOR,
+        rows=np.asarray(right_pivot_rows, dtype=np.int32),
+        columns=np.asarray(right_pivots, dtype=np.int32),
+    )
+    require(rank_minor_determinant != 0, "rank-1508 minor determinant")
+
+    h20_rank, h20_pivots = linear.echelon_pivot_columns(h20_block.toarray().T)
+    h11_rank, h11_pivots = linear.echelon_pivot_columns(h11_block.toarray().T)
+    h02_rank = int(g3bq["full_block"]["rank_mod11"])
+    require(h02_rank == 248, "G3BQ H02 rank")
+
+    terminal_path = mld / "q79_eta9_terminal_H20_divergence_certificate.packet.json"
+    terminal = load(terminal_path)
+    require(all(terminal["checks"].values()), "terminal H20 divergence")
+    checks = {
+        "the_G3BK_correction_direction_is_used_in_all_three_source_sectors": True,
+        "all248_H20_columns_reconstruct_exactly_through_H11_and_H20": True,
+        "eight_spread_H11_to_H02_columns_reconstruct_exactly": True,
+        "all1013_H11_lower_returns_reconstruct_exactly_through_H11_and_H20": True,
+        "the_G3BQ_248_column_H02_return_is_hash_bound_without_recomputation": True,
+        "all1509_source_columns_share_the_frozen_B103_order": True,
+        "the_complete1509_by1509_correction_operator_is_emitted": True,
+        "rank_and_determinant_are_computed_exactly_over_GF11": True,
+        "the_G3CC_selected_H02_source_is_embedded_in_the_last248_target_rows": True,
+        "the_1510_by1510_affine_coefficient_operator_is_emitted": True,
+        "the_homogeneous_coordinate_has_zero_derivative": True,
+        "the_correction_operator_has_one_dimensional_kernel_and_cokernel": True,
+        "explicit_normalized_right_kernel_and_left_cokernel_witnesses_are_emitted": True,
+        "a_nonzero_1508_square_minor_certificate_is_emitted": True,
+        "the_selected_source_pairs_nontrivially_with_the_unique_left_cokernel": True,
+        "the_selected_source_therefore_fills_the_unique_one_fiber_cokernel": True,
+        "no_F1_direction_connection_block_is_substituted": True,
+        "no_characteristic_zero_flatness_integral_transport_or_beta_value_is_inferred": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3cd-correction-full-affine-operator.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3CD",
+        "status": "CLOSED_EXACT_GF11_CORRECTION_FULL_OPERATOR_AND_SELECTED_AFFINE_SOURCE_PATH_LIFT_OPEN",
+        "field": "GF(11) at gamma=3",
+        "basis_order": "B103 rows and columns H20(248), H11(1013), H02(248)",
+        "inputs": {
+            "direct_correction_sources": record(DIRECT),
+            "G3BQ_correction_H02_return": record(G3BQ),
+            "G3CC_selected_terminal_source": record(G3CC),
+            "terminal_H20_divergence": external_record(terminal_path, mld),
+            "coordinate_payloads": {
+                "H20_H11": record(H20_H11_COORDINATES),
+                "H20_H20": record(H20_H20_COORDINATES),
+                "H11_H02": record(H11_H02_COORDINATES),
+                "H11_H11": record(H11_H11_COORDINATES),
+                "H11_H20": record(H11_H20_COORDINATES),
+            },
+            "recursive_divergence_packets": {
+                "H20_lower": record(H20_LOWER_PACKET),
+                "H11_lower": record(H11_LOWER_PACKET),
+                "H11_terminal": record(H11_TERMINAL_PACKET),
+            },
+        },
+        "exact_reconstruction": {
+            "H20_direct_H11_residual_nonzeros": h20_direct_residual,
+            "H20_lower_H20_residual_nonzeros": h20_lower_residual,
+            "H11_direct_H02_sample_columns": sample_columns.tolist(),
+            "H11_direct_H02_sample_residual_nonzeros": h11_direct_sample_residual,
+            "H11_lower_H11_residual_nonzeros": h11_lower_residual,
+            "H11_terminal_H20_residual_nonzeros": h11_terminal_residual,
+        },
+        "source_blocks": {
+            "H20": {
+                "shape": list(h20_block.shape),
+                "nonzero_entries": int(h20_block.nnz),
+                "rank_mod11": h20_rank,
+                "pivot_columns_in_source_by_target_orientation": h20_pivots,
+                "NPZ": record(H20_BLOCK),
+            },
+            "H11": {
+                "shape": list(h11_block.shape),
+                "nonzero_entries": int(h11_block.nnz),
+                "rank_mod11": h11_rank,
+                "pivot_columns_in_source_by_target_orientation": h11_pivots,
+                "NPZ": record(H11_BLOCK),
+            },
+            "H02": {
+                "shape": list(h02_block.shape),
+                "nonzero_entries": int(h02_block.nnz),
+                "rank_mod11": h02_rank,
+                "NPZ": h02_record,
+            },
+        },
+        "correction_operator": {
+            "shape": list(connection.shape),
+            "orientation": "target B103 rows by source B103 columns",
+            "nonzero_entries": int(connection.nnz),
+            "rank_mod11": connection_rank,
+            "determinant_mod11": determinant,
+            "pivot_columns": connection_pivots,
+            "NPZ": record(CONNECTION),
+            "dense_uint8": record(CONNECTION_DENSE),
+        },
+        "selected_affine_source": {
+            "unscaled_equation_convention": "dy/da=K_C*y+b_C; an overall connection sign may be applied consistently at ODE integration",
+            "path_scaling": "multiply the complete right-hand side by a_prime(t) on G3BJ",
+            "source_Hodge_block": "H02",
+            "source_nonzero_entries": int(np.count_nonzero(source_1509)),
+            "source_support_rows": [1261, 1509],
+            "source_vector": record(SOURCE_1509),
+            "affine_matrix_formula": "K_tilde=[[K_C,b_C],[0,0]]",
+            "affine_shape": list(affine.shape),
+            "affine_nonzero_entries": int(affine.nnz),
+            "affine_rank_mod11": affine_rank,
+            "source_is_in_the_one_fiber_connection_image": source_in_connection_image,
+            "right_kernel": {
+                "dimension": 1,
+                "normalization": "first nonzero B103 coordinate equals 1",
+                "nonzero_entries": int(np.count_nonzero(right_kernel)),
+                "nonzero_entries_by_sector": sector_nonzeros(right_kernel),
+                "first_nonzero_index_zero_based": int(np.flatnonzero(right_kernel)[0]),
+                "vector": record(RIGHT_KERNEL),
+            },
+            "rank1508_minor": {
+                "shape": [1508, 1508],
+                "row_order": "ordered original B103 target rows selected by exact elimination",
+                "column_order": "increasing B103 source pivot columns",
+                "determinant_mod11": rank_minor_determinant,
+                "certificate": record(RANK_MINOR),
+            },
+            "left_cokernel": {
+                "dimension": 1,
+                "normalization": "first nonzero dual B103 coordinate equals 1",
+                "nonzero_entries": int(np.count_nonzero(left_cokernel)),
+                "nonzero_entries_by_sector": sector_nonzeros(left_cokernel),
+                "first_nonzero_index_zero_based": int(np.flatnonzero(left_cokernel)[0]),
+                "vector": record(LEFT_COKERNEL),
+            },
+            "obstruction_pairing_mod11": obstruction_pairing,
+            "obstruction_identity": "ell_C^T*K_C=0 and ell_C^T*b_C is nonzero",
+            "NPZ": record(AFFINE),
+            "dense_uint8": record(AFFINE_DENSE),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_this_one_fiber_operator_is_a_rational_function_of_a": False,
+            "claims_a_characteristic_zero_flat_connection": False,
+            "claims_the_selected_source_section_is_horizontal": False,
+            "claims_the_rank1510_path_ODE_is_integrated": False,
+            "claims_an_integral_B89_marking_or_normal_function": False,
+            "claims_beta_C_is_decided": False,
+        },
+        "theorem": {
+            "name": "ustG3cdCorrectionFullAffineGoodFiberOperator",
+            "tier": "CLOSED_EXACT_SELECTED_GF11_FULL_CORRECTION_AND_AFFINE_COEFFICIENT_OPERATOR",
+            "statement": "At the common terminal good fiber, the exact G3BI correction direction acts on every frozen B103 H20, H11 and H02 source column through the complete toric recursive return. Concatenation gives a rank-1508 operator with one-dimensional kernel and cokernel. The independently selected G3CC H02 source pairs nontrivially with the emitted normalized left-cokernel witness, so adjoining it raises the affine rank to 1509 and fills that unique one-fiber cokernel.",
+        },
+        "frontier_delta": {
+            "before": "G3BQ closed only the 248 H02 correction columns, while G3CC supplied a terminal source vector without a complete correction-direction coefficient operator.",
+            "after": "All 1509 correction-direction source columns and the selected affine source column now coexist in one exact terminal good-fiber operator. The correction operator has a unique cokernel and the selected source hits it nontrivially, an exact one-fiber obstruction certificate. Parameter dependence along G3BJ, characteristic-zero promotion, horizontal integration and integral normalization remain.",
+        },
+        "next_required_object": "Evaluate or reconstruct K_C(a) and b_C(a) on a certified path atlas, then integrate the one selected rank-1510 system and promote its endpoint to the integral B89 marking.",
+    }
+    require(all(checks.values()), "G3CD checks")
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CD correction full affine operator: PASS")
+    print(
+        f"H20_rank={h20_rank} H11_rank={h11_rank} H02_rank={h02_rank} "
+        f"K_rank={connection_rank} det={determinant} affine_rank={affine_rank} "
+        f"obstruction={obstruction_pairing} K_nnz={connection.nnz} "
+        f"source_nnz={np.count_nonzero(source_1509)}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

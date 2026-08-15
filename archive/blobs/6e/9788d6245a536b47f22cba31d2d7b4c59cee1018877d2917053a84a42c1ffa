@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Run restartable adaptive row ranges for the selected G3AP Macaulay map."""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as fixed_chunk
+import build_ust_g3ap_selected_cayley_target_macaulay_range as range_builder
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def artifact_current(record: dict[str, object]) -> bool:
+    path = ROOT / str(record.get("path", ""))
+    return (
+        path.is_file()
+        and record.get("sha256") == sha256(path)
+        and ("bytes" not in record or record["bytes"] == path.stat().st_size)
+    )
+
+
+def parse_range(value: str) -> tuple[int, int]:
+    start_text, stop_text = value.split(":", 1)
+    start, stop = int(start_text), int(stop_text)
+    if not 0 <= start < stop:
+        raise argparse.ArgumentTypeError("range must be START:STOP with START < STOP")
+    return start, stop
+
+
+def certified(total: int, start: int, stop: int) -> bool:
+    packet_path = range_builder.paths(total, start, stop)["packet"]
+    if not packet_path.is_file():
+        return False
+    try:
+        packet = json.loads(packet_path.read_text(encoding="ascii"))
+        source = packet["inputs"]["selected_source"]
+        base = packet["inputs"]["base_coordinate_packet"]
+        return (
+            packet["schema"]
+            == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-range.v1"
+            and packet["selection"]["balanced_rows"] == total
+            and packet["selection"]["global_start_zero_based"] == start
+            and packet["selection"]["global_stop_exclusive_zero_based"] == stop
+            and source["path"] == fixed_chunk.macaulay.relative(fixed_chunk.macaulay.SOURCE)
+            and source["sha256"] == fixed_chunk.macaulay.sha256(fixed_chunk.macaulay.SOURCE)
+            and base["path"]
+            == fixed_chunk.macaulay.relative(fixed_chunk.macaulay.INSPECT_PACKET)
+            and base["sha256"] == sha256(fixed_chunk.macaulay.INSPECT_PACKET)
+            and artifact_current(packet["execution"]["script"])
+            and artifact_current(packet["execution"]["compressed_output"])
+            and artifact_current(packet["execution"]["packed_triples"])
+        )
+    except (KeyError, OSError, ValueError):
+        return False
+
+
+def run_range(command: list[str], label: str) -> str:
+    print(f"run {label}", flush=True)
+    subprocess.run(command, cwd=ROOT, check=True)
+    return label
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--balanced-rows", type=int, default=50000)
+    parser.add_argument("--range", dest="ranges", action="append", type=parse_range, required=True)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--timeout", type=int, default=43200)
+    args = parser.parse_args()
+    if not 1 <= args.workers <= 16:
+        raise ValueError("workers")
+    ordered = sorted(args.ranges)
+    if any(stop > args.balanced_rows for _, stop in ordered):
+        raise ValueError("range exceeds balanced rows")
+    if any(left[1] > right[0] for left, right in zip(ordered, ordered[1:])):
+        raise ValueError("adaptive ranges overlap")
+
+    # Bind every range to the same refreshed coordinate and selection packet.
+    fixed_chunk.macaulay.ensure_inspection(args.timeout)
+    jobs: list[tuple[list[str], str]] = []
+    for start, stop in ordered:
+        label = f"[{start},{stop})"
+        if certified(args.balanced_rows, start, stop):
+            print(f"skip {label}: certified", flush=True)
+            continue
+        jobs.append(
+            (
+                [
+                    sys.executable,
+                    str(range_builder.__file__),
+                    "--balanced-rows",
+                    str(args.balanced_rows),
+                    "--global-start",
+                    str(start),
+                    "--global-stop",
+                    str(stop),
+                    "--timeout",
+                    str(args.timeout),
+                ],
+                label,
+            )
+        )
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(run_range, command, label): label
+            for command, label in jobs
+        }
+        for future in as_completed(futures):
+            print(f"done {future.result()}", flush=True)
+    print("G3AP adaptive Macaulay ranges complete", flush=True)
+
+
+if __name__ == "__main__":
+    main()

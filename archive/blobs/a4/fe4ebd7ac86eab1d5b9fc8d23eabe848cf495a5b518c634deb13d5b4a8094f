@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""Compute G3AP in the exact Cayley-fiber-degree-two module.
+
+The ordinary Jacobian is homogeneous in the Cayley variables ``u,v,s``.
+Its fiber-degree-two piece is therefore a six-component module over the
+seven-variable base ring.  This script computes that module directly, while
+retaining the same selected source, field, ideal and scalar degree bound.
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass, field
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = STATE / "ust_g3al_selected_cayley_basis.sing"
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_module.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_module.singular.out"
+CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_module_degree44.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_module.packet.json"
+
+SOURCE_RING = (
+    "ring r=(101,g),(x,y,z,w,t0,t1,t2,u,v,s),"
+    "wp(1,1,1,3,1,1,1,6,9,2);"
+)
+MODULE_RING = (
+    "ring r=(101,g),(x,y,z,w,t0,t1,t2),"
+    "(wp(1,1,1,3,1,1,1),C);"
+)
+COMPONENTS = (
+    (1, "u2", (30, 2), 12),
+    (2, "uv", (24, 5), 15),
+    (3, "us", (33, 3), 8),
+    (4, "v2", (18, 8), 18),
+    (5, "vs", (27, 6), 11),
+    (6, "s2", (36, 4), 4),
+)
+EXPECTED_TOTAL = 174865
+EXPECTED_STANDARD = (6, (0, 0, 0, 12, 0, 0, 4))
+LEAD_COMPONENT_PROCEDURE = '''proc ustLeadComponent(vector value)
+{
+  vector leading=lead(value);
+  int component;
+  for (component=1;component<=nrows(value);component++)
+  { if (leading[component]!=0) { return(component); } }
+  return(0);
+}
+'''
+
+
+def obsolete_leadcomp_export_variant(script: str) -> str:
+    """Reconstruct the pre-fix script whose final exporter used ``leadcomp``."""
+    require(LEAD_COMPONENT_PROCEDURE in script, "current lead-component procedure")
+    return script.replace(LEAD_COMPONENT_PROCEDURE, "", 1).replace(
+        "ustLeadComponent(", "leadcomp("
+    )
+
+
+def candidate_script_matches(
+    executed: str, current: str, leader_recovery_used: bool
+) -> bool:
+    if executed == current:
+        return True
+    return leader_recovery_used and executed == obsolete_leadcomp_export_variant(current)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def selected_base_prefix(source: str) -> str:
+    require(source.count(SOURCE_RING) == 1, "selected source ring")
+    require(source.count("poly Phi=u*K+v*E+s*C;") == 1, "selected Phi marker")
+    prefix = source.split("poly Phi=u*K+v*E+s*C;", 1)[0]
+    prefix = prefix.replace("option(redSB);\n", "", 1)
+    return prefix.replace(SOURCE_RING, MODULE_RING, 1) + LEAD_COMPONENT_PROCEDURE
+
+
+def module_generators() -> list[str]:
+    generators = []
+    for component in range(1, 7):
+        for equation in ("K", "E", "C"):
+            generators.append(f"{equation}*gen({component})")
+    for variable in ("x", "y", "z", "w"):
+        dk = f"diff(K,{variable})"
+        dc = f"diff(C,{variable})"
+        generators.extend(
+            (
+                f"{dk}*gen(1)+{dc}*gen(3)",
+                f"{dk}*gen(2)+{dc}*gen(5)",
+                f"{dk}*gen(3)+{dc}*gen(6)",
+            )
+        )
+    for variable in ("t0", "t1", "t2"):
+        de = f"diff(E,{variable})"
+        dc = f"diff(C,{variable})"
+        generators.extend(
+            (
+                f"{de}*gen(2)+{dc}*gen(3)",
+                f"{de}*gen(4)+{dc}*gen(5)",
+                f"{de}*gen(5)+{dc}*gen(6)",
+            )
+        )
+    require(len(generators) == 39, "39 exact module generators")
+    return generators
+
+
+def module_script(source: str) -> str:
+    generators = ",\n  ".join(module_generators())
+    return selected_base_prefix(source) + f'''module M=
+  {generators};
+intvec componentShifts=12,15,8,18,11,4;
+attrib(M,"isHomog",componentShifts);
+option(noredTail);
+degBound=44;
+module G=std(M);
+int i;
+print("G3AP_F2_MODULE_BOUND="+string(degBound));
+print("G3AP_F2_MODULE_GENERATORS="+string(size(M)));
+print("G3AP_F2_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("G3AP_F2_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("G3AP_F2_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w state/ust_g3ap_selected_cayley_fiber2_module_degree44.ssi",G);
+print("G3AP_F2_MODULE_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_leaders(output: str) -> list[tuple[int, tuple[int, ...]]]:
+    count = re.search(r"^G3AP_F2_MODULE_GB_SIZE=(\d+)$", output, re.MULTILINE)
+    require(count is not None, "module basis size")
+    components = {
+        int(match.group(1)): int(match.group(2))
+        for match in re.finditer(
+            r"^G3AP_F2_MODULE_LEADER_(\d+)_COMP=(\d+)$", output, re.MULTILINE
+        )
+    }
+    exponents = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(
+            r"^G3AP_F2_MODULE_LEADER_(\d+)_EXP=([0-9,]+)$", output, re.MULTILINE
+        )
+    }
+    size = int(count.group(1))
+    require(set(components) == set(exponents) == set(range(1, size + 1)), "all module leaders")
+    leaders = []
+    for index in range(1, size + 1):
+        component = components[index]
+        exponent = exponents[index]
+        require(1 <= component <= 6, "leader component")
+        if len(exponent) == 8:
+            require(
+                exponent[-1] == component,
+                "Singular leadexp module-component coordinate",
+            )
+            exponent = exponent[:-1]
+        require(len(exponent) == 7, "leader polynomial exponent width")
+        leaders.append((component, exponent))
+    return leaders
+
+
+@dataclass
+class Trie:
+    children: dict[int, "Trie"] = field(default_factory=dict)
+    terminal: bool = False
+
+    def add(self, exponent: tuple[int, ...], depth: int = 0) -> None:
+        if depth == len(exponent):
+            self.terminal = True
+        else:
+            self.children.setdefault(exponent[depth], Trie()).add(exponent, depth + 1)
+
+    def divides(self, exponent: tuple[int, ...], depth: int = 0) -> bool:
+        if self.terminal:
+            return True
+        return depth < len(exponent) and any(
+            child.divides(exponent, depth + 1)
+            for power, child in self.children.items()
+            if power <= exponent[depth]
+        )
+
+
+def component_trie(leaders: list[tuple[int, tuple[int, ...]]], component: int) -> tuple[Trie, int]:
+    points = {exponent for leader_component, exponent in leaders if leader_component == component}
+    trie = Trie()
+    minimal = 0
+    for point in sorted(points, key=lambda value: (sum(value), value)):
+        if not trie.divides(point):
+            trie.add(point)
+            minimal += 1
+    return trie, minimal
+
+
+def enumerate_target(
+    leaders: list[tuple[int, tuple[int, ...]]],
+) -> tuple[list[tuple[int, tuple[int, ...]]], dict[str, dict[str, int]]]:
+    standards = []
+    sectors = {}
+    for component, name, (h_degree, l_degree), shift in COMPONENTS:
+        trie, minimal = component_trie(leaders, component)
+        total = 0
+        standard_count = 0
+        for w_power in range(h_degree // 3 + 1):
+            xyz_degree = h_degree - 3 * w_power
+            for x_power in range(xyz_degree + 1):
+                for y_power in range(xyz_degree - x_power + 1):
+                    z_power = xyz_degree - x_power - y_power
+                    for t0_power in range(l_degree + 1):
+                        for t1_power in range(l_degree - t0_power + 1):
+                            t2_power = l_degree - t0_power - t1_power
+                            exponent = (
+                                x_power,
+                                y_power,
+                                z_power,
+                                w_power,
+                                t0_power,
+                                t1_power,
+                                t2_power,
+                            )
+                            total += 1
+                            if not trie.divides(exponent):
+                                standards.append((component, exponent))
+                                standard_count += 1
+        sectors[name] = {
+            "component": component,
+            "base_Cox_degree": [h_degree, l_degree],
+            "component_scalar_shift": shift,
+            "target_scalar_degree": h_degree + l_degree + shift,
+            "enumerated_monomials": total,
+            "minimal_module_leaders": minimal,
+            "standard_monomials": standard_count,
+        }
+    return standards, sectors
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    source = SOURCE.read_text(encoding="ascii")
+    SCRIPT.write_text(module_script(source), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)}")
+        return
+    CACHE.unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "fiber-two module execution")
+    require("G3AP_F2_MODULE_LEADER_EXPORT_PASS" in completed.stdout, "module pass")
+    require(CACHE.is_file() and CACHE.stat().st_size > 0, "module cache")
+    leaders = parse_leaders(completed.stdout)
+    standards, sectors = enumerate_target(leaders)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == EXPECTED_TOTAL, "complete target enumeration")
+    require(standards == [EXPECTED_STANDARD], "unique fiber-two top standard")
+    checks = {
+        "selected_F101e6_source_is_hash_bound": True,
+        "fiber_degree_two_has_exactly_six_components": True,
+        "the_39_module_generators_equal_the_fiber_degree_two_part_of_the_ordinary_Jacobian": True,
+        "component_shifts_make_every_module_generator_homogeneous": True,
+        "bounded_module_basis_reaches_total_scalar_degree_44": True,
+        "all_174865_target_Cox_monomials_are_enumerated": True,
+        "ordinary_top_piece_has_dimension_one": True,
+        "selected_top_representative_is_w12_t2_4_s2": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-module-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.FIBER2",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_MODULE_TOP_DIMENSION_ONE",
+        "inputs": {
+            "selected_source": {
+                "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SOURCE),
+            }
+        },
+        "execution": {
+            "script": {"path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SCRIPT)},
+            "output": {"path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(OUTPUT)},
+            "returncode": completed.returncode,
+            "elapsed_seconds": time.time() - started,
+            "module_generator_count": 39,
+            "leading_module_basis_size_through_bound": len(leaders),
+            "scalar_degree_bound": 44,
+            "full_module_standard_basis_claimed": False,
+            "bounded_module_cache": {
+                "path": str(CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(CACHE),
+                "bytes": CACHE.stat().st_size,
+                "valid_through_total_scalar_degree": 44,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "fiber_degree_two_module": {
+            "base_ring_variables": ["x", "y", "z", "w", "t0", "t1", "t2"],
+            "components": [name for _, name, _, _ in COMPONENTS],
+            "component_scalar_shifts": [shift for _, _, _, shift in COMPONENTS],
+            "sectors": sectors,
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "scalar_weight": 44,
+            "enumerated_monomials": total,
+            "dimension": 1,
+            "basis": ["w^12*t2^4*s^2"],
+            "basis_component": "s2",
+            "basis_base_exponent": list(EXPECTED_STANDARD[1]),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_a_full_module_basis_was_computed": False,
+            "claims_the_ordinary_Jacobian_was_replaced_by_a_different_ideal": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_promotion": False,
+        },
+        "next_required_object": "Independently reconstruct and verify the exact fiber-degree-two module before canonical G3AP adoption.",
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AP.FIBER2 module top: PASS "
+        f"leaders={len(leaders)} monomials={total} basis=w^12*t2^4*s^2"
+    )
+
+
+if __name__ == "__main__":
+    main()

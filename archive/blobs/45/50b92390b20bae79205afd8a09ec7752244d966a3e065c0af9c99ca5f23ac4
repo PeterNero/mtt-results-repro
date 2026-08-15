@@ -1,0 +1,137 @@
+// Parallel exact LinBox/Givaro elimination for a transcript-ordered SMS matrix.
+
+#include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <string>
+
+#include <omp.h>
+
+#include <givaro/extension.h>
+#include <givaro/givpoly1.h>
+#include <givaro/modular.h>
+#include <linbox/field/field-traits.h>
+
+namespace LinBox {
+template <class BaseField>
+struct ClassifyRing<Givaro::Extension<BaseField>> {
+    using categoryTag = RingCategories::ModularTag;
+};
+}  // namespace LinBox
+
+#include <linbox/algorithms/gauss.h>
+#include <linbox/matrix/sparse-matrix.h>
+
+using namespace LinBox;
+
+template <class Field>
+class ParallelNoReorderingGauss : public GaussDomain<Field> {
+public:
+    using Base = GaussDomain<Field>;
+    using Element = typename Base::Element;
+
+    explicit ParallelNoReorderingGauss(const Field& field) : Base(field) {}
+
+    template <class Matrix>
+    std::size_t rank(Matrix& matrix, int threads) const {
+        const auto rows = matrix.rowdim();
+        std::size_t rank = 0;
+        long pivot_column = -1;
+        Element determinant;
+        this->field().assign(determinant, this->field().one);
+        typename Matrix::Row empty_row(0);
+        const auto started = std::chrono::steady_clock::now();
+
+        for (std::size_t pivot_row = 0; pivot_row < rows; ++pivot_row) {
+            if (!matrix[pivot_row].empty()) {
+                this->SparseFindPivot(
+                    matrix[pivot_row], rank, pivot_column, determinant);
+                if (pivot_column != -1 && pivot_row + 1 < rows) {
+                    const auto begin = static_cast<std::int64_t>(pivot_row + 1);
+                    const auto end = static_cast<std::int64_t>(rows);
+#pragma omp parallel for schedule(dynamic, 64) num_threads(threads)
+                    for (std::int64_t row = begin; row < end; ++row) {
+                        this->eliminate(
+                            matrix[static_cast<std::size_t>(row)],
+                            matrix[pivot_row], rank, pivot_column);
+                    }
+                }
+            }
+            matrix[pivot_row] = empty_row;
+            if ((pivot_row + 1) % 250 == 0 || pivot_row + 1 == rows) {
+                const auto elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - started)
+                                         .count();
+                std::cerr << "[parallel-linbox-no-reordering] processed="
+                          << pivot_row + 1 << '/' << rows << " rank=" << rank
+                          << " threads=" << threads << " elapsed=" << elapsed
+                          << "s\n";
+            }
+        }
+        return rank;
+    }
+
+protected:
+    using Base::eliminate;
+    using Base::SparseFindPivot;
+};
+
+int main(int argc, char** argv) {
+    if (argc != 2 && argc != 3) {
+        std::cerr << "usage: ust_f1016_sparse_rank_parallel_no_reordering "
+                     "MATRIX [THREADS]\n";
+        return 64;
+    }
+    const int threads = argc == 3 ? std::stoi(argv[2]) : omp_get_max_threads();
+    if (threads < 1) {
+        std::cerr << "threads must be positive\n";
+        return 64;
+    }
+
+    using BaseField = Givaro::Modular<int64_t>;
+    using PolynomialDomain = Givaro::Poly1Dom<BaseField, Givaro::Dense>;
+    using Field = Givaro::Extension<BaseField>;
+    BaseField base(101);
+    PolynomialDomain polynomials(base, "g");
+    PolynomialDomain::Element minpoly;
+    polynomials.init(minpoly, Givaro::Degree(6));
+    const int64_t coefficients[7] = {64, 16, 33, 44, 89, 24, 1};
+    for (std::size_t index = 0; index < 7; ++index) {
+        base.init(minpoly[index], coefficients[index]);
+    }
+    Field field(polynomials, minpoly);
+
+    std::ifstream input(argv[1]);
+    std::size_t rows = 0;
+    std::size_t columns = 0;
+    std::size_t nonzeros = 0;
+    if (!input || !(input >> rows >> columns >> nonzeros)) {
+        std::cerr << "invalid packed sparse header\n";
+        return 65;
+    }
+    SparseMatrix<Field, SparseMatrixFormat::SparseSeq> matrix(field, rows, columns);
+    for (std::size_t index = 0; index < nonzeros; ++index) {
+        std::size_t row = 0;
+        std::size_t column = 0;
+        Givaro::Integer packed;
+        if (!(input >> row >> column >> packed) || row == 0 || column == 0 ||
+            row > rows || column > columns) {
+            std::cerr << "invalid packed sparse entry at index " << index << "\n";
+            return 65;
+        }
+        Field::Element value;
+        field.init(value, packed);
+        if (!field.isZero(value)) {
+            matrix.setEntry(row - 1, column - 1, value);
+        }
+    }
+
+    ParallelNoReorderingGauss<Field> gauss(field);
+    const auto rank = gauss.rank(matrix, threads);
+    std::cout
+        << "EXACT_F1016_PARALLEL_NO_REORDERING_SPARSE_ELIMINATION_RANK rows="
+        << rows << " columns=" << columns << " nonzeros=" << nonzeros
+        << " rank=" << rank << " threads=" << threads << "\n";
+    return 0;
+}

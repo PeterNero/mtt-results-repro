@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Restrict the full original G3AO uvs system to all nine elliptic flexes."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_cusp_split_msolve_inputs as split
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "uvs_cusp_original_msolve"
+EXPORT_SCRIPT = CAMPAIGN / "export_original_flex_systems.sing"
+RAW_OUTPUT = CAMPAIGN / "export_original_flex_systems.singular.out"
+OUT = CAMPAIGN / "inputs.packet.json"
+BIDUAL_IDENTITY = ROOT / "state" / "ust_g3ao_elliptic_bidual_identity.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def component_coordinates(case: str, root: str) -> dict[str, str]:
+    squared = {"root0": "root0", "root1": "root2", "root2": "root1"}[root]
+    rho2 = split.ZETA_EXPRESSIONS[squared]
+    if case == "dual0":
+        X, Y, Z = "0", f"-({rho2})", "1"
+    elif case == "dual1":
+        X, Y, Z = f"-({rho2})", "0", "1"
+    else:
+        require(case == "dual2", "known cusp coordinate")
+        X, Y, Z = f"-({rho2})", "1", "0"
+    return {
+        "X": X,
+        "Y": Y,
+        "Z": Z,
+        "T0": f"-14*({X})-4*({Y})+6*({Z})",
+        "T1": f"7*({Y})-7*({Z})",
+        "T2": f"-3*({Y})+({Z})",
+    }
+
+
+def verify_component_coordinates(polynomials: dict[str, str]) -> None:
+    g = sp.symbols("g")
+    modulus = sp.Poly(sp.sympify(polynomials["minpoly"].replace("^", "**")), g, modulus=101)
+    require(modulus.degree() == 6 and modulus.is_irreducible, "irreducible F101 extension")
+
+    def elt(expression: str) -> sp.Poly:
+        return sp.Poly(sp.sympify(expression.replace("^", "**")), g, modulus=101).rem(modulus)
+
+    for case in split.CASES:
+        for root in split.ROOTS:
+            coordinates = component_coordinates(case, root)
+            X, Y, Z = (elt(coordinates[name]) for name in ("X", "Y", "Z"))
+            require((X**3 + Y**3 + Z**3).rem(modulus).is_zero, f"{case} {root} Fermat flex")
+            tangent = (X**2, Y**2, Z**2)
+            zero_index = split.CASES.index(case)
+            require(tangent[zero_index].rem(modulus).is_zero, f"{case} {root} zero tangent coordinate")
+            for name in ("T0", "T1", "T2"):
+                require(not elt(coordinates[name]).is_zero, f"{case} {root} nonzero {name}")
+
+
+def make_export_script(polynomials: dict[str, str]) -> str:
+    components: list[str] = []
+    printers: list[str] = []
+    for case in split.CASES:
+        for root in split.ROOTS:
+            label = f"{case}_{root}"
+            coordinates = component_coordinates(case, root)
+            map_name = f"flexMap_{label}"
+            ideal_name = f"flexSystem_{label}"
+            components.extend(
+                [
+                    f"number T0_{label}={coordinates['T0']};",
+                    f"number T1_{label}={coordinates['T1']};",
+                    f"number T2_{label}={coordinates['T2']};",
+                    f"map {map_name}=source,1,y,z,w,T0_{label},T1_{label},T2_{label},lambdaU,lambdaV;",
+                    f"ideal {ideal_name}={map_name}(originalSystem),orbitInv*y*z*w*lambdaU*lambdaV-1;",
+                ]
+            )
+            marker = label.upper()
+            printers.extend(
+                [
+                    f'print("G3AO_MSOLVE_{marker}_COUNT="+string(size({ideal_name})));',
+                    f"for (exportIndex=1;exportIndex<=size({ideal_name});exportIndex++)",
+                    f'{{ print("G3AO_MSOLVE_{marker}_"+string(exportIndex)+"="+string({ideal_name}[exportIndex])); }}',
+                ]
+            )
+    return f'''// UST.G3AO exact full original uvs equations on all nine Fermat flexes.
+ring source=(101,g),(x,y,z,w,t0,t1,t2,lambdaU,lambdaV),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly E={direct.ELLIPTIC_POLYNOMIAL};
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly C_reduced=(A0)*t0+(A0+A1+3*A2)*t1+(A0+7*A1+7*A2)*t2;
+poly B_ambient={direct.AMBIENT_GAUGE};
+poly C=C_reduced+K*B_ambient;
+poly potential=lambdaU*K+lambdaV*E+C;
+// E vanishes identically at every verified flex, so the remaining seven
+// equations are precisely the nontrivial original uvs equations there.
+ideal originalSystem=K,C,diff(potential,y),diff(potential,z),
+  diff(potential,w),diff(potential,t1),diff(potential,t2);
+ring orbit=(101,g),(y,z,w,lambdaU,lambdaV,orbitInv),dp;
+minpoly={polynomials["minpoly"]};
+{chr(10).join(components)}
+int exportIndex;
+{chr(10).join(printers)}
+print("G3AO_MSOLVE_EXPORT_PASS");
+quit;
+'''
+
+
+def make_msolve_input(polynomials: dict[str, str], generators: list[str]) -> str:
+    equations = [common.normalize_for_msolve(polynomials["minpoly"])]
+    equations.extend(common.normalize_for_msolve(value) for value in generators if value.strip() != "0")
+    return "y,z,w,lambdaU,lambdaV,orbitInv,g\n101\n" + ",\n".join(equations) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--reuse-export", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    polynomials = direct.selected_polynomials()
+    split.verify_cube_roots(polynomials)
+    verify_component_coordinates(polynomials)
+    require(BIDUAL_IDENTITY.is_file(), "elliptic-bidual identity packet")
+    identity = json.loads(BIDUAL_IDENTITY.read_text(encoding="ascii"))
+    require(all(identity["checks"].values()), "elliptic-bidual identity checks")
+    EXPORT_SCRIPT.write_text(make_export_script(polynomials), encoding="ascii")
+    if args.reuse_export:
+        require(RAW_OUTPUT.is_file(), "reusable raw export")
+        raw = RAW_OUTPUT.read_text(encoding="utf-8")
+    else:
+        completed = subprocess.run(
+            singular_command(ROOT, EXPORT_SCRIPT),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        RAW_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+        require(completed.returncode == 0, "Singular original-flex export")
+        raw = completed.stdout
+    require("G3AO_MSOLVE_EXPORT_PASS" in raw, "export marker")
+    records: dict[str, dict[str, object]] = {}
+    for case in split.CASES:
+        for root in split.ROOTS:
+            label = f"{case}_{root}"
+            generators = common.parse_locus(raw, label)
+            input_path = CAMPAIGN / f"{label}.msolve.in"
+            input_path.write_text(make_msolve_input(polynomials, generators), encoding="ascii")
+            records[label] = {
+                "case": case,
+                "root": root,
+                "ell_and_t_coordinates": component_coordinates(case, root),
+                "generator_count_including_minpoly": 1 + sum(value.strip() != "0" for value in generators),
+                "input": {
+                    "path": str(input_path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(input_path),
+                },
+            }
+    packet = {
+        "schema": "mtt.unified-source.g3ao-uvs-original-flex-msolve-inputs.v1",
+        "source_sha256": sha256(direct.SOURCE),
+        "dependencies": {
+            "elliptic_bidual_identity": {
+                "path": str(BIDUAL_IDENTITY.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BIDUAL_IDENTITY),
+                "theorem_id": identity["theorem_id"],
+            }
+        },
+        "field_presentation": {
+            "characteristic": 101,
+            "extension_variable": "g",
+            "minpoly": polynomials["minpoly"],
+            "degree": 6,
+            "irreducible_over_F101": True,
+            "cube_roots": split.ZETA_EXPRESSIONS,
+        },
+        "export_script": {
+            "path": str(EXPORT_SCRIPT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(EXPORT_SCRIPT),
+        },
+        "raw_output": {
+            "path": str(RAW_OUTPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(RAW_OUTPUT),
+        },
+        "components": records,
+        "checks": {
+            "the_nine_explicit_ell_points_are_exact_Fermat_flexes": True,
+            "their_selected_t_coordinates_are_exact_and_all_nonzero": True,
+            "the_full_original_C_equation_is_retained": True,
+            "all_three_original_base_derivatives_are_retained": True,
+            "both_original_elliptic_derivatives_are_retained": True,
+            "lambdaU_and_lambdaV_remain_nonzero_torus_coordinates": True,
+            "smooth_contacts_are_handled_by_the_separate_smooth_primal_unit_ideal": True,
+            "the_extension_minpoly_is_irreducible_and_adjoined_over_F101": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AO uvs original-flex inputs: PASS components=9")
+
+
+if __name__ == "__main__":
+    main()

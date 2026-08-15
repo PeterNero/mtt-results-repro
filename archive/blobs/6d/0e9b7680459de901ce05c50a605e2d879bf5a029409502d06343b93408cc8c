@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Adopt a completed full-support G3AO uvs bidual certificate."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+import run_ust_g3ao_selected_cayley_toric_uvs_dual_elimination as dual
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="std")
+    args = parser.parse_args()
+    packet_path = dual.CAMPAIGN / f"{dual.LABEL}.{args.algorithm}.packet.json"
+    require(packet_path.is_file(), "bidual packet")
+    packet = json.loads(packet_path.read_text(encoding="ascii"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3ao-selected-cayley-toric-orbit-uvs-dual.v1",
+        "bidual schema",
+    )
+    require(packet["label"] == dual.LABEL, "bidual label")
+    require(packet["source_sha256"] == sha256(direct.SOURCE), "selected source")
+    require(
+        packet["passed"] is True
+        and packet["returncode"] == 0
+        and packet["timed_out"] is False,
+        "completed bidual pass",
+    )
+    require(all(packet["proof_scope"].values()), "bidual proof scope")
+    require(
+        packet["supports"]
+        == {
+            "base": list(direct.BASE),
+            "elliptic": list(direct.ELLIPTIC),
+            "Cayley_fiber": ["u", "v", "s"],
+        },
+        "full supports",
+    )
+    require(packet["algorithm"] == f"uvs_dual_{args.algorithm}", "algorithm")
+    script = direct.CAMPAIGN / packet["script"]["path"]
+    output = direct.CAMPAIGN / packet["output"]["path"]
+    require(script.is_file() and sha256(script) == packet["script"]["sha256"], "script")
+    require(output.is_file() and sha256(output) == packet["output"]["sha256"], "output")
+    require(
+        script.read_text(encoding="ascii")
+        == dual.make_script(direct.selected_polynomials(), args.algorithm),
+        "exact bidual script reconstruction",
+    )
+    raw = output.read_text(encoding="utf-8")
+    require("G3AO_UVS_BIDUAL_SMOOTH_EMPTY=1" in raw, "smooth bidual locus empty")
+    require("G3AO_UVS_BIDUAL_SINGULAR_EMPTY=1" in raw, "cusp locus empty")
+    require(
+        f"G3AO_UVS_DUAL_ELIMINATION_PASS {dual.LABEL}" in raw,
+        "bidual pass marker",
+    )
+    canonical = dict(packet)
+    canonical["schema"] = "mtt.unified-source.g3ao-selected-cayley-toric-orbit.v1"
+    canonical_path = direct.CAMPAIGN / f"{dual.LABEL}.packet.json"
+    canonical_path.write_text(json.dumps(canonical, indent=2) + "\n", encoding="ascii")
+    print(f"{dual.LABEL}: ADOPTED EXACT ELLIPTIC-BIDUAL CERTIFICATE")
+
+
+if __name__ == "__main__":
+    main()

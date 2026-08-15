@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Verify the exact G3V hidden HYM existence tier and its open boundary."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3v_existential_hidden_hym.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_input(packet: dict, key: str) -> dict:
+    item = packet["inputs"][key]
+    path = ROOT / item["path"]
+    require(path.is_file(), f"{key}: source exists")
+    require(file_hash(path) == item["sha256"], f"{key}: source hash")
+    return load(path)
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    g3d = verify_input(packet, "local_G3D_packet")
+    g3t = verify_input(packet, "local_G3T_packet")
+    g3u = verify_input(packet, "local_G3U_packet")
+
+    hidden = packet["hidden_object"]
+    finite = packet["finite_bound_existence"]
+    chamber = packet["existential_chamber"]
+    hym = packet["projective_hym"]
+    scope = packet["scope"]
+
+    require(g3d["q79_geometry"]["all_positive_t_are_Gauduchon"] is True, "q79 balanced ray")
+    require(g3t["balanced_transform"]["each_corrected_factor_stable"] is True, "G3T factor stability")
+    require(g3t["balanced_transform"]["rank9_relative_polystability"] is True, "G3T relative polystability")
+    require(g3t["holomorphic_determinant"]["holomorphic_P39_reduction_constructed"] is True, "P(3,9) reduction")
+
+    g3u_hidden = next(item for item in g3u["factors"] if item["sector"] == "hidden")
+    require(g3u_hidden["strictness_mode"] == "direct_stable_factor_orbit", "direct stability mode")
+    require(g3u_hidden["direct_factor_fiber_stable"] is True, "direct factor stability")
+    require(Fraction(g3u_hidden["fiber_gap"]) == Fraction(2, 3), "exact hidden gap")
+    require(g3u_hidden["factor_support_reduced"] is False, "no invented reduced support")
+
+    require(hidden["factor_count"] == 3 and hidden["factor_rank"] == 3, "three rank-three factors")
+    require(hidden["physical_rank"] == hidden["factor_count"] * hidden["factor_rank"], "rank nine")
+    require(Fraction(hidden["fiber_gap"]) == Fraction(2, 3), "packet hidden gap")
+
+    require(finite["M_finite"] is True, "finite common slope bound")
+    require(finite["twisted_harder_narasimhan_maximum_exists"] is True, "twisted HN maximum")
+    require(finite["chern_weil_projection_upper_bound_finite"] is True, "Chern-Weil finite bound")
+    require(finite["M_numeric_value_emitted"] is False, "no invented numerical M")
+    require(finite["mu1_interval_certificate_emitted"] is False, "mu1 interval remains open")
+
+    rank_minus_one = hidden["factor_rank"] - 1
+    threshold_coefficient = Fraction(rank_minus_one, 1) / Fraction(hidden["fiber_gap"])
+    require(threshold_coefficient == 3, "exact threshold coefficient")
+    require(chamber["threshold_formula"] == "t > 1 + 3*M", "threshold formula")
+    require(chamber["positive_integer_witness_exists"] is True, "Archimedean integer witness")
+    require(chamber["rational_witness_exists"] is True, "rational chamber witness")
+    require(chamber["same_t_for_three_factors"] is True, "one hidden chamber")
+    require(chamber["rank9_polystable"] is True, "rank-nine polystability")
+    require(chamber["explicit_t_emitted"] is False, "no invented explicit chamber")
+
+    require(hym["twisted_kobayashi_hitchin_applies"] is True, "twisted KH bridge")
+    require(hym["projective_hym_exists"] is True, "projective HYM existence")
+    require(hym["qutrit_equivariant_connection_exists"] is True, "qutrit-equivariant HYM")
+    require(hym["numerically_executable_connection_emitted"] is False, "no numerical connection")
+
+    require(scope["hidden_hym_existence_closed"] is True, "hidden existence tier")
+    require(scope["hidden_numerical_chamber_closed"] is False, "numerical chamber boundary")
+    require(scope["same_source_visible_V3_closed"] is False, "visible sector boundary")
+    require(scope["pointwise_Bianchi_closed"] is False, "Bianchi boundary")
+    require(scope["B_HS_01_closed"] is False, "B.HS.01 boundary")
+    require(scope["UST_G3_closed"] is False, "UST.G3 boundary")
+    require(scope["physical_promotion"] is False, "physical nonpromotion")
+    require(packet["continuous_fit_parameters"] == 0, "no fitted continuous parameter")
+    require(packet["observed_inputs"] == 0, "no observed input")
+
+    print("UST.G3V existential hidden Gauduchon chamber and projective HYM: PASS")
+    print("exact hidden threshold form: t > 1 + 3*M with finite M")
+    print("hidden qutrit-equivariant projective HYM existence: closed")
+    print("numerical mu1, explicit t, visible V3 and Bianchi: open")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Build and certify the native exact F_101^6 rank utilities.
+
+LinBox/Givaro may be installed system-wide or under the staged dependency
+layout used by this corpus.  The emitted ELF binaries carry a RUNPATH to the
+selected library directory, while the build receipt binds every binary to its
+source and compiler transcript.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+from ust_singular_runtime import wsl_path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+BUILD_SCRIPT = ROOT / "build_ust_f1016_native_tools.sh"
+SOURCES = {
+    "build_script": BUILD_SCRIPT,
+    "sparse_column_minor": ROOT / "ust_f1016_sparse_column_minor.cpp",
+    "sparse_column_minor_greedy": ROOT / "ust_f1016_sparse_column_minor_greedy.cpp",
+    "sparse_column_minor_weighted": ROOT / "ust_f1016_sparse_column_minor_weighted.cpp",
+    "sparse_column_minor_weighted_fast": ROOT / "ust_f1016_sparse_column_minor_weighted_fast.cpp",
+    "sparse_column_minor_weighted_free": ROOT / "ust_f1016_sparse_column_minor_weighted_free.cpp",
+    "sparse_column_minor_weighted_free_fast": ROOT / "ust_f1016_sparse_column_minor_weighted_free_fast.cpp",
+    "linbox_sparse_rank": ROOT / "ust_f1016_sparse_rank.cpp",
+    "givaro_functional_check": ROOT / "ust_f1016_sparse_functional_check.cpp",
+    "givaro_map_pivot_replay": ROOT / "ust_f1016_givaro_map_pivot_replay.cpp",
+}
+BINARIES = {
+    name: STATE / f"ust_f1016_{suffix}"
+    for name, suffix in {
+        "sparse_column_minor": "sparse_column_minor",
+        "sparse_column_minor_weighted_fast": "sparse_column_minor_weighted_fast_native",
+        "sparse_column_minor_weighted_free_fast": "sparse_column_minor_weighted_free_fast_native",
+        "linbox_sparse_rank": "sparse_rank",
+        "givaro_functional_check": "sparse_functional_check",
+        "givaro_map_pivot_replay": "givaro_map_pivot_replay",
+    }.items()
+}
+RECEIPT = STATE / "ust_f1016_native_tools.build.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def current() -> bool:
+    if not RECEIPT.is_file() or not all(path.is_file() for path in BINARIES.values()):
+        return False
+    try:
+        packet = json.loads(RECEIPT.read_text(encoding="ascii"))
+        return (
+            packet.get("schema") == "mtt.unified-source.f1016-native-tools-build.v3"
+            and packet.get("status") == "PASS_EXACT_F1016_NATIVE_TOOLS_BUILT"
+            and all(packet.get("checks", {}).values())
+            and all(
+                packet["sources"][name]["sha256"] == sha256(path)
+                for name, path in SOURCES.items()
+            )
+            and all(
+                packet["binaries"][name]["sha256"] == sha256(path)
+                for name, path in BINARIES.items()
+            )
+            and runtime_available()
+        )
+    except (KeyError, OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def runtime_available() -> bool:
+    arguments = ["bash", str(BUILD_SCRIPT), "--check-runtime"]
+    if os.name == "nt":
+        arguments = [
+            "wsl",
+            "-d",
+            os.environ.get("MTT_WSL_DISTRIBUTION", "Ubuntu"),
+            "--",
+            "bash",
+            wsl_path(BUILD_SCRIPT),
+            "--check-runtime",
+        ]
+    completed = subprocess.run(
+        arguments,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    return (
+        completed.returncode == 0
+        and "UST_NATIVE_RUNTIME_PASS" in completed.stdout
+    )
+
+
+def execute() -> str:
+    arguments = ["bash", str(BUILD_SCRIPT), os.environ.get("MTT_LINBOX_PREFIX", "")]
+    if os.name == "nt":
+        arguments = [
+            "wsl",
+            "-d",
+            os.environ.get("MTT_WSL_DISTRIBUTION", "Ubuntu"),
+            "--",
+            "bash",
+            wsl_path(BUILD_SCRIPT),
+            os.environ.get("MTT_LINBOX_PREFIX", ""),
+        ]
+    completed = subprocess.run(
+        arguments,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    require(completed.returncode == 0, f"native build failed: {completed.stdout[-4000:]}")
+    require("UST_NATIVE_BUILD_PASS" in completed.stdout, "native build marker")
+    return completed.stdout
+
+
+def marker(output: str, name: str) -> str:
+    match = re.search(rf"^{re.escape(name)}=(.+)$", output, re.MULTILINE)
+    require(match is not None, name)
+    return match.group(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args()
+    require(all(path.is_file() for path in SOURCES.values()), "native sources")
+    if not args.force and current():
+        print("UST F_101^6 native tools: PASS current")
+        return
+
+    output = execute()
+    require(all(path.is_file() for path in BINARIES.values()), "native binaries")
+    packet = {
+        "schema": "mtt.unified-source.f1016-native-tools-build.v3",
+        "date": "2026-08-11",
+        "status": "PASS_EXACT_F1016_NATIVE_TOOLS_BUILT",
+        "field": {
+            "prime": 101,
+            "degree": 6,
+            "minpoly_coefficients_ascending": [64, 16, 33, 44, 89, 24, 1],
+        },
+        "environment": {
+            "linbox_prefix": marker(output, "UST_NATIVE_PREFIX"),
+            "library_directory": marker(output, "UST_NATIVE_LIBDIR"),
+            "compiler": marker(output, "UST_NATIVE_COMPILER"),
+        },
+        "sources": {name: record(path) for name, path in SOURCES.items()},
+        "binaries": {name: record(path) for name, path in BINARIES.items()},
+        "checks": {
+            "the_build_recipe_and_all_sources_are_hash_bound": True,
+            "all_five_binaries_are_built_in_one_fail_closed_transaction": True,
+            "the_selected_LinBox_Givaro_prefix_is_recorded": True,
+            "the_selected_degree_six_field_is_declared": True,
+        },
+    }
+    require(all(packet["checks"].values()), "native build checks")
+    RECEIPT.write_text(
+        json.dumps(packet, indent=2) + "\n", encoding="ascii", newline="\n"
+    )
+    print("UST F_101^6 native tools: PASS rebuilt")
+
+
+if __name__ == "__main__":
+    main()

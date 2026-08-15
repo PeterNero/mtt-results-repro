@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Verify UST.G3S target slope obstruction and the forced slope-three type."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3s_target_hn_slope_nogo.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    loaded: dict[str, dict] = {}
+    for key, source in packet["inputs"].items():
+        path = ROOT / source["path"]
+        require(sha256(path) == source["sha256"], f"input hash {key}")
+        loaded[key] = load(path)
+    return loaded
+
+
+def corrected_output(source: list[int]) -> tuple[int, Fraction]:
+    rank, degree = source
+    return degree, Fraction(-rank, 1) + Fraction(degree, 3)
+
+
+def verify_block_arithmetic(packet: dict, inputs: dict[str, dict]) -> None:
+    blocks = packet["G3R_support_blocks"]
+    g3g = inputs["local_G3G_packet"]["fourier_mukai_repair"]
+    expected_sources = [g3g["degree_six_line_input"], g3g["stable_rank_two_input"]]
+    expected_fm = [g3g["degree_six_line_output"], g3g["stable_rank_two_output"]]
+    require([block["source"] for block in blocks] == expected_sources, "source blocks")
+    require([block["FM_output"] for block in blocks] == expected_fm, "FM blocks")
+
+    computed = [corrected_output(block["source"]) for block in blocks]
+    declared = [
+        (block["B_corrected_output"][0], Fraction(block["B_corrected_output"][1], 1))
+        for block in blocks
+    ]
+    require(computed == declared == [(6, Fraction(1)), (3, Fraction(-1))], "B correction")
+    require(sum(rank for rank, _ in computed) == 9, "total rank")
+    require(sum(degree for _, degree in computed) == 0, "total degree")
+
+
+def verify_hn_cutset(packet: dict, inputs: dict[str, dict]) -> None:
+    hn = packet["harder_narasimhan"]
+    require(hn["maximal_piece_rank"] == 6, "HN rank")
+    require(hn["maximal_piece_degree"] == 1, "HN degree")
+    require(Fraction(hn["maximal_piece_degree"], hn["maximal_piece_rank"]) == Fraction(1, 6), "HN slope")
+    require(hn["proper_positive_degree_subobject_exists"], "positive subobject")
+    require(hn["HN_filtration_unique_and_functorial"], "HN functoriality")
+    require(hn["alpha_overlap_preserves_HN"], "alpha HN descent")
+    require(hn["sigma_generators_preserve_HN"], "sigma HN descent")
+    require(not hn["relative_semistability"], "semistability overclaimed")
+    require(not hn["G3D_negative_gap_premise"], "negative gap overclaimed")
+    require(not hn["G3D_adiabatic_stability_possible_for_this_presentation"], "G3D pass overclaimed")
+    compiler = inputs["local_G3D_packet"]["stability_compiler"]
+    require("every proper saturated F" in compiler["negative_gap_premise"], "G3D premise binding")
+
+
+def verify_balanced_exit(packet: dict) -> None:
+    balanced = packet["forced_balanced_type"]
+    source_outputs = [corrected_output(source) for source in balanced["source_factors"]]
+    declared = [
+        (factor[0], Fraction(factor[1], 1))
+        for factor in balanced["B_corrected_factors"]
+    ]
+    require(source_outputs == declared == [(3, Fraction(0))] * 3, "balanced factors")
+    require(sum(rank for rank, _ in source_outputs) == balanced["total_rank"] == 9, "balanced rank")
+    require(sum(degree for _, degree in source_outputs) == balanced["total_degree"] == 0, "balanced degree")
+    require(balanced["G3D_mode"] == "equivariant_three_factor_stable_orbit", "G3D mode")
+    require(balanced["support_block_rank_matches"], "rank match")
+    require(balanced["support_block_degree_matches"], "degree match")
+    require(balanced["support_block_determinant_matches"], "determinant match")
+    require(not balanced["global_slope_balancing_mutation_constructed"], "mutation overclaimed")
+
+
+def verify_scope(packet: dict) -> None:
+    scope = packet["scope"]
+    require(scope["G3R_global_object_retained"], "G3R object reopened")
+    require(scope["G3R_local_freeness_retained"], "G3R local freeness reopened")
+    require(scope["G3R_selected_topological_class_retained"], "G3R class reopened")
+    require(scope["G3R_current_presentation_as_physical_HYM_endpoint_retired"], "failed endpoint left live")
+    require(not scope["all_nonadiabatic_metrics_excluded"], "overbroad metric no-go")
+    require(not scope["balanced_replacement_globally_constructed"], "replacement overclaimed")
+    require(not scope["target_HYM_closed"], "HYM overclaimed")
+    require(not scope["pointwise_Bianchi_closed"], "Bianchi overclaimed")
+    require(not scope["B_HS_01_closed"], "B.HS.01 overclaimed")
+    require(packet["continuous_fit_parameters"] == 0, "continuous fit")
+    require(packet["observed_inputs"] == 0, "observed inputs")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    require(packet["schema"] == "mtt.unified-source.q79-target-hn-slope-nogo.v1", "schema")
+    require(packet["theorem_id"] == "UST.G3S", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_G3R_ADIABATIC_HYM_NOGO_FACTORWISE_SOURCE_SLOPE3_FORCED",
+        "status",
+    )
+    inputs = verify_inputs(packet)
+    verify_block_arithmetic(packet, inputs)
+    verify_hn_cutset(packet, inputs)
+    verify_balanced_exit(packet)
+    verify_scope(packet)
+
+    print("UST.G3S target HN slope no-go: PASS")
+    print("G3R corrected fiber: (6,+1) direct-sum (3,-1)")
+    print("rank-six slope +1/6: canonical destabilizing subobject")
+    print("factorwise zero-degree condition: source d=3r")
+    print("forced type: N tensor C3_sigma -> three corrected (3,0) factors")
+    print("downstream: G3T closes the support-wide slope-balancing mutation")
+
+
+if __name__ == "__main__":
+    main()

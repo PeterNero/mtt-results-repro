@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Independently verify the G3AV scale-free B103 polarization theorem."""
+
+from __future__ import annotations
+
+from fractions import Fraction
+import hashlib
+import json
+import math
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+PACKET = STATE / "ust_g3av_scale_free_b103_polarization.packet.json"
+LOCK = STATE / "upstream-lock.json"
+SOURCE_LOCK = STATE / "ust_g3av_b103_source_lock.json"
+SOURCE_REPOSITORY_ID = "eta9-b103-polarization-source"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def cup_constant(a: int, b: int, d: int) -> Fraction:
+    require(a + b == d - 1, "complementary residue degree")
+    exponent = a * (a + 1) // 2 + b * (b + 1) // 2 + a * a + d - 1
+    return Fraction(-1 if exponent % 2 else 1, math.factorial(a) * math.factorial(b))
+
+
+def transpose(matrix: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [list(row) for row in zip(*matrix)]
+
+
+def multiply(left: list[list[Fraction]], right: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [
+        [
+            sum((left[i][k] * right[k][j] for k in range(len(right))), Fraction(0))
+            for j in range(len(right[0]))
+        ]
+        for i in range(len(left))
+    ]
+
+
+def scale(value: Fraction, matrix: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [[value * item for item in row] for row in matrix]
+
+
+def block_matrix(
+    cross: list[list[Fraction]],
+    middle: list[list[Fraction]],
+    c24: Fraction,
+    c33: Fraction,
+) -> list[list[Fraction]]:
+    h20 = len(cross)
+    h02 = len(cross[0])
+    h11 = len(middle)
+    size = h20 + h11 + h02
+    result = [[Fraction(0) for _ in range(size)] for _ in range(size)]
+    for i in range(h20):
+        for j in range(h02):
+            result[i][h20 + h11 + j] = c24 * cross[i][j]
+            result[h20 + h11 + j][i] = c24 * cross[i][j]
+    for i in range(h11):
+        for j in range(h11):
+            result[h20 + i][h20 + j] = c33 * middle[i][j]
+    return result
+
+
+def outer(column: list[list[Fraction]], row: list[list[Fraction]]) -> list[list[Fraction]]:
+    return multiply(column, row)
+
+
+def trace(matrix: list[list[Fraction]]) -> Fraction:
+    return sum((matrix[i][i] for i in range(len(matrix))), Fraction(0))
+
+
+def exact_scale_free_test() -> None:
+    c24 = cup_constant(2, 4, 7)
+    c33 = cup_constant(3, 3, 7)
+    require(c24 == Fraction(-1, 48), "toy c24")
+    require(c33 == Fraction(-1, 36), "toy c33")
+
+    # This is a small exact Frobenius model of the B103 complementary blocks.
+    cross = [
+        [Fraction(1), Fraction(2)],
+        [Fraction(3), Fraction(5)],
+    ]
+    middle = [
+        [Fraction(2), Fraction(1), Fraction(0)],
+        [Fraction(1), Fraction(-1), Fraction(2)],
+        [Fraction(0), Fraction(2), Fraction(3)],
+    ]
+    qhat = block_matrix(cross, middle, c24, c33)
+    require(qhat == transpose(qhat), "symmetric even-dimensional pairing")
+    e = [[Fraction(1)], [Fraction(2)], [Fraction(1)], [Fraction(-1)], [Fraction(2)], [Fraction(3)], [Fraction(-1)]]
+    row_dense = multiply(transpose(e), qhat)
+
+    e20 = transpose(e[:2])
+    e11 = transpose(e[2:5])
+    e02 = transpose(e[5:])
+    row_formula = [
+        c24 * item for item in multiply(e02, transpose(cross))[0]
+    ] + [
+        c33 * item for item in multiply(e11, middle)[0]
+    ] + [
+        c24 * item for item in multiply(e20, cross)[0]
+    ]
+    require(row_dense == [row_formula], "socle row equals dense polarization application")
+
+    denominator = multiply(row_dense, e)[0][0]
+    require(denominator != 0, "nonisotropic test line")
+    ell = scale(Fraction(1, 1) / denominator, row_dense)
+    projector = outer(e, ell)
+    require(multiply(ell, e) == [[Fraction(1)]], "normalized dual")
+    require(multiply(projector, projector) == projector, "projector idempotence")
+    require(trace(projector) == 1, "projector trace")
+    require(multiply(transpose(projector), qhat) == multiply(qhat, projector), "polarization self-adjointness")
+
+    for common_scale in (Fraction(7), Fraction(-5, 3)):
+        scaled_row = scale(common_scale, row_dense)
+        scaled_denominator = multiply(scaled_row, e)[0][0]
+        scaled_ell = scale(Fraction(1, 1) / scaled_denominator, scaled_row)
+        require(scaled_ell == ell, "common top/integration scale cancellation")
+
+
+def main() -> None:
+    packet = load(PACKET)
+    load(LOCK)
+    source_lock = load(SOURCE_LOCK)
+    require(packet["schema"] == "mtt.unified-source.g3av-scale-free-b103-polarization.v1", "schema")
+    require(packet["theorem_id"] == "UST.G3AV", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_SCALE_FREE_B103_SOCLE_POLARIZATION_APPLICATION_REDUCTION",
+        "status",
+    )
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+
+    for name in ("upstream_lock", "B103_source_lock", "G3AT"):
+        item = packet["inputs"][name]
+        path = ROOT / item["path"]
+        require(path.is_file() and sha256(path) == item["sha256"], f"input {name}")
+        require(path.stat().st_size == item["bytes"], f"input bytes {name}")
+
+    locked = packet["inputs"]["locked_B103_source_subset"]
+    require(source_lock["repository_id"] == SOURCE_REPOSITORY_ID, "source repository")
+    require(locked["commit"] == source_lock["commit"], "source commit")
+    require(locked["remote"] == source_lock["remote"], "source remote")
+    expected = {item["path"]: item for item in source_lock["sources"]}
+    require(len(locked["sources"]) == 7, "locked source count")
+    for source in locked["sources"]:
+        require(source["path"] in expected, f"source path {source['path']}")
+        require(source["git_blob"] == expected[source["path"]]["git_blob"], f"source blob {source['path']}")
+        require(source["sha256"] == expected[source["path"]]["sha256"], f"source hash {source['path']}")
+
+    carrier = packet["selected_residue_carrier"]
+    require(carrier["rank"] == 1509, "carrier rank")
+    require([item["dimension"] for item in carrier["ordered_blocks"]] == [248, 1013, 248], "block dimensions")
+    require(carrier["complementary_top_degree"] == [18, 2, 2], "top degree")
+    require(carrier["top_dimension"] == 1, "top dimension")
+
+    weights = packet["Mavlyutov_cup_weights"]
+    require(weights["c_24"] == "-1/48", "c24 packet")
+    require(weights["c_33"] == "-1/36", "c33 packet")
+    require(weights["c_42"] == "-1/48", "c42 packet")
+    require(weights["c_33_over_c_24"] == "4/3", "relative middle weight")
+
+    bridge = packet["Cayley_trick_polarization_bridge"]
+    require(bridge["number_of_equations"] == 3, "Cayley equation count")
+    # Euler sequence: c(Omega^1_{P^(r-1)}(1))=(1+H)^(-1), so the
+    # fiber integral of its top Chern class is (-1)^(r-1).
+    cayley_multiplier = Fraction((-1) ** (bridge["number_of_equations"] - 1))
+    require(cayley_multiplier == 1, "three-equation Cayley pairing multiplier")
+    require(bridge["fiber_integral"] == "integral_{P^2} H^2=1", "Cayley fiber integral")
+
+    reduction = packet["execution_reduction"]
+    require(reduction["dense_full_matrix_entries"] == 2277081, "dense full count")
+    require(reduction["dense_complementary_block_entries"] == 1149177, "dense block count")
+    require(reduction["total_top_coefficient_reductions"] == 4527, "row reduction count")
+    require(reduction["stored_dense_matrix_entries_required"] == 0, "dense matrix removed")
+    require(reduction["absolute_polarization_normalization_required_before_projector_reconstruction"] is False, "scale-free application")
+
+    exact_scale_free_test()
+    print("UST.G3AV scale-free B103 polarization: PASS 4527 top reductions, dense Q removed")
+    print("remaining numeric input: three primal vectors and their exact characteristic-zero top reductions")
+
+
+if __name__ == "__main__":
+    main()

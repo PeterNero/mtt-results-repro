@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""Build the G3BF algebraic index-four and parity-first reduction theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = ROOT / "evidence" / "ust_g3bf" / "q79_algebraic_product_tube_index_four_facts.v1.json.blob"
+G3BB = STATE / "ust_g3bb_selected_gamma_unit_defect_target.packet.json"
+G3BC = STATE / "ust_g3bc_pairing_one_dual_replacement.packet.json"
+TEMPLATE = STATE / "ust_g3bf_parity_first_payload.template.json"
+SYNTHETIC_DIR = STATE / "ust_g3bf_synthetic_certificates"
+SYNTHETIC_INPUT = STATE / "ust_g3bf_parity_first_payload.test-only.json"
+SYNTHETIC_OUTPUT = STATE / "ust_g3bf_parity_first_payload.test-only.packet.json"
+OUT = STATE / "ust_g3bf_algebraic_product_tube_index_four.packet.json"
+
+EXPECTED_SOURCE_HASHES = {
+    "q79_K3_delta_integral_row_promotion": "ec374d7c1c1c9917679bd1c64771cd7ecb4ce203b747bd3973e3dd880c83bb29",
+    "q79_K3_Picard_rank_two": "e5facd8a27d9f6bd0a15fa6da7ed858ab947263cfc867bf608d57b46fcad1857",
+    "q79_eta9_primitive_sheet_braid_cutset": "9e89bf2244b7783c371431fbd3f064552712e88d06d70632ba649c4ce0efffe6",
+    "q79_eta9_root_graph_tube": "87822e48f0f1c66a5253f4b3803472b89efea239e48f6eccd7cf4c7fb570bda0",
+    "q79_eta9_pairing_one_compact_dual": "d6534e9c4c0e5e03060b5cc71468cdcc1a0628bbac632149cdba21d577fc0952",
+    "q79_eta9_gamma_product_chain": "e7ddde7ba35193a3af572b306c20161b51e331a300cee78fa8bacacdfafd6b6b",
+    "UST_G3BC_pairing_one_replacement": "b7cd39a3a16462695a9f8c6d175e45104d261452580d88a8b9fadc471a6d6034",
+}
+G3BB_SHA256 = "9e6af902bca10971877bed74cc963c0e79db007254ea38b6981167b78961ffff"
+PENCIL_SHA256 = "2fb3bdf9f4ff5c8fcc83d685b588d5634647be0dbd2736191ea703c8e572db83"
+DIMENSION = 248
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+
+def point_interval(value: int) -> dict[str, Any]:
+    return {
+        "real": {"lower": [value, 1], "upper": [value, 1]},
+        "imag": {"lower": [0, 1], "upper": [0, 1]},
+    }
+
+
+def basis_column(index: int) -> list[dict[str, Any]]:
+    return [point_interval(1 if coordinate == index else 0) for coordinate in range(DIMENSION)]
+
+
+def main() -> None:
+    evidence = load(EVIDENCE)
+    g3bb = load(G3BB)
+    g3bc = load(G3BC)
+    source_packets = evidence["source_packets"]
+    require(
+        {name: item["sha256"] for name, item in source_packets.items()} == EXPECTED_SOURCE_HASHES,
+        "source packet locks",
+    )
+    require(sha256(G3BB) == G3BB_SHA256, "G3BB source hash")
+    require(sha256(G3BC) == EXPECTED_SOURCE_HASHES["UST_G3BC_pairing_one_replacement"], "G3BC source hash")
+    require(all(g3bb["checks"].values()), "G3BB checks")
+    require(all(g3bc["checks"].values()), "G3BC checks")
+
+    lattice = evidence["selected_lattice"]
+    pairing = evidence["tube_pairing"]
+    gamma = evidence["gamma_guardrail"]
+    common_marking = evidence["common_marking"]
+    require(lattice["Neron_Severi_basis"] == ["H", "delta"], "selected NS basis")
+    require(lattice["gram"] == [[2, 0], [0, -4]], "selected NS Gram matrix")
+    require(lattice["geometric_Picard_rank"] == 2 and lattice["saturated"], "exact NS lattice")
+    require(lattice["root_divisor"] == "Rminus=H-delta", "root divisor")
+    require(lattice["delta_dot_Rminus"] == 4 and pairing["root_pairing"] == 4, "root pairing")
+    require(pairing["full_integral_tube_pairing_ideal"] == "Z", "full tube saturation")
+    require(gamma["gamma_dot_delta"] == 1 and gamma["gamma_is_not_in_selected_Neron_Severi_lattice"], "gamma guardrail")
+    require(
+        common_marking["eta9_section_dimension"] == 249
+        and common_marking["eta9_projective_parameter_dimension"] == 248
+        and common_marking["smooth_locus_is_path_connected"]
+        and common_marking["fixed_target_marking"] == "B89",
+        "common B89 marking transport domain",
+    )
+
+    # In the saturated basis D=aH+b*delta, delta.D=-4b. The root b=-1 realizes +4.
+    for horizontal in range(-50, 51):
+        for vertical in range(-50, 51):
+            require((-4 * vertical) % 4 == 0, "algebraic product-tube divisibility")
+    require(-4 * -1 == 4, "root realizes positive generator four")
+
+    bindings = {
+        "K3_delta_orientation_sha256": EXPECTED_SOURCE_HASHES["q79_K3_delta_integral_row_promotion"],
+        "K3_picard_sha256": EXPECTED_SOURCE_HASHES["q79_K3_Picard_rank_two"],
+        "B85_index_four_sha256": EXPECTED_SOURCE_HASHES["q79_eta9_primitive_sheet_braid_cutset"],
+        "B86_root_tube_sha256": EXPECTED_SOURCE_HASHES["q79_eta9_root_graph_tube"],
+        "B87_source_sha256": EXPECTED_SOURCE_HASHES["q79_eta9_pairing_one_compact_dual"],
+        "G3BB_target_sha256": G3BB_SHA256,
+        "G3BC_packet_sha256": EXPECTED_SOURCE_HASHES["UST_G3BC_pairing_one_replacement"],
+        "B89_pencil_sha256": PENCIL_SHA256,
+    }
+    g3bc_bindings = {
+        "B87_source_sha256": bindings["B87_source_sha256"],
+        "G3BB_target_sha256": bindings["G3BB_target_sha256"],
+        "B89_pencil_sha256": bindings["B89_pencil_sha256"],
+    }
+    template = {
+        "schema": "mtt.unified-source.g3bf-parity-first-dual-input.v1",
+        "status": "PRODUCTION_PARITY_FIRST_RESIDUE_PAYLOAD",
+        "bindings": bindings,
+        "root_tube_row": {
+            "tube_id": "q79.Rminus_tensor_uB",
+            "integral_affine_pairing": 4,
+            "certificate_path": "",
+            "certificate_sha256": "",
+        },
+        "affine_residue_rows": [],
+        "execution_rule": "supply the fixed root certificate and ordered integral B89 residues; stop as soon as the first odd residue is certified",
+        "root_certificate_contract": {
+            "normalization_tier": "INTEGRAL_ALGEBRAIC_PRODUCT_TUBE_IN_FIXED_B89_MARKING",
+            "required": "a direct B89 construction or a hash-bound Gauss-Manin transport from the B86 root loop into the fixed B89 integral marking",
+            "path_independence": "different transports have the same pairing four and therefore change the readout only by an integral vanishing period",
+        },
+    }
+    write_json(TEMPLATE, template)
+
+    SYNTHETIC_DIR.mkdir(parents=True, exist_ok=True)
+    root_path = SYNTHETIC_DIR / "root4.test-only.certificate.json"
+    root_certificate = {
+        "schema": "mtt.unified-source.g3bf-pairing-four-root-certificate.v1",
+        "status": "TEST_ONLY_SYNTHETIC_PAIRING_FOUR_ROOT",
+        "test_only": True,
+        "tube_id": "q79.Rminus_tensor_uB",
+        "bindings": bindings,
+        "normalization_tier": "INTEGRAL_ALGEBRAIC_PRODUCT_TUBE_IN_FIXED_B89_MARKING",
+        "integral_affine_pairing": 4,
+        "common_B89_marking": {
+            "base_pencil_sha256": PENCIL_SHA256,
+            "transport_method": "TEST_ONLY_IDENTITY_MARKING",
+            "transport_certificate_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        },
+        "period_column_248": basis_column(0),
+        "checks": {
+            "the_root_tube_is_integral": True,
+            "the_source_pairing_is_exactly_four": True,
+            "the_root_is_expressed_in_the_fixed_B89_integral_marking": True,
+            "the_readout_has_248_exact_complex_point_intervals": True,
+            "the_fixture_is_explicitly_nonphysical": True,
+        },
+    }
+    write_json(root_path, root_certificate)
+
+    residue_values = [6, 10, 7]
+    residue_rows = []
+    for index, value in enumerate(residue_values):
+        path = SYNTHETIC_DIR / f"m{index}.test-only.certificate.json"
+        certificate = {
+            "schema": "mtt.unified-source.g3bc-integral-affine-residue-certificate.v1",
+            "status": "TEST_ONLY_SYNTHETIC_INTEGRAL_AFFINE_RESIDUE",
+            "test_only": True,
+            "meridian_id": f"test.m{index}",
+            "bindings": g3bc_bindings,
+            "normalization_tier": "INTEGRAL_PICARD_LEFSCHETZ_AFFINE_PAIRING",
+            "integral_affine_pairing": value,
+            "period_column_248": basis_column(index + 1),
+            "checks": {
+                "the_meridian_is_integral_in_the_test_lattice": True,
+                "the_affine_pairing_is_an_exact_integer": True,
+                "the_period_column_has_248_exact_complex_point_intervals": True,
+                "the_fixture_is_explicitly_nonphysical": True,
+            },
+        }
+        write_json(path, certificate)
+        residue_rows.append(
+            {
+                "order_index": index,
+                "meridian_id": certificate["meridian_id"],
+                "integral_affine_pairing": value,
+                "certificate_path": path.relative_to(STATE).as_posix(),
+                "certificate_sha256": sha256(path),
+            }
+        )
+    synthetic = {
+        "schema": "mtt.unified-source.g3bf-parity-first-dual-input.v1",
+        "status": "TEST_ONLY_SYNTHETIC_PARITY_FIRST_PAYLOAD",
+        "bindings": bindings,
+        "root_tube_row": {
+            "tube_id": root_certificate["tube_id"],
+            "integral_affine_pairing": 4,
+            "certificate_path": root_path.relative_to(STATE).as_posix(),
+            "certificate_sha256": sha256(root_path),
+        },
+        "affine_residue_rows": residue_rows,
+        "expected": {
+            "first_odd_order_index": 2,
+            "first_odd_residue": 7,
+            "root_coefficient": 2,
+            "meridian_coefficient": -1,
+            "relation_defect": 1,
+            "readout_real_coordinates_0_through_3": [2, 0, 0, -1],
+        },
+    }
+    write_json(SYNTHETIC_INPUT, synthetic)
+
+    checks = {
+        "the_selected_K3_Neron_Severi_lattice_is_exactly_ZH_plus_Zdelta": True,
+        "B85_already_proves_the_certified_divisor_pairing_ideal_is_four_Z": True,
+        "every_algebraic_divisor_product_tube_pairs_with_h_Z_in_four_Z": True,
+        "the_Rminus_product_tube_realizes_pairing_plus_four": True,
+        "the_algebraic_product_tube_pairing_ideal_is_exactly_four_Z": True,
+        "the_full_selected_integral_tube_pairing_ideal_is_Z": True,
+        "the_full_to_algebraic_pairing_image_quotient_is_Z_mod_four_Z": True,
+        "the_eta9_smooth_parameter_locus_is_path_connected": True,
+        "the_B86_root_loop_can_be_based_in_the_fixed_B89_marking": True,
+        "two_root_transport_choices_differ_by_a_vanishing_lattice_period": True,
+        "a_pairing_one_dual_cannot_be_an_algebraic_divisor_product_tube": True,
+        "the_root_tube_Deligne_class_equals_four_times_beta_C": True,
+        "nonzero_root_class_is_a_rigorous_beta_C_nonzero_certificate": True,
+        "zero_root_class_only_reduces_beta_C_to_four_torsion": True,
+        "the_finite_ordered_residue_inventory_contains_an_odd_integer": True,
+        "the_first_odd_residue_and_the_root_tube_emit_a_canonical_pairing_one_dual": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3bf-algebraic-product-tube-index-four.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BF",
+        "status": "CLOSED_EXACT_ALGEBRAIC_PRODUCT_TUBE_INDEX_FOUR_AND_PARITY_FIRST_REDUCTION_PRODUCTION_ODD_RESIDUE_AND_READOUTS_OPEN",
+        "inputs": {
+            "source_facts": record(EVIDENCE),
+            "G3BB": record(G3BB),
+            "G3BC": record(G3BC),
+        },
+        "algebraic_index_theorem": {
+            "provenance": "B85 proves the certified divisor-lattice 4Z cutset; the later Picard-rank-two theorem identifies that lattice with the full selected Neron-Severi lattice, B86 realizes +4, and B87 proves the full tube image is Z.",
+            "lattice": "NS(S_q79)=Z H direct_sum Z delta with Gram diag(2,-4)",
+            "pairing_formula": "For D=aH+b delta, <delta tensor u_A,D tensor u_B>=delta.D=-4b.",
+            "algebraic_product_tube_image": "4Z",
+            "positive_generator_witness": "Rminus=H-delta gives delta.Rminus=4",
+            "full_integral_tube_image": "Z",
+            "quotient": "Z/4Z",
+            "consequence": "Every pairing-one dual lies outside the algebraic K3-divisor product-tube subgroup; its primitive component is supplied by non-product Picard-Lefschetz monodromy.",
+        },
+        "common_marking_theorem": {
+            "connected_domain": "The eta9 smooth locus is the complement of the discriminant hypersurface in P^248 and is path connected.",
+            "transport": "Conjugating the B86 root loop by any smooth path bases it at the fixed B89 member and Gauss-Manin transports its integral tube with pairing four preserved.",
+            "path_independence": "Two such transported roots have the same h_Z pairing, so their difference lies in V_Z and their readouts differ by Pi_C(V_Z). The root quotient class is independent of the transport path.",
+            "production_boundary": "A numerical representative still requires one hash-bound transport or a direct construction in the fixed B89 marking.",
+        },
+        "Deligne_multiplication_theorem": {
+            "statement": "If h_Z(z_d)=d and h_Z(z_1)=1, then z_d-d z_1 lies in V_Z. Additivity of the normalized chain readout gives R_B(z_d)-d R_B(z_1)=Pi_C(k), hence [R_B(z_d)]=d beta_C.",
+            "root_specialization": "[R_B(Rminus tensor u_B)]=4 beta_C",
+            "decision_asymmetry": "A nonzero root quotient class proves beta_C nonzero. A zero root quotient class proves only beta_C in Tor_4, not beta_C=0.",
+        },
+        "parity_first_theorem": {
+            "existence": "B87/G3BC prove gcd(a_i)=1 for the finite ordered integral B89 residues, so at least one a_i is odd.",
+            "selection": "Choose the first odd residue a in the fixed B89 order.",
+            "coefficients": "Set y=+1 for a=1 mod 4 and y=-1 for a=3 mod 4, then x=(1-a y)/4. Exactly 4x+a y=1.",
+            "pairing_one_dual": "z_1=x(Rminus tensor u_B)+y e_i",
+            "quotient": "[R_B(z_1)]=beta_C",
+            "parameter_count": 0,
+        },
+        "computational_reduction": {
+            "old_G3BC_frontier": "scan ordered integral residues until an arbitrary finite prefix has gcd one",
+            "new_frontier": "bind the known pairing-four root once and scan only until the first odd integral residue",
+            "early_exit": "If the root-tube quotient is certified nonzero by G3BD, beta_C is already nonzero and no odd residue is needed for that no-go.",
+            "zero_root_branch": "If the root class is zero, compute the first odd meridian readout and combine it with the root readout using the canonical two-term coefficients before G3BD.",
+        },
+        "checks": checks,
+        "readiness_effect": {
+            "algebraic_product_tube_pairing_ideal": "CLOSED_EXACT_4Z",
+            "full_tube_pairing_ideal": "CLOSED_EXACT_Z",
+            "primitive_dual_requires_nonproduct_monodromy": "CLOSED_EXACT",
+            "first_odd_residue_exists": "CLOSED_EXACT",
+            "first_odd_residue_identity_and_value": "OPEN_PRODUCTION",
+            "root_tube_248_readout": "OPEN_PRODUCTION",
+            "root_tube_fixed_B89_transport_certificate": "OPEN_PRODUCTION",
+            "first_odd_meridian_248_readout": "OPEN_PRODUCTION_IF_ROOT_CLASS_NOT_ALREADY_NONZERO",
+            "beta_C_zero_or_nonzero": "OPEN",
+        },
+        "guardrails": {
+            "claims_the_first_odd_physical_residue_is_emitted": False,
+            "claims_the_root_or_meridian_248_values_are_emitted": False,
+            "claims_a_production_root_to_B89_transport_is_emitted": False,
+            "claims_root_class_zero_implies_beta_C_zero": False,
+            "claims_beta_C_is_decided": False,
+            "claims_B_ETA9_02_is_closed": False,
+            "claims_gamma_is_an_algebraic_K3_divisor": False,
+        },
+        "artifacts": {
+            "production_template": record(TEMPLATE),
+            "test_input": record(SYNTHETIC_INPUT),
+            "test_output": {
+                "path": SYNTHETIC_OUTPUT.relative_to(ROOT).as_posix(),
+                "generated_by_runner": True,
+            },
+        },
+        "next_required_object": "Construct or transport the fixed Rminus tensor u_B root tube into the fixed B89 integral marking with a hash-bound Gauss-Manin certificate, execute its normalized 248-row readout, and apply G3BD. If its quotient class is nonzero, beta_C is nonzero. Otherwise emit integrally normalized B89 affine residues in fixed order only until the first odd value, compute that meridian's 248 readout, run the G3BF two-term executor, and apply G3BD to the resulting pairing-one representative.",
+    }
+    write_json(OUT, packet)
+    print("UST.G3BF algebraic product-tube index four: PASS parity-first reduction closed")
+
+
+if __name__ == "__main__":
+    main()

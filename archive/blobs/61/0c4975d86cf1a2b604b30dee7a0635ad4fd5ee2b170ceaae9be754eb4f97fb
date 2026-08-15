@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Verify the G3U direct-stability correction and partial hidden G3D packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+import verify_ust_g3d_common_gauduchon_chamber_v2 as compiler
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3u_hidden_direct_stable_factor.packet.json"
+G3T_PATH = ROOT / "state" / "ust_g3t_support_wide_slope_balanced_qutrit.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+QG_REPOSITORY_ID = "q79-quantum-gravity"
+QG_COMMIT = "1fa48cb247ff3098e46d1e39ca770287510a4959"
+HEISENBERG_PATH = "q79_heisenberg_spectral_support_and_hidden_parity_cutset.packet.json"
+POST_M32_PATH = "q79_post_m32_global_gerbe_target_and_rank_cutset.packet.json"
+EXPECTED_UPSTREAM = {
+    HEISENBERG_PATH: {
+        "sha256": "217566baa9d7efd4130acbbfbfe45cf88c3caa2471ac4ac7b44bcc8999c8cb0e",
+        "git_blob_sha256": "f6cfc4915d8dda7fb43984a2cfa61c0a96ec3f0702a100fbde4dbed6c2d746c0",
+        "git_blob": "a6c77492ea33ce0814f87d7c272d09a18bbae885",
+    },
+    POST_M32_PATH: {
+        "sha256": "fd85686d84ceeb51a876311cb05c22cb641d4626c23c52651ba0fd18f57a9d13",
+        "git_blob_sha256": "69a1a390226f06821f310d51a55fba5733c15a2002dcd9a547304651d7d57526",
+        "git_blob": "10ca1d05f9e348f43653580a682e0360a85767b1",
+    },
+}
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_upstream_lock() -> None:
+    lock = load(LOCK_PATH)
+    qg = next((item for item in lock["repositories"] if item["id"] == QG_REPOSITORY_ID), None)
+    require(qg is not None, "q79 repository lock")
+    require(qg["commit"] == QG_COMMIT, "q79 commit")
+    sources = {item["path"]: item for item in qg["sources"]}
+    for path, expected in EXPECTED_UPSTREAM.items():
+        require(path in sources, f"missing locked source: {path}")
+        for field, value in expected.items():
+            require(sources[path][field] == value, f"{path}: {field}")
+
+
+def verify_exact_gap(g3t: dict) -> None:
+    transform = g3t["balanced_transform"]
+    require(transform["FM_factors"] == [[3, -1], [3, -1], [3, -1]], "FM factor rows")
+    require(transform["B_corrected_factors"] == [[3, 0], [3, 0], [3, 0]], "corrected rows")
+    require(transform["each_corrected_factor_stable"] is True, "factor stability")
+
+    corrected_bounds = {}
+    for rank in (1, 2):
+        maximum_integral_degree = -1
+        require(Fraction(maximum_integral_degree, rank) < Fraction(-1, 3), f"rank {rank}: stability inequality")
+        corrected_degree = Fraction(maximum_integral_degree) + Fraction(rank, 3)
+        corrected_bounds[rank] = 2 * corrected_degree
+    require(corrected_bounds == {1: Fraction(-4, 3), 2: Fraction(-2, 3)}, "exact corrected bounds")
+    require(max(corrected_bounds.values()) == Fraction(-2, 3), "uniform hidden gap")
+    require(Fraction(transform["fiber_gap"]) == Fraction(2, 3), "G3T packet gap")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    g3t = load(G3T_PATH)
+    require(packet["source_hash"] == file_hash(G3T_PATH), "G3T source hash")
+    verify_upstream_lock()
+    verify_exact_gap(g3t)
+
+    result = compiler.validate_packet(packet)
+    hidden = next(item for item in result["factor_results"] if item["sector"] == "hidden")
+    visible = next(item for item in result["factor_results"] if item["sector"] == "visible")
+    hidden_packet = next(item for item in packet["factors"] if item["sector"] == "hidden")
+
+    require(hidden["direct_strictness"] is True, "direct hidden strictness")
+    require(hidden["structural_pass"] is True, "hidden structural rows")
+    require(hidden["certified_mu_bound"] is False, "mu1 remains open")
+    require(hidden["accepted"] is False, "hidden not fully accepted before mu1")
+    require(hidden_packet["factor_support_reduced"] is False, "do not invent reduced support")
+    require(hidden_packet["factor_support_irreducible"] is False, "do not invent irreducible support")
+    require(visible["structural_pass"] is False, "visible slot remains open")
+    require(result["physically_selected"] is False, "physical promotion boundary")
+    require(packet["empirical_inputs"] == [], "no empirical inputs")
+
+    expected_threshold = Fraction(1) + 3 * Fraction(hidden_packet["mu1_upper_bound"])
+    require(hidden["threshold"] == expected_threshold, "hidden threshold formula")
+    require(g3t["scope"]["B_HS_01_closed"] is False, "B.HS.01 remains open")
+    require(g3t["scope"]["UST_G3_closed"] is False, "UST.G3 remains open")
+
+    print("UST.G3U direct-stable-factor compiler correction: PASS")
+    print("qutrit spectral reducedness: not claimed")
+    print("rank-three corrected strictness bounds: -4/3 and -2/3")
+    print("hidden G3D structural rows before mu1: complete")
+    print("remaining hidden compiler row: fixed-metric mu1 upper bound")
+
+
+if __name__ == "__main__":
+    main()

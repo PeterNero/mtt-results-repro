@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Independently replay the G3FR mixed-degree inverse-system source."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fr/H02.component20.inverse_system_source.json"
+EXPECTED_STATUS = "CLOSED_EXACT_48_FIBER_MIXED_DEGREE_INVERSE_SOURCE_QGAMMA_SELECTION_OPEN"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound path exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def ideal_piece(
+    generators: dict[int, np.ndarray], degree: int, prime: int
+) -> np.ndarray:
+    matrix = np.concatenate(
+        [
+            graded.multiply_space(generators[source], source, degree, prime)
+            for source in (11, 14, 15)
+            if source <= degree
+        ],
+        axis=1,
+    )
+    _, pivots, _ = graded.rref(matrix, prime)
+    return matrix[:, pivots] % prime
+
+
+def derivatives(vectors: np.ndarray, degree: int, prime: int) -> np.ndarray:
+    source = graded.homogeneous_exponents(degree)
+    target = graded.homogeneous_exponents(degree - 1)
+    lookup = {exponent: row for row, exponent in enumerate(target)}
+    result = np.zeros((len(target), vectors.shape[1] * 3), dtype=np.int64)
+    for column in range(vectors.shape[1]):
+        for variable in range(3):
+            output = column * 3 + variable
+            for row, exponent in enumerate(source):
+                if exponent[variable]:
+                    contracted = list(exponent)
+                    contracted[variable] -= 1
+                    result[lookup[tuple(contracted)], output] = vectors[row, column]
+    return result % prime
+
+
+def column_basis(vectors: np.ndarray, prime: int) -> np.ndarray:
+    _, pivots, _ = graded.rref(vectors, prime)
+    return vectors[:, pivots] % prime
+
+
+def orthogonal_dimension(ideal: np.ndarray, prime: int) -> int:
+    rank, _, _ = graded.rref(ideal, prime)
+    return ideal.shape[0] - rank
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fr.h02.component20.inverse-system-source.v1", "schema")
+    require(packet["status"] == EXPECTED_STATUS, "status")
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    bound_path(packet["inputs"]["G3FO"])
+    bound_path(packet["inputs"]["G3FQ"])
+    split_paths = [bound_path(row) for row in packet["inputs"]["split_prime_packets"]]
+    arrays_path = bound_path(packet["campaign"]["artifact"])
+    require(tuple(split_paths) == conic.SPLIT_PACKETS, "split packet order")
+
+    arrays = np.load(arrays_path)
+    primes = tuple(int(value) for value in arrays["primes"])
+    require(primes == conic.EXPECTED_PRIMES, "prime order")
+    primitive15 = arrays["degree15_primitives"].astype(np.int64)
+    primitive16 = arrays["degree16_primitive"].astype(np.int64)
+    primitive19 = arrays["degree19_primitive"].astype(np.int64)
+    require(primitive15.shape == (8, 6, 136, 18), "degree15 primitive shape")
+    require(primitive16.shape == (8, 6, 153, 1), "degree16 primitive shape")
+    require(primitive19.shape == (8, 6, 210, 1), "degree19 primitive shape")
+
+    residues: list[np.ndarray] = []
+    charts: list[tuple[tuple[int, ...], ...]] = []
+    checked = 0
+    for prime_index, packet_path in enumerate(split_paths):
+        split = conic.load(packet_path)
+        prime = int(split["field"]["prime"])
+        roots = tuple(int(value) for value in split["field"]["roots"])
+        rows = {int(row["gamma_root"]): row for row in split["root_kernels"]}
+        for root_index, root in enumerate(roots):
+            generators, _, _ = g3fe.extract_fiber(
+                ROOT / rows[root]["kernel"]["path"], prime
+            )
+            ideals = {degree: ideal_piece(generators, degree, prime) for degree in range(15, 20)}
+            require(
+                {degree: orthogonal_dimension(ideals[degree], prime) for degree in ideals}
+                == {15: 36, 16: 11, 17: 6, 18: 3, 19: 1},
+                "dual Hilbert dimensions",
+            )
+
+            p19 = primitive19[prime_index, root_index] % prime
+            p16 = primitive16[prime_index, root_index] % prime
+            p15 = primitive15[prime_index, root_index] % prime
+            d18 = column_basis(derivatives(p19, 19, prime), prime)
+            d17 = column_basis(derivatives(d18, 18, prime), prime)
+            d16 = column_basis(derivatives(d17, 17, prime), prime)
+            d15_top = column_basis(derivatives(d16, 16, prime), prime)
+            d15_mid = column_basis(derivatives(p16, 16, prime), prime)
+            require(
+                (d18.shape[1], d17.shape[1], d16.shape[1], d15_top.shape[1], d15_mid.shape[1])
+                == (3, 6, 10, 15, 3),
+                "derivative tower",
+            )
+            require(
+                np.count_nonzero(ideals[18].T @ d18 % prime) == 0
+                and np.count_nonzero(ideals[17].T @ d17 % prime) == 0,
+                "upper apolar closure",
+            )
+            complete16 = np.concatenate((d16, p16), axis=1)
+            require(
+                graded.rref(complete16, prime)[0] == 11
+                and np.count_nonzero(ideals[16].T @ complete16 % prime) == 0,
+                "degree16 direct source",
+            )
+            complete15 = np.concatenate((d15_top, d15_mid, p15), axis=1)
+            require(
+                graded.rref(complete15, prime)[0] == 36
+                and np.count_nonzero(ideals[15].T @ complete15 % prime) == 0,
+                "degree15 18+3+15 source",
+            )
+            require(ideals[15].shape[1] == 100, "degree15 annihilator dimension100")
+
+            local_chart: list[tuple[int, ...]] = []
+            for value in (p19, p16, p15):
+                rank, pivot_rows, _ = graded.rref(value.T, prime)
+                require(rank == value.shape[1], "primitive rank")
+                pivots = np.asarray(pivot_rows, dtype=np.int64)
+                require(
+                    np.array_equal(value[pivots, :], np.eye(rank, dtype=np.int64)),
+                    "primitive canonical chart",
+                )
+                local_chart.append(tuple(int(row) for row in pivot_rows))
+            charts.append(tuple(local_chart))
+            checked += 1
+
+        coefficients = [
+            g3fe.interpolate(primitive15[prime_index], roots, prime).ravel(),
+            g3fe.interpolate(primitive16[prime_index], roots, prime).ravel(),
+            g3fe.interpolate(primitive19[prime_index], roots, prime).ravel(),
+        ]
+        residues.append(np.concatenate(coefficients))
+        print(f"G3FR verify p={prime}: six mixed inverse sources PASS", flush=True)
+
+    require(checked == 48, "all fibers checked")
+    require(len(set(charts)) == 1, "common primitive charts")
+    residue_matrix = np.stack(residues)
+    require(np.array_equal(residue_matrix, arrays["power_basis_residues"]), "residue replay")
+    audit = g3fe.reconstruction_audit(residue_matrix, primes)
+    require(
+        audit["coefficients"] == 16866
+        and audit["holdout_passes"] == packet["numeric_promotion_audit"]["holdout_passes"]
+        and audit["passing_nontrivial_coefficients"] == 0,
+        "promotion audit replay",
+    )
+    print(
+        "UST.G3FR independent replay: PASS fibers=48 "
+        "primitives=20 degree15=18+3+15=36",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

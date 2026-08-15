@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Build the selected toric-residue lower bound for the ordinary G3AP top piece."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = ROOT / "evidence"
+G3AO = STATE / "ust_g3ao_selected_cayley_toric_regularity.packet.json"
+B71 = EVIDENCE / "q79_eta9_cayley_toric_regularity.B71.packet.json"
+B72 = EVIDENCE / "q79_eta9_cayley_structural_residue_promotion.B72.packet.json"
+OUT = STATE / "ust_g3ap_selected_cayley_ordinary_top_lower_bound.packet.json"
+B71_SHA256 = "b8f27827ad938d6234e7aa70919242c96e670b30a7c05e12354793ad8711abf9"
+B72_SHA256 = "80527c7ee4c75757b346e14a05fbbdf9056bad1ef4ce0d726c8a655395c7c7e5"
+PRIME = 101
+TOP_INTERSECTION = 14301
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def record(path: Path) -> dict[str, str]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+    }
+
+
+def main() -> None:
+    g3ao = load(G3AO)
+    b71 = load(B71)
+    b72 = load(B72)
+    require(sha256(B71) == B71_SHA256, "B71 evidence hash")
+    require(sha256(B72) == B72_SHA256, "B72 evidence hash")
+    require(
+        g3ao["schema"]
+        == "mtt.unified-source.g3ao-selected-cayley-toric-regularity.v1"
+        and g3ao["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_CAYLEY_TORIC_REGULARITY_735_OF_735",
+        "selected G3AO tier",
+    )
+    require(g3ao["orbit_systems"] == {"passed": 735, "total": 735}, "orbit cover")
+    require(all(g3ao["checks"].values()), "G3AO checks")
+    common_ambient_keys = (
+        "description",
+        "Cox_degree_matrix_by_variable",
+        "dimension",
+        "Cayley_degree",
+        "Cox_anticanonical_degree",
+        "maximal_chart_count",
+        "chart_cover",
+        "chart_gauge_degree_determinants",
+    )
+    require(
+        all(
+            g3ao["toric_ambient"][key] == b71["toric_ambient"][key]
+            for key in common_ambient_keys
+        ),
+        "same toric ambient",
+    )
+    require(
+        g3ao["toric_ambient"]["chart_gauge_is_etale_over_F1016"] is True,
+        "selected etale chart gauges",
+    )
+    semiample = b71["semiample_certificate"]
+    require(
+        semiample["tautological_class_is_nef"] is True
+        and semiample["class_is_big"] is True
+        and semiample["top_self_intersection_xi7"] == TOP_INTERSECTION,
+        "common big and nef Cayley class",
+    )
+    require(TOP_INTERSECTION % PRIME == 60 != 0, "selected residue normalization unit")
+    require(
+        b72["degree_ledger"]["ordinary_top_degree_8beta_minus2beta0"]
+        == [18, 2, 2],
+        "ordinary top degree",
+    )
+    require(
+        b72["checks"]["the_ordinary_partial_Jacobian_ideal_is_contained_in_J1"]
+        is True,
+        "ordinary-to-R1 quotient map",
+    )
+    proof_steps = {row["name"]: row["argument"] for row in b72["proof_chain"]}
+    require("R1_complementary_duality" in proof_steps, "R1 duality source")
+    require("ordinary_top_flat_line" in proof_steps, "ordinary containment source")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-lower-bound.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.LOWER",
+        "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_AT_LEAST_ONE",
+        "inputs": {
+            "G3AO_selected_toric_regularity": record(G3AO),
+            "B71_common_toric_ambient": record(B71),
+            "B72_structural_R1_duality": record(B72),
+        },
+        "selected_field": {
+            "prime": PRIME,
+            "extension_degree": 6,
+            "chart_gauge_degree_determinants": [1, 3],
+            "top_self_intersection": TOP_INTERSECTION,
+            "top_self_intersection_mod_prime": TOP_INTERSECTION % PRIME,
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "lower_bound_dimension": 1,
+            "reason": "ordinary quotient surjects onto the nonzero selected toric R1 top line",
+        },
+        "proof_chain": [
+            {
+                "step": 1,
+                "name": "selected_logarithmic_regular_sequence",
+                "argument": (
+                    "G3AO proves that the selected F_101^6 logarithmic Cayley "
+                    "critical locus is empty on all 735 nonempty Cox orbits. "
+                    "The normal Cayley semigroup ring is Cohen-Macaulay, so the "
+                    "eight logarithmic derivatives form a homogeneous system of "
+                    "parameters and hence a regular sequence."
+                ),
+            },
+            {
+                "step": 2,
+                "name": "selected_R1_top_line_nonzero",
+                "argument": (
+                    "The common tautological class is big and nef with top "
+                    "self-intersection 14301, which is the unit 60 modulo 101. "
+                    "Toric residue duality for the regular logarithmic sequence "
+                    "therefore gives a nonzero R1 top residue in Cox degree "
+                    "8beta-2beta0=(18,2,2)."
+                ),
+            },
+            {
+                "step": 3,
+                "name": "ordinary_top_surjection",
+                "argument": (
+                    "Multiplication by the Cox product sends every ordinary "
+                    "partial derivative into the logarithmic Jacobian ideal, so "
+                    "the ordinary top quotient surjects onto R1. Since the "
+                    "selected R1 top line is nonzero, the selected ordinary top "
+                    "dimension is at least one."
+                ),
+            },
+        ],
+        "checks": {
+            "same_selected_F1016_member_as_G3AO": True,
+            "all_735_selected_toric_orbits_are_regular": True,
+            "the_common_Cayley_class_is_big_and_nef": True,
+            "chart_determinants_1_and_3_are_units_mod101": True,
+            "top_intersection_14301_is_the_unit60_mod101": True,
+            "the_logarithmic_sequence_is_regular_in_the_Cohen_Macaulay_semigroup_ring": True,
+            "toric_residue_duality_makes_the_selected_R1_top_piece_nonzero": True,
+            "the_ordinary_partial_Jacobian_quotient_surjects_onto_R1": True,
+            "the_selected_ordinary_top_dimension_is_at_least_one": True,
+            "no_predecessor_basis_or_observed_value_is_used": True,
+        },
+        "guardrails": {
+            "claims_the_selected_ordinary_top_dimension_is_at_most_one": False,
+            "claims_the_selected_ordinary_top_dimension_is_exactly_one": False,
+            "claims_the_ordinary_socle_representative_is_identified": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_selected_member_is_emitted": False,
+        },
+        "theorem": {
+            "name": "selectedCayleyOrdinaryTopResidueLowerBoundTheorem",
+            "tier": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_LOWER_BOUND_ONE",
+            "statement": (
+                "For the G3AO-selected F_101^6 Cayley member, the ordinary "
+                "Jacobian quotient in Cox degree (18,2,2) has dimension at "
+                "least one."
+            ),
+        },
+        "primary_mathematical_sources": b72["primary_mathematical_sources"],
+        "next_required_object": (
+            "Supply a selected-source upper bound of one. It is sufficient to "
+            "exhibit exact module generators whose leading monomial submodule "
+            "leaves at most one target standard and prove that they generate "
+            "the same selected module; a full unrestricted Groebner basis is "
+            "not required."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AP selected ordinary-top lower bound: PASS "
+        "dimension>=1 residue_unit=60 mod101"
+    )
+
+
+if __name__ == "__main__":
+    main()

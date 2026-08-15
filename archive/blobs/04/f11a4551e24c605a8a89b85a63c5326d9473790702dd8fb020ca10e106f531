@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Independently replay the stored G3FQ terminal differential."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fp_component20_canonical_d2_source as g3fp
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fq/H02.component20.canonical_d3_source.json"
+EXPECTED_STATUS = "CLOSED_EXACT_48_FIBER_CANONICAL_D3_SOURCE_QGAMMA_GEOMETRIC_LIFT_OPEN"
+F2_BLOCKS = ((12, 1), (13, 1), (16, 40), (17, 7))
+EXPECTED_D3_SHAPES = {18: (310, 18), 19: (506, 1), 22: (1388, 1)}
+EXPECTED_GENERATED_RANKS = {18: 18, 19: 55, 20: 111, 21: 186, 22: 281}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound path exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def f2_keys(degree: int) -> list[tuple[int, int, tuple[int, int, int]]]:
+    return [
+        (shift, generator, exponent)
+        for shift, count in F2_BLOCKS
+        if degree >= shift
+        for generator in range(count)
+        for exponent in graded.homogeneous_exponents(degree - shift)
+    ]
+
+
+def lift_f2(
+    vectors: np.ndarray, source_degree: int, target_degree: int, prime: int
+) -> np.ndarray:
+    source = f2_keys(source_degree)
+    target = f2_keys(target_degree)
+    lookup = {key: row for row, key in enumerate(target)}
+    multipliers = graded.homogeneous_exponents(target_degree - source_degree)
+    result = np.zeros(
+        (len(target), vectors.shape[1] * len(multipliers)), dtype=np.int64
+    )
+    for column in range(vectors.shape[1]):
+        for multiplier_index, multiplier in enumerate(multipliers):
+            output = column * len(multipliers) + multiplier_index
+            for row, (shift, generator, exponent) in enumerate(source):
+                product = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                result[lookup[(shift, generator, product)], output] = vectors[row, column]
+    return result % prime
+
+
+def d2_matrix(
+    d2_columns: dict[int, np.ndarray], degree: int, prime: int
+) -> np.ndarray:
+    return np.concatenate(
+        [
+            g3fp.multiply_module_vectors(d2_columns[shift], shift, degree, prime)
+            for shift, _ in F2_BLOCKS
+            if shift <= degree
+        ],
+        axis=1,
+    ) % prime
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fq.h02.component20.canonical-d3-source.v1", "schema")
+    require(packet["status"] == EXPECTED_STATUS, "status")
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    bound_path(packet["inputs"]["G3FO"])
+    bound_path(packet["inputs"]["G3FP"])
+    d2_path = bound_path(packet["inputs"]["G3FP_arrays"])
+    split_paths = [bound_path(row) for row in packet["inputs"]["split_prime_packets"]]
+    d3_path = bound_path(packet["campaign"]["artifact"])
+    require(tuple(split_paths) == conic.SPLIT_PACKETS, "split packet order")
+
+    d2_arrays = np.load(d2_path)
+    d3_arrays = np.load(d3_path)
+    primes = tuple(int(value) for value in d3_arrays["primes"])
+    require(primes == conic.EXPECTED_PRIMES, "prime order")
+    d3_values = {
+        degree: d3_arrays[f"degree{degree}_values"].astype(np.int64)
+        for degree in EXPECTED_D3_SHAPES
+    }
+    for degree, shape in EXPECTED_D3_SHAPES.items():
+        require(d3_values[degree].shape == (8, 6, *shape), f"degree{degree} shape")
+
+    replayed_residues: list[np.ndarray] = []
+    charts: list[tuple[tuple[int, ...], ...]] = []
+    checked = 0
+    for prime_index, packet_path in enumerate(split_paths):
+        split = conic.load(packet_path)
+        prime = int(split["field"]["prime"])
+        roots = tuple(int(value) for value in split["field"]["roots"])
+        for root_index, _root in enumerate(roots):
+            d2_columns = {
+                degree: d2_arrays[f"degree{degree}_values"][prime_index, root_index]
+                .astype(np.int64)
+                % prime
+                for degree in (12, 13, 16, 17)
+            }
+            d3_columns = {
+                degree: d3_values[degree][prime_index, root_index] % prime
+                for degree in EXPECTED_D3_SHAPES
+            }
+
+            native_chart: list[tuple[int, ...]] = []
+            for degree, value in d3_columns.items():
+                matrix = d2_matrix(d2_columns, degree, prime)
+                require(
+                    np.count_nonzero(matrix @ value % prime) == 0,
+                    f"native d2*d3 degree{degree}",
+                )
+                rank, pivot_rows, _ = graded.rref(value.T, prime)
+                require(rank == value.shape[1], f"native d3 rank degree{degree}")
+                pivots = np.asarray(pivot_rows, dtype=np.int64)
+                require(
+                    np.array_equal(value[pivots, :], np.eye(rank, dtype=np.int64)),
+                    f"native canonical chart degree{degree}",
+                )
+                native_chart.append(tuple(int(row) for row in pivot_rows))
+            charts.append(tuple(native_chart))
+
+            for degree, expected in EXPECTED_GENERATED_RANKS.items():
+                generated = np.concatenate(
+                    [
+                        lift_f2(d3_columns[shift], shift, degree, prime)
+                        for shift in EXPECTED_D3_SHAPES
+                        if shift <= degree
+                    ],
+                    axis=1,
+                )
+                require(generated.shape[1] == expected, f"generated count degree{degree}")
+                require(
+                    np.count_nonzero(d2_matrix(d2_columns, degree, prime) @ generated % prime) == 0,
+                    f"generated complex identity degree{degree}",
+                )
+                if degree == 22:
+                    require(graded.rref(generated, prime)[0] == 281, "terminal injective rank")
+            checked += 1
+
+        coefficients = [
+            g3fe.interpolate(d3_values[degree][prime_index], roots, prime).ravel()
+            for degree in EXPECTED_D3_SHAPES
+        ]
+        replayed_residues.append(np.concatenate(coefficients))
+        print(f"G3FQ verify p={prime}: six canonical d3 fibers PASS", flush=True)
+
+    require(checked == 48, "all fibers checked")
+    require(len(set(charts)) == 1, "common native charts")
+    residues = np.stack(replayed_residues)
+    require(np.array_equal(residues, d3_arrays["power_basis_residues"]), "residue replay")
+    audit = g3fe.reconstruction_audit(residues, primes)
+    require(
+        audit["coefficients"] == 44844
+        and audit["holdout_passes"] == packet["numeric_promotion_audit"]["holdout_passes"]
+        and audit["passing_nontrivial_coefficients"] == 0,
+        "promotion audit replay",
+    )
+    print(
+        "UST.G3FQ independent replay: PASS fibers=48 d3_columns=20 "
+        "terminal_rank=281",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

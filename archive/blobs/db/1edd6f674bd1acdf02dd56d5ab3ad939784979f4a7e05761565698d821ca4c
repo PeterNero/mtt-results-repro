@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Benchmark SymPy DomainMatrix rank on an SMS number-field matrix."""
+
+from __future__ import annotations
+
+import argparse
+import time
+from pathlib import Path
+
+from sympy import Poly, QQ, Symbol
+from sympy.polys.matrices import DomainMatrix
+from sympy.polys.matrices.sdm import SDM
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("matrix", type=Path)
+    parser.add_argument("--method", default="rank", choices=("rank", "FF", "GJ"))
+    arguments = parser.parse_args()
+    started = time.monotonic()
+    with arguments.matrix.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = list(map(int, handle.readline().split()))
+        raw = [list(map(int, line.split())) for line in handle]
+    assert len(raw) == declared
+    gamma = Symbol("gamma")
+    polynomial = Poly(
+        sum(value * gamma**index for index, value in enumerate(minimal)), gamma
+    )
+    field = QQ.alg_field_from_poly(polynomial, alias="gamma")
+    alpha = field.from_sympy(field.ext)
+    powers = [field.one]
+    for _ in range(1, degree):
+        powers.append(powers[-1] * alpha)
+    cache = {}
+    sparse_rows = {}
+    for values in raw:
+        row, column = values[0] - 1, values[1] - 1
+        coefficients = tuple(values[2:])
+        value = cache.get(coefficients)
+        if value is None:
+            value = field.zero
+            for coefficient, power in zip(coefficients, powers, strict=True):
+                if coefficient:
+                    value += field(coefficient) * power
+            cache[coefficients] = value
+        sparse_rows.setdefault(row, {})[column] = value
+    matrix = DomainMatrix.from_rep(SDM(sparse_rows, (rows, columns), field))
+    print(
+        f"loaded rows={rows} columns={columns} nonzeros={declared} "
+        f"elapsed={time.monotonic()-started:.3f}",
+        flush=True,
+    )
+    if arguments.method == "rank":
+        rank = matrix.rank()
+    else:
+        _, _, pivots = matrix.rref_den(method=arguments.method)
+        rank = len(pivots)
+    print(
+        f"DOMAINMATRIX rank={rank} nullity={columns-rank} "
+        f"method={arguments.method} elapsed={time.monotonic()-started:.3f}"
+    )
+
+
+if __name__ == "__main__":
+    main()

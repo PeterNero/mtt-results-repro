@@ -1,6 +1,6 @@
 # Current Scientific Status
 
-Snapshot date: 2026-08-05
+Snapshot date: 2026-08-15
 
 ## Headline
 
@@ -11,7 +11,7 @@ inputs and imported standard SM quantization. It is not a zero-knob derivation,
 unique observed-branch selection, or derivation of perturbative quantization
 from MTT.
 
-The 2026-08-05 layer adds promoted, hash-locked results from the newer QM/QFT,
+The current August layer adds promoted, hash-locked results from the newer QM/QFT,
 QG, Eta9, mathematical-language, and unified-source work. These results sharpen
 the upstream structure and the remaining dependency cutsets; they do not alter
 the declared scope of the SM baseline or silently close physical endpoints.
@@ -53,10 +53,25 @@ the declared scope of the SM baseline or silently close physical endpoints.
 - Eta9 Gate 1 completion for all 30 original-Jacobian groups and 225 selected
   support columns, together with a characteristic-zero reduction. The detecting
   meridian and integral periods remain open.
-- Unified-source gates G1, G1E, G2, G2P/G5A, and G3A-G3D at their declared
-  classification, embedding, universal, symbolic, or criterion tiers. The
-  unified source itself remains a hypothesis, with physical V3/W9 modules,
-  physical source metric, action metric, and numerical execution open.
+- Unified-source gates G1, G1E, G2, G2P/G5A, and G3A through the committed
+  G3FR frontier at their declared
+  classification, embedding, universal, symbolic, exact, no-go, or criterion
+  tiers. The sequence constructs a locally free holomorphic projective hidden
+  rank-nine object, proves relative polystability/direct stability and an
+  existential hidden projective HYM connection, proves full real Bott-Chern to
+  de Rham injectivity, compiles the full nontransverse residual, and selects the
+  finite eta9 theta orientation and nine-member orbit. The later exact finite
+  campaign computes the selected response rank 122, a rank-126 finite normal
+  operator, the 1,509-coordinate first jet, exact H11 coupling rank 710,
+  component-12 H02 rank 71, and the component-20 mixed-degree inverse system
+  with finite length 656, socle type 20, resolution ranks 1/30/49/20, and
+  derivative closure 36. Its strict G3FS same-source Q(gamma) promotion remains
+  open. The unified source itself remains a hypothesis; selected visible
+  V3/common-chamber data, differential
+  Green-Schwarz/Bianchi closure, physical endpoint coefficients, and numerical
+  continuum-to-finite execution remain open. The repository verifier also has
+  two stale G3DI artifact locks; those must be repaired before the G3FR campaign
+  is a portable promoted proof package.
 - The A63-A89 gauge-action program reduces the three common-scheme gauge
   coordinates to one shared kinetic anchor at the adopted corpus-action/profile
   tier. The two ratios are frozen compatibility results, not held-out evidence;
@@ -90,10 +105,12 @@ the declared scope of the SM baseline or silently close physical endpoints.
   proper-time measure, overlap metric, Wick map, and gravity/vacuum terms.
 - No-knob gauge-coupling prediction: the closed ten-spectrum source has one
   common determinant and produces only a matching-scale translation.
-- Physical V3/W9 module construction, selected action/source metric, and a
-  physically promoted common finite operator in the unified-source program.
-- Eta9 detecting meridian, period vector, Deligne transport, and final HYM
-  execution.
+- Selected visible V3 construction, a common visible-hidden HYM chamber,
+  differential Green-Schwarz/Bianchi closure, selected action/source metric,
+  and a physically promoted common finite operator in the unified-source program.
+- Eta9 detecting meridian, integral rank-1509 representative, 248-coordinate
+  period/residue readout, carrier-specific beta_C decision, and final common
+  HYM execution.
 
 ## Parameter Accounting
 
@@ -120,7 +137,7 @@ count is claimed. See `release/parameter_ledger.json` for the values and roles.
 
 The 62-entry A01-A62 authority chain is the frozen July baseline, not the whole
 current state. A63-A99 form a 37-entry authority extension, and the August
-short-path layer contains 50 promoted result entries.
+short-path layer contains 74 promoted result entries.
 Older packet statuses and unpromoted exploratory artifacts are raw evidence
 only. Adjacent source repositories remain in the archive at their configured
 scope, including open, no-go, superseded, and retired routes; they affect current

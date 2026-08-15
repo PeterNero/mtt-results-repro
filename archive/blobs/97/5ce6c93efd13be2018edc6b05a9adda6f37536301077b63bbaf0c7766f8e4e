@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Verify the hash-bound hypotheses and exact deductions of UST.G3CK."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ck_rational_source_cyclic_open_arc_gauge.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def local(record: dict) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record["bytes"], f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_CHARACTERISTIC_ZERO_SOURCE_CYCLIC_GAUGE_ON_OPEN_G3BJ_ARC_START_AND_COEFFICIENT_EXECUTION_OPEN",
+        "status",
+    )
+    g3bj = load(local(packet["inputs"]["G3BJ"]))
+    g3cf = load(local(packet["inputs"]["G3CF"]))
+    g3ci = load(local(packet["inputs"]["G3CI"]))
+    g3cj = load(local(packet["inputs"]["G3CJ"]))
+    for label, source in (("G3BJ", g3bj), ("G3CF", g3cf), ("G3CI", g3ci), ("G3CJ", g3cj)):
+        require(all(source["checks"].values()), f"{label} checks")
+
+    require(
+        g3cf["rational_family_typing"]["connection"].startswith(
+            "K_C(a) belongs to Mat_1509(k(a))"
+        ),
+        "operator rational typing",
+    )
+    require(
+        "k(a)^1509" in g3cf["rational_family_typing"]["selected_source"],
+        "source rational typing",
+    )
+    require(
+        g3ci["H02_associated_graded_source"]["terminal_anchor_residual_against_G3CD"] == 0,
+        "associated-graded anchor",
+    )
+    require(
+        g3cj["homogeneous_cyclic_frame"]["determinant_mod11"] == 7
+        and g3cj["homogeneous_cyclic_frame"]["rank_mod11"] == 1509,
+        "terminal cyclic unit",
+    )
+    require(
+        g3bj["selected_path"]["formula"] == "a(t)=1-t+i*pi*t*(1-t)",
+        "selected path",
+    )
+    require(
+        g3bj["checks"]["every_interior_selected_path_parameter_is_transcendental"],
+        "interior transcendence",
+    )
+    require(
+        g3cf["checks"]["the_parent_H20_H11_H02_chart_poles_are_algebraic"],
+        "parent chart pole typing",
+    )
+
+    family = packet["rational_family"]
+    require(family["krylov_determinant"].endswith("belongs to k(a)"), "Krylov rationality")
+    require("7 mod11" in family["terminal_certificate"], "terminal certificate")
+    domain = packet["selected_domain"]
+    require(domain["covered_parameter_range"].startswith("0<t<=1"), "covered domain")
+    require("a=1" in domain["excluded_boundary"], "start boundary")
+    require("transcendental" in domain["proof"] and "algebraic" in domain["proof"], "avoidance proof")
+
+    gauge = packet["moving_companion_gauge"]
+    require(gauge["dimension"] == 1510, "gauge dimension")
+    require("Omega_aff" in gauge["path_equation"], "moving-frame term")
+    require("B_aff(a)^-1 dB_aff(a)/da" == gauge["moving_frame_connection"].split("=", 1)[1].strip(), "Omega formula")
+    require("k(a)" in gauge["coefficient_typing"], "gauge coefficient field")
+
+    for key in (
+        "claims_cyclicity_at_the_G3BI_start_a1",
+        "claims_the_explicit_characteristic_zero_companion_coefficients_are_emitted",
+        "claims_Omega_aff_is_zero",
+        "claims_a_constant_coefficient_path_system",
+        "claims_a_transport_dimension_reduction",
+        "claims_an_integral_lattice_basis_or_meridian_word",
+        "claims_beta_C_is_decided",
+    ):
+        require(not packet["guardrails"][key], key)
+    print("UST.G3CK rational source-cyclic open-arc gauge verifier: PASS")
+    print("domain=0<t<=1 terminal_det_reduction=7 dimension=1510 start_a1=open")
+
+
+if __name__ == "__main__":
+    main()

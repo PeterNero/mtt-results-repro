@@ -1,0 +1,72 @@
+# UST.G3AS Selected Finite Normal Operator Theorem
+
+## Purpose
+
+G3AN proves that the selected finite-residue response has rank `122`, but its
+left-normal map is stored as the factorization
+
+```text
+N_full = L * N0 : F_(101^6)^248 -> F_(101^6)^126.
+```
+
+G3AS materializes that product as a hash-addressed `126 x 248` matrix. This
+removes an execution ambiguity before the same-source Deligne row arrives.
+
+## Exact statement
+
+Assume the hash-current G3AN full-response packet has
+
+```text
+rank(D0) = 33,
+rank(N0 D1) = 89,
+rank(D) = 122.
+```
+
+Then the emitted matrix `N_full=L*N0` satisfies, exactly over `F_(101^6)`,
+
+```text
+shape(N_full) = 126 x 248,
+rank(N_full) = 126,
+N_full D0 = 0,
+N_full D1 = 0.
+```
+
+The builder computes the product from the G3AN factorization. The independent
+verifier decodes the source matrices and recomputes that product. It invokes
+the G3AN verifier for `N0D0=0`, `N0D1=E` and `LE=0`, then checks the identity
+submatrices proving that both `N0` and `L` are surjective. Their composition is
+therefore surjective, proving `rank(N_full)=126` without a redundant dense
+row reduction.
+
+## One-way characteristic-zero consequence
+
+G3AQ supplies a unit `122 x 122` response minor over the selected DVR. Hence
+the integral response image is a direct summand (in particular, saturated),
+and a fraction-field solution for an integral target has integral response
+coordinates. Let an integrally normalized, same-source `beta_C` have reduction
+`beta_bar` in the selected finite row frame. If
+
+```text
+N_full beta_bar != 0,
+```
+
+then the integral characteristic-zero normal residual cannot be zero: every
+zero integral vector reduces to zero. This is a rigorous branch obstruction.
+
+The converse is false. If `N_full beta_bar=0`, the characteristic-zero residual
+may merely be divisible by the selected prime. Modular vanishing is therefore
+only a necessary congruence. G3AS never promotes it to exact endpoint closure.
+
+## Proof boundary
+
+G3AS does not emit `beta_C`, an explicit characteristic-zero response matrix,
+or a Hull-Strominger endpoint. G3AR still requires the B89 meridian, integral
+rank-1509 representative, certified 248-coordinate period/residue image, common
+frame transport, and an exact zero/nonzero decision certificate.
+
+## Reproduction
+
+```powershell
+python build_ust_g3as_selected_finite_normal_operator.py
+python verify_ust_g3as_selected_finite_normal_operator.py
+```

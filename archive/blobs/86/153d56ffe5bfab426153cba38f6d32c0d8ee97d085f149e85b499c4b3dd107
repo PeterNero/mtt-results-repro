@@ -1,0 +1,90 @@
+# UST.G3DL H02 Two-Prime Reconstruction Holdout Theorem v1
+
+## Status
+
+`CLOSED_EXACT_TWO_PRIME_RECONSTRUCTION_WITH_INDEPENDENT_THIRD_PRIME_HOLDOUT`
+
+G3DI and G3DJ emit the normalized H02 kernel coefficients modulo 21,817 and
+33,863. G3DK independently reserves the complete kernel modulo 37,493. G3DL
+uses the third prime only after constructing every two-prime candidate.
+
+## Reconstruction contract
+
+For each of the 46,032,168 power-basis coefficients, G3DL first combines the
+two construction residues modulo
+
+```text
+M2 = 21817 * 33863 = 738789071.
+```
+
+It applies extended-Euclidean rational reconstruction with
+
+```text
+|numerator| <= 19219,
+1 <= denominator <= 19219,
+2 * 19219^2 < M2.
+```
+
+This is the standard uniqueness range: there is at most one reduced fraction
+inside the stated box for a given residue. Prime 37,493 is then consulted as a
+strict out-of-sample test.
+
+The exact result is:
+
+```text
+two-prime candidates:       42,352,640
+third-prime holdout passes: 36,652,627
+rejected CRT aliases:        5,700,013
+no two-prime candidate:      3,679,528
+```
+
+Thus finite rank agreement did not justify accepting every two-prime
+reconstruction. The reserved prime removes more than five million false
+aliases before they can enter a purported characteristic-zero relation.
+
+After admitting the third residue, reconstruction modulo
+
+```text
+M3 = 27,699,418,639,003
+```
+
+with uniqueness bound 3,721,519 emits 42,353,676 candidates. These candidates
+are explicitly reserved for a fourth-prime holdout; they are not promoted.
+
+## What Changed
+
+The multiprime program now has a falsifiable coefficient-level protocol:
+construct on earlier primes, test on an unseen prime, and only then expand the
+CRT. It no longer treats cross-prime rank agreement as coefficient recovery.
+
+All candidate and verdict masks are persisted in canonical
+degree-row-column order, together with a digest of the candidate stream and
+representative samples.
+
+## Boundary
+
+A fraction that passes one finite holdout is strong evidence, not an identity
+over `Q(gamma)`. G3DL proves neither a global coefficient-height bound nor the
+exact polynomial equation
+
+```text
+Q(gamma) N(gamma) = 0.
+```
+
+It therefore does not prove `rank_Q(gamma)(Q)=4748`, a characteristic-zero
+second Woodbury factorization, the H02 source contraction, path integration,
+integral marking, readout or `beta_C`.
+
+The next certificate must execute a fourth split prime, test the three-prime
+candidates out of sample, and continue toward either direct exact relation
+verification or a sufficient height theorem.
+
+## Reproduction
+
+```powershell
+python build_ust_g3dl_h02_two_prime_reconstruction_holdout.py
+```
+
+The packet is
+`state/ust_g3dl_h02_two_prime_reconstruction_holdout.packet.json`; masks and
+samples are under `evidence/ust_g3dl/`.

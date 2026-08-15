@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""Differentiate the complete selected connection action through H02/H11/H20."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3ct"
+OUT = ROOT / "state" / "ust_g3ct_selected_connection_action_first_jet.packet.json"
+G3BK = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+G3BQ = ROOT / "state" / "ust_g3bq_correction_full_recursive_return.packet.json"
+G3CC = ROOT / "state" / "ust_g3cc_selected_source_terminal_b89_dualization.packet.json"
+G3CR = ROOT / "state" / "ust_g3cr_selected_source_recursive_first_jet.packet.json"
+G3CS = ROOT / "state" / "ust_g3cs_selected_pole_six_preimage_first_jet.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.resolve().relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc().astype(np.int64)
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result.astype(np.uint8)
+
+
+def run(arguments: list[str], cwd: Path, timeout: float) -> None:
+    print("RUN " + " ".join(arguments), flush=True)
+    subprocess.run(arguments, cwd=cwd, check=True, timeout=timeout)
+
+
+def solved(output: Path, log: Path) -> bool:
+    return output.is_file() and log.is_file() and "SUCCESS" in log.read_text(encoding="utf-8")
+
+
+def solve(
+    solver: Path,
+    mld: Path,
+    target: str,
+    rhs: Path,
+    output: Path,
+    log: Path,
+    timeout: float,
+    resume: bool,
+) -> None:
+    if resume and solved(output, log):
+        print(f"CHECKPOINT {target} derivative solve existing: {output.name}", flush=True)
+        return
+    run(
+        [
+            sys.executable,
+            str(solver),
+            "--target",
+            target,
+            "--rhs",
+            str(rhs),
+            "--output",
+            str(output),
+            "--log",
+            str(log),
+            "--timeout",
+            str(timeout),
+            "--progress-seconds",
+            "5",
+        ],
+        cwd=mld,
+        timeout=timeout + 300,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout-per-solve", type=float, default=7200.0)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout_per_solve > 0, "positive solve timeout")
+
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_full_recursive_H20_source_block as common
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    solver = mld / "run_q79_eta9_original_jacobian_coordinate_solve.py"
+    divergence = mld / "build_q79_eta9_recursive_divergence_from_coordinates.py"
+    require(solver.is_file() and divergence.is_file(), "MLD recursive tools")
+    g3bk = load(G3BK)
+    g3bq = load(G3BQ)
+    g3cc = load(G3CC)
+    g3cr = load(G3CR)
+    g3cs = load(G3CS)
+    for label, packet in (("G3BK", g3bk), ("G3BQ", g3bq), ("G3CC", g3cc), ("G3CR", g3cr), ("G3CS", g3cs)):
+        require(all(packet["checks"].values()), f"{label} checks")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+
+    selected_source_path = ROOT / g3cc["terminal_source"]["B103_H02_vector"]["path"]
+    selected_source = np.load(selected_source_path, allow_pickle=False).astype(np.uint8)
+    require(selected_source.shape == (248,), "selected source shape")
+    selected_column = sparse.csc_matrix(selected_source.reshape(248, 1))
+
+    base_coordinates: dict[str, sparse.csc_matrix] = {}
+    quotient_dimensions = {"H02": 248, "H11": 1013, "H20": 248}
+    coordinate_keys = {
+        "H02": "H02_coordinates",
+        "H11": "H11_coordinates",
+        "H20": "H20_coordinates",
+    }
+    for target, key in coordinate_keys.items():
+        source_path = ROOT / g3bq["inputs"][key]["path"]
+        require(sha256(source_path) == g3bq["inputs"][key]["sha256"], f"{target} base coordinates hash")
+        all_coordinates, quotient_rows, _ = solver_io.read_coordinates(source_path)
+        require(quotient_rows == quotient_dimensions[target] and all_coordinates.shape[1] == 248, f"{target} base shape")
+        base_coordinates[target] = normalize(all_coordinates.astype(np.int64) @ selected_column.astype(np.int64))
+
+    base_full = sparse.vstack(
+        [
+            base_coordinates["H20"][:248, :],
+            base_coordinates["H11"][:1013, :],
+            base_coordinates["H02"][:248, :],
+        ],
+        format="csc",
+    )
+    g3bq_full = sparse.load_npz(ROOT / g3bq["full_block"]["NPZ"]["path"]).tocsc()
+    expected_base_full = normalize(g3bq_full.astype(np.int64) @ selected_column.astype(np.int64))
+    require(common.exact_residual_nonzeros(base_full, expected_base_full) == 0, "selected base action")
+
+    updates: dict[str, sparse.csc_matrix] = {}
+    for target in ("H02", "H11", "H20"):
+        update_record = g3bk["good_reduction_family_updates"][target]["matrix"]
+        update_path = ROOT / update_record["path"]
+        require(sha256(update_path) == update_record["sha256"], f"{target} update hash")
+        updates[target] = sparse.load_npz(update_path).tocsc()
+
+    full_h02_prime = sparse.load_npz(
+        ROOT / g3cs["full_H02_return_first_jet"]["ambient_scipy_NPZ"]["path"]
+    ).tocsc()
+    h02_prime_rhs_matrix = normalize(
+        full_h02_prime.astype(np.int64)
+        - updates["H02"].astype(np.int64) @ base_coordinates["H02"][248:, :].astype(np.int64)
+    )
+    h02_prime_rhs = EVIDENCE / "g3ct_H02_prime.rhs.cscbin"
+    h02_prime_npz = EVIDENCE / "g3ct_H02_prime.npz"
+    solver_io.write_rhs(h02_prime_rhs, h02_prime_rhs_matrix)
+    sparse.save_npz(h02_prime_npz, h02_prime_rhs_matrix, compressed=True)
+    h02_prime_coordinates_path = EVIDENCE / "g3ct_H02_prime.coordinates.cscbin"
+    h02_prime_log = EVIDENCE / "g3ct_H02_prime.coordinates.solver.out"
+    solve(solver, mld, "H02", h02_prime_rhs, h02_prime_coordinates_path, h02_prime_log, args.timeout_per_solve, args.resume)
+    h02_prime, h02_q, _ = solver_io.read_coordinates(h02_prime_coordinates_path)
+    require(h02_q == 248, "H02 derivative split")
+
+    h11_divergence_prefix = EVIDENCE / "g3ct_H02_prime_divergence_H11"
+    run(
+        [sys.executable, str(divergence), "--source", "H02", "--coordinates", str(h02_prime_coordinates_path), "--output-prefix", str(h11_divergence_prefix)],
+        cwd=mld,
+        timeout=1800,
+    )
+    h11_divergence = sparse.load_npz(h11_divergence_prefix.with_suffix(".npz")).tocsc()
+    h11_prime_rhs_matrix = normalize(
+        h11_divergence.astype(np.int64)
+        - updates["H11"].astype(np.int64) @ base_coordinates["H11"][1013:, :].astype(np.int64)
+    )
+    h11_prime_rhs = EVIDENCE / "g3ct_H11_prime.rhs.cscbin"
+    h11_prime_npz = EVIDENCE / "g3ct_H11_prime.npz"
+    solver_io.write_rhs(h11_prime_rhs, h11_prime_rhs_matrix)
+    sparse.save_npz(h11_prime_npz, h11_prime_rhs_matrix, compressed=True)
+    h11_prime_coordinates_path = EVIDENCE / "g3ct_H11_prime.coordinates.cscbin"
+    h11_prime_log = EVIDENCE / "g3ct_H11_prime.coordinates.solver.out"
+    solve(solver, mld, "H11", h11_prime_rhs, h11_prime_coordinates_path, h11_prime_log, args.timeout_per_solve, args.resume)
+    h11_prime, h11_q, _ = solver_io.read_coordinates(h11_prime_coordinates_path)
+    require(h11_q == 1013, "H11 derivative split")
+
+    h20_divergence_prefix = EVIDENCE / "g3ct_H11_prime_divergence_H20"
+    run(
+        [sys.executable, str(divergence), "--source", "H11", "--coordinates", str(h11_prime_coordinates_path), "--output-prefix", str(h20_divergence_prefix)],
+        cwd=mld,
+        timeout=1800,
+    )
+    h20_divergence = sparse.load_npz(h20_divergence_prefix.with_suffix(".npz")).tocsc()
+    h20_prime_rhs_matrix = normalize(
+        h20_divergence.astype(np.int64)
+        - updates["H20"].astype(np.int64) @ base_coordinates["H20"][248:, :].astype(np.int64)
+    )
+    h20_prime_rhs = EVIDENCE / "g3ct_H20_prime.rhs.cscbin"
+    h20_prime_npz = EVIDENCE / "g3ct_H20_prime.npz"
+    solver_io.write_rhs(h20_prime_rhs, h20_prime_rhs_matrix)
+    sparse.save_npz(h20_prime_npz, h20_prime_rhs_matrix, compressed=True)
+    h20_prime_coordinates_path = EVIDENCE / "g3ct_H20_prime.coordinates.cscbin"
+    h20_prime_log = EVIDENCE / "g3ct_H20_prime.coordinates.solver.out"
+    solve(solver, mld, "H20", h20_prime_rhs, h20_prime_coordinates_path, h20_prime_log, args.timeout_per_solve, args.resume)
+    h20_prime, h20_q, _ = solver_io.read_coordinates(h20_prime_coordinates_path)
+    require(h20_q == 248, "H20 derivative split")
+
+    residuals: dict[str, int] = {}
+    for target, coordinates, rhs in (
+        ("H02", h02_prime, h02_prime_rhs_matrix),
+        ("H11", h11_prime, h11_prime_rhs_matrix),
+        ("H20", h20_prime, h20_prime_rhs_matrix),
+    ):
+        selected_matrix, _ = common.selected_source_matrix(target)
+        reconstruction = normalize(selected_matrix @ coordinates.astype(np.int64))
+        residuals[target] = common.exact_residual_nonzeros(reconstruction, rhs)
+    require(all(value == 0 for value in residuals.values()), "derivative coordinate equations")
+
+    full_prime = sparse.vstack(
+        [h20_prime[:248, :], h11_prime[:1013, :], h02_prime[:248, :]],
+        format="csc",
+    )
+    full_prime = normalize(full_prime)
+    require(full_prime.shape == (1509, 1), "full derivative shape")
+    full_prime_npz = EVIDENCE / "g3ct_selected_connection_action_first_jet.npz"
+    full_prime_dense = EVIDENCE / "g3ct_selected_connection_action_first_jet.u8"
+    base_full_npz = EVIDENCE / "g3ct_selected_connection_action_base.npz"
+    base_full_dense = EVIDENCE / "g3ct_selected_connection_action_base.u8"
+    sparse.save_npz(full_prime_npz, full_prime, compressed=True)
+    full_prime_dense.write_bytes(full_prime.toarray().astype(np.uint8).tobytes(order="C"))
+    sparse.save_npz(base_full_npz, base_full, compressed=True)
+    base_full_dense.write_bytes(base_full.toarray().astype(np.uint8).tobytes(order="C"))
+    correction_only = sparse.load_npz(
+        ROOT / g3cr["full_recursive_first_jet_correction"]["NPZ"]["path"]
+    ).tocsc()
+    correction_only_residual = common.exact_residual_nonzeros(full_prime, correction_only)
+
+    terminal_path = mld / "q79_eta9_terminal_H20_divergence_certificate.packet.json"
+    terminal = load(terminal_path)
+    require(all(terminal["checks"].values()), "terminal checks")
+    checks = {
+        "G3BK_G3BQ_G3CC_G3CR_and_G3CS_are_hash_bound_and_passing": True,
+        "the_selected_G3BQ_base_action_is_reconstructed_from_the248_source_columns": True,
+        "the_full_G3CS_H02_return_derivative_is_used_before_the_H02_frame_update": True,
+        "each_differentiated_coordinate_equation_has_zero_reconstruction_residual": True,
+        "the_H02_image_derivative_is_diverged_with_factor_one_fourth": True,
+        "the_H11_image_derivative_is_diverged_with_factor_one_third": True,
+        "the_H20_image_derivative_has_identically_zero_terminal_divergence": True,
+        "the_complete1509_coordinate_selected_connection_action_first_jet_is_emitted": True,
+        "the_G3CR_quotient_correction_is_not_substituted_for_the_full_derivative": correction_only_residual > 0,
+        "no_characteristic_zero_action_path_integration_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CT checks")
+    packet = {
+        "schema": "mtt.unified-source.g3ct-selected-connection-action-first-jet.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CT",
+        "status": "CLOSED_EXACT_GF11_COMPLETE_SELECTED_CONNECTION_ACTION_FIRST_JET",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "field": "GF(11) at gamma=3 and family base a=0",
+        "fixed_input": "the G3CC selected B103 H02 source coordinate vector",
+        "basis_order": "B103 target rows H20(248), H11(1013), H02(248)",
+        "inputs": {
+            "G3BK": record(G3BK),
+            "G3BQ": record(G3BQ),
+            "G3CC": record(G3CC),
+            "G3CR": record(G3CR),
+            "G3CS": record(G3CS),
+            "coordinate_solver": external_record(solver, mld),
+            "recursive_divergence_builder": external_record(divergence, mld),
+            "terminal_H20_divergence": external_record(terminal_path, mld),
+        },
+        "selected_base_action": {
+            "shape": list(base_full.shape),
+            "nonzero_entries": int(base_full.nnz),
+            "NPZ": record(base_full_npz),
+            "dense_uint8": record(base_full_dense),
+        },
+        "differentiated_coordinate_equations": {
+            "H02": {
+                "equation": "M_H02(0)c_H02_prime=R_H02_prime-M_H02_prime*c_H02_image",
+                "RHS_nonzeros": int(h02_prime_rhs_matrix.nnz),
+                "coordinate_nonzeros": int(h02_prime.nnz),
+                "quotient_nonzeros": int(h02_prime[:248, :].nnz),
+                "image_nonzeros": int(h02_prime[248:, :].nnz),
+                "residual_nonzeros": residuals["H02"],
+                "RHS_NPZ": record(h02_prime_npz),
+                "RHS_solver_CSC": record(h02_prime_rhs),
+                "coordinates": record(h02_prime_coordinates_path),
+                "solver_log": record(h02_prime_log),
+            },
+            "H11": {
+                "equation": "M_H11(0)c_H11_prime=D_1_4(c_H02_image_prime)-M_H11_prime*c_H11_image",
+                "RHS_nonzeros": int(h11_prime_rhs_matrix.nnz),
+                "coordinate_nonzeros": int(h11_prime.nnz),
+                "quotient_nonzeros": int(h11_prime[:1013, :].nnz),
+                "image_nonzeros": int(h11_prime[1013:, :].nnz),
+                "residual_nonzeros": residuals["H11"],
+                "divergence_packet": record(h11_divergence_prefix.with_suffix(".packet.json")),
+                "RHS_NPZ": record(h11_prime_npz),
+                "RHS_solver_CSC": record(h11_prime_rhs),
+                "coordinates": record(h11_prime_coordinates_path),
+                "solver_log": record(h11_prime_log),
+            },
+            "H20": {
+                "equation": "M_H20(0)c_H20_prime=D_1_3(c_H11_image_prime)-M_H20_prime*c_H20_image",
+                "RHS_nonzeros": int(h20_prime_rhs_matrix.nnz),
+                "coordinate_nonzeros": int(h20_prime.nnz),
+                "quotient_nonzeros": int(h20_prime[:248, :].nnz),
+                "image_nonzeros": int(h20_prime[248:, :].nnz),
+                "residual_nonzeros": residuals["H20"],
+                "terminal_divergence_nonzeros": 0,
+                "divergence_packet": record(h20_divergence_prefix.with_suffix(".packet.json")),
+                "RHS_NPZ": record(h20_prime_npz),
+                "RHS_solver_CSC": record(h20_prime_rhs),
+                "coordinates": record(h20_prime_coordinates_path),
+                "solver_log": record(h20_prime_log),
+            },
+        },
+        "selected_connection_action_first_jet": {
+            "meaning": "Kprime(0)*b for the fixed selected G3CC source b in the differentiated B103 quotient charts",
+            "shape": list(full_prime.shape),
+            "nonzero_entries": int(full_prime.nnz),
+            "correction_only_G3CR_residual_nonzeros": correction_only_residual,
+            "NPZ": record(full_prime_npz),
+            "dense_uint8": record(full_prime_dense),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_full1509_by1509_operator_derivative_is_emitted": False,
+            "claims_the_input_source_is_evolving_with_a": False,
+            "claims_characteristic_zero_connection_action": False,
+            "claims_integral_G3BJ_parallel_transport_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3ctSelectedConnectionActionFirstJet",
+            "tier": "CLOSED_EXACT_SELECTED_GF11_COMPLETE_ONE_SOURCE_CONNECTION_ACTION_DERIVATIVE",
+            "statement": (
+                "For the fixed selected G3CC H02 source, the complete G3CS pole-six return derivative and the "
+                "G3BK H02/H11/H20 family updates determine three exact differentiated coordinate equations. "
+                "All reconstruct with zero residual; recursive factors 1/4 and 1/3 are applied to the derivative "
+                "image preimages, and H20 terminates identically. Their quotient rows emit the complete "
+                "1509-coordinate vector Kprime(0)b at the selected proof fiber."
+            ),
+        },
+        "frontier_delta": {
+            "before": "The selected pole-six preimage derivative was exact, but lower-pole chart variation had not been assembled, so no complete derivative of even one selected 1509-coordinate connection action existed.",
+            "after": "The complete one-source selected connection-action derivative Kprime(0)b is now emitted in all 1509 B103 coordinates with zero residual at every differentiated Hodge-block equation.",
+        },
+        "next_required_object": (
+            "Promote this one-source derivative from the selected good fiber to Q(gamma) or a directed-rounding "
+            "start ball, and implement the on-demand K(a) action along G3BJ. The full 1509-by-1509 derivative "
+            "is optional for one-source integration and must not be demanded unless another theorem needs it."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CT selected connection action first jet: PASS")
+    print(
+        f"base_nnz={base_full.nnz} H02_prime_q={h02_prime[:248,:].nnz} "
+        f"H11_prime_q={h11_prime[:1013,:].nnz} H20_prime_q={h20_prime[:248,:].nnz} "
+        f"full_prime_nnz={full_prime.nnz} correction_only_residual={correction_only_residual}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

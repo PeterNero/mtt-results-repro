@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Verify G3X vertical Fourier contraction and its nonpromotion boundary."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3x_full_bott_chern_fourier_homotopy.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    upstream = packet["inputs"]["upstream_invariant_bott_chern"]
+    repository = next(
+        item for item in lock["repositories"] if item["id"] == upstream["repository_id"]
+    )
+    source = next(item for item in repository["sources"] if item["path"] == upstream["path"])
+    require(source["sha256"] == upstream["sha256"], "invariant Bott-Chern lock")
+
+    torus = packet["vertical_complex_torus"]
+    fourier = packet["fourier_homotopy"]
+    zero = packet["zero_mode_promotion"]
+    physical = packet["physical_bianchi_consequence"]
+    scope = packet["scope"]
+
+    require(torus["action_on_q79_Y"] == "free holomorphic principal elliptic action", "q79 action")
+    require(torus["pullback_preserves_bidegree"] is True, "holomorphic type preservation")
+    require(torus["averaging_commutes_with_partial_barpartial_and_d"] is True, "chain averaging")
+
+    checked_modes = 0
+    for m in range(-6, 7):
+        for n in range(-6, 7):
+            if (m, n) == (0, 0):
+                continue
+            lam = (1j * m + n) / 2
+            mu = (1j * m - n) / 2
+            product = lam * mu
+            expected = -(m * m + n * n) / 4
+            require(abs(product - expected) < 1e-12, "Fourier eigenvalue product")
+            require(product != 0, "nonzero mode is contractible")
+            require(abs(1 / product) == 4 / (m * m + n * n), "homotopy multiplier")
+            checked_modes += 1
+    require(checked_modes == 168, "finite Fourier identity test count")
+    require(fourier["nonzero_character_has_nonzero_lambda_mu"] is True, "all nonzero modes")
+    require(fourier["smooth_fourier_sum_converges"] is True, "smooth homotopy")
+    require(fourier["full_BC_computed_by_invariant_subcomplex"] is True, "BC quasi-isomorphism")
+
+    require(zero["locked_invariant_BC22_to_deRham_injective"] is True, "invariant injection")
+    require(zero["averaging_preserves_deRham_exactness"] is True, "exact zero mode")
+    require(zero["nonzero_modes_ddc_exact"] is True, "nonzero modes exact")
+    require(zero["full_real_BC22_to_deRham_injective"] is True, "full injection")
+
+    require(physical["actual_total_difference_ddc_exact_once_pair_exists"] is True, "Bianchi potential")
+    require(physical["visible_connection_equivariance_required"] is False, "visible equivariance removed")
+    require(physical["hidden_connection_equivariance_required"] is False, "hidden equivariance removed")
+    require(physical["separate_exact_quadratic_representatives_required_for_BC"] is False, "split rows removed")
+    require(physical["independent_Aeppli_gate_after_source_pair"] is False, "Aeppli gate removed")
+
+    require(scope["same_source_visible_V3_constructed"] is False, "visible source remains open")
+    require(scope["physical_visible_hidden_pair_constructed"] is False, "pair remains open")
+    require(scope["positive_conformally_balanced_realization_closed"] is False, "positivity boundary")
+    require(scope["integral_string_class_refinement_closed"] is False, "integral boundary")
+    require(scope["actual_physical_bianchi_source_emitted"] is False, "no source emission")
+    require(scope["B_HS_01_closed"] is False, "B.HS.01 boundary")
+    require(scope["physical_promotion"] is False, "physical nonpromotion")
+    require(packet["continuous_fit_parameters"] == 0, "no fit parameters")
+    require(packet["observed_inputs"] == 0, "no observed inputs")
+
+    print("UST.G3X full Bott-Chern Fourier homotopy: PASS")
+    print(f"nonzero Fourier characters checked: {checked_modes}")
+    print("full real BC(2,2) -> de Rham map on q79 Y: injective")
+    print("gauge equivariance and separate split forms: removed from Bianchi gate")
+    print("visible V3, common chamber, positivity and differential trivialization: open; order-three typing closes in G3AA")
+
+
+if __name__ == "__main__":
+    main()

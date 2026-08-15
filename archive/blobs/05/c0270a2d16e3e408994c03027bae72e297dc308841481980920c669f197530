@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Assemble the full selected G3AP Macaulay map from reused and complement rows."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import shutil
+
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as fixed_chunk
+import build_ust_g3ap_selected_cayley_target_macaulay_complement_chunk as complement
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+BALANCED_PACKET = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.packet.json"
+)
+BALANCED_MATRIX = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.packed-sms"
+)
+FULL_MATRIX = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.packed-sms"
+)
+PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {"path": relative(path), "sha256": sha256(path), "bytes": path.stat().st_size}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--chunk-count", type=int, default=12)
+    args = parser.parse_args()
+    require(args.chunk_count > 0, "positive chunk count")
+
+    leaders, _ = fixed_chunk.load_coordinates()
+    targets, _ = macaulay.coordinate_data(leaders)
+    full, balanced, missing = complement.selections(leaders)
+    require(
+        len(full) == complement.FULL_ROWS
+        and len(balanced) == complement.REUSED_ROWS
+        and len(missing) == complement.COMPLEMENT_ROWS,
+        "source partition sizes",
+    )
+
+    balanced_packet = json.loads(BALANCED_PACKET.read_text(encoding="ascii"))
+    require(
+        balanced_packet["matrix"]["path"] == relative(BALANCED_MATRIX)
+        and balanced_packet["matrix"]["sha256"] == sha256(BALANCED_MATRIX)
+        and balanced_packet["matrix"]["rows"] == complement.REUSED_ROWS
+        and balanced_packet["matrix"]["columns"] == len(targets)
+        and balanced_packet["selection"]["selection_sha256"]
+        == complement.source_hash(balanced),
+        "reused balanced campaign binding",
+    )
+
+    chunks: list[tuple[Path, dict[str, object]]] = []
+    expected_start = 0
+    complement_nonzeros = 0
+    for index in range(args.chunk_count):
+        paths = complement.paths(index, args.chunk_count)
+        require(paths["packet"].is_file(), f"missing complement packet {index}")
+        packet = json.loads(paths["packet"].read_text(encoding="ascii"))
+        selection = packet["selection"]
+        start = int(selection["complement_start_zero_based"])
+        stop = int(selection["complement_stop_exclusive_zero_based"])
+        require(
+            packet["schema"]
+            == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-complement-chunk.v1"
+            and all(packet["checks"].values())
+            and not any(packet["guardrails"].values())
+            and selection["chunk_index"] == index
+            and selection["chunk_count"] == args.chunk_count
+            and start == expected_start
+            and stop > start
+            and selection["full_source_sha256"] == complement.source_hash(full)
+            and selection["reused_balanced_source_sha256"]
+            == complement.source_hash(balanced)
+            and selection["complement_source_sha256"]
+            == complement.source_hash(missing)
+            and selection["chunk_source_sha256"]
+            == complement.source_hash(missing[start:stop]),
+            f"complement packet {index}",
+        )
+        triples = ROOT / packet["execution"]["packed_triples"]["path"]
+        require(
+            triples == paths["triples"]
+            and triples.is_file()
+            and sha256(triples)
+            == packet["execution"]["packed_triples"]["sha256"],
+            f"complement triples {index}",
+        )
+        chunks.append((paths["packet"], packet))
+        complement_nonzeros += int(packet["execution"]["nonzeros"])
+        expected_start = stop
+    require(expected_start == complement.COMPLEMENT_ROWS, "complete complement cover")
+
+    balanced_nonzeros = int(balanced_packet["matrix"]["nonzeros"])
+    total_nonzeros = balanced_nonzeros + complement_nonzeros
+    with BALANCED_MATRIX.open("rb") as reused:
+        header = [int(value) for value in reused.readline().split()]
+        require(
+            header == [complement.REUSED_ROWS, len(targets), balanced_nonzeros],
+            "reused matrix header",
+        )
+        with FULL_MATRIX.open("wb") as output:
+            output.write(
+                f"{complement.FULL_ROWS} {len(targets)} {total_nonzeros}\n".encode(
+                    "ascii"
+                )
+            )
+            shutil.copyfileobj(reused, output, length=16 * 1024 * 1024)
+            for _, packet in chunks:
+                triples = ROOT / packet["execution"]["packed_triples"]["path"]
+                with triples.open("rb") as source:
+                    shutil.copyfileobj(source, output, length=16 * 1024 * 1024)
+
+    union_sources = balanced + missing
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-full-reused.v1",
+        "date": "2026-08-11",
+        "status": "CANDIDATE_EXACT_FULL_SELECTED_RELATION_MATRIX_REQUIRES_RANK_AND_SOURCE_CERTIFICATION",
+        "inputs": {
+            "selected_source": record(macaulay.SOURCE),
+            "base_coordinate_packet": record(macaulay.INSPECT_PACKET),
+            "reused_balanced_campaign": record(BALANCED_PACKET),
+            "reused_balanced_matrix": record(BALANCED_MATRIX),
+            "complement_packets": [record(path) for path, _ in chunks],
+        },
+        "selection": {
+            "kind": "balanced50000_followed_by_exact_ordered_complement42979",
+            "full_source_rows": len(full),
+            "reused_balanced_rows": len(balanced),
+            "complement_rows": len(missing),
+            "natural_full_source_sha256": complement.source_hash(full),
+            "reused_balanced_source_sha256": complement.source_hash(balanced),
+            "complement_source_sha256": complement.source_hash(missing),
+            "union_source_order_sha256": complement.source_hash(union_sources),
+            "union_is_a_permutation_of_all_selected_sources": (
+                len(union_sources) == len(set(union_sources)) == len(full)
+                and set(union_sources) == set(full)
+            ),
+        },
+        "matrix": {
+            **record(FULL_MATRIX),
+            "rows": complement.FULL_ROWS,
+            "columns": len(targets),
+            "nonzeros": total_nonzeros,
+            "reused_nonzeros": balanced_nonzeros,
+            "complement_nonzeros": complement_nonzeros,
+        },
+        "checks": {
+            "the_reused_50000_row_matrix_is_hash_bound": True,
+            "the_42979_complement_rows_form_an_exact_nonoverlapping_cover": True,
+            "the_union_source_order_is_a_permutation_of_all_92979_selected_rows": True,
+            "the_union_matrix_is_an_exact_body_concatenation_with_disjoint_row_ranges": True,
+            "all_39726_selected_target_coordinates_are_retained": True,
+        },
+        "guardrails": {
+            "claims_complement_raw_streams_are_independently_replayed": False,
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Run exact sparse elimination on the full 92,979-row union, then "
+            "independently certify every complement source row and the emitted minor."
+        ),
+    }
+    require(all(packet["checks"].values()), "full reuse checks")
+    require(packet["selection"]["union_is_a_permutation_of_all_selected_sources"], "union")
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP full reused Macaulay assembly: PASS "
+        f"rows={complement.FULL_ROWS} columns={len(targets)} "
+        f"nonzeros={total_nonzeros} rank=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

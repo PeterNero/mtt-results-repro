@@ -1,0 +1,145 @@
+# UST.G3AO.BIDUAL: exact elliptic-bidual identity lemma
+
+Date: 2026-08-10
+
+## Verdict
+
+The elliptic-bidual reduction used in the two hardest selected Cayley toric
+charts is exact. It is not a numerical approximation and does not import a
+generic smoothness assumption.
+
+For the selected elliptic coordinate transport
+
+```text
+ell0 = t0+t1+t2,
+ell1 = t1+7t2,
+ell2 = 3t1+7t2,
+```
+
+the transport matrix has determinant `-14`, a unit in characteristic `101`.
+The transformed Fermat cubic has the displayed dual sextic, its smooth dual
+gradient returns the original contact point, and its singular dual is exactly
+the union of three coordinate cusp families.
+
+## Lemma
+
+Let
+
+```text
+F(X,Y,Z)=X^3+Y^3+Z^3
+```
+
+over a field of characteristic different from `2`, `3`, and `7`. For a
+covector `a=(a0,a1,a2)`, set
+
+```text
+D(a)=a0^6+a1^6+a2^6
+     -2(a0^3 a1^3+a0^3 a2^3+a1^3 a2^3).
+```
+
+Then:
+
+1. every tangent covector `(X^2,Y^2,Z^2)` to `F=0` lies on `D=0`;
+2. at a smooth point of `D=0`, the gradient of `D` recovers the same primal
+   contact point projectively;
+3. the projective singular locus of `D=0` is
+
+```text
+a0=0, a1^3=a2^3;
+a1=0, a0^3=a2^3;
+a2=0, a0^3=a1^3;
+```
+
+which consists of the nine Fermat-dual cusps over an algebraic closure;
+4. under the selected `ell=L t` transport, a `t`-covector `B` transforms by
+   `adj(L)^T B`, and the dual gradient returns to `t` by the transpose chain
+   rule.
+
+## Proof
+
+Direct factorization gives
+
+```text
+D(X^2,Y^2,Z^2)
+ = (X^3+Y^3+Z^3)
+   (X^3-Y^3-Z^3)
+   (X^3-Y^3+Z^3)
+   (X^3+Y^3-Z^3).
+```
+
+This proves the first claim. Write one sixth of the dual gradient as
+
+```text
+q0=a0^2(a0^3-a1^3-a2^3),
+q1=a1^2(a1^3-a0^3-a2^3),
+q2=a2^2(a2^3-a0^3-a1^3).
+```
+
+After substituting `a=(X^2,Y^2,Z^2)`, reduction modulo `F` gives
+
+```text
+(q0,q1,q2)=2 X^3 Y^3 Z^3 (X,Y,Z).
+```
+
+Thus the smooth dual gradient recovers the primal point. It vanishes at the
+inflection contacts where one coordinate is zero. Conversely, if all three
+`ai` are nonzero and all `qi` vanish, the cubes `(a0^3,a1^3,a2^3)` lie in the
+kernel of
+
+```text
+[ 1 -1 -1 ]
+[-1  1 -1 ]
+[-1 -1  1 ],
+```
+
+whose determinant is `-4`. Hence all three cubes would vanish, a
+contradiction. If, for example, `a0=0`, the remaining equations force
+`a1^3=a2^3` with both entries nonzero; the other two cases are symmetric.
+This proves the cusp classification.
+
+Finally,
+
+```text
+L = [1 1 1; 0 1 7; 0 3 7],
+det(L)=-14,
+adj(L)^T = [-14 0 0; -4 7 -3; 6 -7 1].
+```
+
+If `B=L^T a`, then `adj(L)^T B=det(L)a`. Applying the transpose chain rule
+to the dual gradient gives exactly the contact formulas used by the G3AO
+elimination scripts. Both `-14` and the cusp determinant `-4` are nonzero
+modulo `101`.
+
+## Role in G3AO
+
+The lemma justifies the split of each hard elliptic critical locus into:
+
+```text
+smooth dual contact locus + singular cusp locus.
+```
+
+It does not itself show either locus is empty. Emptiness is a separate exact
+selected-member Groebner calculation. Those unit-ideal packets have now been
+completed downstream by `UST.G3AO`, which closes the `735/735`
+toric-regularity theorem.
+
+## Boundaries
+
+This lemma does not claim by itself:
+
+- selected Cayley toric regularity;
+- characteristic-zero endpoint selection;
+- rank `122` of the physical response;
+- a value or vanishing theorem for `beta_C`;
+- visible or hidden HYM endpoint selection.
+
+## Reproduction
+
+```powershell
+python build_ust_g3ao_elliptic_bidual_identity.py
+python verify_ust_g3ao_elliptic_bidual_identity.py
+```
+
+Primary artifact:
+
+- `state/ust_g3ao_elliptic_bidual_identity.packet.json`

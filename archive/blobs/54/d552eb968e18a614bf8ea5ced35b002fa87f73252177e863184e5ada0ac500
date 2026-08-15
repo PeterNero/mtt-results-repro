@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Assemble the selected-source first-jet correction through all Hodge blocks."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cr"
+G3CQ = ROOT / "state" / "ust_g3cq_selected_source_transform_defect.packet.json"
+H02_COORDINATES = EVIDENCE / "g3cr_H02.coordinates.cscbin"
+H02_LOG = EVIDENCE / "g3cr_H02.coordinates.solver.out"
+H11_PACKET = EVIDENCE / "g3cr_recursive_H11_ambient.packet.json"
+H11_COORDINATES = EVIDENCE / "g3cr_H11.coordinates.cscbin"
+H11_LOG = EVIDENCE / "g3cr_H11.coordinates.solver.out"
+H20_PACKET = EVIDENCE / "g3cr_recursive_H20_ambient.packet.json"
+H20_COORDINATES = EVIDENCE / "g3cr_H20.coordinates.cscbin"
+H20_LOG = EVIDENCE / "g3cr_H20.coordinates.solver.out"
+FULL_NPZ = EVIDENCE / "g3cr_selected_source_recursive_first_jet.npz"
+FULL_DENSE = EVIDENCE / "g3cr_selected_source_recursive_first_jet.u8"
+OUT = ROOT / "state" / "ust_g3cr_selected_source_recursive_first_jet.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.resolve().relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def require_solver_log(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    require("SUCCESS" in text and "rhs_columns=1" in text, f"{path.name} success")
+
+
+def main() -> None:
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_full_recursive_H20_source_block as common
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    g3cq = load(G3CQ)
+    h11_lower = load(H11_PACKET)
+    h20_lower = load(H20_PACKET)
+    terminal_path = mld / "q79_eta9_terminal_H20_divergence_certificate.packet.json"
+    terminal = load(terminal_path)
+    require(all(g3cq["checks"].values()), "G3CQ checks")
+    for label, packet in (("H11 lower", h11_lower), ("H20 lower", h20_lower), ("terminal", terminal)):
+        require(all(packet["checks"].values()), f"{label} checks")
+    require(h11_lower["source_Hodge_block"] == "H02" and h11_lower["target_Hodge_block"] == "H11", "H02 to H11 typing")
+    require(h20_lower["source_Hodge_block"] == "H11" and h20_lower["target_Hodge_block"] == "H20", "H11 to H20 typing")
+    for log in (H02_LOG, H11_LOG, H20_LOG):
+        require_solver_log(log)
+
+    h02_coordinates, h02_q, h02_image = solver_io.read_coordinates(H02_COORDINATES)
+    h11_coordinates, h11_q, h11_image = solver_io.read_coordinates(H11_COORDINATES)
+    h20_coordinates, h20_q, h20_image = solver_io.read_coordinates(H20_COORDINATES)
+    require(h02_coordinates.shape == (42706, 1) and (h02_q, h02_image) == (248, 42458), "H02 coordinate shape")
+    require(h11_coordinates.shape == (5439, 1) and (h11_q, h11_image) == (1013, 4426), "H11 coordinate shape")
+    require(h20_coordinates.shape == (282, 1) and (h20_q, h20_image) == (248, 34), "H20 coordinate shape")
+
+    h02_rhs_record = g3cq["H02_return_correction"]["ambient_scipy_NPZ"]
+    h02_rhs = sparse.load_npz(ROOT / h02_rhs_record["path"]).tocsc()
+    h11_rhs = sparse.load_npz(EVIDENCE / "g3cr_recursive_H11_ambient.npz").tocsc()
+    h20_rhs = sparse.load_npz(EVIDENCE / "g3cr_recursive_H20_ambient.npz").tocsc()
+    h02_selected, _ = common.selected_source_matrix("H02")
+    h11_selected, _ = common.selected_source_matrix("H11")
+    h20_selected, _ = common.selected_source_matrix("H20")
+    residuals: dict[str, int] = {}
+    for name, selected, coordinates, rhs in (
+        ("H02", h02_selected, h02_coordinates, h02_rhs),
+        ("H11", h11_selected, h11_coordinates, h11_rhs),
+        ("H20", h20_selected, h20_coordinates, h20_rhs),
+    ):
+        reconstruction = (selected @ coordinates.astype(np.int32)).tocsc()
+        reconstruction.data %= PRIME
+        reconstruction.eliminate_zeros()
+        residuals[name] = common.exact_residual_nonzeros(reconstruction, rhs)
+    require(all(value == 0 for value in residuals.values()), "all recursive reconstructions")
+
+    h02_quotient = h02_coordinates[:h02_q, :].tocsc()
+    h11_quotient = h11_coordinates[:h11_q, :].tocsc()
+    h20_quotient = h20_coordinates[:h20_q, :].tocsc()
+    expected_h02_record = g3cq["H02_return_correction"]["normal_form_binary_uint8"]
+    expected_h02 = np.fromfile(ROOT / expected_h02_record["path"], dtype=np.uint8).reshape(248, 1)
+    require(common.exact_residual_nonzeros(h02_quotient, sparse.csc_matrix(expected_h02)) == 0, "H02 quotient matches Singular normal form")
+
+    full = sparse.vstack([h20_quotient, h11_quotient, h02_quotient], format="csc")
+    require(full.shape == (1509, 1), "full vector shape")
+    full.data %= PRIME
+    full.eliminate_zeros()
+    sparse.save_npz(FULL_NPZ, full, compressed=True)
+    dense = full.toarray().astype(np.uint8)
+    FULL_DENSE.write_bytes(dense.tobytes(order="C"))
+
+    checks = {
+        "G3CQ_is_hash_bound_and_passing": True,
+        "all_three_exact_coordinate_solvers_report_success_for_one_RHS": True,
+        "the_H02_ambient_correction_reconstructs_with_zero_residual": residuals["H02"] == 0,
+        "the_H02_quotient_equals_the_independent_Singular_normal_form": True,
+        "the_factor_one_fourth_divergence_is_solved_in_H11_with_zero_residual": residuals["H11"] == 0,
+        "the_factor_one_third_divergence_is_solved_in_H20_with_zero_residual": residuals["H20"] == 0,
+        "the_terminal_H20_image_preimage_has_identically_zero_divergence": True,
+        "the_complete1509_coordinate_first_jet_correction_is_emitted": True,
+        "no_characteristic_zero_action_path_integration_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CR checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cr-selected-source-recursive-first-jet.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CR",
+        "status": "CLOSED_EXACT_GF11_SELECTED_SOURCE_QUOTIENT_DEFECT_FULL_RECURSIVE_FIRST_JET_CORRECTION",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "field": "GF(11) at gamma=3 and family base a=0",
+        "basis_order": "B103 target rows H20(248), H11(1013), H02(248)",
+        "inputs": {
+            "G3CQ": record(G3CQ),
+            "H02_coordinates": record(H02_COORDINATES),
+            "H02_solver_log": record(H02_LOG),
+            "recursive_H11_divergence": record(H11_PACKET),
+            "H11_coordinates": record(H11_COORDINATES),
+            "H11_solver_log": record(H11_LOG),
+            "recursive_H20_divergence": record(H20_PACKET),
+            "H20_coordinates": record(H20_COORDINATES),
+            "H20_solver_log": record(H20_LOG),
+            "terminal_H20_divergence": external_record(terminal_path, mld),
+        },
+        "exact_components": {
+            "H02": {
+                "ambient_RHS_nonzeros": int(h02_rhs.nnz),
+                "coordinate_nonzeros": int(h02_coordinates.nnz),
+                "quotient_nonzeros": int(h02_quotient.nnz),
+                "image_nonzeros": int(h02_coordinates[h02_q:, :].nnz),
+                "reconstruction_residual_nonzeros": residuals["H02"],
+            },
+            "H11": {
+                "ambient_RHS_nonzeros": int(h11_rhs.nnz),
+                "coordinate_nonzeros": int(h11_coordinates.nnz),
+                "quotient_nonzeros": int(h11_quotient.nnz),
+                "image_nonzeros": int(h11_coordinates[h11_q:, :].nnz),
+                "reconstruction_residual_nonzeros": residuals["H11"],
+            },
+            "H20": {
+                "ambient_RHS_nonzeros": int(h20_rhs.nnz),
+                "coordinate_nonzeros": int(h20_coordinates.nnz),
+                "quotient_nonzeros": int(h20_quotient.nnz),
+                "image_nonzeros": int(h20_coordinates[h20_q:, :].nnz),
+                "reconstruction_residual_nonzeros": residuals["H20"],
+                "terminal_image_divergence_nonzeros": 0,
+            },
+        },
+        "full_recursive_first_jet_correction": {
+            "shape": list(full.shape),
+            "orientation": "B103 target coordinates by one selected-source quotient-defect correction",
+            "nonzero_entries": int(full.nnz),
+            "NPZ": record(FULL_NPZ),
+            "dense_uint8": record(FULL_DENSE),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_this_is_the_complete_family_derivative_including_all_source_and_frame_terms": False,
+            "claims_characteristic_zero_connection_action": False,
+            "claims_integral_G3BJ_parallel_transport": False,
+            "claims_terminal_period_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3crSelectedSourceRecursiveFirstJetCorrection",
+            "tier": "CLOSED_EXACT_SELECTED_GF11_QUOTIENT_DEFECT_REPAIR_THROUGH_H02_H11_H20",
+            "statement": (
+                "At the selected GF(11) proof fiber, the exact G3CQ quotient-defect coefficient correction "
+                "has an H02 minus-divergence return whose original-Jacobian coordinates reconstruct with zero "
+                "residual. Exact factor-1/4 and factor-1/3 recursive divergences likewise reconstruct with zero "
+                "residual in H11 and H20, and the complete H20 image domain has identically zero terminal "
+                "divergence. Thus the selected quotient-defect repair contributes one explicit 1509-coordinate "
+                "recursive first-jet vector."
+            ),
+        },
+        "frontier_delta": {
+            "before": "G3CQ emitted the exact H02 return of the selected-source quotient-defect correction but had not propagated its original-Jacobian preimage through lower poles.",
+            "after": "That one selected H02 row is now solved and recursively propagated with zero residual through H11 and H20 to a terminal 1509-coordinate correction vector; the quotient-defect branch of the selected first derivative is closed at the proof fiber.",
+        },
+        "next_required_object": (
+            "Assemble this quotient-defect vector with the remaining selected family-derivative contributions: "
+            "the derivative of the pole-six source numerator/division multipliers and the derivative of the "
+            "recursive H02/H11/H20 frame actions. Then lift or interval-certify the resulting connection action "
+            "along G3BJ; do not recompute the quotient-defect branch."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CR selected-source recursive first jet assembly: PASS")
+    print(
+        f"H02_q_nnz={h02_quotient.nnz} H11_q_nnz={h11_quotient.nnz} "
+        f"H20_q_nnz={h20_quotient.nnz} full_nnz={full.nnz}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

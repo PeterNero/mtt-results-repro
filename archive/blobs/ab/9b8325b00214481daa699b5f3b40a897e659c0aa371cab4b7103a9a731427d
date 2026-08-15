@@ -1,0 +1,99 @@
+# UST.G3FI - H02 Component-20 Root-Ideal Normal-Pair Theorem
+
+## Scope
+
+This theorem upgrades the restricted conic identity in UST.G3FF to the full
+ambient weighted polynomial ring. It does not yet promote the 100 finite
+component-20 relations to characteristic zero and does not yet prove the
+component rank is 36 over `Q(gamma)`.
+
+## Selected root graph
+
+Let
+
+```text
+q = xz-y^2,
+r = w+G3(x,y,z).
+```
+
+The selected root graph is the weighted complete intersection
+
+```text
+Rminus = V(q,r).
+```
+
+The sequence `(q,r)` is regular: `q` is irreducible over `Q`, and `r` is
+monic of degree one in `w` over `Q[x,y,z]/(q)`.
+
+## Exact ambient identity
+
+For the selected G3BI coefficient section, the six coefficient coordinates
+of the corrected fiber difference satisfy
+
+```text
+A0_selected-A1 = r*B6 + q*D7
+```
+
+literally over `Z` in the frozen power basis of `Q(gamma)`, where
+
+```text
+B6 in Sym^6(x,y,z) tensor Q(gamma),
+D7 in Sym^7(x,y,z) tensor Q(gamma).
+```
+
+The representative is canonical under the requirement that both quotients
+are independent of `w`: `B6` is the coefficient of `w` in the ambient
+difference, and `D7` is the quotient by `q` after substituting `w=-G3`.
+
+Restricting to `r=0` recovers exactly the earlier G3FF identity
+
+```text
+(A0_selected-A1)|_(w=-G3) = q*D7.
+```
+
+Thus `q*D7` was the root-graph restriction, not the full ambient derivative
+transgression.
+
+## Normal filtration
+
+The conic filtration in degree 15 has the exact dimension split
+
+```text
+dim Sym^15                  = 136,
+dim q^4 Sym^7               = 36,
+dim Sym^15 / q^4 Sym^7      = 100,
+100 = 31+27+23+19.
+```
+
+The four summands are the dimensions of the conic quotients in degrees
+`15,13,11,9`. This matches the four finite kernel layers observed at all 48
+split fibers, but matching dimensions are not by themselves a promotion
+theorem.
+
+## What is newly closed
+
+1. Both normal coefficients of the selected root complete intersection are
+   explicit over `Q(gamma)`.
+2. The full ambient difference replays exactly in all six field coordinates.
+3. The restricted G3FF identity is reconciled with the ambient source.
+4. The `100+36` count is identified with the four absorbable conic layers and
+   the fourth normal carrier.
+
+## Remaining wall
+
+One must construct the selected Koszul contraction for `(q,r)`, iterate it
+through the four conic layers, and replay 100 resulting relations against the
+exact G3EX presentation. Only after that replay, together with an independent
+nonzero 36 by 36 residual minor, may component 20 be promoted to rank 36 over
+`Q(gamma)`.
+
+## Reproduction
+
+```powershell
+python build_ust_g3fi_component20_root_ideal_normal_pair.py
+python verify_ust_g3fi_component20_root_ideal_normal_pair.py
+```
+
+The emitted evidence is
+`evidence/ust_g3fi/H02.component20.root_ideal_normal_pair.json` and
+`evidence/ust_g3fi/H02.component20.root_ideal_normal_pair.npz`.

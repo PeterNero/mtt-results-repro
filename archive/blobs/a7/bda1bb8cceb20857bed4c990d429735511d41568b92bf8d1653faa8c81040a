@@ -1,0 +1,135 @@
+"""Independent parser and arithmetic for F_101^6 sparse-minor certificates."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+
+PRIME = 101
+DEGREE = 6
+FIELD_ORDER = PRIME**DEGREE
+RELATION = (64, 16, 33, 44, 89, 24, 1)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def unpack(value: int) -> tuple[int, ...]:
+    require(0 <= value < FIELD_ORDER, "packed F_101^6 coefficient")
+    result = []
+    for _ in range(DEGREE):
+        result.append(value % PRIME)
+        value //= PRIME
+    return tuple(result)
+
+
+def pack(value: tuple[int, ...]) -> int:
+    require(len(value) == DEGREE, "F_101^6 coefficient width")
+    result = 0
+    place = 1
+    for coefficient in value:
+        require(0 <= coefficient < PRIME, "F_101 coefficient")
+        result += place * coefficient
+        place *= PRIME
+    return result
+
+
+def multiply(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    accumulator = [0] * (2 * DEGREE - 1)
+    for left_degree, left_value in enumerate(left):
+        for right_degree, right_value in enumerate(right):
+            accumulator[left_degree + right_degree] = (
+                accumulator[left_degree + right_degree]
+                + left_value * right_value
+            ) % PRIME
+    for exponent in range(2 * DEGREE - 2, DEGREE - 1, -1):
+        leading = accumulator[exponent] % PRIME
+        shift = exponent - DEGREE
+        for relation_degree in range(DEGREE):
+            accumulator[shift + relation_degree] = (
+                accumulator[shift + relation_degree]
+                - leading * RELATION[relation_degree]
+            ) % PRIME
+    return tuple(value % PRIME for value in accumulator[:DEGREE])
+
+
+def add(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    require(len(left) == len(right) == DEGREE, "F_101^6 addition widths")
+    return tuple((a + b) % PRIME for a, b in zip(left, right))
+
+
+def negate(value: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple((-coefficient) % PRIME for coefficient in value)
+
+
+def odd_inversion_count(values: list[int]) -> bool:
+    if not values:
+        return False
+    fenwick = [0] * (max(values) + 2)
+    previous = 0
+    odd = False
+    for value in values:
+        not_greater = 0
+        position = value + 1
+        while position:
+            not_greater += fenwick[position]
+            position -= position & -position
+        if (previous - not_greater) % 2:
+            odd = not odd
+        position = value + 1
+        while position < len(fenwick):
+            fenwick[position] += 1
+            position += position & -position
+        previous += 1
+    return odd
+
+
+def determinant(pivot_rows: list[int], packed_coefficients: list[int]) -> int:
+    require(len(pivot_rows) == len(packed_coefficients), "minor vector lengths")
+    value = (1, 0, 0, 0, 0, 0)
+    for coefficient in packed_coefficients:
+        element = unpack(coefficient)
+        require(any(element), "nonzero pivot coefficient")
+        value = multiply(value, element)
+    if odd_inversion_count(pivot_rows):
+        value = negate(value)
+    return pack(value)
+
+
+def parse_output(path: Path) -> tuple[dict[str, str], dict[str, list[int]]]:
+    lines = path.read_text(encoding="ascii").splitlines()
+    vector_labels = {
+        "SELECTED_SOURCE_ROWS_ZERO_BASED",
+        "PIVOT_TARGET_COORDINATES_ZERO_BASED",
+        "PIVOT_COEFFICIENTS_PACKED",
+        "QUOTIENT_FUNCTIONAL_PACKED",
+    }
+    scalars: dict[str, str] = {}
+    vectors: dict[str, list[int]] = {}
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        index += 1
+        if not line or line == "END_CERTIFICATE":
+            continue
+        label, value = line.split(" ", 1)
+        if label in vector_labels:
+            count = int(value)
+            require(index < len(lines), f"{label} value line")
+            entries = [int(item) for item in lines[index].split()]
+            index += 1
+            require(len(entries) == count, f"{label} count")
+            vectors[label] = entries
+        else:
+            scalars[label] = value
+    require(
+        {
+            "SELECTED_SOURCE_ROWS_ZERO_BASED",
+            "PIVOT_TARGET_COORDINATES_ZERO_BASED",
+            "PIVOT_COEFFICIENTS_PACKED",
+        }.issubset(vectors),
+        "complete minor vectors",
+    )
+    return scalars, vectors

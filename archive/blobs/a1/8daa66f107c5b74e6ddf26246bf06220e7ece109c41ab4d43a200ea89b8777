@@ -1,0 +1,97 @@
+# UST.G3FG: H02 Component-20 Canonical Conic-Graph Promotion No-Go
+
+## Status
+
+`CANONICAL_CONIC_GRAPH_RECONSTRUCTION_INCOMPLETE_MORE_EXACT_SOURCE_STRUCTURE_REQUIRED`
+
+This theorem tests and rejects direct numerical promotion of the finite
+component-20 kernels. It does not reject the conic filtration proved by
+G3FF.
+
+## Canonical Chart
+
+G3FF proves at every one of 48 split fibers that
+
+```text
+K_15 direct_sum q^4 Sym^7 = Sym^15,
+dim K_15 = 100,
+dim q^4 Sym^7 = 36.
+```
+
+The integer multiplication matrix of `q^4=(xz-y^2)^4` has a fixed
+36-by-36 pivot submatrix of determinant one. It therefore defines the same
+chart in characteristic zero and at every prime. Projection along this
+fourth-normal carrier canonically normalizes each finite kernel as a graph
+
+```text
+K_15 = graph(T_gamma),  T_gamma: k^100 -> k^36.
+```
+
+This removes every arbitrary finite-kernel basis choice.
+
+## Reconstruction Test
+
+For each of eight split primes, the six graph values are interpolated in the
+power basis `1,gamma,...,gamma^5`. This gives
+
+```text
+6 * 36 * 100 = 21,600
+```
+
+coefficient slots per characteristic. The first seven primes give a
+109-bit CRT modulus and rational-reconstruction uniqueness bound
+
+```text
+13,400,828,956,057,273.
+```
+
+Of the 21,600 slots:
+
+```text
+13,162 admit a unique seven-prime rational candidate;
+ 8,438 lie outside that uniqueness range;
+     0 candidates pass the independent eighth prime.
+```
+
+Thus the 100-dimensional finite graph is not the reduction of one fixed
+bounded-height `Q(gamma)` graph in this canonical chart.
+
+## Positive Control
+
+The identical evaluation, six-root interpolation, seven-prime CRT and
+eighth-prime holdout pipeline is applied to the exact G3FF `D7` source.
+All 216 power-basis slots reconstruct literally, and all 216 pass the
+holdout with zero aliases. The recovered integer coordinates agree exactly
+with the stored `D7`, including maximum absolute value 590.
+
+The graph rejection is therefore not caused by root ordering, interpolation,
+CRT, rational reconstruction or the holdout implementation.
+
+## Consequence
+
+Adding more arbitrary split primes is not the proof route. The stable finite
+invariant is the conic normal filtration, while the individual 100-plane
+varies between reductions. Characteristic-zero promotion must occur before
+kernel specialization, through the selected source operator and its
+normal-jet homotopy.
+
+This is precisely the distinction later used by G3FH: finite kernel graphs
+do not promote directly, but the exact source descriptors select the same
+`100+36` conic decomposition before projection.
+
+## Claim Boundary
+
+G3FG does not prove that the characteristic-zero kernel has dimension below
+100, and it does not disprove an upstream exact 100-dimensional kernel
+constructed in a different presentation. It proves only that the canonical
+finite graphs themselves do not form one promoted `Q(gamma)` graph under the
+certified height and independent-holdout test.
+
+Artifacts:
+
+```text
+build_ust_g3fg_component20_conic_graph_reconstruction.py
+evidence/ust_g3fg/H02.component20.conic_graph_reconstruction.json
+evidence/ust_g3fg/H02.component20.conic_graph_eight_prime_residues.npz
+evidence/ust_g3fg/H02.component20.conic_graph_reconstruction.npz
+```

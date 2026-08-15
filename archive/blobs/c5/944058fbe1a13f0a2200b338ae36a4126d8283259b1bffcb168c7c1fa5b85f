@@ -1,0 +1,481 @@
+#!/usr/bin/env python3
+"""Independently replay the UST.G3AD finite-ring obstruction certificate."""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json"
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def qzero(degree: int) -> tuple[int, ...]:
+    return (0,) * degree
+
+
+def qone(degree: int) -> tuple[int, ...]:
+    return (1,) + (0,) * (degree - 1)
+
+
+def qelement(values, modulus: int, degree: int) -> tuple[int, ...]:
+    values = tuple(int(value) % modulus for value in values)
+    require(len(values) <= degree, "quotient element width")
+    return values + (0,) * (degree - len(values))
+
+
+def qadd(left, right, modulus: int) -> tuple[int, ...]:
+    return tuple((a + b) % modulus for a, b in zip(left, right))
+
+
+def qneg(value, modulus: int) -> tuple[int, ...]:
+    return tuple((-entry) % modulus for entry in value)
+
+
+def qsub(left, right, modulus: int) -> tuple[int, ...]:
+    return qadd(left, qneg(right, modulus), modulus)
+
+
+def qscale(value, scalar: int, modulus: int) -> tuple[int, ...]:
+    return tuple((scalar * entry) % modulus for entry in value)
+
+
+def qmul(left, right, relation, modulus: int) -> tuple[int, ...]:
+    degree = len(relation) - 1
+    accumulator = [0] * (2 * degree - 1)
+    for left_degree, left_value in enumerate(left):
+        for right_degree, right_value in enumerate(right):
+            accumulator[left_degree + right_degree] = (
+                accumulator[left_degree + right_degree]
+                + left_value * right_value
+            ) % modulus
+    for exponent in range(2 * degree - 2, degree - 1, -1):
+        leading = accumulator[exponent] % modulus
+        shift = exponent - degree
+        for relation_degree in range(degree):
+            accumulator[shift + relation_degree] = (
+                accumulator[shift + relation_degree]
+                - leading * relation[relation_degree]
+            ) % modulus
+    return tuple(value % modulus for value in accumulator[:degree])
+
+
+def qpow(value, exponent: int, relation, modulus: int) -> tuple[int, ...]:
+    degree = len(relation) - 1
+    result = qone(degree)
+    base = value
+    while exponent:
+        if exponent & 1:
+            result = qmul(result, base, relation, modulus)
+        base = qmul(base, base, relation, modulus)
+        exponent //= 2
+    return result
+
+
+def qeval(coefficients, value, relation, modulus: int) -> tuple[int, ...]:
+    degree = len(relation) - 1
+    result = qzero(degree)
+    for coefficient in reversed(tuple(coefficients)):
+        result = qadd(
+            qmul(result, value, relation, modulus),
+            qelement((coefficient,), modulus, degree),
+            modulus,
+        )
+    return result
+
+
+def ptrim(values, zero):
+    values = list(values)
+    while len(values) > 1 and values[-1] == zero:
+        values.pop()
+    return values or [zero]
+
+
+def ppad(values, size, zero):
+    return list(values) + [zero] * max(0, size - len(values))
+
+
+def padd(left, right, modulus: int, zero):
+    size = max(len(left), len(right))
+    return ptrim(
+        [
+            qadd(a, b, modulus)
+            for a, b in zip(ppad(left, size, zero), ppad(right, size, zero))
+        ],
+        zero,
+    )
+
+
+def pneg(value, modulus: int, zero):
+    return ptrim([qneg(entry, modulus) for entry in value], zero)
+
+
+def psub(left, right, modulus: int, zero):
+    return padd(left, pneg(right, modulus, zero), modulus, zero)
+
+
+def pmul(left, right, relation, modulus: int, zero):
+    output = [zero] * (len(left) + len(right) - 1)
+    for left_degree, left_value in enumerate(left):
+        for right_degree, right_value in enumerate(right):
+            output[left_degree + right_degree] = qadd(
+                output[left_degree + right_degree],
+                qmul(left_value, right_value, relation, modulus),
+                modulus,
+            )
+    return ptrim(output, zero)
+
+
+def pscale(value, scalar, relation, modulus: int, zero):
+    return ptrim(
+        [qmul(entry, scalar, relation, modulus) for entry in value], zero
+    )
+
+
+def ppow(value, exponent: int, relation, modulus: int, one, zero):
+    result = [one]
+    base = value
+    while exponent:
+        if exponent & 1:
+            result = pmul(result, base, relation, modulus, zero)
+        base = pmul(base, base, relation, modulus, zero)
+        exponent //= 2
+    return result
+
+
+def evaluate_expression(expression, variables, relation, modulus, one, zero):
+    degree = len(relation) - 1
+
+    def visit(node):
+        if isinstance(node, ast.Expression):
+            return visit(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return [qelement((node.value,), modulus, degree)]
+        if isinstance(node, ast.Name):
+            require(node.id in variables, "known polynomial variable")
+            return variables[node.id]
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return pneg(visit(node.operand), modulus, zero)
+        if isinstance(node, ast.BinOp):
+            left = visit(node.left)
+            if isinstance(node.op, ast.Pow):
+                require(isinstance(node.right, ast.Constant), "literal exponent")
+                return ppow(
+                    left, int(node.right.value), relation, modulus, one, zero
+                )
+            right = visit(node.right)
+            if isinstance(node.op, ast.Add):
+                return padd(left, right, modulus, zero)
+            if isinstance(node.op, ast.Sub):
+                return psub(left, right, modulus, zero)
+            if isinstance(node.op, ast.Mult):
+                return pmul(left, right, relation, modulus, zero)
+        raise AssertionError("unsupported F6 expression")
+
+    return visit(ast.parse(expression, mode="eval"))
+
+
+def embed_cubic(rows, alpha, relation, modulus):
+    return qeval(rows, alpha, relation, modulus)
+
+
+def restrict_monomial(powers, r_value, w_value, relation, modulus, one, zero):
+    x_power, _y_power, z_power = powers
+    x = [zero, one]
+    z = [w_value, r_value]
+    return pmul(
+        ppow(x, x_power, relation, modulus, one, zero),
+        ppow(z, z_power, relation, modulus, one, zero),
+        relation,
+        modulus,
+        zero,
+    )
+
+
+def multiply_sheet_pairs(left, right, h, relation, modulus, zero):
+    le, lo = left
+    re, ro = right
+    even = padd(
+        pmul(le, re, relation, modulus, zero),
+        pmul(
+            pmul(lo, ro, relation, modulus, zero),
+            h,
+            relation,
+            modulus,
+            zero,
+        ),
+        modulus,
+        zero,
+    )
+    odd = padd(
+        pmul(le, ro, relation, modulus, zero),
+        pmul(lo, re, relation, modulus, zero),
+        modulus,
+        zero,
+    )
+    return even, odd
+
+
+def main() -> None:
+    packet = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AD", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_FIRST_ORDER_FIXED_FQ_SELECTED_SECOND_H_GRAPH_NOGO",
+        "theorem status",
+    )
+
+    local = packet["inputs"]["local_G3AC_packet"]
+    local_path = ROOT / local["path"]
+    require(local_path.is_file(), "local G3AC packet")
+    require(sha256(local_path) == local["sha256"], "local G3AC hash")
+    for name, source in packet["inputs"].items():
+        require(HEX64.fullmatch(source["sha256"]) is not None, f"{name} sha256")
+        if "git_blob" in source:
+            require(HEX40.fullmatch(source["git_blob"]) is not None, f"{name} Git blob")
+
+    completion = packet["completion_ring"]
+    prime = completion["prime"]
+    modulus = completion["modulus"]
+    relation = tuple(completion["gamma_relation_coefficients_ascending"])
+    degree = len(relation) - 1
+    require(prime == 101 and modulus == prime**2, "101-adic first-order modulus")
+    require(degree == completion["residue_degree"] == 6, "residue degree")
+    zero = qzero(degree)
+    one = qone(degree)
+    gamma = qelement((0, 1), modulus, degree)
+    alpha = qelement(completion["alpha_hensel_lift_gamma_coordinates_mod1012"], modulus, degree)
+    mu = qelement(completion["mu_hensel_lift_gamma_coordinates_mod1012"], modulus, degree)
+    alpha_residue = qelement(completion["alpha_residue_gamma_coordinates"], prime, degree)
+    mu_residue = qelement(completion["mu_residue_gamma_coordinates"], prime, degree)
+    require(tuple(entry % prime for entry in alpha) == alpha_residue, "alpha reduction")
+    require(tuple(entry % prime for entry in mu) == mu_residue, "mu reduction")
+    require(
+        qadd(alpha_residue, mu_residue, prime)
+        == qelement((0, 1), prime, degree),
+        "special-fiber gamma split",
+    )
+    alpha_cubic = qadd(
+        qadd(
+            qpow(alpha, 3, relation, modulus),
+            qscale(qpow(alpha, 2, relation, modulus), 12, modulus),
+            modulus,
+        ),
+        qadd(qscale(alpha, 69, modulus), qelement((31,), modulus, degree), modulus),
+        modulus,
+    )
+    require(alpha_cubic == zero, "alpha cubic at p2")
+    require(
+        qadd(qpow(mu, 2, relation, modulus), qelement((3,), modulus, degree), modulus)
+        == zero,
+        "mu quadratic at p2",
+    )
+    require(
+        qsub(qadd(alpha, mu, modulus), gamma, modulus)
+        == tuple(completion["alpha_plus_mu_minus_gamma_mod1012"]),
+        "generator displacement",
+    )
+
+    graph = packet["selected_second_H_graph"]
+    cubic = graph["cubic_mod1012_data"]
+    embedded = graph["embedded_mod1012_data"]
+
+    source = {
+        name: embed_cubic(rows, alpha, relation, modulus)
+        for name, rows in cubic["source_coordinates_mod1012_in_alpha_basis"].items()
+    }
+    require(
+        {name: list(value) for name, value in source.items()}
+        == embedded["source_coordinates_mod1012_in_gamma_basis"],
+        "source embedding replay",
+    )
+
+    def embedded_polynomial(cubic_key, embedded_key):
+        values = [
+            embed_cubic(row, alpha, relation, modulus) for row in cubic[cubic_key]
+        ]
+        require([list(value) for value in values] == embedded[embedded_key], embedded_key)
+        return values
+
+    p_values = embedded_polynomial("P_mod1012_in_alpha_basis", "P_mod1012_in_gamma_basis")
+    q_values = embedded_polynomial("Q_mod1012_in_alpha_basis", "Q_mod1012_in_gamma_basis")
+    s_values = embedded_polynomial("S_mod1012_in_alpha_basis", "S_mod1012_in_gamma_basis")
+    lambda_value = embed_cubic(cubic["lambda_mod1012_in_alpha_basis"], alpha, relation, modulus)
+    k_value = embed_cubic(cubic["Fermat_k_mod1012_in_alpha_basis"], alpha, relation, modulus)
+    require(list(lambda_value) == embedded["lambda_mod1012_in_gamma_basis"], "lambda embedding")
+    require(list(k_value) == embedded["Fermat_k_mod1012_in_gamma_basis"], "k embedding")
+
+    r_value = source["r"]
+    w_value = source["w"]
+    h = evaluate_expression(
+        graph["F6_integer_expression"],
+        {"x": [zero, one], "y": [one], "z": [w_value, r_value]},
+        relation,
+        modulus,
+        one,
+        zero,
+    )
+    require([list(value) for value in h] == graph["line_sextic_mod1012_in_gamma_basis"], "line sextic replay")
+
+    map_left = pmul(
+        q_values,
+        padd(
+            ppow(p_values, 3, relation, modulus, one, zero),
+            pscale(
+                ppow(q_values, 3, relation, modulus, one, zero),
+                qelement((16,), modulus, degree),
+                relation,
+                modulus,
+                zero,
+            ),
+            modulus,
+            zero,
+        ),
+        relation,
+        modulus,
+        zero,
+    )
+    map_right = pscale(
+        pmul(
+            h,
+            ppow(s_values, 2, relation, modulus, one, zero),
+            relation,
+            modulus,
+            zero,
+        ),
+        lambda_value,
+        relation,
+        modulus,
+        zero,
+    )
+    require(psub(map_left, map_right, modulus, zero) == [zero], "marked-map identity")
+    require(
+        qadd(qpow(k_value, 2, relation, modulus), qscale(lambda_value, 3, modulus), modulus)
+        == zero,
+        "Fermat square root",
+    )
+
+    fixed_rows = packet["fixed_FQ"]["nonzero_gamma_rows"]
+    require(len(fixed_rows) == packet["fixed_FQ"]["nonzero_gamma_row_count"] == 214, "F_Q rows")
+    components = [([zero], [zero]) for _ in range(3)]
+    alpha_p = alpha_residue
+    mu_p = mu_residue
+    for row in fixed_rows:
+        one_part = qeval(row["one_coefficients_ascending"], alpha_p, relation, prime)
+        mu_part = qeval(row["mu_coefficients_ascending"], alpha_p, relation, prime)
+        converted = qadd(one_part, qmul(mu_p, mu_part, relation, prime), prime)
+        require(list(converted) == row["gamma_coefficients_ascending"], "gamma conversion")
+        coefficient = qelement(converted, modulus, degree)
+        restricted = pscale(
+            restrict_monomial(
+                row["powers_xyz"], r_value, w_value, relation, modulus, one, zero
+            ),
+            coefficient,
+            relation,
+            modulus,
+            zero,
+        )
+        coordinate = row["target_coordinate"]
+        even, odd = components[coordinate]
+        if row["basis_kind"] == "base_degree9":
+            even = padd(even, restricted, modulus, zero)
+        else:
+            require(row["basis_kind"] == "K3_sheet_times_degree6", "F_Q basis kind")
+            odd = padd(odd, restricted, modulus, zero)
+        components[coordinate] = (even, odd)
+
+    q_squared = ppow(q_values, 2, relation, modulus, one, zero)
+    even_12q2 = pscale(q_squared, qelement((12,), modulus, degree), relation, modulus, zero)
+    odd_ks = pscale(s_values, k_value, relation, modulus, zero)
+    target_coordinates = [
+        (even_12q2, pneg(odd_ks, modulus, zero)),
+        (even_12q2, odd_ks),
+        (
+            pscale(
+                pmul(p_values, q_values, relation, modulus, zero),
+                qelement((6,), modulus, degree),
+                relation,
+                modulus,
+                zero,
+            ),
+            [zero],
+        ),
+    ]
+    restriction = ([zero], [zero])
+    for component, target in zip(components, target_coordinates):
+        contribution = multiply_sheet_pairs(
+            component, target, h, relation, modulus, zero
+        )
+        restriction = (
+            padd(restriction[0], contribution[0], modulus, zero),
+            padd(restriction[1], contribution[1], modulus, zero),
+        )
+
+    even = ppad(restriction[0], 16, zero)
+    odd = ppad(restriction[1], 16, zero)
+    require(len(even) == len(odd) == 16, "degree-fifteen restriction")
+    require(all(entry % prime == 0 for value in even + odd for entry in value), "mod101 containment")
+    replay_rows = []
+    for parity, values in (("even", even), ("odd", odd)):
+        for x_degree, value in enumerate(values):
+            replay_rows.append(
+                {
+                    "sheet_parity": parity,
+                    "x_degree": x_degree,
+                    "gamma_coefficients_mod101": [entry // prime % prime for entry in value],
+                }
+            )
+
+    test = packet["restriction_test"]
+    require(replay_rows == test["first_order_rows"], "first-order row replay")
+    require(canonical_hash(replay_rows) == test["first_order_rows_sha256"], "row hash")
+    nonzero = [row for row in replay_rows if any(row["gamma_coefficients_mod101"])]
+    require(nonzero == test["nonzero_first_order_rows"], "nonzero row list")
+    require(len(nonzero) == test["nonzero_first_order_row_count"] == 29, "nonzero row count")
+    require(nonzero[0] == test["first_nonzero_row"], "first obstruction row")
+    require(test["restriction_zero_mod1012"] is False, "p2 obstruction missing")
+
+    frontier = packet["frontier_delta"]
+    require(frontier["fixed_FQ_selected_second_H_graph_compatibility_decided"] is True, "decision")
+    require(frontier["fixed_FQ_selected_second_H_graph_compatible"] is False, "wrong compatibility")
+    require(frontier["existential_G3AC_graph_prym_family_affected"] is False, "G3AC overreach")
+    scope = packet["scope"]
+    require(scope["excludes_only_the_fixed_integer_gamma_coefficient_lift"] is True, "scope")
+    require(scope["excludes_all_graph_preserving_eta9_members"] is False, "family overreach")
+    require(scope["proves_no_other_nonambient_Prym_class_on_fixed_FQ"] is False, "Picard overreach")
+    require(scope["constructs_visible_V3_HYM"] is False, "physical overreach")
+    require(scope["closes_B_ETA9_01"] is False, "ETA9.01 overreach")
+    require(scope["closes_B_ETA9_02"] is False, "ETA9.02 overreach")
+    require(scope["closes_B_HS_01"] is False, "HS overreach")
+    for name, value in packet["guardrails"].items():
+        require(value is False, f"guardrail violated: {name}")
+
+    print("UST.G3AD fixed-F_Q second-H graph obstruction: PASS")
+    print("special fiber: restriction zero modulo 101")
+    print("first order: 29/32 coefficient rows nonzero modulo 101")
+    print("conclusion: fixed integer-gamma F_Q lift is not the selected graph-Prym member")
+    print("open: select a member inside the 33-dimensional graph-preserving family and decide beta_C")
+
+
+if __name__ == "__main__":
+    main()

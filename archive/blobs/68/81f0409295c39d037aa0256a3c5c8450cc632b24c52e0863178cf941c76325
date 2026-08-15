@@ -1,0 +1,3492 @@
+#!/usr/bin/env python3
+"""Verify the unified-source research contract, not the source hypothesis."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+FRONTIER_PATH = ROOT / "state" / "frontier.json"
+
+REQUIRED_FILES = (
+    ROOT / "README.md",
+    ROOT / "HYPOTHESIS.md",
+    ROOT / "PLAN.md",
+    ROOT / "docs" / "BRANCH_DECISION.md",
+    ROOT / "docs" / "CANDIDATE_MATRIX.md",
+    ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+    ROOT / "docs" / "G3D_PHYSICAL_SPECTRAL_OBJECT_CUTSET.md",
+    ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ROOT / "refresh_local_dependency_hashes.py",
+    ROOT / "UST_G1_AUGMENTED_SOURCE_TYPE_ADJUDICATION_THEOREM_v1.md",
+    ROOT / "UST_G1E_BUNDLE_COHESIVE_EMBEDDING_AND_REPRESENTABILITY_CUTSET_v1.md",
+    ROOT / "UST_G2_FULL_RESIDUAL_HODGE_DECOMPOSITION_THEOREM_v1.md",
+    ROOT / "UST_G2P_G5A_PHYSICAL_RESIDUAL_AND_FINITE_TRANSFER_INGESTION_v1.md",
+    ROOT / "UST_G3A_MINIMAL_SOURCE_INGESTION_AND_ANTI_SPLICING_THEOREM_v1.md",
+    ROOT / "UST_G3B_SCALE_ORBIT_AND_DIMENSIONLESS_READOUT_THEOREM_v1.md",
+    ROOT / "UST_G3C_SOURCE_METRIC_COMMUTANT_AND_CONNECTED_BINDING_THEOREM_v1.md",
+    ROOT / "UST_G3D_SPECTRAL_TO_COMMON_GAUDUCHON_HYM_CHAMBER_THEOREM_v1.md",
+    ROOT / "UST_G3E_OPPOSITE_COMPLEX_BFIELD_WIT_REDUCTION_THEOREM_v1.md",
+    ROOT / "UST_G3F_Q79_HS_GLOBAL_STABILITY_AND_PROJECTIVE_HE_THEOREM_v1.md",
+    ROOT / "UST_G3G_TWO_FIBER_STABLE_RECOMBINATION_AND_DETERMINANT_CUTSET_THEOREM_v1.md",
+    ROOT / "UST_G3H_QUTRIT_DETERMINANTAL_TORSION_AND_GENERATOR_DESCENT_THEOREM_v1.md",
+    ROOT / "UST_G3I_BIDIRECTIONAL_EXT_RIGIDITY_AND_REVERSE_EXISTENCE_THEOREM_v1.md",
+    ROOT / "UST_G3J_REVERSE_EXT_REPRESENTATION_AND_LOCAL_FREENESS_NOGO_THEOREM_v1.md",
+    ROOT / "UST_G3K_DERIVED_SCHUR_TYPING_AND_YONEDA_OBSTRUCTION_REDUCTION_THEOREM_v1.md",
+    ROOT / "UST_G3L_MONAD_YONEDA_RANK_FOUR_AND_NORMAL_BLOCK_REDUCTION_THEOREM_v1.md",
+    ROOT / "UST_G3M_CONJUGATE_CLOCK_FIXED_YONEDA_COLUMN_THEOREM_v1.md",
+    ROOT / "UST_G3N_FIBER_SERRE_PAIRING_AND_NONZERO_YONEDA_COLUMN_NOGO_THEOREM_v1.md",
+    ROOT / "UST_G3O_SAME_OBJECT_QUTRIT_RANK_NINE_CHERN_CUTSET_THEOREM_v1.md",
+    ROOT / "UST_G3P_ZERO_SECTION_CORRECTED_HIDDEN_PERFECT_COMPLEX_THEOREM_v1.md",
+    ROOT / "UST_G3Q_ZERO_SECTION_BUFFER_INJECTION_NOGO_THEOREM_v1.md",
+    ROOT / "UST_G3R_RELATIVE_STABLE_REDUCTION_AND_GLOBAL_WIT0_PROMOTION_THEOREM_v1.md",
+    ROOT / "UST_G3S_TARGET_HARDER_NARASIMHAN_SLOPE_NOGO_AND_BALANCE_CONDITION_THEOREM_v1.md",
+    ROOT / "UST_G3T_SUPPORT_WIDE_SLOPE_BALANCED_QUTRIT_PROMOTION_THEOREM_v1.md",
+    ROOT / "UST_G3U_DIRECT_STABLE_FACTOR_COMPILER_CORRECTION_AND_HIDDEN_STRUCTURAL_PROMOTION_THEOREM_v1.md",
+    ROOT / "UST_G3V_EXISTENTIAL_HIDDEN_GAUDUCHON_CHAMBER_AND_PROJECTIVE_HYM_THEOREM_v1.md",
+    ROOT / "UST_G3W_RELATIVE_PROJECTIVE_TRANSLATION_AND_HIDDEN_CHERN_WEIL_INVARIANCE_THEOREM_v1.md",
+    ROOT / "UST_G3X_FULL_BOTT_CHERN_INJECTIVITY_BY_VERTICAL_FOURIER_HOMOTOPY_THEOREM_v1.md",
+    ROOT / "UST_G3Y_TRANSVERSE_FUYAU_SHORTCUT_NOGO_FOR_NONZERO_VISIBLE_C3_THEOREM_v1.md",
+    ROOT / "UST_G3Z_NONTRANSVERSE_FULL_RESIDUAL_A_POSTERIORI_ENDPOINT_COMPILER_THEOREM_v1.md",
+    ROOT / "UST_G3AA_EQUIVARIANT_SHARED_LINE_THETA_PRODUCT_AND_STRING_CLASS_TYPING_THEOREM_v1.md",
+    ROOT / "UST_G3AB_ETA9_THETA_ORIENTATION_UNIVERSAL_INCIDENCE_AND_TWO_TWIST_SEPARATION_THEOREM_v1.md",
+    ROOT / "UST_G3AC_ETA9_PRIMITIVE_GRAPH_PRYM_ORBIT_AND_SELECTED_SOURCE_CUTSET_THEOREM_v1.md",
+    ROOT / "UST_G3AD_FIXED_FQ_SELECTED_SECOND_H_GRAPH_FIRST_ORDER_OBSTRUCTION_THEOREM_v1.md",
+    ROOT / "UST_G3AE_SECOND_H_FIRST_ORDER_JOINT_GRAPH_COEFFICIENT_LIFT_THEOREM_v1.md",
+    ROOT / "UST_G3AF_TWO_H_FIRST_ORDER_JOINT_GRAPH_COEFFICIENT_LIFT_THEOREM_v1.md",
+    ROOT / "UST_G3AG_THREE_GRAPH_FIRST_ORDER_JOINT_COEFFICIENT_LIFT_THEOREM_v1.md",
+    ROOT / "UST_G3AH_FORMAL_THREE_GRAPH_COEFFICIENT_KERNEL_THEOREM_v1.md",
+    ROOT / "UST_G3AI_SELECTED_SECOND_H_MARKED_MAP_ALL_ORDERS_DESCENT_THEOREM_v1.md",
+    ROOT / "UST_G3AJ_SELECTED_RESIDUE_BALL_SMOOTH_GRAPH_PRYM_EXISTENCE_THEOREM_v1.md",
+    ROOT / "UST_G3AK_FULL_GRAPH_INCIDENCE_TANGENT_AND_NORMAL_DECOMPOSITION_THEOREM_v1.md",
+    ROOT / "UST_G3AL_SELECTED_CARRIER_RESPONSE_SCHUR_REDUCTION_THEOREM_v1.md",
+    ROOT / "UST_G3AO_ELLIPTIC_BIDUAL_IDENTITY_LEMMA_v1.md",
+    ROOT / "UST_G3AO_SELECTED_CAYLEY_TORIC_REGULARITY_THEOREM_v1.md",
+    ROOT / "docs" / "G3AP_DEGREE44_EXACT_REDUCTION_CONTRACT.md",
+    ROOT / "docs" / "G3AP_FIBER2_MODULE_REDUCTION_CONTRACT.md",
+    ROOT / "state" / "ust_g1_candidate_adjudication.packet.json",
+    ROOT / "state" / "ust_g1e_bundle_cohesive_embedding.packet.json",
+    ROOT / "state" / "ust_g2_full_residual_hodge.packet.json",
+    ROOT / "state" / "ust_g2p_g5a_physical_residual_transfer.packet.json",
+    ROOT / "state" / "ust_g3_source_ingestion.schema.json",
+    ROOT / "state" / "ust_g3_candidate.template.json",
+    ROOT / "state" / "ust_g3_current_candidate_audit.packet.json",
+    ROOT / "state" / "ust_g3b_scale_orbit.packet.json",
+    ROOT / "state" / "ust_g3c_target_metric.schema.json",
+    ROOT / "state" / "ust_g3c_reference_metric.packet.json",
+    ROOT / "state" / "ust_g3c_candidate.template.json",
+    ROOT / "state" / "ust_g3d_common_gauduchon_chamber.schema.json",
+    ROOT / "state" / "ust_g3d_candidate.template.json",
+    ROOT / "state" / "ust_g3d_reference_common_chamber.packet.json",
+    ROOT / "state" / "ust_g3d_common_gauduchon_chamber.packet.json",
+    ROOT / "state" / "ust_g3d_common_gauduchon_chamber.schema.v2.json",
+    ROOT / "state" / "ust_g3d_candidate.v2.template.json",
+    ROOT / "state" / "ust_g3d_reference_common_chamber.v2.packet.json",
+    ROOT / "state" / "ust_g3e_opposite_complex_bfield_wit.packet.json",
+    ROOT / "state" / "ust_g3f_q79_no_splitting_line.packet.json",
+    ROOT / "state" / "ust_g3f_q79_hs_global_stability.packet.json",
+    ROOT / "state" / "ust_g3g_two_fiber_stable_recombination.packet.json",
+    ROOT / "state" / "ust_g3h_qutrit_determinantal_torsion.packet.json",
+    ROOT / "state" / "ust_g3h_equivariant_descent.schema.json",
+    ROOT / "state" / "ust_g3h_candidate.template.json",
+    ROOT / "state" / "ust_g3i_bidirectional_ext.packet.json",
+    ROOT / "state" / "ust_g3j_reverse_ext_representation_nogo.packet.json",
+    ROOT / "state" / "ust_g3k_derived_schur_yoneda_reduction.packet.json",
+    ROOT / "state" / "ust_g3k_yoneda_mc.schema.json",
+    ROOT / "state" / "ust_g3k_yoneda_mc_candidate.template.json",
+    ROOT / "state" / "ust_g3l_monad_yoneda_rank_four.packet.json",
+    ROOT / "state" / "ust_g3l_normal_yoneda_block.schema.json",
+    ROOT / "state" / "ust_g3l_normal_yoneda_block_candidate.template.json",
+    ROOT / "state" / "ust_g3m_conjugate_clock_fixed_yoneda_column.packet.json",
+    ROOT / "state" / "ust_g3m_invariant_yoneda_column.schema.json",
+    ROOT / "state" / "ust_g3m_invariant_yoneda_column_candidate.template.json",
+    ROOT / "state" / "ust_g3m_invariant_yoneda_column.result.json",
+    ROOT / "state" / "ust_g3n_fiber_serre_nonzero_yoneda.packet.json",
+    ROOT / "state" / "ust_g3o_same_object_qutrit_chern_cutset.packet.json",
+    ROOT / "state" / "ust_g3p_zero_section_hidden_perfect_complex.packet.json",
+    ROOT / "state" / "ust_g3q_zero_section_buffer_injection_nogo.packet.json",
+    ROOT / "state" / "ust_g3r_relative_stable_wit0_promotion.packet.json",
+    ROOT / "state" / "ust_g3s_target_hn_slope_nogo.packet.json",
+    ROOT / "state" / "ust_g3t_support_wide_slope_balanced_qutrit.packet.json",
+    ROOT / "state" / "ust_g3u_hidden_direct_stable_factor.packet.json",
+    ROOT / "state" / "ust_g3v_existential_hidden_hym.packet.json",
+    ROOT / "state" / "ust_g3w_relative_projective_translation.packet.json",
+    ROOT / "state" / "ust_g3x_full_bott_chern_fourier_homotopy.packet.json",
+    ROOT / "state" / "ust_g3y_transverse_fuyau_c3_nogo.packet.json",
+    ROOT / "state" / "ust_g3z_nontransverse_endpoint_compiler.packet.json",
+    ROOT / "state" / "ust_g3aa_equivariant_shared_line_theta.packet.json",
+    ROOT / "state" / "ust_g3ab_eta9_theta_incidence_two_twist.packet.json",
+    ROOT / "state" / "ust_g3ac_eta9_graph_prym_orbit.packet.json",
+    ROOT / "state" / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json",
+    ROOT / "state" / "ust_g3ae_second_h_joint_coefficient_lift.packet.json",
+    ROOT / "state" / "ust_g3af_two_h_joint_coefficient_lift.packet.json",
+    ROOT / "state" / "ust_g3ag_three_graph_joint_coefficient_lift.packet.json",
+    ROOT / "state" / "ust_g3ah_formal_coefficient_kernel.packet.json",
+    ROOT / "state" / "ust_g3ai_second_h_marked_map_all_orders.packet.json",
+    ROOT / "state" / "ust_g3aj_residue_ball_smooth_graph_prym.packet.json",
+    ROOT / "state" / "ust_g3ak_full_graph_incidence_normal_decomposition.packet.json",
+    ROOT / "state" / "ust_g3ak_incidence_matrix.f101e6.u8",
+    ROOT / "verify_ust_g1_candidate_adjudication.py",
+    ROOT / "verify_ust_g1e_bundle_cohesive_embedding.py",
+    ROOT / "verify_ust_g2_full_residual_hodge.py",
+    ROOT / "verify_ust_g2p_g5a_physical_residual_transfer.py",
+    ROOT / "verify_ust_g3_source_ingestion.py",
+    ROOT / "verify_ust_g3b_scale_orbit.py",
+    ROOT / "verify_ust_g3c_target_metric.py",
+    ROOT / "verify_ust_g3d_common_gauduchon_chamber.py",
+    ROOT / "verify_ust_g3d_common_gauduchon_chamber_v2.py",
+    ROOT / "verify_ust_g3e_opposite_complex_bfield_wit.py",
+    ROOT / "verify_ust_g3f_q79_no_splitting_line.py",
+    ROOT / "verify_ust_g3f_q79_hs_global_stability.py",
+    ROOT / "verify_ust_g3g_two_fiber_stable_recombination.py",
+    ROOT / "verify_ust_g3h_qutrit_determinantal_torsion.py",
+    ROOT / "verify_ust_g3i_bidirectional_ext.py",
+    ROOT / "verify_ust_g3j_reverse_ext_representation_nogo.py",
+    ROOT / "verify_ust_g3k_derived_schur_yoneda_reduction.py",
+    ROOT / "verify_ust_g3l_monad_yoneda_rank_four.py",
+    ROOT / "verify_ust_g3m_conjugate_clock_fixed_yoneda_column.py",
+    ROOT / "verify_ust_g3n_fiber_serre_nonzero_yoneda.py",
+    ROOT / "verify_ust_g3o_same_object_qutrit_chern_cutset.py",
+    ROOT / "verify_ust_g3p_zero_section_hidden_perfect_complex.py",
+    ROOT / "verify_ust_g3q_zero_section_buffer_injection_nogo.py",
+    ROOT / "verify_ust_g3r_relative_stable_wit0_promotion.py",
+    ROOT / "verify_ust_g3s_target_hn_slope_nogo.py",
+    ROOT / "verify_ust_g3t_support_wide_slope_balanced_qutrit.py",
+    ROOT / "verify_ust_g3u_direct_stable_factor_compiler.py",
+    ROOT / "verify_ust_g3v_existential_hidden_hym.py",
+    ROOT / "verify_ust_g3w_relative_projective_translation.py",
+    ROOT / "verify_ust_g3x_full_bott_chern_fourier_homotopy.py",
+    ROOT / "verify_ust_g3y_transverse_fuyau_c3_nogo.py",
+    ROOT / "verify_ust_g3z_nontransverse_endpoint_compiler.py",
+    ROOT / "verify_ust_g3aa_equivariant_shared_line_theta.py",
+    ROOT / "verify_ust_g3ab_eta9_theta_incidence_two_twist.py",
+    ROOT / "verify_ust_g3ac_eta9_graph_prym_orbit.py",
+    ROOT / "build_ust_g3ad_fixed_fq_second_h_graph_obstruction.py",
+    ROOT / "verify_ust_g3ad_fixed_fq_second_h_graph_obstruction.py",
+    ROOT / "build_ust_g3ae_second_h_joint_coefficient_lift.py",
+    ROOT / "verify_ust_g3ae_second_h_joint_coefficient_lift.py",
+    ROOT / "build_ust_g3af_two_h_joint_coefficient_lift.py",
+    ROOT / "verify_ust_g3af_two_h_joint_coefficient_lift.py",
+    ROOT / "build_ust_g3ag_three_graph_joint_coefficient_lift.py",
+    ROOT / "verify_ust_g3ag_three_graph_joint_coefficient_lift.py",
+    ROOT / "build_ust_g3ah_formal_coefficient_kernel.py",
+    ROOT / "verify_ust_g3ah_formal_coefficient_kernel.py",
+    ROOT / "build_ust_g3ai_second_h_marked_map_all_orders.py",
+    ROOT / "verify_ust_g3ai_second_h_marked_map_all_orders.py",
+    ROOT / "build_ust_g3aj_residue_ball_smooth_graph_prym.py",
+    ROOT / "verify_ust_g3aj_residue_ball_smooth_graph_prym.py",
+    ROOT / "build_ust_g3ak_full_graph_incidence_normal_decomposition.py",
+    ROOT / "verify_ust_g3ak_full_graph_incidence_normal_decomposition.py",
+    ROOT / "build_ust_g3al_selected_carrier_response_schur.py",
+    ROOT / "verify_ust_g3al_selected_carrier_response_schur.py",
+    ROOT / "run_ust_g3al_selected_cayley_basis.py",
+    ROOT / "build_ust_g3al_selected_cayley_response_chunk.py",
+    ROOT / "build_ust_g3ap_selected_cayley_bounded_top_dimension.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_bounded_top_dimension.py",
+    ROOT / "build_ust_g3ap_selected_cayley_fiber2_module_top_dimension.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_module_top_dimension.py",
+    ROOT / "build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_qring_top_dimension.py",
+    ROOT / "build_ust_g3ap_selected_cayley_fiber2_predecessor_hilbert_hint.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_hilbert_hedge.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_hilbert_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_hilbert_certified.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_qring_hilbert_hedge.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_qring_hilbert44_hedge.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_qring_hilbert_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_qring_hilbert_certified.py",
+    ROOT / "build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint.py",
+    ROOT / "verify_ust_g3ap_positive_cox_regrading.py",
+    ROOT / "build_ust_g3ap_selected_cayley_ordinary_top_lower_bound.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_lower_bound.py",
+    ROOT / "UST_G3AP_SELECTED_CAYLEY_ORDINARY_TOP_LOWER_BOUND_THEOREM_v1.md",
+    ROOT / "UST_G3AP_SELECTED_CAYLEY_ORDINARY_TOP_DIMENSION_ONE_THEOREM_v1.md",
+    ROOT / "UST_G3AP_SELECTED_CAYLEY_TARGET_MACAULAY_SUBCAMPAIGN_LEMMA_v1.md",
+    ROOT / "UST_G3AP_ADAPTIVE_SOURCE_SCHEDULING_LEMMA_v1.md",
+    ROOT / "UST_G3AP_FULL_SOURCE_COMPLEMENT_REUSE_LEMMA_v1.md",
+    ROOT / "UST_G3AP_MONOTONE_FULL_SOURCE_RANK_SQUEEZE_LEMMA_v1.md",
+    ROOT / "UST_G3AP_GIVARO_MAP_PIVOT_REPLAY_CERTIFICATE_LEMMA_v1.md",
+    ROOT / "UST_G3AP_STRUCTURAL_SCC_MINOR_FACTORIZATION_LEMMA_v1.md",
+    ROOT / "build_ust_g3ap_selected_cayley_target_macaulay_matrix.py",
+    ROOT / "build_ust_g3ap_selected_cayley_target_macaulay_chunk.py",
+    ROOT / "build_ust_g3ap_selected_cayley_target_macaulay_range.py",
+    ROOT / "run_ust_g3ap_selected_cayley_target_macaulay_campaign.py",
+    ROOT / "run_ust_g3ap_selected_cayley_target_macaulay_ranges.py",
+    ROOT / "assemble_ust_g3ap_selected_cayley_target_macaulay_adaptive_campaign.py",
+    ROOT / "assemble_ust_g3ap_selected_cayley_target_macaulay_rank_subcampaign.py",
+    ROOT / "build_ust_g3ap_selected_cayley_target_macaulay_complement_chunk.py",
+    ROOT / "assemble_ust_g3ap_selected_cayley_target_macaulay_full_reuse.py",
+    ROOT / "assemble_ust_g3ap_selected_cayley_target_macaulay_incremental_full_submap.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_incremental_rank.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_incremental_givaro_map_rank.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_incremental_scc_rank.py",
+    ROOT / "run_ust_g3ap_selected_cayley_target_macaulay_full_complement.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_target_macaulay_full_reused.py",
+    ROOT / "build_ust_f1016_native_tools.py",
+    ROOT / "build_ust_f1016_native_tools.sh",
+    ROOT / "ust_f1016_sparse_column_minor.cpp",
+    ROOT / "ust_f1016_sparse_column_minor_greedy.cpp",
+    ROOT / "ust_f1016_sparse_column_minor_weighted.cpp",
+    ROOT / "ust_f1016_sparse_column_minor_weighted_fast.cpp",
+    ROOT / "ust_f1016_sparse_column_minor_weighted_free.cpp",
+    ROOT / "ust_f1016_sparse_column_minor_weighted_free_fast.cpp",
+    ROOT / "ust_f1016_sparse_rank.cpp",
+    ROOT / "ust_f1016_sparse_functional_check.cpp",
+    ROOT / "ust_f1016_givaro_map_pivot_replay.cpp",
+    ROOT / "ust_g3ap_minor_structural_decomposition.cpp",
+    ROOT / "state" / "ust_f1016_givaro_map_pivot_replay.selftest.packed-sms",
+    ROOT / "ust_f1016_sparse_minor.py",
+    ROOT / "run_ust_g3ap_selected_cayley_target_macaulay_minor.py",
+    ROOT / "extract_ust_g3ap_selected_cayley_target_macaulay_minor.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_target_macaulay_certified.py",
+    ROOT / "run_ust_g3ap_selected_cayley_target_macaulay_full_minor.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_base.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_full.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_full_from_incremental.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_target_macaulay_certified.py",
+    ROOT / "run_ust_g3ap_through_g3aq_closure.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_hedge.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_weighted_qslimgb_hedge.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_hedge.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_weighted_boxtrunc_hilbert_hedge.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_qslimgb_hedge.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_std_hedge.py",
+    ROOT / "verify_ust_g3ap_permuted_cox_box_routes.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_std_hedge.py",
+    ROOT / "build_ust_g3ap_hmajor_ltrunc_hilbert_hint.py",
+    ROOT / "verify_ust_g3ap_hmajor_ltrunc_hilbert_hint.py",
+    ROOT / "verify_ust_g3ap_hmajor_ltrunc_routes.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_certified.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_certified.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_honly_ltrunc_hedge.py",
+    ROOT / "verify_ust_g3ap_honly_ltrunc_routes.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_honly_ltrunc_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_honly_ltrunc_certified.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_honly_ltrunc_certified.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_honly_direct_ltrunc_hedge.py",
+    ROOT / "verify_ust_g3ap_honly_direct_ltrunc_routes.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_honly_direct_ltrunc_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_honly_direct_ltrunc_certified.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_honly_direct_ltrunc_certified.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_hilbert_hedge.py",
+    ROOT / "verify_ust_g3ap_hmajor_direct_ltrunc_routes.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_hedge.py",
+    ROOT / "verify_ust_g3ap_hmajor_direct_ltrunc_sba_routes.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_warm_hilbert_hedge.py",
+    ROOT / "verify_ust_g3ap_hmajor_direct_ltrunc_sba_warm_hilbert_route.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_warm_qslimgb_hedge.py",
+    ROOT / "verify_ust_g3ap_hmajor_direct_ltrunc_sba_warm_qslimgb_route.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_certified.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_certified.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_certified.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_certified.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_candidate.py",
+    ROOT / "certify_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_candidate.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_certified.py",
+    ROOT / "run_ust_g3ap_selected_cayley_fiber2_qslimgb_hedge.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_fiber2_qslimgb_top_dimension.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_module.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_qring.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_qslimgb.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_hilbert_certified.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_qring_hilbert_certified.py",
+    ROOT / "adopt_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_certified.py",
+    ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_dimension.py",
+    ROOT / "ust_cayley_fiber2_reduction.py",
+    ROOT / "build_ust_g3am_selected_cayley_fiber2_response_chunk.py",
+    ROOT / "verify_ust_g3am_selected_cayley_fiber2_response_chunk.py",
+    ROOT / "assemble_ust_g3am_selected_cayley_principal_response.py",
+    ROOT / "verify_ust_g3am_selected_cayley_principal_response.py",
+    ROOT / "UST_G3AM_SELECTED_CAYLEY_PRINCIPAL_RESPONSE_RANK33_THEOREM_v1.md",
+    ROOT / "run_ust_g3al_selected_cayley_principal_campaign.py",
+    ROOT / "run_ust_g3an_selected_cayley_extra_campaign.py",
+    ROOT / "assemble_ust_g3an_selected_cayley_full_response_schur.py",
+    ROOT / "verify_ust_g3an_selected_cayley_full_response_schur.py",
+    ROOT / "UST_G3AN_SELECTED_CAYLEY_FULL_RESPONSE_RANK122_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3an_selected_cayley_full_response_schur.packet.json",
+    ROOT / "state" / "ust_g3an_selected_cayley_full_response_schur.f101e6.u8",
+    ROOT / "build_ust_g3an_selected_cayley_schur_chunk.py",
+    ROOT / "run_ust_g3an_selected_cayley_schur_campaign.py",
+    ROOT / "assemble_ust_g3an_selected_cayley_direct_schur.py",
+    ROOT / "verify_ust_g3an_selected_cayley_direct_schur.py",
+    ROOT / "build_ust_g3aq_selected_cayley_relative_residue_promotion.py",
+    ROOT / "verify_ust_g3aq_selected_cayley_relative_residue_promotion.py",
+    ROOT / "UST_G3AQ_SELECTED_CAYLEY_CHARACTERISTIC_ZERO_RESPONSE_RANK122_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3aq_selected_cayley_relative_residue_promotion.packet.json",
+    ROOT / "UST_G3AR_SAME_MEMBER_BETA_C_SOURCE_AND_NORMAL_DECISION_CONTRACT_v1.md",
+    ROOT / "state" / "ust_g3ar_same_member_beta_c_source.schema.json",
+    ROOT / "state" / "ust_g3ar_beta_c_vector.schema.json",
+    ROOT / "state" / "ust_g3ar_normal_residual.schema.json",
+    ROOT / "state" / "ust_g3ar_zero_certificate.schema.json",
+    ROOT / "state" / "ust_g3ar_nonzero_certificate.schema.json",
+    ROOT / "state" / "ust_g3ar_candidate.template.json",
+    ROOT / "verify_ust_g3ar_same_member_beta_c_source.py",
+    ROOT / "build_ust_g3as_selected_finite_normal_operator.py",
+    ROOT / "verify_ust_g3as_selected_finite_normal_operator.py",
+    ROOT / "UST_G3AS_SELECTED_FINITE_NORMAL_OPERATOR_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3as_selected_finite_normal_operator.packet.json",
+    ROOT / "state" / "ust_g3as_selected_finite_normal_operator.f101e6.u8",
+    ROOT / "build_ust_g3at_polarized_primal_transport.py",
+    ROOT / "verify_ust_g3at_polarized_primal_transport.py",
+    ROOT / "UST_G3AT_POLARIZED_PRIMAL_ONLY_RANK_ONE_TRANSPORT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3at_polarized_primal_transport.packet.json",
+    ROOT / "build_ust_g3au_adjoint_normal_first_obstruction.py",
+    ROOT / "verify_ust_g3au_adjoint_normal_first_obstruction.py",
+    ROOT / "UST_G3AU_ADJOINT_NORMAL_FIRST_OBSTRUCTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3au_adjoint_normal_first_obstruction.packet.json",
+    ROOT / "build_ust_g3av_scale_free_b103_polarization.py",
+    ROOT / "verify_ust_g3av_scale_free_b103_polarization.py",
+    ROOT / "verify_ust_g3av_frontier_integration.py",
+    ROOT / "UST_G3AV_SCALE_FREE_B103_SOCLE_POLARIZATION_APPLICATION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3av_b103_source_lock.json",
+    ROOT / "state" / "ust_g3av_scale_free_b103_polarization.packet.json",
+    ROOT / "build_ust_g3aw_three_line_gram_meridian_reduction.py",
+    ROOT / "verify_ust_g3aw_three_line_gram_meridian_reduction.py",
+    ROOT / "UST_G3AW_THREE_LINE_GRAM_MERIDIAN_REDUCTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3aw_three_line_gram_meridian_reduction.packet.json",
+    ROOT / "build_ust_g3ax_selected_dvr_top_functional_lift.py",
+    ROOT / "verify_ust_g3ax_selected_dvr_top_functional_lift.py",
+    ROOT / "UST_G3AX_SELECTED_DVR_TOP_FUNCTIONAL_LIFT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ax_selected_dvr_top_functional_lift.packet.json",
+    ROOT / "build_ust_g3ay_relative_gram_jet_unit_screening.py",
+    ROOT / "verify_ust_g3ay_relative_gram_jet_unit_screening.py",
+    ROOT / "UST_G3AY_RELATIVE_GRAM_JET_AND_UNIT_SCREENING_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ay_relative_gram_jet_unit_screening.packet.json",
+    ROOT / "build_ust_g3az_finite_b103_gram_executor.py",
+    ROOT / "run_ust_g3az_finite_b103_gram_screen.py",
+    ROOT / "verify_ust_g3az_finite_b103_gram_executor.py",
+    ROOT / "UST_G3AZ_FINITE_B103_GRAM_EXECUTOR_AND_INPUT_ADMISSIBILITY_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3az" / "q79_eta9_full_vanishing_residue_basis.packet.json.blob",
+    ROOT / "state" / "ust_g3az_b103_coordinate_map.json",
+    ROOT / "state" / "ust_g3az_finite_transport_input.template.json",
+    ROOT / "state" / "ust_g3az_synthetic_transport_input.test-only.json",
+    ROOT / "state" / "ust_g3az_finite_b103_gram_executor.packet.json",
+    ROOT / "state" / "ust_g3az_synthetic_gram_screen.test-only.packet.json",
+    ROOT / "state" / "ust_g3az_synthetic_gram_screen.test-only.packet.sing",
+    ROOT / "state" / "ust_g3az_synthetic_gram_screen.test-only.packet.singular.out",
+    ROOT / "build_ust_g3ba_common_fiber_face_cover_gram.py",
+    ROOT / "run_ust_g3ba_common_fiber_face_cover_gram.py",
+    ROOT / "verify_ust_g3ba_common_fiber_face_cover_gram.py",
+    ROOT / "UST_G3BA_COMMON_FIBER_FACE_COVER_TOPOLOGICAL_GRAM_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3ba" / "q79_eta9_pairing_one_compact_dual_tube.packet.json.blob",
+    ROOT / "state" / "ust_g3ba_common_fiber_face_cover_gram.packet.json",
+    ROOT / "state" / "ust_g3ba_synthetic_complete_face_projection.test-only.json",
+    ROOT / "state" / "ust_g3ba_synthetic_gram.test-only.packet.json",
+    ROOT / "build_ust_g3bb_selected_gamma_unit_defect_target.py",
+    ROOT / "verify_ust_g3bb_selected_gamma_unit_defect_target.py",
+    ROOT / "UST_G3BB_SELECTED_GAMMA_PAIRING_ONE_TRANSGRESSION_TARGET_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3bb" / "q79_eta9_selected_gamma_product_chain_promotion.packet.json.blob",
+    ROOT / "evidence" / "ust_g3bb" / "q79_eta9_gamma_sheet_product_chain.packet.json.blob",
+    ROOT / "state" / "ust_g3bb_selected_gamma_transgression.template.json",
+    ROOT / "state" / "ust_g3bb_selected_gamma_unit_defect_target.packet.json",
+    ROOT / "build_ust_g3bc_pairing_one_bezout_dual.py",
+    ROOT / "run_ust_g3bc_pairing_one_bezout_dual.py",
+    ROOT / "verify_ust_g3bc_pairing_one_bezout_dual.py",
+    ROOT / "UST_G3BC_PAIRING_ONE_DUAL_REPLACEMENT_AND_BEZOUT_MERIDIAN_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3bc" / "q79_eta9_normalized_B_sweep_readout.packet.json.blob",
+    ROOT / "evidence" / "ust_g3bc" / "q79_eta9_B89_residue_meridian_extraction.packet.json.blob",
+    ROOT / "state" / "ust_g3bc_integral_affine_residue_payload.template.json",
+    ROOT / "state" / "ust_g3bc_synthetic_bezout_dual.test-only.json",
+    ROOT / "state" / "ust_g3bc_synthetic_bezout_dual.test-only.packet.json",
+    ROOT / "state" / "ust_g3bc_synthetic_certificates" / "m0.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bc_synthetic_certificates" / "m1.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bc_synthetic_certificates" / "m2.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bc_pairing_one_dual_replacement.packet.json",
+    ROOT / "build_ust_g3bd_sparse_deligne_quotient_decision.py",
+    ROOT / "run_ust_g3bd_sparse_deligne_quotient_decision.py",
+    ROOT / "verify_ust_g3bd_sparse_deligne_quotient_decision.py",
+    ROOT / "UST_G3BD_SPARSE_DELIGNE_QUOTIENT_DECISION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3bd_sparse_deligne_quotient.template.json",
+    ROOT / "state" / "ust_g3bd_sparse_deligne_quotient.packet.json",
+    ROOT / "state" / "ust_g3bd_zero_membership.test-only.json",
+    ROOT / "state" / "ust_g3bd_zero_membership.test-only.packet.json",
+    ROOT / "state" / "ust_g3bd_nonzero_annihilator.test-only.json",
+    ROOT / "state" / "ust_g3bd_nonzero_annihilator.test-only.packet.json",
+    ROOT / "state" / "ust_g3bd_nonzero_character.test-only.json",
+    ROOT / "state" / "ust_g3bd_nonzero_character.test-only.packet.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "p0.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "p1.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "zero-b-sweep.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "zero-decision.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "nonzero-b-sweep.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "nonzero-decision.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "nonzero-scope.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "character-b-sweep.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bd_synthetic_certificates" / "character-decision.test-only.certificate.json",
+    ROOT / "build_ust_g3be_delta_trivial_hs_elementary_transform_nogo.py",
+    ROOT / "verify_ust_g3be_delta_trivial_hs_elementary_transform_nogo.py",
+    ROOT / "UST_G3BE_DELTA_TRIVIAL_HS_ELEMENTARY_TRANSFORM_NOGO_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3be" / "q79_hs_prym_support_facts.v1.json.blob",
+    ROOT / "evidence" / "ust_g3be" / "phi_j_3.txt.blob",
+    ROOT / "state" / "ust_g3be_delta_trivial_hs_elementary_transform_nogo.packet.json",
+    ROOT / "build_ust_g3bf_algebraic_product_tube_index_four.py",
+    ROOT / "run_ust_g3bf_parity_first_pairing_one_dual.py",
+    ROOT / "verify_ust_g3bf_algebraic_product_tube_index_four.py",
+    ROOT / "UST_G3BF_ALGEBRAIC_PRODUCT_TUBE_INDEX_FOUR_AND_PARITY_FIRST_DELIGNE_REDUCTION_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3bf" / "q79_algebraic_product_tube_index_four_facts.v1.json.blob",
+    ROOT / "state" / "ust_g3bf_parity_first_payload.template.json",
+    ROOT / "state" / "ust_g3bf_parity_first_payload.test-only.json",
+    ROOT / "state" / "ust_g3bf_parity_first_payload.test-only.packet.json",
+    ROOT / "state" / "ust_g3bf_synthetic_certificates" / "root4.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bf_synthetic_certificates" / "m0.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bf_synthetic_certificates" / "m1.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bf_synthetic_certificates" / "m2.test-only.certificate.json",
+    ROOT / "state" / "ust_g3bf_algebraic_product_tube_index_four.packet.json",
+    ROOT / "build_ust_g3bg_root_primitive_projection.py",
+    ROOT / "verify_ust_g3bg_root_primitive_projection.py",
+    ROOT / "UST_G3BG_ROOT_TUBE_PRIMITIVE_PROJECTION_AND_EXPLICIT_PERIOD_SHIFT_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3bg" / "q79_root_primitive_projection_facts.v1.json.blob",
+    ROOT / "state" / "ust_g3bg_root_transport.template.json",
+    ROOT / "state" / "ust_g3bg_root_primitive_projection.packet.json",
+    ROOT / "extract_ust_g3bh_fixed_b89_root_containment_evidence.py",
+    ROOT / "build_ust_g3bh_fixed_b89_root_containment_nogo.py",
+    ROOT / "verify_ust_g3bh_fixed_b89_root_containment_nogo.py",
+    ROOT / "UST_G3BH_FIXED_B89_ROOT_GRAPH_DIRECT_CONTAINMENT_NOGO_AND_TRANSPORT_NECESSITY_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3bh" / "q79_fixed_b89_root_containment_screen.v1.json.blob",
+    ROOT / "state" / "ust_g3bh_fixed_b89_root_containment_nogo.packet.json",
+    ROOT / "build_ust_g3bu_h02_endpoint_determinant_crt_campaign.py",
+    ROOT / "verify_ust_g3bu_h02_endpoint_determinant_crt_campaign.py",
+    ROOT / "UST_G3BU_H02_ENDPOINT_DETERMINANT_CRT_CAMPAIGN_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3bu_h02_endpoint_determinant_crt_campaign.packet.json",
+    ROOT / "build_ust_g3bv_h02_endpoint_gf11_calibration.py",
+    ROOT / "verify_ust_g3bv_h02_endpoint_gf11_calibration.py",
+    ROOT / "UST_G3BV_H02_ENDPOINT_GF11_CALIBRATION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3bv_h02_endpoint_gf11_calibration.packet.json",
+    ROOT / "build_ust_g3bw_g3bi_h02_dm_woodbury_reduction.py",
+    ROOT / "verify_ust_g3bw_g3bi_h02_dm_woodbury_reduction.py",
+    ROOT / "UST_G3BW_SELECTED_G3BI_H02_DM_WOODBURY_REDUCTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json",
+    ROOT / "build_ust_g3bx_g3bi_h02_structural_intertwiner.py",
+    ROOT / "verify_ust_g3bx_g3bi_h02_structural_intertwiner.py",
+    ROOT / "UST_G3BX_SELECTED_G3BI_H02_STRUCTURAL_INTERTWINER_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3bx_g3bi_h02_structural_intertwiner.packet.json",
+    ROOT / "build_ust_g3by_g3bi_h02_exact_update_rank.py",
+    ROOT / "verify_ust_g3by_g3bi_h02_exact_update_rank.py",
+    ROOT / "UST_G3BY_SELECTED_G3BI_H02_EXACT_UPDATE_RANK_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3by_g3bi_h02_exact_update_rank.packet.json",
+    ROOT / "build_ust_g3bz_g3bi_h02_exact_path_update_rank.py",
+    ROOT / "verify_ust_g3bz_g3bi_h02_exact_path_update_rank.py",
+    ROOT / "UST_G3BZ_SELECTED_G3BI_H02_EXACT_AFFINE_PATH_UPDATE_RANK_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json",
+    ROOT / "build_ust_g3ca_selected_delta_correction_h02_source.py",
+    ROOT / "verify_ust_g3ca_selected_delta_correction_h02_source.py",
+    ROOT / "UST_G3CA_SELECTED_DELTA_CORRECTION_H02_SOURCE_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ca_selected_delta_correction_h02_source.packet.json",
+    ROOT / "build_ust_g3cb_b69_b103_h20_frame_intertwiner.py",
+    ROOT / "verify_ust_g3cb_b69_b103_h20_frame_intertwiner.py",
+    ROOT / "UST_G3CB_B69_B103_H20_FRAME_INTERTWINER_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cb_b69_b103_h20_frame_intertwiner.packet.json",
+    ROOT / "build_ust_g3cc_selected_source_terminal_b89_dualization.py",
+    ROOT / "verify_ust_g3cc_selected_source_terminal_b89_dualization.py",
+    ROOT / "UST_G3CC_SELECTED_SOURCE_TERMINAL_B89_DUALIZATION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cc_selected_source_terminal_b89_dualization.packet.json",
+    ROOT / "build_ust_g3cd_correction_direct_source_blocks.py",
+    ROOT / "run_ust_g3cd_correction_full_operator.py",
+    ROOT / "assemble_ust_g3cd_correction_full_operator.py",
+    ROOT / "verify_ust_g3cd_correction_full_affine_operator.py",
+    ROOT / "UST_G3CD_CORRECTION_FULL_AFFINE_GOOD_FIBER_OPERATOR_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cd_correction_full_affine_operator.packet.json",
+    ROOT / "build_ust_g3ce_hodge_schur_affine_reduction.py",
+    ROOT / "verify_ust_g3ce_hodge_schur_affine_reduction.py",
+    ROOT / "UST_G3CE_HODGE_SCHUR_AFFINE_REDUCTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ce_hodge_schur_affine_reduction.packet.json",
+    ROOT / "build_ust_g3cf_transcendental_arc_schur_gauge.py",
+    ROOT / "verify_ust_g3cf_transcendental_arc_schur_gauge.py",
+    ROOT / "UST_G3CF_TRANSCENDENTAL_ARC_SCHUR_GAUGE_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cf_transcendental_arc_schur_gauge.packet.json",
+    ROOT / "build_ust_g3cg_schur_riccati_transport_cutset.py",
+    ROOT / "verify_ust_g3cg_schur_riccati_transport_cutset.py",
+    ROOT / "UST_G3CG_SCHUR_RICCATI_TRANSPORT_CUTSET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cg_schur_riccati_transport_cutset.packet.json",
+    ROOT / "build_ust_g3ch_cancelled_h02_riccati_source_jet.py",
+    ROOT / "verify_ust_g3ch_cancelled_h02_riccati_source_jet.py",
+    ROOT / "UST_G3CH_CANCELLED_H02_RICCATI_SOURCE_JET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ch_cancelled_h02_riccati_source_jet.packet.json",
+    ROOT / "build_ust_g3ci_selected_source_family_jet.py",
+    ROOT / "verify_ust_g3ci_selected_source_family_jet.py",
+    ROOT / "UST_G3CI_SELECTED_SOURCE_FAMILY_JET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ci_selected_source_family_jet.packet.json",
+    ROOT / "build_ust_g3cj_selected_source_cyclic_full_carrier.py",
+    ROOT / "verify_ust_g3cj_selected_source_cyclic_full_carrier.py",
+    ROOT / "UST_G3CJ_SELECTED_SOURCE_CYCLIC_FULL_CARRIER_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cj_selected_source_cyclic_full_carrier.packet.json",
+    ROOT / "build_ust_g3ck_rational_source_cyclic_open_arc_gauge.py",
+    ROOT / "verify_ust_g3ck_rational_source_cyclic_open_arc_gauge.py",
+    ROOT / "UST_G3CK_RATIONAL_SOURCE_CYCLIC_OPEN_ARC_GAUGE_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ck_rational_source_cyclic_open_arc_gauge.packet.json",
+    ROOT / "build_ust_g3cl_hybrid_full_path_gauge_atlas.py",
+    ROOT / "verify_ust_g3cl_hybrid_full_path_gauge_atlas.py",
+    ROOT / "UST_G3CL_HYBRID_FULL_PATH_GAUGE_ATLAS_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cl_hybrid_full_path_gauge_atlas.packet.json",
+    ROOT / "build_ust_g3cm_matrix_free_selected_state_action.py",
+    ROOT / "verify_ust_g3cm_matrix_free_selected_state_action.py",
+    ROOT / "UST_G3CM_MATRIX_FREE_SELECTED_STATE_ACTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cm_matrix_free_selected_state_action.packet.json",
+    ROOT / "build_ust_g3cn_pole_six_family_transform_first_jet.py",
+    ROOT / "verify_ust_g3cn_pole_six_family_transform_first_jet.py",
+    ROOT / "UST_G3CN_POLE_SIX_FAMILY_TRANSFORM_FIRST_JET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cn_pole_six_family_transform_first_jet.packet.json",
+    ROOT / "build_ust_g3co_pole_six_automatic_open_arc_exactness.py",
+    ROOT / "verify_ust_g3co_pole_six_automatic_open_arc_exactness.py",
+    ROOT / "UST_G3CO_POLE_SIX_AUTOMATIC_OPEN_ARC_EXACTNESS_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3co_pole_six_automatic_open_arc_exactness.packet.json",
+    ROOT / "build_ust_g3cp_smooth_start_removable_connection.py",
+    ROOT / "verify_ust_g3cp_smooth_start_removable_connection.py",
+    ROOT / "UST_G3CP_SMOOTH_START_REMOVABLE_GAUSS_MANIN_CONNECTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cp_smooth_start_removable_connection.packet.json",
+    ROOT / "state" / "ust_g3cp_start_limit_majorant.schema.json",
+    ROOT / "build_ust_g3cq_selected_source_transform_defect.py",
+    ROOT / "verify_ust_g3cq_selected_source_transform_defect.py",
+    ROOT / "UST_G3CQ_SELECTED_SOURCE_TRANSFORM_DEFECT_CORRECTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cq_selected_source_transform_defect.packet.json",
+    ROOT / "run_ust_g3cr_selected_source_recursive_first_jet.py",
+    ROOT / "assemble_ust_g3cr_selected_source_recursive_first_jet.py",
+    ROOT / "verify_ust_g3cr_selected_source_recursive_first_jet.py",
+    ROOT / "UST_G3CR_SELECTED_SOURCE_RECURSIVE_FIRST_JET_CORRECTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cr_selected_source_recursive_first_jet.packet.json",
+    ROOT / "build_ust_g3cs_selected_pole_six_preimage_first_jet.py",
+    ROOT / "verify_ust_g3cs_selected_pole_six_preimage_first_jet.py",
+    ROOT / "UST_G3CS_SELECTED_POLE_SIX_PREIMAGE_FIRST_JET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cs_selected_pole_six_preimage_first_jet.packet.json",
+    ROOT / "build_ust_g3ct_selected_connection_action_first_jet.py",
+    ROOT / "verify_ust_g3ct_selected_connection_action_first_jet.py",
+    ROOT / "UST_G3CT_SELECTED_CONNECTION_ACTION_FIRST_JET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ct_selected_connection_action_first_jet.packet.json",
+    ROOT / "build_ust_g3cu_h11_exact_path_update_rank.py",
+    ROOT / "verify_ust_g3cu_h11_exact_path_update_rank.py",
+    ROOT / "UST_G3CU_SELECTED_H11_EXACT_AFFINE_PATH_UPDATE_RANK_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cu_h11_exact_path_update_rank.packet.json",
+    ROOT / "build_ust_g3cv_h11_fraction_free_path_woodbury.py",
+    ROOT / "verify_ust_g3cv_h11_fraction_free_path_woodbury.py",
+    ROOT / "UST_G3CV_SELECTED_H11_FRACTION_FREE_PATH_WOODBURY_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json",
+    ROOT / "build_ust_g3cw_h11_split_place_base_action.py",
+    ROOT / "verify_ust_g3cw_h11_split_place_base_action.py",
+    ROOT / "UST_G3CW_SELECTED_H11_SPLIT_PLACE_BASE_ACTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cw_h11_split_place_base_action.packet.json",
+    ROOT / "build_ust_g3cx_h11_dm_source_observation_corridor.py",
+    ROOT / "verify_ust_g3cx_h11_dm_source_observation_corridor.py",
+    ROOT / "UST_G3CX_H11_DM_SOURCE_OBSERVATION_CORRIDOR_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cx_h11_dm_source_observation_corridor.packet.json",
+    ROOT / "build_ust_g3cy_h11_exact_base_resolvent_coupling_rank.py",
+    ROOT / "verify_ust_g3cy_h11_exact_base_resolvent_coupling_rank.py",
+    ROOT / "UST_G3CY_H11_EXACT_BASE_RESOLVENT_COUPLING_RANK_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cy_h11_exact_base_resolvent_coupling_rank.packet.json",
+    ROOT / "build_ust_g3cz_h11_core221_archimedean_action.py",
+    ROOT / "verify_ust_g3cz_h11_core221_archimedean_action.py",
+    ROOT / "UST_G3CZ_H11_CORE221_ARCHIMEDEAN_ACTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3cz_h11_core221_archimedean_action.packet.json",
+    ROOT / "build_ust_g3da_h11_archimedean_reduced_coupling.py",
+    ROOT / "verify_ust_g3da_h11_archimedean_reduced_coupling.py",
+    ROOT / "UST_G3DA_H11_ARCHIMEDEAN_REDUCED_COUPLING_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3da_h11_archimedean_reduced_coupling.packet.json",
+    ROOT / "build_ust_g3db_h11_selected_710_path_kernel.py",
+    ROOT / "verify_ust_g3db_h11_selected_710_path_kernel.py",
+    ROOT / "UST_G3DB_H11_SELECTED_710_PATH_KERNEL_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3db_h11_selected_710_path_kernel.packet.json",
+    ROOT / "build_ust_g3dc_h11_archimedean_affine_source_action.py",
+    ROOT / "verify_ust_g3dc_h11_archimedean_affine_source_action.py",
+    ROOT / "UST_G3DC_H11_ARCHIMEDEAN_AFFINE_SOURCE_ACTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dc_h11_archimedean_affine_source_action.packet.json",
+    ROOT / "build_ust_g3dd_h11_selected_710_affine_rhs.py",
+    ROOT / "verify_ust_g3dd_h11_selected_710_affine_rhs.py",
+    ROOT / "UST_G3DD_H11_SELECTED_710_AFFINE_RHS_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dd_h11_selected_710_affine_rhs.packet.json",
+    ROOT / "build_ust_g3de_h02_fraction_free_path_woodbury.py",
+    ROOT / "verify_ust_g3de_h02_fraction_free_path_woodbury.py",
+    ROOT / "UST_G3DE_H02_FRACTION_FREE_PATH_WOODBURY_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json",
+    ROOT / "build_ust_g3df_h02_dm_source_observation_corridor.py",
+    ROOT / "verify_ust_g3df_h02_dm_source_observation_corridor.py",
+    ROOT / "UST_G3DF_H02_DM_SOURCE_OBSERVATION_CORRIDOR_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3df_h02_dm_source_observation_corridor.packet.json",
+    ROOT / "build_ust_g3dg_h02_split_place_full_coupling_rank.py",
+    ROOT / "verify_ust_g3dg_h02_split_place_full_coupling_rank.py",
+    ROOT / "UST_G3DG_H02_SPLIT_PLACE_COUPLING_RANK_INTERVAL_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dg_h02_split_place_full_coupling_rank.packet.json",
+    ROOT / "build_ust_g3dh_h02_all_split_roots_coupling_rank.py",
+    ROOT / "verify_ust_g3dh_h02_all_split_roots_coupling_rank.py",
+    ROOT / "UST_G3DH_H02_ALL_SPLIT_ROOTS_COUPLING_RANK_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dh_h02_all_split_roots_coupling_rank.packet.json",
+    ROOT / "build_ust_g3di_h02_split_algebra_kernel_relations.py",
+    ROOT / "verify_ust_g3di_h02_split_algebra_kernel_relations.py",
+    ROOT / "UST_G3DI_H02_SPLIT_ALGEBRA_KERNEL_RELATIONS_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json",
+    ROOT / "ust_split_prime_sparse_rank.cpp",
+    ROOT / "state" / "ust_split_prime_sparse_rank",
+    ROOT / "ust_split_prime_sparse_kernel.cpp",
+    ROOT / "state" / "ust_split_prime_sparse_kernel",
+    ROOT / "build_ust_g3dj_h02_second_prime_kernel_relations.py",
+    ROOT / "verify_ust_g3dj_h02_second_prime_kernel_relations.py",
+    ROOT / "UST_G3DJ_H02_SECOND_PRIME_KERNEL_RELATIONS_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dj_h02_second_prime_kernel_relations.packet.json",
+    ROOT / "build_ust_g3dk_h02_third_prime_kernel_relations.py",
+    ROOT / "state" / "ust_g3dk_h02_third_prime_kernel_relations.packet.json",
+    ROOT / "build_ust_g3dl_h02_two_prime_reconstruction_holdout.py",
+    ROOT / "UST_G3DL_H02_TWO_PRIME_RECONSTRUCTION_HOLDOUT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dl_h02_two_prime_reconstruction_holdout.packet.json",
+    ROOT / "build_ust_g3dm_h02_fourth_prime_holdout_kernel.py",
+    ROOT / "state" / "ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json",
+    ROOT / "build_ust_g3dn_h02_three_prime_reconstruction_holdout.py",
+    ROOT / "state" / "ust_g3dn_h02_three_prime_reconstruction_holdout.packet.json",
+    ROOT / "build_ust_g3do_h02_fifth_prime_holdout_kernel.py",
+    ROOT / "state" / "ust_g3do_h02_fifth_prime_holdout_kernel.packet.json",
+    ROOT / "build_ust_g3dp_h02_four_prime_reconstruction_holdout.py",
+    ROOT / "UST_G3DP_H02_FOUR_PRIME_RECONSTRUCTION_HOLDOUT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dp_h02_four_prime_reconstruction_holdout.packet.json",
+    ROOT / "build_ust_g3dq_h02_sixth_prime_holdout_kernel.py",
+    ROOT / "state" / "ust_g3dq_h02_sixth_prime_holdout_kernel.packet.json",
+    ROOT / "ust_h02_u128_reconstruction_audit.cpp",
+    ROOT / "state" / "ust_h02_u128_reconstruction_audit",
+    ROOT / "build_ust_g3dr_h02_five_prime_reconstruction_holdout.py",
+    ROOT / "UST_G3DR_H02_FIVE_PRIME_RECONSTRUCTION_HOLDOUT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dr_h02_five_prime_reconstruction_holdout.packet.json",
+    ROOT / "build_ust_g3ds_h02_seventh_prime_holdout_kernel.py",
+    ROOT / "state" / "ust_g3ds_h02_seventh_prime_holdout_kernel.packet.json",
+    ROOT / "build_ust_g3dt_h02_six_prime_reconstruction_holdout.py",
+    ROOT / "state" / "ust_g3dt_h02_six_prime_reconstruction_holdout.packet.json",
+    ROOT / "build_ust_g3du_h02_eighth_prime_holdout_kernel.py",
+    ROOT / "state" / "ust_g3du_h02_eighth_prime_holdout_kernel.packet.json",
+    ROOT / "build_ust_g3dv_h02_seven_prime_reconstruction_holdout.py",
+    ROOT / "UST_G3DV_H02_FINAL_EIGHT_PRIME_HOLDOUT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dv_h02_seven_prime_reconstruction_holdout.packet.json",
+    ROOT / "build_ust_g3dw_h02_kernel_component_triangularity.py",
+    ROOT / "UST_G3DW_H02_KERNEL_COMPONENT_TRIANGULARITY_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dw_h02_kernel_component_triangularity.packet.json",
+    ROOT / "ust_h02_incremental_prefix_matching.cpp",
+    ROOT / "state" / "ust_h02_incremental_prefix_matching",
+    ROOT / "build_ust_g3dx_h02_prefix_structural_gap_localization.py",
+    ROOT / "UST_G3DX_H02_PREFIX_STRUCTURAL_GAP_LOCALIZATION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dx_h02_prefix_structural_gap_localization.packet.json",
+    ROOT / "build_ust_g3dy_h02_branch_sextic_square_source.py",
+    ROOT / "verify_ust_g3dy_h02_branch_sextic_square_source.py",
+    ROOT / "UST_G3DY_H02_BRANCH_SEXTIC_SQUARE_SOURCE_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dy_h02_branch_sextic_square_source.packet.json",
+    ROOT / "build_ust_g3dz_h02_component0_cayley_lift.py",
+    ROOT / "verify_ust_g3dz_h02_component0_cayley_lift.py",
+    ROOT / "UST_G3DZ_H02_COMPONENT0_CAYLEY_LIFT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3dz_h02_component0_cayley_lift.packet.json",
+    ROOT / "ust_number_field_sparse_rank.py",
+    ROOT / "build_ust_g3ea_h02_component9_gradient_elliptic_lift.py",
+    ROOT / "verify_ust_g3ea_h02_component9_gradient_elliptic_lift.py",
+    ROOT / "UST_G3EA_H02_COMPONENT9_GRADIENT_ELLIPTIC_LIFT_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3ea_h02_component9_gradient_elliptic_lift.packet.json",
+    ROOT / "build_ust_g3eb_h02_component12_cohomological_source_cutset.py",
+    ROOT / "build_ust_g3eb_h02_component12_two_level_cayley_lift.py",
+    ROOT / "probe_ust_g3eb_component12_boundary_koszul.py",
+    ROOT / "probe_ust_g3eb_general_two_level_source.py",
+    ROOT / "probe_ust_g3eb_restricted_cohomological_presentation.py",
+    ROOT / "UST_G3EB_H02_COMPONENT12_COHOMOLOGICAL_SOURCE_CUTSET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3eb_a_h02_component12_simple_two_level_nogo.packet.json",
+    ROOT / "state" / "ust_g3eb_h02_component12_cohomological_source_cutset.packet.json",
+    ROOT / "build_ust_g3ec_h02_component12_unit_pivot_reduction.py",
+    ROOT / "probe_ust_g3ec_component12_padic_kernel.py",
+    ROOT / "build_ust_g3ed_h02_component12_unit_saturation.py",
+    ROOT / "probe_ust_g3ed_component12_reduced_padic_kernel.py",
+    ROOT / "probe_ust_g3ee_component12_fraction_free_elimination.py",
+    ROOT / "probe_ust_g3ef_component12_six_embedding_lattice.py",
+    ROOT / "build_ust_g3eg_h02_component12_adaptive_exactness_cutset.py",
+    ROOT / "verify_ust_g3eg_h02_component12_adaptive_exactness_cutset.py",
+    ROOT / "UST_G3EG_H02_COMPONENT12_ADAPTIVE_EXACTNESS_CUTSET_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3eg_h02_component12_adaptive_exactness_cutset.packet.json",
+    ROOT / "ust_fplll_backend.py",
+    ROOT / "probe_ust_g3ei_component12_warm_span_target_lattice.py",
+    ROOT / "evidence" / "ust_g3ei" / "H02.component12.warm_span_target_lattice.json.gz",
+    ROOT / "build_ust_g3ej_h02_component12_exact_kernel_promotion.py",
+    ROOT / "verify_ust_g3ej_h02_component12_exact_kernel_promotion.py",
+    ROOT / "UST_G3EJ_H02_COMPONENT12_EXACT_KERNEL_PROMOTION_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3ej" / "H02.component12.exact_kernel_vectors.json.gz",
+    ROOT / "state" / "ust_g3ej_h02_component12_exact_kernel_promotion.packet.json",
+    ROOT / "build_ust_g3fv_selected_cox_hilbert_burch_source.py",
+    ROOT / "verify_ust_g3fv_selected_cox_hilbert_burch_source.py",
+    ROOT / "UST_G3FV_SELECTED_COX_HILBERT_BURCH_SOURCE_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3fv" / "selected_cox_hilbert_burch_source.json",
+    ROOT / "build_ust_g3fw_component20_apolar_selection_separation.py",
+    ROOT / "verify_ust_g3fw_component20_apolar_selection_separation.py",
+    ROOT / "UST_G3FW_H02_COMPONENT20_APOLAR_SELECTION_SEPARATION_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3fw" / "H02.component20.apolar_selection_separation.json",
+    ROOT / "build_ust_g3fx_component20_adjugate_normal_homotopy.py",
+    ROOT / "verify_ust_g3fx_component20_adjugate_normal_homotopy.py",
+    ROOT / "UST_G3FX_H02_COMPONENT20_ADJUGATE_NORMAL_HOMOTOPY_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3fx" / "H02.component20.adjugate_normal_homotopy.json",
+    ROOT / "build_ust_g3fy_pdelta_socle_kernel_source.py",
+    ROOT / "verify_ust_g3fy_pdelta_socle_kernel_source.py",
+    ROOT / "UST_G3FY_PDELTA_SOCLE_KERNEL_SOURCE_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3fy" / "H02.component20.pdelta_socle_kernel_source.json",
+    ROOT / "build_ust_g3fz_component20_second_jet_o8_source.py",
+    ROOT / "verify_ust_g3fz_component20_second_jet_o8_source.py",
+    ROOT / "UST_G3FZ_H02_COMPONENT20_SECOND_JET_O8_SOURCE_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3fz" / "H02.component20.second_jet_o8_source.json",
+    ROOT / "build_ust_g3ga_component20_second_jet_qgamma_promotion.py",
+    ROOT / "evidence" / "ust_g3ga" / "H02.component20.second_jet_qgamma_promotion.json",
+    ROOT / "build_ust_g3gb_extra_root_second_jet_height_campaign.py",
+    ROOT / "evidence" / "ust_g3gb" / "H02.component20.extra_root_second_jet_height.json",
+    ROOT / "build_ust_g3gc_adaptive_root_second_jet_height_extension.py",
+    ROOT / "evidence" / "ust_g3gc" / "H02.component20.adaptive_root_second_jet_height.json",
+    ROOT / "build_ust_g3gd_final_root_second_jet_height_extension.py",
+    ROOT / "evidence" / "ust_g3gd" / "H02.component20.final_root_second_jet_height.json",
+    ROOT / "build_ust_g3ge_component20_eleven_prime_second_jet_height_audit.py",
+    ROOT / "verify_ust_g3ge_component20_eleven_prime_second_jet_height_audit.py",
+    ROOT / "UST_G3GE_H02_COMPONENT20_ELEVEN_PRIME_SECOND_JET_HEIGHT_AUDIT_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3ge" / "H02.component20.eleven_prime_second_jet_height_audit.json",
+    ROOT / "build_ust_g3gf_h02_global_rank_profile_correction.py",
+    ROOT / "verify_ust_g3gf_h02_global_rank_profile_correction.py",
+    ROOT / "UST_G3GF_H02_GLOBAL_RANK_PROFILE_CORRECTION_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3gf" / "H02.global_rank_profile_correction.json",
+    ROOT / "build_ust_g3gg_component20_second_jet_fixed_minor_source.py",
+    ROOT / "verify_ust_g3gg_component20_second_jet_fixed_minor_source.py",
+    ROOT / "UST_G3GG_H02_COMPONENT20_SECOND_JET_FIXED_MINOR_SOURCE_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3gg" / "H02.component20.second_jet_fixed_minor_source.json",
+    ROOT / "build_ust_g3gh_h02_rank_jump_component_localization.py",
+    ROOT / "verify_ust_g3gh_h02_rank_jump_component_localization.py",
+    ROOT / "UST_G3GH_H02_RANK_JUMP_COMPONENT_LOCALIZATION_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3gh" / "H02.rank_jump_component_localization.json",
+    ROOT / "build_ust_g3gm_prime_arithmetic_compatibility_correction.py",
+    ROOT / "verify_ust_g3gm_prime_arithmetic_compatibility_correction.py",
+    ROOT / "UST_G3GM_PRIME_ARITHMETIC_COMPATIBILITY_CORRECTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3gm_prime_arithmetic_compatibility_correction.packet.json",
+    ROOT / "evidence" / "ust_g3gm" / "H02.prime_arithmetic_compatibility_correction.npz",
+    ROOT / "build_ust_g3gi_full_catalecticant_source_exclusion.py",
+    ROOT / "verify_ust_g3gi_full_catalecticant_source_exclusion.py",
+    ROOT / "UST_G3GI_H02_COMPONENT20_FULL_CATALECTICANT_SOURCE_EXCLUSION_THEOREM_v1.md",
+    ROOT / "evidence" / "ust_g3gi" / "H02.component20.full_catalecticant_source_exclusion.json",
+    ROOT / "calculations" / "ust_g3gi_full_catalecticant_campaign" / "aggregate_results.py",
+    ROOT / "calculations" / "ust_g3gi_full_catalecticant_campaign" / "kernel_execution.json",
+    ROOT / "calculations" / "ust_g3gi_full_catalecticant_campaign" / "outputs" / "campaign.json",
+    ROOT / "build_ust_g3gj_k6_h02_source_injection.py",
+    ROOT / "verify_ust_g3gj_k6_h02_source_injection.py",
+    ROOT / "UST_G3GJ_H02_COMPONENT20_K6_SOURCE_INJECTION_THEOREM_v1.md",
+    ROOT / "state" / "ust_g3gj_k6_h02_source_injection.packet.json",
+    ROOT / "evidence" / "ust_g3gj" / "H02.p21817.g5.K6_C_section_source.npz",
+    ROOT / "evidence" / "ust_g3gj" / "H02.p21817.g5.K6_C_section_source.rhs.bin",
+    ROOT / "evidence" / "ust_g3gj" / "H02.p21817.g5.K6_C_section_source.solution.bin",
+    ROOT / "evidence" / "ust_g3gj" / "H02.p21817.g5.K6_C_section_source.solve.log",
+    ROOT / "evidence" / "ust_g3gj" / "H02.p21817.g5.K6_C_section_source.quotient.npy",
+    ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json",
+    ROOT / "state" / "ust_g3al_coefficient_schur.f101e6.u8",
+    ROOT / "state" / "ust_g3al_selected_cayley_basis.sing",
+    ROOT / "build_ust_g3ao_elliptic_bidual_identity.py",
+    ROOT / "verify_ust_g3ao_elliptic_bidual_identity.py",
+    ROOT / "run_ust_g3ao_selected_cayley_toric_regularity.py",
+    ROOT / "verify_ust_g3ao_selected_cayley_toric_regularity.py",
+    ROOT / "state" / "ust_g3ao_elliptic_bidual_identity.packet.json",
+    ROOT / "state" / "ust_g3ao_selected_cayley_toric_regularity.packet.json",
+    LOCK_PATH,
+    FRONTIER_PATH,
+)
+
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+WINDOWS_ABSOLUTE = re.compile(
+    r"[A-Za-z]:\\(?:Users|Windows|Program Files|ProgramData|Temp)\\",
+    re.IGNORECASE,
+)
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_local_packet_hashes() -> int:
+    """Fail before theorem execution when a local packet lock is stale."""
+    checked = 0
+
+    def visit(node: object, owner: Path) -> None:
+        nonlocal checked
+        if isinstance(node, dict):
+            relative = node.get("path")
+            expected = node.get("sha256")
+            if isinstance(relative, str) and isinstance(expected, str):
+                dependency = ROOT / relative
+                if dependency.is_file():
+                    require(
+                        sha256(dependency) == expected,
+                        f"stale local packet hash in {owner.relative_to(ROOT)}: {relative}",
+                    )
+                    checked += 1
+            for value in node.values():
+                visit(value, owner)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value, owner)
+
+    for packet_path in sorted((ROOT / "state").glob("*.json")):
+        visit(load_json(packet_path), packet_path)
+
+    # G3U conforms to the generic G3D-v2 schema, where the source lock is a
+    # bare source_hash rather than a {path, sha256} dependency record.
+    g3u = load_json(ROOT / "state" / "ust_g3u_hidden_direct_stable_factor.packet.json")
+    g3t_path = ROOT / "state" / "ust_g3t_support_wide_slope_balanced_qutrit.packet.json"
+    require(g3u["source_hash"] == sha256(g3t_path), "stale G3U source_hash lock")
+    checked += 1
+    return checked
+
+
+def verify_dependency_graph(gates: list[dict]) -> None:
+    gate_ids = {gate["id"] for gate in gates}
+    require(len(gate_ids) == len(gates), "gate ids must be unique")
+    graph = {
+        gate["id"]: [item for item in gate["depends_on"] if item in gate_ids]
+        for gate in gates
+    }
+    temporary: set[str] = set()
+    permanent: set[str] = set()
+
+    def visit(node: str) -> None:
+        require(node not in temporary, f"dependency cycle at {node}")
+        if node in permanent:
+            return
+        temporary.add(node)
+        for dependency in graph[node]:
+            visit(dependency)
+        temporary.remove(node)
+        permanent.add(node)
+
+    for gate_id in graph:
+        visit(gate_id)
+
+
+def main() -> None:
+    for path in REQUIRED_FILES:
+        require(path.is_file(), f"missing required file: {path.relative_to(ROOT)}")
+
+    lock = load_json(LOCK_PATH)
+    frontier = load_json(FRONTIER_PATH)
+    local_hash_count = verify_local_packet_hashes()
+    print(f"local packet dependency locks: PASS ({local_hash_count})")
+
+    require(lock["schema"] == "mtt.unified-source.upstream-lock.v1", "bad lock schema")
+    require(frontier["schema"] == "mtt.unified-source.frontier.v1", "bad frontier schema")
+    model_hash = lock["kernel_model"]["state_sha256"]
+    require(bool(HEX64.fullmatch(model_hash)), "invalid Kernel model hash")
+    require(frontier["kernel_model_sha256"] == model_hash, "Kernel model locks disagree")
+
+    repository_ids = [item["id"] for item in lock["repositories"]]
+    require(len(repository_ids) == len(set(repository_ids)), "repository ids must be unique")
+    for repository in lock["repositories"]:
+        require(bool(HEX40.fullmatch(repository["commit"])), f"bad commit for {repository['id']}")
+        for source in repository["sources"]:
+            require(bool(HEX40.fullmatch(source["git_blob"])), f"bad blob for {source['path']}")
+            if "sha256" in source:
+                require(bool(HEX64.fullmatch(source["sha256"])), f"bad sha256 for {source['path']}")
+            if "git_blob_sha256" in source:
+                require(bool(HEX64.fullmatch(source["git_blob_sha256"])), f"bad blob-byte sha256 for {source['path']}")
+
+    authority_ids = [item["id"] for item in lock["authorities"]]
+    require(len(authority_ids) == len(set(authority_ids)), "authority ids must be unique")
+    require("A01" in authority_ids and "A13" in authority_ids, "missing downstream authority locks")
+
+    hypothesis = frontier["hypothesis"]
+    require(hypothesis["id"] == "UST.H1", "unexpected hypothesis id")
+    require(hypothesis["state"] == "HYPOTHESIS", "hypothesis was silently promoted")
+    require(hypothesis["physical_promotion"] is False, "physical promotion must remain false")
+    require(
+        "25-block" in frontier["frontier_current"]
+        or "rank-102 mask" in frontier["frontier_current"],
+        "current rank-102 frontier missing",
+    )
+    require(
+        "physical T_fin" in frontier["frontier_current"]
+        or "T_fin execution" in frontier["frontier_current"],
+        "current finite-map boundary missing",
+    )
+
+    verify_dependency_graph(frontier["gates"])
+    gate_states = {gate["id"]: gate["state"] for gate in frontier["gates"]}
+    require(gate_states["UST.G0"] == "closed", "contract gate must be closed")
+    require(gate_states["UST.G1"] == "closed_exact_two_presentation_classification", "G1 classification state")
+    require(gate_states["UST.G1E"] == "partial_exact_embedding_reverse_physical_representability_open", "G1E representability state")
+    require(gate_states["UST.G2"] == "closed_exact_universal_physical_K_open", "G2 theorem state")
+    require(gate_states["UST.G2P"] == "closed_exact_symbolic_endpoint_coefficients_open", "G2P symbolic residual state")
+    require(gate_states["UST.G3A"] == "closed_exact_contract_zero_current_promotable_candidates", "G3A ingestion state")
+    require(gate_states["UST.G3B"] == "closed_exact_common_scale_physical_normalization_open", "G3B scale state")
+    require(gate_states["UST.G3C"] == "closed_exact_criterion_physical_target_metric_open", "G3C target metric state")
+    require(gate_states["UST.G3D"] == "closed_exact_universal_criterion_physical_spectral_objects_open", "G3D common chamber state")
+    require(gate_states["UST.G3E"] == "closed_exact_local_bfield_wit_reduction_two_fiber_defect_global_w9_open", "G3E B-field WIT state")
+    require(gate_states["UST.G3F"] == "closed_exact_source_u3_stability_and_he_physical_w9_open", "G3F source stability state")
+    require(
+        gate_states["UST.G3G"]
+        == "closed_exact_fiberwise_stable_recombination_ordinary_determinant_nogo_global_projective_descent_open",
+        "G3G stable recombination state",
+    )
+    require(
+        gate_states["UST.G3H"]
+        == "closed_exact_fiber_torsion_line_smooth_corank_one_slice_and_generator_reduction_global_chain_maps_open",
+        "G3H qutrit determinant and descent state",
+    )
+    require(
+        gate_states["UST.G3I"]
+        == "closed_exact_forward_ext1_one_reverse_ext1_nonzero_equivariant_reverse_selection_open",
+        "G3I bidirectional Ext state",
+    )
+    require(
+        gate_states["UST.G3J"]
+        == "closed_exact_reverse_ext_dimension_nine_clock_decomposition_reverse_bundle_route_excluded",
+        "G3J reverse Ext representation/no-go state",
+    )
+    require(
+        gate_states["UST.G3K"]
+        == "closed_exact_ordinary_projective_coefficient_nogo_derived_yoneda_route_forced",
+        "G3K derived Schur/Yoneda state",
+    )
+    require(
+        gate_states["UST.G3L"]
+        == "closed_exact_rank_four_yoneda_shadow_five_dimensional_normal_block_open",
+        "G3L monad/Yoneda rank-four state",
+    )
+    require(
+        gate_states["UST.G3M"]
+        == "closed_exact_clock_fixed_domain_one_connecting_column_open",
+        "G3M conjugate-clock fixed-column state",
+    )
+    require(
+        gate_states["UST.G3N"]
+        == "closed_exact_invariant_yoneda_column_nonzero_locked_bidirectional_hs_route_retired",
+        "G3N nonzero Yoneda-column state",
+    )
+    require(
+        gate_states["UST.G3O"]
+        == "closed_exact_ambient_atiyah_tensor_hidden_mixed_sign_nogo",
+        "G3O same-object qutrit Chern cutset state",
+    )
+    require(
+        gate_states["UST.G3P"]
+        == "closed_exact_projective_perfect_complex_hidden_rows_local_free_w9_open",
+        "G3P hidden perfect-complex state",
+    )
+    require(
+        gate_states["UST.G3Q"]
+        == "closed_exact_zero_section_monad_nogo_horizontal_g3g_repair_forced",
+        "G3Q zero-section buffer no-go state",
+    )
+    require(
+        gate_states["UST.G3R"]
+        == "closed_exact_global_alpha_sigma_repair_locally_free_twisted_rank9_stability_hym_bianchi_open",
+        "G3R relative stable WIT0 promotion state",
+    )
+    require(
+        gate_states["UST.G3S"]
+        == "closed_exact_g3r_adiabatic_hym_nogo_factorwise_source_slope3_forced",
+        "G3S target HN slope no-go state",
+    )
+    require(
+        gate_states["UST.G3T"]
+        == "closed_exact_support_wide_balanced_mutation_relative_polystability_holomorphic_p39_mu1_hym_bianchi_open",
+        "G3T support-wide balanced qutrit promotion state",
+    )
+    require(
+        gate_states["UST.G3U"]
+        == "closed_exact_direct_stability_hidden_structural_g3d_rows_mu1_open",
+        "G3U direct-stable-factor compiler state",
+    )
+    require(
+        gate_states["UST.G3V"]
+        == "closed_exact_existential_hidden_chamber_qutrit_equivariant_projective_hym_numerical_chamber_visible_bianchi_open",
+        "G3V existential hidden HYM state",
+    )
+    require(
+        gate_states["UST.G3W"]
+        == "closed_exact_relative_projective_translation_homogeneity_hidden_invariant_chern_weil_strict_shared_line_visible_bianchi_open",
+        "G3W projective translation and Chern-Weil state",
+    )
+    require(
+        gate_states["UST.G3X"]
+        == "closed_exact_full_bc22_to_derham_injectivity_gauge_equivariance_removed_positive_balanced_integral_source_pair_open",
+        "G3X full Bott-Chern Fourier-homotopy state",
+    )
+    require(
+        gate_states["UST.G3Y"]
+        == "closed_exact_transverse_fuyau_shortcut_nogo_for_selected_visible_c3_nonzero_nontransverse_coupled_positivity_open",
+        "G3Y transverse Fu-Yau visible-c3 cutset state",
+    )
+    require(
+        gate_states["UST.G3Z"]
+        == "closed_exact_nontransverse_full_residual_a_posteriori_compiler_physical_source_and_bounds_open",
+        "G3Z nontransverse endpoint compiler state",
+    )
+    require(
+        gate_states["UST.G3AA"]
+        == "closed_exact_equivariant_shared_line_theta_product_flat_spinc_determinant_and_ordinary_strict_lift_nogo_eta9_deligne_and_physical_string_trivialization_open",
+        "G3AA shared-line/theta product state",
+    )
+    require(
+        gate_states["UST.G3AB"]
+        == "closed_exact_eta9_theta_orientation_selected_nine_member_orbit_universal_incidence_and_two_twist_separation_primitive_deligne_open",
+        "G3AB eta9 theta/incidence state",
+    )
+    require(
+        gate_states["UST.G3AC"]
+        == "closed_exact_existential_smooth_finite_flat_graph_prym_orbit_fixed_orbit_noether_lefschetz_deligne_hym_open",
+        "G3AC eta9 graph-Prym orbit state",
+    )
+    require(
+        gate_states["UST.G3AD"]
+        == "closed_exact_first_order_fixed_fq_selected_graph_nogo_beta_zero_family_selection_open",
+        "G3AD fixed-FQ selected-graph obstruction state",
+    )
+    require(
+        gate_states["UST.G3AE"]
+        == "closed_exact_second_h_first_order_joint_lift_three_graph_convergence_beta_open",
+        "G3AE second-H joint coefficient lift state",
+    )
+    require(
+        gate_states["UST.G3AF"]
+        == "closed_exact_two_h_first_order_joint_lift_four_h_convergence_beta_open",
+        "G3AF two-H joint coefficient lift state",
+    )
+    require(
+        gate_states["UST.G3AG"]
+        == "closed_exact_three_graph_first_order_lift_convergence_smoothness_beta_open",
+        "G3AG three-graph joint coefficient lift state",
+    )
+    require(
+        gate_states["UST.G3AH"]
+        == "closed_exact_conditional_formal_coefficient_lift_second_h_map_beta_open",
+        "G3AH formal coefficient-kernel state",
+    )
+    require(
+        gate_states["UST.G3AI"]
+        == "closed_exact_second_h_all_orders_formal_eta9_coefficient_lift_same_member_smoothness_beta_open",
+        "G3AI second-H all-orders descent state",
+    )
+    require(
+        gate_states["UST.G3AJ"]
+        == "closed_exact_existential_smooth_selected_residue_graph_prym_branch_explicit_member_beta_open",
+        "G3AJ selected-residue smooth graph-Prym state",
+    )
+    require(
+        gate_states["UST.G3AK"]
+        == "closed_exact_projective_tangent122_equals33plus89_true_incidence_normal126_deligne_transport_open",
+        "G3AK full graph-incidence tangent/normal state",
+    )
+    require(
+        gate_states["UST.G3AL"]
+        == "closed_exact_response_schur_reduction_selected_campaign_consumed_beta_open",
+        "G3AL selected-carrier response Schur state",
+    )
+    require(
+        gate_states["UST.G3AO"]
+        == "closed_exact_selected_f1016_toric_regularity_735_of_735",
+        "G3AO selected regularity state",
+    )
+    require(
+        gate_states["UST.G3AP"]
+        == "closed_exact_selected_f1016_ordinary_top_dimension_one",
+        "G3AP selected top-line state",
+    )
+    require(
+        gate_states["UST.G3AM"]
+        == "closed_exact_selected_f1016_principal_response_rank33",
+        "G3AM selected principal response state",
+    )
+    require(
+        gate_states["UST.G3AN"]
+        == "closed_exact_selected_f1016_full_response_rank122_left_nullity126",
+        "G3AN selected full response state",
+    )
+    require(
+        gate_states["UST.G3AQ"]
+        == "closed_exact_characteristic_zero_relative_r1_response_rank122",
+        "G3AQ characteristic-zero response state",
+    )
+    require(
+        gate_states["UST.G3AR"]
+        == "closed_exact_contract_zero_promotable_candidates_beta_open",
+        "G3AR same-source decision-contract state",
+    )
+    require(
+        gate_states["UST.G3AS"]
+        == "closed_exact_finite_normal_operator_rank126_beta_reduction_open",
+        "G3AS finite normal operator state",
+    )
+    require(
+        gate_states["UST.G3AT"]
+        == "closed_exact_polarized_primal_only_transport_three_odes_inputs_open",
+        "G3AT polarized primal-only transport state",
+    )
+    require(
+        gate_states["UST.G3AU"]
+        == "closed_exact_adjoint_normal_first_obstruction_reduction_payload_open",
+        "G3AU adjoint normal-first obstruction state",
+    )
+    require(
+        gate_states["UST.G3AV"]
+        == "closed_exact_scale_free_b103_socle_polarization_top_reductions_open",
+        "G3AV scale-free B103 polarization state",
+    )
+    require(
+        gate_states["UST.G3AW"]
+        == "closed_exact_three_line_gram_meridian_six_top_reductions_inputs_open",
+        "G3AW three-line Gram meridian state",
+    )
+    require(
+        gate_states["UST.G3AX"]
+        == "closed_exact_relative_graph_ball_top_functional_unique_member_values_open",
+        "G3AX relative graph-ball top-functional state",
+    )
+    require(
+        gate_states["UST.G3AY"]
+        == "closed_exact_relative_gram_jet_compiler_and_unit_screen_inputs_open",
+        "G3AY relative Gram-jet compiler state",
+    )
+    require(
+        gate_states["UST.G3AZ"]
+        == "closed_exact_finite_b103_gram_executor_admissible_transport_source_open",
+        "G3AZ finite Gram executor state",
+    )
+    require(
+        gate_states["UST.G3BA"]
+        == "closed_exact_face_cover_to_topological_gram_compiler_three_covers_open",
+        "G3BA face-cover topological Gram compiler state",
+    )
+    require(
+        gate_states["UST.G3BB"]
+        == "closed_exact_selected_gamma_pairing_one_transgression_target_coordinates_open",
+        "G3BB selected transgression target state",
+    )
+    require(
+        gate_states["UST.G3BC"]
+        == "closed_exact_pairing_one_dual_replacement_and_bezout_compiler_integral_residues_open",
+        "G3BC dual replacement state",
+    )
+    require(
+        gate_states["UST.G3BD"]
+        == "closed_exact_two_sided_sparse_deligne_compiler_production_values_open",
+        "G3BD direct quotient compiler state",
+    )
+    require(
+        gate_states["UST.G3BE"]
+        == "closed_exact_nogo_ordinary_cartier_line_on_delta_trivial_hs_support",
+        "G3BE Hartshorne-Serre product support no-go state",
+    )
+    require(
+        gate_states["UST.G3BF"]
+        == "closed_exact_algebraic_product_tube_index_four_and_parity_first_reduction",
+        "G3BF index-four parity-first reduction state",
+    )
+    require(
+        gate_states["UST.G3BG"]
+        == "closed_exact_root_primitive_two_sparse_input_and_period_shift",
+        "G3BG sparse primitive root state",
+    )
+    require(
+        gate_states["UST.G3BH"]
+        == "closed_exact_direct_root_containment_nogo_transport_required",
+        "G3BH direct-containment no-go state",
+    )
+    require(
+        gate_states["UST.G3BZ"]
+        == "closed_exact_selected_affine_path_update_rank_6022",
+        "G3BZ exact selected path-update rank state",
+    )
+    require(
+        gate_states["UST.G3CA"]
+        == "closed_exact_selected_h02_source_class_and_one_split_prime_coordinates",
+        "G3CA selected H02 source state",
+    )
+    require(
+        gate_states["UST.G3CB"]
+        == "closed_exact_good_reduction_frame_isomorphism_characteristic_zero_entries_open",
+        "G3CB frame-isomorphism state",
+    )
+    require(
+        gate_states["UST.G3CC"]
+        == "closed_exact_terminal_source_values_horizontal_transport_open",
+        "G3CC terminal source state",
+    )
+    require(
+        gate_states["UST.G3CD"]
+        == "closed_exact_gf11_rank1508_operator_selected_source_fills_unique_cokernel_path_lift_open",
+        "G3CD full affine good-fiber operator state",
+    )
+    require(
+        gate_states["UST.G3CE"]
+        == "closed_exact_gf11_static_1510_to249_affine_schur_obstruction_reduction_dynamic_path_reduction_open",
+        "G3CE Hodge Schur affine reduction state",
+    )
+    require(
+        gate_states["UST.G3CF"]
+        == "closed_exact_rational_static_schur_gauge_open_arc_and_b89_dynamic_riccati_and_coefficient_execution_open",
+        "G3CF transcendental-arc Schur gauge state",
+    )
+    require(
+        gate_states["UST.G3CG"]
+        == "closed_exact_gf11_static_schur_transport_no_shortcut_riccati_targets_actual_jets_open",
+        "G3CG Schur-Riccati transport cutset state",
+    )
+    require(
+        gate_states["UST.G3CH"]
+        == "closed_exact_gf11_cancelled_h02_riccati_source_jet_target_fixed_coordinate_source_rejected_selected_source_jet_open",
+        "G3CH cancelled-H02 source-jet state",
+    )
+    require(
+        gate_states["UST.G3CI"]
+        == "closed_exact_gf11_raw_source_anchor_nogo_h02_graded_source_riccati_jet_rejected_non_graded_selection_open",
+        "G3CI selected-source family-jet state",
+    )
+    require(
+        gate_states["UST.G3CJ"]
+        == "closed_exact_gf11_selected_source_cyclic_full_affine_carrier_pathwise_promotion_open",
+        "G3CJ selected-source cyclic full-carrier state",
+    )
+    require(
+        gate_states["UST.G3CK"]
+        == "closed_exact_characteristic_zero_source_cyclic_gauge_open_arc_start_and_coefficient_execution_open",
+        "G3CK rational source-cyclic open-arc gauge state",
+    )
+    require(
+        gate_states["UST.G3CL"]
+        == "closed_exact_hybrid_full_path_gauge_atlas_start_cyclicity_not_required_coefficient_execution_open",
+        "G3CL hybrid full-path gauge-atlas state",
+    )
+    require(
+        gate_states["UST.G3CM"]
+        == "closed_exact_gf11_matrix_free_full_carrier_action_equivalence_family_oracle_execution_open",
+        "G3CM matrix-free selected-state action state",
+    )
+    require(
+        gate_states["UST.G3CN"]
+        == "closed_exact_pole_six_thirty_chart_woodbury_atlas_and_gf11_first_jet",
+        "G3CN pole-six family-transform first-jet state",
+    )
+    require(
+        gate_states["UST.G3CO"]
+        == "closed_exact_pole_six_automatic_finite_open_arc_membership_right_inverse_execution_and_start_unit_open",
+        "G3CO pole-six automatic open-arc exactness state",
+    )
+    require(
+        gate_states["UST.G3CP"]
+        == "closed_exact_smooth_start_removable_gauss_manin_connection_existence_start_limit_and_execution_open",
+        "G3CP smooth-start removable-connection state",
+    )
+    require(
+        gate_states["UST.G3CQ"]
+        == "closed_exact_gf11_selected_source_transform_defect_and_h02_return",
+        "G3CQ selected-source transform-defect state",
+    )
+    require(
+        gate_states["UST.G3CR"]
+        == "closed_exact_gf11_selected_source_quotient_defect_full_recursive_first_jet",
+        "G3CR quotient-defect recursive state",
+    )
+    require(
+        gate_states["UST.G3CS"]
+        == "closed_exact_gf11_selected_pole_six_full_original_partial_preimage_first_jet",
+        "G3CS full pole-six preimage-jet state",
+    )
+    require(
+        gate_states["UST.G3CT"]
+        == "closed_exact_gf11_complete_one_source_connection_action_first_jet",
+        "G3CT selected connection-action first-jet state",
+    )
+    require(
+        gate_states["UST.G3CU"]
+        == "closed_exact_selected_h11_affine_path_update_rank_988",
+        "G3CU exact H11 path-update rank state",
+    )
+    require(
+        gate_states["UST.G3CV"]
+        == "closed_exact_selected_h11_fraction_free_path_woodbury_factorization",
+        "G3CV H11 fraction-free Woodbury state",
+    )
+    require(
+        gate_states["UST.G3CW"]
+        == "closed_exact_selected_h11_split_place_base_action_and_reduced_kernel",
+        "G3CW H11 split-place base-action state",
+    )
+    require(
+        gate_states["UST.G3CX"]
+        == "closed_exact_h11_dm_source_observation_corridor_and_248_zero_kernel_columns",
+        "G3CX H11 DM corridor state",
+    )
+    require(
+        gate_states["UST.G3CY"]
+        == "closed_exact_h11_base_resolvent_coupling_rank_710_and_second_woodbury_dimension",
+        "G3CY H11 exact base-resolvent coupling-rank state",
+    )
+    require(
+        gate_states["UST.G3CZ"]
+        == "closed_certified_selected_h11_core221_action_on_one_conjugate_archimedean_pair",
+        "G3CZ H11 largest-core Archimedean action state",
+    )
+    require(
+        gate_states["UST.G3DA"]
+        == "closed_certified_full_h11_reduced_coupling_on_one_conjugate_archimedean_pair",
+        "G3DA H11 full Archimedean reduced-coupling state",
+    )
+    require(
+        gate_states["UST.G3DB"]
+        == "closed_certified_selected_h11_710_path_kernel_on_one_conjugate_archimedean_pair",
+        "G3DB H11 selected 710 path-kernel state",
+    )
+    require(
+        gate_states["UST.G3DC"]
+        == "closed_certified_selected_h11_affine_source_action_on_one_conjugate_archimedean_pair",
+        "G3DC H11 affine source-action state",
+    )
+    require(
+        gate_states["UST.G3DD"]
+        == "closed_certified_selected_h11_710_affine_rhs_on_one_conjugate_archimedean_pair",
+        "G3DD H11 selected 710 affine-RHS state",
+    )
+    require(
+        gate_states["UST.G3DE"]
+        == "closed_exact_selected_h02_fraction_free_path_woodbury_factorization",
+        "G3DE H02 fraction-free path Woodbury state",
+    )
+    require(
+        gate_states["UST.G3DF"]
+        == "closed_exact_h02_dm_source_observation_core_and_no_structural_kernel_zero",
+        "G3DF H02 DM source-observation corridor state",
+    )
+    require(
+        gate_states["UST.G3DG"]
+        == "closed_exact_h02_one_split_root_rank4748_charzero_upper5223",
+        "G3DG H02 one-root coupling-rank state",
+    )
+    require(
+        gate_states["UST.G3DH"]
+        == "closed_exact_h02_all_first_split_roots_rank4748",
+        "G3DH H02 all-first-split-roots state",
+    )
+    require(
+        gate_states["UST.G3DI"]
+        == "closed_exact_h02_first_split_algebra_1274_kernel_relations",
+        "G3DI H02 first split-algebra kernel state",
+    )
+    require(
+        gate_states["UST.G3DJ"]
+        == "closed_exact_h02_second_split_algebra_1274_kernel_relations",
+        "G3DJ H02 second split-algebra kernel state",
+    )
+    expected_h02_frontier_states = {
+        "UST.G3DK": "closed_exact_h02_third_split_algebra_1274_kernel_relations",
+        "UST.G3DL": "closed_exact_finite_reconstruction_audit_characteristic_zero_open",
+        "UST.G3DM": "closed_exact_h02_fourth_split_algebra_holdout_kernel",
+        "UST.G3DN": "closed_exact_finite_reconstruction_audit_characteristic_zero_open",
+        "UST.G3DO": "closed_exact_h02_fifth_split_algebra_holdout_kernel",
+        "UST.G3DP": "closed_exact_finite_reconstruction_audit_characteristic_zero_open",
+        "UST.G3DQ": "closed_exact_h02_sixth_split_algebra_holdout_kernel",
+        "UST.G3DR": "closed_exact_signed128_finite_reconstruction_audit_characteristic_zero_open",
+        "UST.G3DS": "closed_exact_h02_seventh_split_algebra_holdout_kernel",
+        "UST.G3DT": "closed_exact_finite_reconstruction_audit_characteristic_zero_open",
+        "UST.G3DU": "closed_exact_h02_eighth_split_algebra_holdout_kernel",
+        "UST.G3DV": "closed_exact_complete_eight_prime_finite_audit_characteristic_zero_open",
+        "UST.G3DW": "closed_exact_h02_kernel_component_triangularity",
+        "UST.G3DX": "closed_exact_h02_prefix_structural_gap_localization",
+        "UST.G3DY": "closed_exact_h02_component0_source_identification_charzero_annihilation_open",
+        "UST.G3DZ": "closed_exact_h02_component0_cayley_lift_rank162_global_upper5195",
+        "UST.G3EA": "closed_exact_h02_component9_gradient_elliptic_lift_rank169_global_upper5112",
+        "UST.G3EB": "closed_exact_h02_component12_cohomological_source_cutset_promotion_open",
+        "UST.G3EG": "closed_exact_h02_component12_reduction_adaptive_exactness_cutset_promotion_open",
+        "UST.G3EJ": "closed_exact_h02_component12_kernel_promotion_rank71_global_upper5102",
+        "UST.G3FV": "closed_exact_selected_cox_hilbert_burch_source_finite_intertwiner_open",
+        "UST.G3FW": "closed_exact_apolar_selection_separation_and_raw_source_nogo",
+        "UST.G3FX": "closed_exact_adjugate_normal_homotopy_pdelta_descent_open",
+        "UST.G3FY": "closed_exact_pdelta_socle_kernel_direct_apolar_family_excluded",
+        "UST.G3FZ": "closed_exact_48_fiber_second_jet_o8_source_qgamma_operator_open",
+        "UST.G3GA": "superseded_mixed_modulus_cache_rebuild_required",
+        "UST.G3GB": "superseded_mixed_modulus_cache_rebuild_required",
+        "UST.G3GC": "superseded_mixed_modulus_cache_rebuild_required",
+        "UST.G3GD": "superseded_mixed_modulus_cache_rebuild_required",
+        "UST.G3GE": "superseded_mixed_modulus_height_audit_rebuild_required",
+        "UST.G3GF": "retracted_mixed_modulus_rank_profile",
+        "UST.G3GG": "closed_exact_48_fiber_plus_corrected_anchor_fixed_minor_operator_promotion_open",
+        "UST.G3GH": "retracted_mixed_modulus_rank_jump",
+        "UST.G3GM": "closed_exact_inherited_modulus_defect_corrected_false_rank_jump_retracted",
+        "UST.G3GI": "closed_exact_48_fiber_complete_scalar_source_class_exclusion",
+        "UST.G3GJ": "closed_exact_anchor_k6_h02_source_injection_same_field_connection_open",
+    }
+    for gate_id, expected_state in expected_h02_frontier_states.items():
+        require(gate_states[gate_id] == expected_state, f"{gate_id} H02 frontier state")
+    require(
+        "full selected finite response rank 122" in frontier["frontier_delta_g3an_g3as"]
+        and "Modular nonzero is a rigorous no-go" in frontier["frontier_delta_g3an_g3as"],
+        "G3AN-G3AS frontier delta",
+    )
+    require(
+        "six to three" in frontier["frontier_delta_g3at_g3au"]
+        and "126 normal rows" in frontier["frontier_delta_g3at_g3au"],
+        "G3AT-G3AU frontier delta",
+    )
+    require(
+        "4527 characteristic-zero top-coefficient reductions"
+        in frontier["frontier_delta_g3av"]
+        and "-1/36" in frontier["frontier_delta_g3av"],
+        "G3AV frontier delta",
+    )
+    require(
+        "4527" in frontier["frontier_delta_g3aw"]
+        and "six" in frontier["frontier_delta_g3aw"]
+        and "determinant" in frontier["frontier_delta_g3aw"],
+        "G3AW frontier delta",
+    )
+    require(
+        "39,725" in frontier["frontier_delta_g3ax"]
+        and "28267" in frontier["frontier_delta_g3ax"]
+        and "unique" in frontier["frontier_delta_g3ax"]
+        and "39,726" in frontier["frontier_delta_g3ax"],
+        "G3AX frontier delta",
+    )
+    require(
+        "124" in frontier["frontier_delta_g3ay"]
+        and "seven" in frontier["frontier_delta_g3ay"]
+        and "unit" in frontier["frontier_delta_g3ay"]
+        and "one-way" in frontier["frontier_delta_g3ay"],
+        "G3AY frontier delta",
+    )
+    require(
+        "1,509" in frontier["frontier_delta_g3az"]
+        and "39,726" in frontier["frontier_delta_g3az"]
+        and "no automatic" in frontier["frontier_delta_g3az"]
+        and "complex" in frontier["frontier_delta_g3az"],
+        "G3AZ frontier delta",
+    )
+    require(
+        "-2 I3" in frontier["frontier_delta_g3ba"]
+        and "-8" in frontier["frontier_delta_g3ba"]
+        and "independent" in frontier["frontier_delta_g3ba"]
+        and "212,598" in frontier["frontier_delta_g3ba"],
+        "G3BA frontier delta",
+    )
+    require(
+        "Z_phys" in frontier["frontier_delta_g3bb"]
+        and "unit" in frontier["frontier_delta_g3bb"]
+        and "rank-1509" in frontier["frontier_delta_g3bb"],
+        "G3BB frontier delta",
+    )
+    require(
+        "affine residue" in frontier["frontier_delta_g3bc"]
+        and "gcd" in frontier["frontier_delta_g3bc"]
+        and "GF(11)" in frontier["frontier_delta_g3bc"],
+        "G3BC frontier delta",
+    )
+    require(
+        "integer membership" in frontier["frontier_delta_g3bd"]
+        and "annihilat" in frontier["frontier_delta_g3bd"]
+        and "does not require G3AU" in frontier["frontier_delta_g3bd"],
+        "G3BD frontier delta",
+    )
+    require(
+        "nonintegral rational" in frontier["frontier_delta_g3be"]
+        and "not isogenous" in frontier["frontier_delta_g3be"]
+        and "simultaneously" in frontier["frontier_delta_g3be"],
+        "G3BE frontier delta",
+    )
+    require(
+        "4Z" in frontier["frontier_delta_g3bf"]
+        and "first odd" in frontier["frontier_delta_g3bf"]
+        and "four-torsion" in frontier["frontier_delta_g3bf"],
+        "G3BF frontier delta",
+    )
+    require(
+        "two-sparse" in frontier["frontier_delta_g3bg"]
+        and "rank-1509" in frontier["frontier_delta_g3bg"]
+        and "(-e2+2f2)" in frontier["frontier_delta_g3bg"],
+        "G3BG frontier delta",
+    )
+    require(
+        "identity-marking" in frontier["frontier_delta_g3bh"]
+        and "rank ten" in frontier["frontier_delta_g3bh"]
+        and "nonconstant" in frontier["frontier_delta_g3bh"],
+        "G3BH frontier delta",
+    )
+    require(
+        "6022" in frontier["frontier_delta_g3bz"]
+        and "8397" in frontier["frontier_delta_g3bz"],
+        "G3BZ frontier delta",
+    )
+    require(
+        "100-term" in frontier["frontier_delta_g3ca"]
+        and "248 by 6" in frontier["frontier_delta_g3ca"],
+        "G3CA frontier delta",
+    )
+    require(
+        "215" in frontier["frontier_delta_g3cb"]
+        and "determinant 5" in frontier["frontier_delta_g3cb"],
+        "G3CB frontier delta",
+    )
+    require(
+        "229" in frontier["frontier_delta_g3cc"]
+        and "227" in frontier["frontier_delta_g3cc"]
+        and "224" in frontier["frontier_delta_g3cc"],
+        "G3CC frontier delta",
+    )
+    require(
+        "rank 1508" in frontier["frontier_delta_g3cd"]
+        and "pairs 2 modulo 11" in frontier["frontier_delta_g3cd"]
+        and "affine rank to 1509" in frontier["frontier_delta_g3cd"],
+        "G3CD frontier delta",
+    )
+    require(
+        "determinant 4" in frontier["frontier_delta_g3ce"]
+        and "rank 247" in frontier["frontier_delta_g3ce"]
+        and "249-square affine rank" in frontier["frontier_delta_g3ce"]
+        and "pairing 2" in frontier["frontier_delta_g3ce"],
+        "G3CE frontier delta",
+    )
+    require(
+        "transcendental" in frontier["frontier_delta_g3cf"]
+        and "no interior atlas" in frontier["frontier_delta_g3cf"]
+        and "static" in frontier["frontier_delta_g3cf"],
+        "G3CF frontier delta",
+    )
+    require(
+        "rank 247" in frontier["frontier_delta_g3cg"]
+        and "rank 248" in frontier["frontier_delta_g3cg"]
+        and "Riccati" in frontier["frontier_delta_g3cg"]
+        and "rank-1510" in frontier["frontier_delta_g3cg"],
+        "G3CG frontier delta",
+    )
+    require(
+        "determinant 10" in frontier["frontier_delta_g3ch"]
+        and "1147" in frontier["frontier_delta_g3ch"]
+        and "cancel the unknown H02 connection derivative" in frontier["frontier_delta_g3ch"]
+        and "necessary first-order cutset" in frontier["frontier_delta_g3ch"],
+        "G3CH frontier delta",
+    )
+    require(
+        "920 H11" in frontier["frontier_delta_g3ci"]
+        and "1139" in frontier["frontier_delta_g3ci"]
+        and "rank-249" in frontier["frontier_delta_g3ci"],
+        "G3CI frontier delta",
+    )
+    require(
+        "determinant 7" in frontier["frontier_delta_g3cj"]
+        and "1384" in frontier["frontier_delta_g3cj"]
+        and "1510" in frontier["frontier_delta_g3cj"]
+        and "minimal" in frontier["frontier_delta_g3cj"],
+        "G3CJ frontier delta",
+    )
+    require(
+        "characteristic zero" in frontier["frontier_delta_g3ck"]
+        and "0<t<=1" in frontier["frontier_delta_g3ck"]
+        and "moving-frame" in frontier["frontier_delta_g3ck"]
+        and "a=1" in frontier["frontier_delta_g3ck"],
+        "G3CK frontier delta",
+    )
+    require(
+        "0<=t<=1" in frontier["frontier_delta_g3cl"]
+        and "start cyclicity" in frontier["frontier_delta_g3cl"]
+        and "not a transport prerequisite" in frontier["frontier_delta_g3cl"]
+        and "action oracle" in frontier["frontier_delta_g3cl"],
+        "G3CL frontier delta",
+    )
+    require(
+        "1509" in frontier["frontier_delta_g3cm"]
+        and "three" in frontier["frontier_delta_g3cm"]
+        and "matrix-free" in frontier["frontier_delta_g3cm"]
+        and "H02 pole-six" in frontier["frontier_delta_g3cm"],
+        "G3CM frontier delta",
+    )
+    require(
+        "30" in frontier["frontier_delta_g3cn"]
+        and "15211" in frontier["frontier_delta_g3cn"]
+        and "quotient" in frontier["frontier_delta_g3cn"],
+        "G3CN frontier delta",
+    )
+    require(
+        "208570" in frontier["frontier_delta_g3co"]
+        and "602597" in frontier["frontier_delta_g3co"]
+        and "0<t<=1" in frontier["frontier_delta_g3co"],
+        "G3CO frontier delta",
+    )
+    require(
+        "regular Gauss-Manin" in frontier["frontier_delta_g3cp"]
+        and "removable" in frontier["frontier_delta_g3cp"]
+        and "directed-rounding" in frontier["frontier_delta_g3cp"],
+        "G3CP frontier delta",
+    )
+    require(
+        "705-term" in frontier["frontier_delta_g3cq"]
+        and "107 generators" in frontier["frontier_delta_g3cq"]
+        and "229-coordinate" in frontier["frontier_delta_g3cq"],
+        "G3CQ frontier delta",
+    )
+    require(
+        "1509-coordinate" in frontier["frontier_delta_g3cr"]
+        and "1360" in frontier["frontier_delta_g3cr"]
+        and "zero residual" in frontier["frontier_delta_g3cr"],
+        "G3CR frontier delta",
+    )
+    require(
+        "3758824" in frontier["frontier_delta_g3cs"]
+        and "60708" in frontier["frontier_delta_g3cs"]
+        and "Jprime*h0+J*hprime=0" in frontier["frontier_delta_g3cs"],
+        "G3CS frontier delta",
+    )
+    require(
+        "Kprime(0)b" in frontier["frontier_delta_g3ct"]
+        and "1381" in frontier["frontier_delta_g3ct"]
+        and "1379" in frontier["frontier_delta_g3ct"],
+        "G3CT frontier delta",
+    )
+    require(
+        "988" in frontier["frontier_delta_g3cu"]
+        and "1006" in frontier["frontier_delta_g3cu"]
+        and "13318" in frontier["frontier_delta_g3cu"],
+        "G3CU frontier delta",
+    )
+    require(
+        "U" in frontier["frontier_delta_g3cv"]
+        and "S" in frontier["frontier_delta_g3cv"]
+        and "W" in frontier["frontier_delta_g3cv"]
+        and "zero mismatch" in frontier["frontier_delta_g3cv"],
+        "G3CV frontier delta",
+    )
+    require(
+        "A0^-1*U" in frontier["frontier_delta_g3cw"]
+        and "988x988x6" in frontier["frontier_delta_g3cw"]
+        and "characteristic-zero/Arb promotion" in frontier["frontier_delta_g3cw"],
+        "G3CW frontier delta",
+    )
+    require(
+        "dimension 2786" in frontier["frontier_delta_g3cx"]
+        and "248 Q columns" in frontier["frontier_delta_g3cx"]
+        and "710<=rank_Q(gamma)(Q)<=740" in frontier["frontier_delta_g3cx"],
+        "G3CX frontier delta",
+    )
+    require(
+        "5136" in frontier["frontier_delta_g3cy"]
+        and "17520" in frontier["frontier_delta_g3cy"]
+        and "rank_Q(gamma)(W*A0^-1*U)=710" in frontier["frontier_delta_g3cy"],
+        "G3CY frontier delta",
+    )
+    require(
+        "1710x499" in frontier["frontier_delta_g3cz"]
+        and "853290" in frontier["frontier_delta_g3cz"]
+        and "embedding 5" in frontier["frontier_delta_g3cz"],
+        "G3CZ frontier delta",
+    )
+    require(
+        "290080" in frontier["frontier_delta_g3da"]
+        and "506160" in frontier["frontier_delta_g3da"]
+        and "710x710" in frontier["frontier_delta_g3da"],
+        "G3DA frontier delta",
+    )
+    require(
+        "701480" in frontier["frontier_delta_g3db"]
+        and "K_710(a)=T_Q+aR_Q" in frontier["frontier_delta_g3db"]
+        and "transcendental G3BJ" in frontier["frontier_delta_g3db"],
+        "G3DB frontier delta",
+    )
+    require(
+        "2195296" in frontier["frontier_delta_g3dc"]
+        and "1542277" in frontier["frontier_delta_g3dc"]
+        and "4426x248" in frontier["frontier_delta_g3dc"],
+        "G3DC frontier delta",
+    )
+    require(
+        "490048" in frontier["frontier_delta_g3dd"]
+        and "710x248" in frontier["frontier_delta_g3dd"]
+        and "(T_Q+aR_Q)q=a^2*(H_B89+aH_C)c20(a)" in frontier["frontier_delta_g3dd"],
+        "G3DD frontier delta",
+    )
+    require(
+        "6022-minor" in frontier["frontier_delta_g3de"]
+        and "10028" in frontier["frontier_delta_g3de"]
+        and "42458-dimensional" in frontier["frontier_delta_g3de"],
+        "G3DE frontier delta",
+    )
+    require(
+        "24767-dimensional" in frontier["frontier_delta_g3df"]
+        and "24861" in frontier["frontier_delta_g3df"]
+        and "all 6022 rows and columns" in frontier["frontier_delta_g3df"],
+        "G3DF frontier delta",
+    )
+    require(
+        "rank(Q)=4748" in frontier["frontier_delta_g3dg"]
+        and "4748<=rank_Q(gamma)(Q)<=5223" in frontier["frontier_delta_g3dg"],
+        "G3DG frontier delta",
+    )
+    require(
+        "all six roots" in frontier["frontier_delta_g3dh"]
+        and "29515" in frontier["frontier_delta_g3dh"]
+        and "4748" in frontier["frontier_delta_g3dh"],
+        "G3DH frontier delta",
+    )
+    require(
+        "1274 normalized triangular kernel relations" in frontier["frontier_delta_g3di"]
+        and "6022x1274" in frontier["frontier_delta_g3di"],
+        "G3DI frontier delta",
+    )
+    require(
+        "33863" in frontier["frontier_delta_g3dj"]
+        and "7644" in frontier["frontier_delta_g3dj"]
+        and "738789071" in frontier["frontier_delta_g3dj"],
+        "G3DJ frontier delta",
+    )
+    require(
+        "All48" in frontier["frontier_delta_g3du"]
+        and "36656107" in frontier["frontier_delta_g3dv"]
+        and "5699180" in frontier["frontier_delta_g3dv"],
+        "G3DU-G3DV frontier delta",
+    )
+    require(
+        "16 of34" in frontier["frontier_delta_g3dw"]
+        and "475" in frontier["frontier_delta_g3dx"]
+        and "15 component" in frontier["frontier_delta_g3dx"],
+        "G3DW-G3DX frontier delta",
+    )
+    require(
+        "(F6^2/16)Sym6" in frontier["frontier_delta_g3dy"]
+        and "All48" in frontier["frontier_delta_g3dy"]
+        and "annihilation identity remains open" in frontier["frontier_delta_g3dy"],
+        "G3DY frontier delta",
+    )
+    require(
+        "C0(F6+w^2)" in frontier["frontier_delta_g3dz"]
+        and "rank162" in frontier["frontier_delta_g3dz"]
+        and "4748..5195" in frontier["frontier_delta_g3dz"]
+        and "447" in frontier["frontier_delta_g3dz"],
+        "G3DZ frontier delta",
+    )
+    require(
+        "grad(C0) dot P-C0*T" in frontier["frontier_delta_g3ea"]
+        and "rank359" in frontier["frontier_delta_g3ea"]
+        and "kernel166" in frontier["frontier_delta_g3ea"]
+        and "4748..5112" in frontier["frontier_delta_g3ea"]
+        and "364" in frontier["frontier_delta_g3ea"],
+        "G3EA frontier delta",
+    )
+    require(
+        "zero-quotient" in frontier["frontier_delta_g3eb"]
+        and "42706x2113" in frontier["frontier_delta_g3eb"]
+        and "nullity10" in frontier["frontier_delta_g3eb"]
+        and "no characteristic-zero promotion" in frontier["frontier_delta_g3eb"],
+        "G3EB frontier delta",
+    )
+    require(
+        "1242" in frontier["frontier_delta_g3eg"]
+        and "1239x871" in frontier["frontier_delta_g3eg"]
+        and "10795 to3279" in frontier["frontier_delta_g3eg"]
+        and "4748..5112" in frontier["frontier_delta_g3eg"],
+        "G3EG frontier delta",
+    )
+    require(
+        "zero replay in all13240" in frontier["frontier_delta_g3ej"]
+        and "determinant is1071" in frontier["frontier_delta_g3ej"]
+        and "rank946" in frontier["frontier_delta_g3ej"]
+        and "component12 rank71" in frontier["frontier_delta_g3ej"]
+        and "4748..5102" in frontier["frontier_delta_g3ej"]
+        and "354" in frontier["frontier_delta_g3ej"],
+        "G3EJ frontier delta",
+    )
+    require(
+        "SUPERSEDED_BY_G3GM" in frontier["frontier_current_g3gh_override"]
+        and "mixed-modulus" in frontier["frontier_current_g3gh_override"]
+        and "not current authority" in frontier["frontier_current_g3gh_override"],
+        "G3GH retraction override",
+    )
+    require(
+        "dimensions33,17" in frontier["frontier_delta_g3fz"]
+        and "one-dimensional quotient" in frontier["frontier_delta_g3fz"]
+        and "all48" in frontier["frontier_delta_g3fz"],
+        "G3FZ second-jet frontier delta",
+    )
+    require(
+        "SUPERSEDED_BY_G3GM" in frontier["frontier_delta_g3ge"]
+        and "modulus33863" in frontier["frontier_delta_g3ge"]
+        and "must be rebuilt" in frontier["frontier_delta_g3ge"],
+        "G3GE superseded height-audit frontier delta",
+    )
+    require(
+        "RETRACTED_BY_G3GM" in frontier["frontier_delta_g3gf"]
+        and "4748<=rank_Q(gamma)(Q)<=5102" in frontier["frontier_delta_g3gf"]
+        and "nullity<=1274" in frontier["frontier_delta_g3gf"],
+        "G3GF retracted global-rank frontier delta",
+    )
+    require(
+        "fixed132-square invertible system" in frontier["frontier_delta_g3gg"]
+        and "c=adj(M2)e132/det(M2)" in frontier["frontier_delta_g3gg"]
+        and "operator promotion over Q(gamma) remains open" in frontier["frontier_delta_g3gg"],
+        "G3GG fixed-minor frontier delta",
+    )
+    require(
+        "RETRACTED_BY_G3GM" in frontier["frontier_delta_g3gh"]
+        and "mixed-modulus arithmetic" in frontier["frontier_delta_g3gh"]
+        and "archived4748 selected and1274 dependent coordinates" in frontier["frontier_delta_g3gh"],
+        "G3GH retracted rank-jump frontier delta",
+    )
+    require(
+        "inherited33863 modulus" in frontier["frontier_delta_g3gm"]
+        and "306769 legacy border mismatches" in frontier["frontier_delta_g3gm"]
+        and "profile4748/1274" in frontier["frontier_delta_g3gm"]
+        and "false4752/1270 branch" in frontier["frontier_delta_g3gm"],
+        "G3GM arithmetic-correction frontier delta",
+    )
+    require(
+        "all48 archived split fibers" in frontier["frontier_current_g3gi_override"]
+        and "rank244 and nullity9" in frontier["frontier_current_g3gi_override"]
+        and "no nonzero scalar degree21 catalecticant" in frontier["frontier_current_g3gi_override"]
+        and "matrix-valued Griffiths-Dwork compiler" in frontier["frontier_current_g3gi_override"],
+        "G3GI authoritative frontier override",
+    )
+    require(
+        "all253 scalar degree21 catalecticants" in frontier["frontier_delta_g3gi"]
+        and "96 obstruction matrices" in frontier["frontier_delta_g3gi"]
+        and "every admissible scalar source induces rank zero" in frontier["frontier_delta_g3gi"],
+        "G3GI scalar source-class exclusion frontier delta",
+    )
+    require(
+        "exact anchor (p,gamma)=(21817,5)" in frontier["frontier_current_g3gj_override"]
+        and "quotient image has rank18" in frontier["frontier_current_g3gj_override"]
+        and "raises rank to19" in frontier["frontier_current_g3gj_override"]
+        and "cannot be composed" in frontier["frontier_current_g3gj_override"],
+        "G3GJ authoritative frontier override",
+    )
+    require(
+        "all18 canonical K6 directions" in frontier["frontier_delta_g3gj"]
+        and "248x18 quotient matrix of rank18" in frontier["frontier_delta_g3gj"]
+        and "GF11,gamma3" in frontier["frontier_delta_g3gj"],
+        "G3GJ source-injection frontier delta",
+    )
+    require(
+        "UST.G3FV through UST.G3GJ" in frontier["next_action"]
+        and "G3GN rebuild with prime_parameterized_v2 arithmetic" in frontier["next_action"]
+        and "four-dimensional graded Jacobian basis" in frontier["next_action"]
+        and "Do not search another scalar degree21 source" in frontier["next_action"]
+        and "anchor K6 source injection has rank18" in frontier["next_action"]
+        and "Do not substitute the archived GF11,gamma3" in frontier["next_action"]
+        and "base-change/naturality intertwiner" in frontier["next_action"]
+        and "no component23/24 correction is current" in frontier["next_action"]
+        and "No characteristic-zero component20 rank36" in frontier["next_action"]
+        and "global H02 rank equality" in frontier["next_action"],
+        "G3GJ anti-loop next-action guard",
+    )
+    require(gate_states["UST.G5A"] == "closed_exact_criterion_physical_Tfin_open", "G5A transfer state")
+    require(gate_states["UST.G3"] == "blocked_upstream", "physical source gate must remain blocked")
+
+    hypothesis_text = (ROOT / "HYPOTHESIS.md").read_text(encoding="utf-8")
+    require("## 7. Falsifiers" in hypothesis_text, "hypothesis needs explicit falsifiers")
+    require("## 8. Explicit Nonclaims" in hypothesis_text, "hypothesis needs explicit nonclaims")
+    require("does not prove" in hypothesis_text, "hypothesis must state its proof boundary")
+
+    for path in ROOT.rglob("*"):
+        if path.is_file() and ".git" not in path.parts and path.suffix in {".md", ".json", ".py"}:
+            text = path.read_text(encoding="utf-8")
+            require(
+                WINDOWS_ABSOLUTE.search(text) is None,
+                f"machine-specific absolute path in {path.relative_to(ROOT)}",
+            )
+
+    adjudication = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g1_candidate_adjudication.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(adjudication.stdout.strip())
+
+    embedding = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g1e_bundle_cohesive_embedding.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(embedding.stdout.strip())
+
+    full_residual = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g2_full_residual_hodge.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(full_residual.stdout.strip())
+
+    physical_residual_transfer = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g2p_g5a_physical_residual_transfer.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(physical_residual_transfer.stdout.strip())
+
+    source_ingestion = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3_source_ingestion.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(source_ingestion.stdout.strip())
+
+    scale_orbit = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3b_scale_orbit.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(scale_orbit.stdout.strip())
+
+    target_metric = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3c_target_metric.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(target_metric.stdout.strip())
+
+    common_chamber = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3d_common_gauduchon_chamber.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(common_chamber.stdout.strip())
+
+    bfield_wit = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3e_opposite_complex_bfield_wit.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(bfield_wit.stdout.strip())
+
+    source_stability = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3f_q79_hs_global_stability.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(source_stability.stdout.strip())
+
+    stable_recombination = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3g_two_fiber_stable_recombination.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(stable_recombination.stdout.strip())
+
+    qutrit_descent = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3h_qutrit_determinantal_torsion.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(qutrit_descent.stdout.strip())
+
+    bidirectional_ext = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3i_bidirectional_ext.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(bidirectional_ext.stdout.strip())
+
+    reverse_ext_nogo = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3j_reverse_ext_representation_nogo.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(reverse_ext_nogo.stdout.strip())
+
+    derived_schur_yoneda = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3k_derived_schur_yoneda_reduction.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(derived_schur_yoneda.stdout.strip())
+
+    monad_yoneda_rank_four = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3l_monad_yoneda_rank_four.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(monad_yoneda_rank_four.stdout.strip())
+
+    invariant_yoneda_column = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3m_conjugate_clock_fixed_yoneda_column.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(invariant_yoneda_column.stdout.strip())
+
+    nonzero_yoneda_column = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3n_fiber_serre_nonzero_yoneda.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(nonzero_yoneda_column.stdout.strip())
+
+    alternate_qutrit_chern = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3o_same_object_qutrit_chern_cutset.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(alternate_qutrit_chern.stdout.strip())
+
+    hidden_perfect_complex = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3p_zero_section_hidden_perfect_complex.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hidden_perfect_complex.stdout.strip())
+
+    buffer_injection_nogo = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3q_zero_section_buffer_injection_nogo.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(buffer_injection_nogo.stdout.strip())
+
+    stable_wit0_promotion = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3r_relative_stable_wit0_promotion.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(stable_wit0_promotion.stdout.strip())
+
+    target_hn_nogo = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3s_target_hn_slope_nogo.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(target_hn_nogo.stdout.strip())
+
+    balanced_qutrit_promotion = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3t_support_wide_slope_balanced_qutrit.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(balanced_qutrit_promotion.stdout.strip())
+
+    chamber_compiler_v2 = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3d_common_gauduchon_chamber_v2.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(chamber_compiler_v2.stdout.strip())
+
+    direct_stable_factor = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3u_direct_stable_factor_compiler.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(direct_stable_factor.stdout.strip())
+
+    existential_hidden_hym = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3v_existential_hidden_hym.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(existential_hidden_hym.stdout.strip())
+
+    relative_projective_translation = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3w_relative_projective_translation.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(relative_projective_translation.stdout.strip())
+
+    full_bott_chern = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3x_full_bott_chern_fourier_homotopy.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(full_bott_chern.stdout.strip())
+
+    transverse_fuyau_nogo = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3y_transverse_fuyau_c3_nogo.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(transverse_fuyau_nogo.stdout.strip())
+
+    nontransverse_endpoint_compiler = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3z_nontransverse_endpoint_compiler.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(nontransverse_endpoint_compiler.stdout.strip())
+
+    shared_line_theta = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3aa_equivariant_shared_line_theta.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(shared_line_theta.stdout.strip())
+
+    eta9_theta_incidence = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ab_eta9_theta_incidence_two_twist.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(eta9_theta_incidence.stdout.strip())
+
+    eta9_graph_prym_orbit = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ac_eta9_graph_prym_orbit.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(eta9_graph_prym_orbit.stdout.strip())
+
+    fixed_fq_graph_obstruction = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ad_fixed_fq_second_h_graph_obstruction.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(fixed_fq_graph_obstruction.stdout.strip())
+
+    second_h_joint_coefficient_lift = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ae_second_h_joint_coefficient_lift.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(second_h_joint_coefficient_lift.stdout.strip())
+
+    two_h_joint_coefficient_lift = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3af_two_h_joint_coefficient_lift.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(two_h_joint_coefficient_lift.stdout.strip())
+
+    three_graph_joint_coefficient_lift = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ag_three_graph_joint_coefficient_lift.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(three_graph_joint_coefficient_lift.stdout.strip())
+
+    formal_coefficient_kernel = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ah_formal_coefficient_kernel.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(formal_coefficient_kernel.stdout.strip())
+
+    second_h_all_orders = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ai_second_h_marked_map_all_orders.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(second_h_all_orders.stdout.strip())
+
+    residue_ball_smooth_member = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3aj_residue_ball_smooth_graph_prym.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(residue_ball_smooth_member.stdout.strip())
+
+    full_graph_incidence_decomposition = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ak_full_graph_incidence_normal_decomposition.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(full_graph_incidence_decomposition.stdout.strip())
+
+    selected_carrier_response_schur = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3al_selected_carrier_response_schur.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_carrier_response_schur.stdout.strip())
+
+    elliptic_bidual_identity = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ao_elliptic_bidual_identity.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(elliptic_bidual_identity.stdout.strip())
+
+    selected_cayley_toric_regularity = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ao_selected_cayley_toric_regularity.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_cayley_toric_regularity.stdout.strip())
+
+    selected_cayley_ordinary_top_lower_bound = subprocess.run(
+        [
+            sys.executable,
+            str(
+                ROOT
+                / "verify_ust_g3ap_selected_cayley_ordinary_top_lower_bound.py"
+            ),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_cayley_ordinary_top_lower_bound.stdout.strip())
+
+    permuted_cox_box_routes = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ap_permuted_cox_box_routes.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(permuted_cox_box_routes.stdout.strip())
+
+    hmajor_ltrunc_routes = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ap_hmajor_ltrunc_routes.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hmajor_ltrunc_routes.stdout.strip())
+
+    honly_ltrunc_routes = subprocess.run(
+        [sys.executable, str(ROOT / "verify_ust_g3ap_honly_ltrunc_routes.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(honly_ltrunc_routes.stdout.strip())
+
+    honly_direct_ltrunc_routes = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ap_honly_direct_ltrunc_routes.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(honly_direct_ltrunc_routes.stdout.strip())
+
+    hmajor_direct_ltrunc_routes = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ap_hmajor_direct_ltrunc_routes.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hmajor_direct_ltrunc_routes.stdout.strip())
+
+    hmajor_direct_ltrunc_sba_routes = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ap_hmajor_direct_ltrunc_sba_routes.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hmajor_direct_ltrunc_sba_routes.stdout.strip())
+
+    hmajor_direct_ltrunc_sba_warm = subprocess.run(
+        [
+            sys.executable,
+            str(
+                ROOT
+                / "verify_ust_g3ap_hmajor_direct_ltrunc_sba_warm_hilbert_route.py"
+            ),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hmajor_direct_ltrunc_sba_warm.stdout.strip())
+
+    hmajor_direct_ltrunc_sba_warm_qslimgb = subprocess.run(
+        [
+            sys.executable,
+            str(
+                ROOT
+                / "verify_ust_g3ap_hmajor_direct_ltrunc_sba_warm_qslimgb_route.py"
+            ),
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=True,
+    )
+    print(hmajor_direct_ltrunc_sba_warm_qslimgb.stdout.strip())
+
+    hmajor_hint_packet = (
+        ROOT / "state" / "ust_g3ap_hmajor_ltrunc_hilbert_hint.packet.json"
+    )
+    if hmajor_hint_packet.is_file():
+        hmajor_hint = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3ap_hmajor_ltrunc_hilbert_hint.py"),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(hmajor_hint.stdout.strip())
+
+    g3ap_target_macaulay_packet = (
+        ROOT
+        / "state"
+        / "ust_g3ap_selected_cayley_target_macaulay_certified.packet.json"
+    )
+    if g3ap_target_macaulay_packet.is_file():
+        selected_cayley_target_macaulay = subprocess.run(
+            [
+                sys.executable,
+                str(
+                    ROOT
+                    / "verify_ust_g3ap_selected_cayley_target_macaulay_certified.py"
+                ),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_cayley_target_macaulay.stdout.strip())
+
+    g3ap_full_target_macaulay_packet = (
+        ROOT
+        / "state"
+        / "ust_g3ap_selected_cayley_target_macaulay_full_reused.certified.packet.json"
+    )
+    if g3ap_full_target_macaulay_packet.is_file():
+        full_target_packet = json.loads(
+            g3ap_full_target_macaulay_packet.read_text(encoding="ascii")
+        )
+        if "incremental_rank_witness" in full_target_packet.get("inputs", {}):
+            full_target_verifier = (
+                ROOT
+                / "certify_ust_g3ap_selected_cayley_target_macaulay_full_from_incremental.py"
+            )
+            full_target_extra = ["--reuse-full-functional"]
+        else:
+            full_target_verifier = (
+                ROOT / "certify_ust_g3ap_selected_cayley_target_macaulay_full.py"
+            )
+            full_target_extra = []
+        selected_cayley_full_target_macaulay = subprocess.run(
+            [
+                sys.executable,
+                str(full_target_verifier),
+                "--reuse-source-certificate",
+                *full_target_extra,
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_cayley_full_target_macaulay.stdout.strip())
+
+    g3ap_packet = ROOT / "state" / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+    if g3ap_packet.is_file():
+        selected_cayley_ordinary_top = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_dimension.py"),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_cayley_ordinary_top.stdout.strip())
+
+    g3am_packet = ROOT / "state" / "ust_g3am_selected_cayley_principal_response.packet.json"
+    if g3am_packet.is_file():
+        selected_cayley_principal_response = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3am_selected_cayley_principal_response.py"),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_cayley_principal_response.stdout.strip())
+
+    g3an_packet = ROOT / "state" / "ust_g3an_selected_cayley_full_response_schur.packet.json"
+    if g3an_packet.is_file():
+        selected_cayley_full_response = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3an_selected_cayley_full_response_schur.py"),
+                "--upstream-g3am-verified-in-caller",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_cayley_full_response.stdout.strip())
+
+    g3an_direct_packet = ROOT / "state" / "ust_g3an_selected_cayley_direct_schur.packet.json"
+    if g3an_direct_packet.is_file():
+        selected_cayley_direct_response = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3an_selected_cayley_direct_schur.py"),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_cayley_direct_response.stdout.strip())
+
+    g3aq_packet = ROOT / "state" / "ust_g3aq_selected_cayley_relative_residue_promotion.packet.json"
+    if g3aq_packet.is_file():
+        selected_cayley_relative_promotion = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3aq_selected_cayley_relative_residue_promotion.py"),
+                "--upstream-g3an-verified-in-caller",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_cayley_relative_promotion.stdout.strip())
+
+    g3as_packet = ROOT / "state" / "ust_g3as_selected_finite_normal_operator.packet.json"
+    if g3as_packet.is_file():
+        selected_finite_normal_operator = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "verify_ust_g3as_selected_finite_normal_operator.py"),
+                "--upstream-g3an-verified-in-caller",
+                "--upstream-g3aq-verified-in-caller",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        print(selected_finite_normal_operator.stdout.strip())
+
+    polarized_primal_transport = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3at_polarized_primal_transport.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(polarized_primal_transport.stdout.strip())
+
+    adjoint_normal_first = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3au_adjoint_normal_first_obstruction.py"),
+            "--upstream-g3as-verified-in-caller",
+            "--upstream-g3at-verified-in-caller",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(adjoint_normal_first.stdout.strip())
+
+    scale_free_b103_polarization = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3av_scale_free_b103_polarization.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(scale_free_b103_polarization.stdout.strip())
+
+    g3av_frontier_integration = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3av_frontier_integration.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(g3av_frontier_integration.stdout.strip())
+
+    three_line_gram_meridian = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3aw_three_line_gram_meridian_reduction.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(three_line_gram_meridian.stdout.strip())
+
+    selected_dvr_top_functional = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ax_selected_dvr_top_functional_lift.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_dvr_top_functional.stdout.strip())
+
+    relative_gram_jet = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ay_relative_gram_jet_unit_screening.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(relative_gram_jet.stdout.strip())
+
+    finite_b103_gram_executor = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3az_finite_b103_gram_executor.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(finite_b103_gram_executor.stdout.strip())
+
+    common_fiber_gram = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ba_common_fiber_face_cover_gram.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(common_fiber_gram.stdout.strip())
+
+    selected_gamma_target = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bb_selected_gamma_unit_defect_target.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_gamma_target.stdout.strip())
+
+    pairing_one_dual = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bc_pairing_one_bezout_dual.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(pairing_one_dual.stdout.strip())
+
+    sparse_deligne_decision = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bd_sparse_deligne_quotient_decision.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(sparse_deligne_decision.stdout.strip())
+
+    hs_support_nogo = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3be_delta_trivial_hs_elementary_transform_nogo.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hs_support_nogo.stdout.strip())
+
+    algebraic_tube_index_four = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bf_algebraic_product_tube_index_four.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(algebraic_tube_index_four.stdout.strip())
+
+    root_primitive_projection = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bg_root_primitive_projection.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(root_primitive_projection.stdout.strip())
+
+    fixed_b89_root_containment_nogo = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bh_fixed_b89_root_containment_nogo.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(fixed_b89_root_containment_nogo.stdout.strip())
+
+    explicit_root_start = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bi_explicit_root_start.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(explicit_root_start.stdout.strip())
+
+    transcendental_arc_path = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bj_transcendental_arc_path.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(transcendental_arc_path.stdout.strip())
+
+    correction_pencil_operator = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bk_correction_pencil_operator_compiler.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(correction_pencil_operator.stdout.strip())
+
+    h11_proof_prime_initializer_nogo = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bl_h11_proof_prime_initializer_nogo.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_proof_prime_initializer_nogo.stdout.strip())
+
+    h11_alternate_split_prime_initializer = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bn_h11_alternate_split_prime_initializer.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_alternate_split_prime_initializer.stdout.strip())
+
+    h11_endpoint_correction_action = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bo_h11_endpoint_correction_action.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_endpoint_correction_action.stdout.strip())
+
+    correction_toric_return = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bm_correction_toric_return.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(correction_toric_return.stdout.strip())
+
+    correction_full_recursive_return = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bq_correction_full_recursive_return.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(correction_full_recursive_return.stdout.strip())
+
+    h02_alternate_split_prime_initializer = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3br_h02_alternate_split_prime_initializer.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_alternate_split_prime_initializer.stdout.strip())
+
+    h02_endpoint_action_root5 = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bs_h02_endpoint_action_root5.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_endpoint_action_root5.stdout.strip())
+
+    h02_endpoint_action_one_split_prime = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bt_h02_endpoint_action_one_split_prime.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_endpoint_action_one_split_prime.stdout.strip())
+
+    h02_endpoint_determinant_crt = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bu_h02_endpoint_determinant_crt_campaign.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_endpoint_determinant_crt.stdout.strip())
+
+    h02_endpoint_gf11_calibration = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bv_h02_endpoint_gf11_calibration.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_endpoint_gf11_calibration.stdout.strip())
+
+    h02_selected_dm_woodbury = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bw_g3bi_h02_dm_woodbury_reduction.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_selected_dm_woodbury.stdout.strip())
+
+    h02_structural_intertwiner = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bx_g3bi_h02_structural_intertwiner.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_structural_intertwiner.stdout.strip())
+
+    h02_exact_update_rank = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3by_g3bi_h02_exact_update_rank.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_exact_update_rank.stdout.strip())
+
+    h02_exact_path_update_rank = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bz_g3bi_h02_exact_path_update_rank.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_exact_path_update_rank.stdout.strip())
+
+    h02_selected_delta_source = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ca_selected_delta_correction_h02_source.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_selected_delta_source.stdout.strip())
+
+    h20_b69_b103_frame = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cb_b69_b103_h20_frame_intertwiner.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h20_b69_b103_frame.stdout.strip())
+
+    selected_terminal_source_dualization = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cc_selected_source_terminal_b89_dualization.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_terminal_source_dualization.stdout.strip())
+
+    correction_full_affine_operator = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cd_correction_full_affine_operator.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(correction_full_affine_operator.stdout.strip())
+
+    hodge_schur_affine_reduction = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ce_hodge_schur_affine_reduction.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hodge_schur_affine_reduction.stdout.strip())
+
+    transcendental_arc_schur_gauge = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cf_transcendental_arc_schur_gauge.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(transcendental_arc_schur_gauge.stdout.strip())
+
+    schur_riccati_transport_cutset = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cg_schur_riccati_transport_cutset.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(schur_riccati_transport_cutset.stdout.strip())
+
+    cancelled_h02_source_jet = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ch_cancelled_h02_riccati_source_jet.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(cancelled_h02_source_jet.stdout.strip())
+
+    selected_source_family_jet = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ci_selected_source_family_jet.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_source_family_jet.stdout.strip())
+
+    selected_source_cyclic_full_carrier = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cj_selected_source_cyclic_full_carrier.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_source_cyclic_full_carrier.stdout.strip())
+
+    rational_source_cyclic_open_arc_gauge = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ck_rational_source_cyclic_open_arc_gauge.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(rational_source_cyclic_open_arc_gauge.stdout.strip())
+
+    hybrid_full_path_gauge_atlas = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cl_hybrid_full_path_gauge_atlas.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(hybrid_full_path_gauge_atlas.stdout.strip())
+
+    matrix_free_selected_state_action = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cm_matrix_free_selected_state_action.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(matrix_free_selected_state_action.stdout.strip())
+
+    pole_six_family_transform_first_jet = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cn_pole_six_family_transform_first_jet.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(pole_six_family_transform_first_jet.stdout.strip())
+
+    pole_six_automatic_open_arc_exactness = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3co_pole_six_automatic_open_arc_exactness.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(pole_six_automatic_open_arc_exactness.stdout.strip())
+
+    smooth_start_removable_connection = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cp_smooth_start_removable_connection.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(smooth_start_removable_connection.stdout.strip())
+
+    selected_source_transform_defect = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cq_selected_source_transform_defect.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_source_transform_defect.stdout.strip())
+
+    selected_source_recursive_first_jet = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cr_selected_source_recursive_first_jet.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_source_recursive_first_jet.stdout.strip())
+
+    selected_pole_six_preimage_first_jet = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cs_selected_pole_six_preimage_first_jet.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_pole_six_preimage_first_jet.stdout.strip())
+
+    selected_connection_action_first_jet = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ct_selected_connection_action_first_jet.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(selected_connection_action_first_jet.stdout.strip())
+
+    h11_exact_path_update_rank = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cu_h11_exact_path_update_rank.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_exact_path_update_rank.stdout.strip())
+
+    h11_fraction_free_path_woodbury = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cv_h11_fraction_free_path_woodbury.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_fraction_free_path_woodbury.stdout.strip())
+
+    h11_split_place_base_action = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cw_h11_split_place_base_action.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_split_place_base_action.stdout.strip())
+
+    h11_dm_corridor = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cx_h11_dm_source_observation_corridor.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_dm_corridor.stdout.strip())
+
+    h11_exact_base_resolvent_rank = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cy_h11_exact_base_resolvent_coupling_rank.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_exact_base_resolvent_rank.stdout.strip())
+
+    h11_core221_archimedean_action = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3cz_h11_core221_archimedean_action.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_core221_archimedean_action.stdout.strip())
+
+    h11_archimedean_reduced_coupling = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3da_h11_archimedean_reduced_coupling.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_archimedean_reduced_coupling.stdout.strip())
+
+    h11_selected_710_path_kernel = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3db_h11_selected_710_path_kernel.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_selected_710_path_kernel.stdout.strip())
+
+    h11_archimedean_affine_source_action = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3dc_h11_archimedean_affine_source_action.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_archimedean_affine_source_action.stdout.strip())
+
+    h11_selected_710_affine_rhs = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3dd_h11_selected_710_affine_rhs.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_selected_710_affine_rhs.stdout.strip())
+
+    h02_fraction_free_path_woodbury = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3de_h02_fraction_free_path_woodbury.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_fraction_free_path_woodbury.stdout.strip())
+
+    h02_dm_source_observation_corridor = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3df_h02_dm_source_observation_corridor.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_dm_source_observation_corridor.stdout.strip())
+
+    h02_split_place_coupling_rank = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3dg_h02_split_place_full_coupling_rank.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_split_place_coupling_rank.stdout.strip())
+
+    h02_all_split_roots_coupling_rank = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3dh_h02_all_split_roots_coupling_rank.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_all_split_roots_coupling_rank.stdout.strip())
+
+    h02_split_algebra_kernel_relations = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3di_h02_split_algebra_kernel_relations.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_split_algebra_kernel_relations.stdout.strip())
+
+    h02_second_prime_kernel_relations = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3dj_h02_second_prime_kernel_relations.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_second_prime_kernel_relations.stdout.strip())
+
+    h02_branch_sextic_square_source = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3dy_h02_branch_sextic_square_source.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_branch_sextic_square_source.stdout.strip())
+
+    h02_component0_cayley_lift = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3dz_h02_component0_cayley_lift.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_component0_cayley_lift.stdout.strip())
+
+    h02_component9_gradient_elliptic_lift = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ea_h02_component9_gradient_elliptic_lift.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_component9_gradient_elliptic_lift.stdout.strip())
+
+    h02_component12_adaptive_exactness_cutset = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3eg_h02_component12_adaptive_exactness_cutset.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_component12_adaptive_exactness_cutset.stdout.strip())
+
+    h02_component12_exact_kernel_promotion = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ej_h02_component12_exact_kernel_promotion.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h02_component12_exact_kernel_promotion.stdout.strip())
+
+    h11_endpoint_determinant_crt = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3bp_h11_endpoint_determinant_crt.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(h11_endpoint_determinant_crt.stdout.strip())
+
+    g3ar_source_contract = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ar_same_member_beta_c_source.py"),
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    print(g3ar_source_contract.stdout.strip())
+
+    print("mtt unified-source research contract: PASS")
+    print(f"kernel model: {model_hash}")
+    print(f"hypothesis: {hypothesis['id']} [{hypothesis['state']}]")
+    print(f"gates: {len(frontier['gates'])}; physical promotion: false")
+
+
+if __name__ == "__main__":
+    main()

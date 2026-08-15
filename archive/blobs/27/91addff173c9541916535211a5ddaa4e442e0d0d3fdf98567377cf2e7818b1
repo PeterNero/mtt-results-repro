@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""Identify H02 component zero with the selected q79 branch-sextic square."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from sympy import Poly, expand, symbols, sympify
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+K3_BASE = (
+    ROOT.parent
+    / "mtt-protospinor-gr-response-proof"
+    / "certificates"
+    / "q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json"
+)
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3DX = ROOT / "state" / "ust_g3dx_h02_prefix_structural_gap_localization.packet.json"
+PACKET_PATHS = {
+    "G3DI": ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json",
+    "G3DJ": ROOT / "state" / "ust_g3dj_h02_second_prime_kernel_relations.packet.json",
+    "G3DK": ROOT / "state" / "ust_g3dk_h02_third_prime_kernel_relations.packet.json",
+    "G3DM": ROOT / "state" / "ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json",
+    "G3DO": ROOT / "state" / "ust_g3do_h02_fifth_prime_holdout_kernel.packet.json",
+    "G3DQ": ROOT / "state" / "ust_g3dq_h02_sixth_prime_holdout_kernel.packet.json",
+    "G3DS": ROOT / "state" / "ust_g3ds_h02_seventh_prime_holdout_kernel.packet.json",
+    "G3DU": ROOT / "state" / "ust_g3du_h02_eighth_prime_holdout_kernel.packet.json",
+}
+ALGEBRA_KEYS = {
+    "G3DI": "split_algebra_kernel",
+    "G3DJ": "second_split_algebra_kernel",
+    "G3DK": "third_split_algebra_kernel",
+    "G3DM": "fourth_split_algebra_kernel",
+    "G3DO": "fifth_split_algebra_kernel",
+    "G3DQ": "sixth_split_algebra_kernel",
+    "G3DS": "seventh_split_algebra_kernel",
+    "G3DU": "eighth_split_algebra_kernel",
+}
+EVIDENCE = ROOT / "evidence" / "ust_g3dy"
+OUT = ROOT / "state" / "ust_g3dy_h02_branch_sextic_square_source.packet.json"
+EXPECTED_K3_HASH = "2f7dd722c5e387baf9438e6c2e14fe66f564de2109030ab08516552dabb86035"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.resolve().relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (left, middle, degree - left - middle)
+        for left in range(degree + 1)
+        for middle in range(degree - left + 1)
+    ]
+
+
+def coefficient_vector(poly: Poly, exponents: list[tuple[int, int, int]]) -> np.ndarray:
+    return np.asarray([int(poly.coeff_monomial(exponent)) for exponent in exponents], dtype=np.int64)
+
+
+def main() -> None:
+    g3de, g3dx = load(G3DE), load(G3DX)
+    packets = {label: load(path) for label, path in PACKET_PATHS.items()}
+    require(all(g3de["checks"].values()) and all(g3dx["checks"].values()), "G3DE/G3DX checks")
+    require(all(all(packet["checks"].values()) for packet in packets.values()), "kernel packet checks")
+    require(sha256(K3_BASE) == EXPECTED_K3_HASH, "selected q79 K3 base hash")
+    k3 = load(K3_BASE)
+    require(k3["checks"]["plane_branch_sextic_is_projectively_smooth"], "selected branch sextic smoothness")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    family_source = mld / "build_q79_eta9_family_macaulay_update.py"
+    macaulay, factor = load(macaulay_path), load(factor_path)
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    woodbury_selection = np.load(
+        ROOT / g3de["factorization"]["selection"]["path"], allow_pickle=False
+    )
+    selected_columns = woodbury_selection["selected_columns"].astype(np.int32)
+    component_descriptors = [descriptors[int(column)] for column in selected_columns[:190]]
+    component_exponents = [tuple(int(value) for value in descriptor[1][:3]) for descriptor in component_descriptors]
+    degree18 = homogeneous_exponents(18)
+    require(all(descriptor[0] == 4 for descriptor in component_descriptors), "component zero generator")
+    require(set(component_exponents) == set(degree18) and len(set(component_exponents)) == 190, "Sym18 basis")
+    frozen_tail = tuple(int(value) for value in component_descriptors[0][1][3:])
+    require(all(tuple(int(value) for value in descriptor[1][3:]) == frozen_tail for descriptor in component_descriptors), "fixed non-base multiplier")
+
+    x, y, z = symbols("x y z")
+    f6_text = k3["explicit_K3"]["F6_equals_G3_squared_plus_Q2_H4"]
+    f6 = Poly(sympify(f6_text, locals={"x": x, "y": y, "z": z}), x, y, z)
+    require(f6.total_degree() == 6 and int(f6.coeff_monomial((6, 0, 0))) == 4, "normalized branch sextic")
+    f6_squared = Poly(expand(f6.as_expr() ** 2), x, y, z)
+    degree12 = homogeneous_exponents(12)
+    f6_squared_numerators = coefficient_vector(f6_squared, degree12)
+    require(int(f6_squared_numerators[degree12.index((12, 0, 0))]) == 16, "square leading coefficient")
+
+    degree6 = homogeneous_exponents(6)
+    exponent_lookup = {exponent: index for index, exponent in enumerate(component_exponents)}
+    principal_numerator = np.zeros((190, 28), dtype=np.int64)
+    for column, multiplier in enumerate(degree6):
+        for exponent, coefficient in zip(degree12, f6_squared_numerators, strict=True):
+            target = tuple(exponent[index] + multiplier[index] for index in range(3))
+            principal_numerator[exponent_lookup[target], column] = int(coefficient)
+
+    reference_kernel = kernel_io.read_kernel(
+        ROOT / packets["G3DI"]["root_kernels"][0]["kernel"]["path"]
+    )
+    dependent = reference_kernel["dependent"].astype(np.int32)
+    component_relation_columns = np.flatnonzero(dependent < 190).astype(np.int32)
+    component_dependents = dependent[component_relation_columns]
+    require(component_relation_columns.size == 28, "component zero relation count")
+    expected_dependent_exponents = [(12 + left, middle, right) for left, middle, right in degree6]
+    require(
+        [component_exponents[int(value)] for value in component_dependents]
+        == expected_dependent_exponents,
+        "leading x12 times Sym6 coordinates",
+    )
+    exact_transition_numerator = principal_numerator[component_dependents, :]
+    require(np.array_equal(np.diag(exact_transition_numerator), np.full(28, 16)), "unit normalized diagonal")
+    require(np.count_nonzero(np.tril(exact_transition_numerator, -1)) == 0, "exact upper triangular transition")
+
+    root_rows: list[dict[str, Any]] = []
+    relation_space_mismatches = 0
+    transition_mismatches = 0
+    support_escape_terms = 0
+    for label, packet in packets.items():
+        prime = int(packet["field"]["prime"])
+        inverse16 = pow(16, -1, prime)
+        principal_mod = (principal_numerator % prime) * inverse16 % prime
+        for root_row in packet["root_kernels"]:
+            kernel_path = ROOT / root_row["kernel"]["path"]
+            require(sha256(kernel_path) == root_row["kernel"]["sha256"], f"{label} kernel hash")
+            payload = kernel_io.read_kernel(kernel_path)
+            require(payload["prime"] == prime, f"{label} kernel prime")
+            require(np.array_equal(payload["dependent"], dependent), f"{label} dependent partition")
+            matrix = payload["matrix"]
+            columns = np.flatnonzero(payload["dependent"] < 190).astype(np.int32)
+            require(np.array_equal(columns, component_relation_columns), f"{label} component columns")
+            for column in columns:
+                first, past = matrix.indptr[column : column + 2]
+                support_escape_terms += int(np.count_nonzero(matrix.indices[first:past] >= 190))
+            normalized = matrix[:190, columns].toarray().astype(np.int64)
+            transition = principal_mod[component_dependents, :]
+            transition_mismatches += int(np.count_nonzero(np.diag(transition) != 1))
+            transition_mismatches += int(np.count_nonzero(np.tril(transition, -1)))
+            relation_space_mismatches += int(
+                np.count_nonzero((normalized @ transition - principal_mod) % prime)
+            )
+            root_rows.append(
+                {
+                    "packet": label,
+                    "prime": prime,
+                    "gamma_root": int(root_row["gamma_root"]),
+                    "kernel": record(kernel_path),
+                    "component_relation_columns": int(columns.size),
+                    "normalized_relation_nonzeros": int(np.count_nonzero(normalized)),
+                    "principal_macaulay_nonzeros": int(np.count_nonzero(principal_mod)),
+                    "transition_nonzeros": int(np.count_nonzero(transition)),
+                    "transition_is_upper_unitriangular": True,
+                    "relation_space_mismatches": 0,
+                }
+            )
+    require(len(root_rows) == 48, "all 48 root charts")
+    require(relation_space_mismatches == transition_mismatches == support_escape_terms == 0, "all finite relation spaces")
+
+    shifted_rows = np.asarray(
+        [exponent_lookup[(left, middle, right + 6)] for left, middle, right in degree12],
+        dtype=np.int32,
+    )
+    source_coefficient_mismatches = 0
+    archive_rows: list[dict[str, Any]] = []
+    for label, packet in packets.items():
+        prime = int(packet["field"]["prime"])
+        archive_record = packet[ALGEBRA_KEYS[label]]["power_basis_coefficients"]
+        archive_path = ROOT / archive_record["path"]
+        require(sha256(archive_path) == archive_record["sha256"], f"{label} archive hash")
+        coefficients = np.load(archive_path, allow_pickle=False)["coefficients"]
+        observed = coefficients[:, shifted_rows, int(component_relation_columns[0])].astype(np.int64)
+        expected = np.zeros((6, 91), dtype=np.int64)
+        expected[0] = (f6_squared_numerators % prime) * pow(16, -1, prime) % prime
+        mismatches = int(np.count_nonzero(observed != expected))
+        source_coefficient_mismatches += mismatches
+        archive_rows.append(
+            {
+                "packet": label,
+                "prime": prime,
+                "archive": record(archive_path),
+                "checked_power_basis_coefficients": 6 * 91,
+                "mismatches_against_F6_squared_over16": mismatches,
+            }
+        )
+        del coefficients, observed
+    require(source_coefficient_mismatches == 0, "source coefficient replay")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    arrays_path = EVIDENCE / "H02.component0.branch_sextic_square_source.npz"
+    np.savez_compressed(
+        arrays_path,
+        component_exponents=np.asarray(component_exponents, dtype=np.int16),
+        degree6_multipliers=np.asarray(degree6, dtype=np.int16),
+        degree12_exponents=np.asarray(degree12, dtype=np.int16),
+        F6_coefficients=coefficient_vector(f6, homogeneous_exponents(6)),
+        F6_squared_numerators=f6_squared_numerators,
+        normalization_denominator=np.asarray([16], dtype=np.int16),
+        principal_macaulay_numerator=principal_numerator,
+        component_dependent_coordinates=component_dependents,
+        exact_transition_numerator=exact_transition_numerator,
+    )
+    checks = {
+        "G3DE_G3DX_and_all_eight_kernel_packets_are_hash_bound_and_passing": True,
+        "the_selected_q79_K3_branch_sextic_certificate_is_hash_bound_and_smooth": True,
+        "component0_is_exactly_the190_dimensional_ternary_Sym18_carrier": len(component_exponents) == 190,
+        "its28_dependent_coordinates_are_x12_times_the_complete_Sym6_basis": component_dependents.size == 28,
+        "the_exact_source_subspace_is_F6_squared_over16_times_Sym6": True,
+        "multiplication_by_the_nonzero_F6_squared_is_injective_and_has_exact_rank28": True,
+        "the_exact_dependent_coordinate_transition_is_upper_unitriangular": bool(np.count_nonzero(np.tril(exact_transition_numerator, -1)) == 0),
+        "all48_finite_root_kernel_spaces_equal_the_reduction_of_the_source_subspace": relation_space_mismatches == 0,
+        "all_eight_split_algebra_archives_recover_F6_squared_over16_with_no_gamma_dependence": source_coefficient_mismatches == 0,
+        "no_finite_replay_is_promoted_to_a_characteristic_zero_border_annihilation": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DY checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dy-h02-branch-sextic-square-source.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DY",
+        "status": "CLOSED_EXACT_H02_COMPONENT0_BRANCH_SEXTIC_SQUARE_SOURCE_IDENTIFICATION",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3DE": record(G3DE),
+            "G3DX": record(G3DX),
+            **{label: record(path) for label, path in PACKET_PATHS.items()},
+            "q79_K3_base": external_record(K3_BASE, K3_BASE.parents[1]),
+            "H02_macaulay": external_record(macaulay_path, mld),
+            "H02_coordinate_factorization": external_record(factor_path, mld),
+            "family_update_source": external_record(family_source, mld),
+        },
+        "selected_source": {
+            "ambient": k3["explicit_K3"]["ambient"],
+            "K3_equation": "w^2-F6=0",
+            "F6": f6_text,
+            "component_carrier": "Sym^18(Q^3)",
+            "component_dimension": 190,
+            "source_subspace": "(F6^2/16)*Sym^6(Q^3)",
+            "source_subspace_dimension": 28,
+            "exact_quotient_dimension": 162,
+            "normalization_reason": "the x^6 coefficient of F6 is4, so the x^12 coefficient of F6^2 is16",
+            "gamma_dependence": "none",
+        },
+        "finite_identification": {
+            "split_primes": [int(packet["field"]["prime"]) for packet in packets.values()],
+            "root_charts": len(root_rows),
+            "relation_space_mismatches": relation_space_mismatches,
+            "transition_mismatches": transition_mismatches,
+            "support_escape_terms": support_escape_terms,
+            "source_coefficient_mismatches": source_coefficient_mismatches,
+            "root_rows": root_rows,
+            "archive_rows": archive_rows,
+        },
+        "evidence": {"arrays": record(arrays_path)},
+        "checks": checks,
+        "guardrails": {
+            "claims_the_exact_source_subspace_is_already_in_kernel_over_Q_gamma": False,
+            "claims_component0_Q_gamma_rank_is162": False,
+            "claims_global_Q_gamma_rank_is4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dyH02BranchSexticSquareSource",
+            "tier": "CLOSED_EXACT_SOURCE_SUBSPACE_WITH_COMPLETE_FINITE_KERNEL_IDENTIFICATION",
+            "statement": "The first frozen H02 update component is canonically Sym^18 in the q79 base variables. Its observed 28-dimensional relation space at every one of the48 split-root charts is exactly the reduction of (F6^2/16)Sym^6, where F6 is the independently selected integral q79 K3 branch sextic. The source subspace has exact characteristic-zero dimension28 and quotient dimension162. Promotion to a Q(gamma) kernel still requires an exact bordered annihilation identity, which is not inferred from the finite replays.",
+        },
+        "frontier_delta": {
+            "before": "G3DX isolated a28-rank coefficient defect in a190-direction first component without identifying its source.",
+            "after": "That defect is no longer an unexplained numerical kernel: it is the selected q79 branch relation (F6^2/16)Sym^6, recovered identically at all48 root charts. The remaining component0 task is one exact source-to-border annihilation identity, not coefficient discovery.",
+        },
+        "next_required_object": "Derive in the exact Cayley/Jacobian Macaulay complex the bordered syzygy sending each (F6^2/16)m, m in Sym6, to a base lift y_m with A_core*y_m+U*m=0 and W*y_m=0. One symbolic generator identity suffices for all28 monomial multiples and proves the component0 Q(gamma) rank upper162.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DY H02 branch-sextic-square source: PASS")
+    print("component0=Sym18 source=(F6^2/16)Sym6 rank=28 quotient=162")
+    print(f"root_charts={len(root_rows)} relation_mismatches={relation_space_mismatches} source_mismatches={source_coefficient_mismatches}")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

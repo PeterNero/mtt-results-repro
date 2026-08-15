@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""Target hard component-12 coordinates in the K-span of the G3EF basis."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+import statistics
+import time
+from pathlib import Path
+from typing import Any
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    coefficient_multiply,
+)
+from build_ust_g3ec_h02_component12_unit_pivot_reduction import ROOT
+from probe_ust_g3ec_component12_padic_kernel import invert_matrix_mod
+from probe_ust_g3ef_component12_six_embedding_lattice import (
+    MATRIX,
+    OUTPUT as G3EF_OUTPUT,
+    RESIDUE,
+    candidate_vectors,
+    centered,
+    exact_replay,
+    independent_candidates,
+    interpolate_vectors,
+)
+from ust_fplll_backend import reduce_fplll
+
+
+OUTPUT = ROOT / "evidence/ust_g3ei/H02.component12.warm_span_target_lattice.json.gz"
+GAMMA = (0, 1, 0, 0, 0, 0)
+PRIME = 21817
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load_gzip(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_gzip_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.write("\n")
+    temporary.replace(path)
+
+
+def multiply_vector_by_gamma(vector: list[int]) -> list[int]:
+    require(len(vector) == 60, "free-coefficient vector length")
+    result: list[int] = []
+    for relation in range(10):
+        coefficient = tuple(vector[relation * 6 : (relation + 1) * 6])
+        result.extend(coefficient_multiply(coefficient, GAMMA))
+    return result
+
+
+def gamma_span(candidates: list[list[int]]) -> list[list[int]]:
+    require(len(candidates) == 10, "ten warm candidates")
+    basis: list[list[int]] = []
+    for source in candidates:
+        current = list(source)
+        for _degree in range(6):
+            basis.append(current)
+            current = multiply_vector_by_gamma(current)
+    require(len(basis) == 60, "gamma-span dimension")
+    return basis
+
+
+def modular_rank(rows: list[list[int]], prime: int = PRIME) -> int:
+    matrix = [[int(value) % prime for value in row] for row in rows]
+    rank = 0
+    columns = len(matrix[0])
+    for column in range(columns):
+        pivot = next(
+            (index for index in range(rank, len(matrix)) if matrix[index][column]),
+            None,
+        )
+        if pivot is None:
+            continue
+        matrix[rank], matrix[pivot] = matrix[pivot], matrix[rank]
+        inverse = pow(matrix[rank][column], -1, prime)
+        matrix[rank] = [value * inverse % prime for value in matrix[rank]]
+        for index in range(len(matrix)):
+            if index == rank:
+                continue
+            factor = matrix[index][column]
+            if factor:
+                matrix[index] = [
+                    (value - factor * pivot_value) % prime
+                    for value, pivot_value in zip(
+                        matrix[index], matrix[rank], strict=True
+                    )
+                ]
+        rank += 1
+        if rank == len(matrix):
+            break
+    return rank
+
+
+def coupling_for_targets(
+    kernels: list[list[list[int]]],
+    roots: list[int],
+    inverse_vandermonde: list[list[int]],
+    modulus: int,
+    targets: list[int],
+) -> list[list[int]]:
+    output_count = 6 * len(targets)
+    root_powers = [
+        [pow(root, degree, modulus) for degree in range(6)] for root in roots
+    ]
+    coupling = [[0] * output_count for _ in range(60)]
+    for relation in range(10):
+        for degree in range(6):
+            variable = relation * 6 + degree
+            for target_index, coordinate in enumerate(targets):
+                root_values = [
+                    int(kernels[root][coordinate][relation])
+                    * root_powers[root][degree]
+                    % modulus
+                    for root in range(6)
+                ]
+                for output_degree in range(6):
+                    coupling[variable][target_index * 6 + output_degree] = sum(
+                        inverse_vandermonde[output_degree][root]
+                        * root_values[root]
+                        for root in range(6)
+                    ) % modulus
+    return coupling
+
+
+def build_target_lattice(
+    basis: list[list[int]], coupling: list[list[int]], modulus: int
+) -> list[list[int]]:
+    output_count = len(coupling[0])
+    rows: list[list[int]] = []
+    for vector in basis:
+        output = [
+            centered(
+                sum(
+                    vector[variable] * coupling[variable][column]
+                    for variable in range(60)
+                ),
+                modulus,
+            )
+            for column in range(output_count)
+        ]
+        rows.append(vector + output)
+    rows.extend(
+        [0] * 60
+        + [modulus if column == row else 0 for column in range(output_count)]
+        for row in range(output_count)
+    )
+    require(len(rows) == len(rows[0]), "square target lattice")
+    return rows
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--targets-per-round", type=int, default=5)
+    parser.add_argument("--candidate-count", type=int, default=20)
+    parser.add_argument("--threshold-bits", type=int, default=500)
+    parser.add_argument("--delta", type=float, default=0.75)
+    parser.add_argument("--eta", type=float, default=0.51)
+    parser.add_argument(
+        "--fplll-mode",
+        choices=("wrapper", "fast", "heuristic", "proved"),
+        default="wrapper",
+    )
+    parser.add_argument(
+        "--fplll-float",
+        choices=("mpfr", "dd", "qd", "dpe", "double", "longdouble"),
+        default="dpe",
+    )
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    arguments = parser.parse_args()
+    require(arguments.rounds > 0, "positive round count")
+    require(arguments.targets_per_round > 0, "positive target count")
+    require(arguments.candidate_count >= 10, "at least ten candidates")
+
+    g3ef = load_gzip(G3EF_OUTPUT)
+    require(g3ef["exact_replay_nonzero_slots"] == 3279, "G3EF residual")
+    require(not g3ef["exact_kernel_closed"], "G3EF open")
+    residue = load_gzip(RESIDUE)
+    require(residue["shape"] == [6, 956, 10], "residue shape")
+    modulus = int(residue["modulus"])
+    roots = [int(value) for value in residue["lifted_roots"]]
+    kernels = residue["kernels"]
+    vandermonde = [
+        [pow(root, degree, modulus) for degree in range(6)] for root in roots
+    ]
+    inverse_vandermonde = invert_matrix_mod(vandermonde, modulus)
+    free = set(int(value) for value in residue["free_columns"])
+    available = [coordinate for coordinate in range(956) if coordinate not in free]
+
+    warm_candidates = [
+        [int(value) for value in row]
+        for row in g3ef["selected_candidate_free_coefficients"]
+    ]
+    initial_worst = g3ef["rounds"][-1]["worst_new_coordinates"]
+    targets = sorted(
+        int(item["coordinate"])
+        for item in initial_worst[: arguments.targets_per_round]
+    )
+    rounds: list[dict[str, Any]] = []
+    exact_nonzeros = int(g3ef["exact_replay_nonzero_slots"])
+    exact_slots = 1324 * 10
+
+    if arguments.resume:
+        current = load_gzip(arguments.output)
+        require(
+            current["schema"]
+            == "ust.g3ei.h02.component12.warm-span-target-lattice.v1",
+            "resume schema",
+        )
+        require(
+            current["source_G3EF"]["sha256"] == sha256(G3EF_OUTPUT),
+            "resume G3EF hash",
+        )
+        require(not current["exact_kernel_closed"], "resume only open output")
+        rounds = list(current["rounds"])
+        warm_candidates = [
+            [int(value) for value in row]
+            for row in current["selected_candidate_free_coefficients"]
+        ]
+        targets = sorted(
+            {int(value) for value in rounds[-1]["targets"]}
+            | {
+                int(item["coordinate"])
+                for item in rounds[-1]["worst_new_coordinates"][
+                    : arguments.targets_per_round
+                ]
+            }
+        )
+        exact_nonzeros = int(current["exact_replay_nonzero_slots"])
+        exact_slots = int(current["exact_replay_slots"])
+
+    for _local_round in range(arguments.rounds):
+        started = time.monotonic()
+        basis = gamma_span(warm_candidates)
+        basis_rank = modular_rank(basis)
+        require(basis_rank == 60, "warm gamma-span has full rank")
+        coupling = coupling_for_targets(
+            kernels, roots, inverse_vandermonde, modulus, targets
+        )
+        lattice = build_target_lattice(basis, coupling, modulus)
+        lll_started = time.monotonic()
+        reduced = reduce_fplll(
+            lattice,
+            arguments.delta,
+            arguments.eta,
+            arguments.fplll_mode,
+            arguments.fplll_float,
+            True,
+            False,
+        )
+        lll_elapsed = time.monotonic() - lll_started
+        candidates = candidate_vectors(reduced, arguments.candidate_count)
+        vectors = interpolate_vectors(
+            candidates, kernels, roots, inverse_vandermonde, modulus
+        )
+        selected = independent_candidates(candidates)
+        require(len(selected) == 10, "ten independent candidates")
+        selected_vectors = [vectors[index] for index in selected]
+        exact_nonzeros, exact_slots = exact_replay(selected_vectors)
+
+        scores: list[tuple[int, int, int]] = []
+        all_bits: list[int] = []
+        for coordinate in available:
+            bits = [
+                abs(value).bit_length()
+                for vector in vectors
+                for value in vector[coordinate]
+            ]
+            all_bits.extend(bits)
+            scores.append(
+                (
+                    sum(value > arguments.threshold_bits for value in bits),
+                    max(bits),
+                    coordinate,
+                )
+            )
+        worst = sorted(
+            (score for score in scores if score[2] not in targets), reverse=True
+        )[: arguments.targets_per_round]
+        record = {
+            "round": len(rounds),
+            "targets": list(targets),
+            "lattice_dimension": len(lattice),
+            "warm_gamma_span_rank_mod21817": basis_rank,
+            "candidate_count": len(candidates),
+            "selected_independent_candidates": selected,
+            "coefficient_bit_median": statistics.median(all_bits),
+            "coefficient_bit_max": max(all_bits),
+            "coefficients_over_threshold": sum(
+                value > arguments.threshold_bits for value in all_bits
+            ),
+            "exact_replay_nonzero_slots": exact_nonzeros,
+            "exact_replay_slots": exact_slots,
+            "worst_new_coordinates": [
+                {"coordinate": coordinate, "over_threshold": count, "max_bits": maximum}
+                for count, maximum, coordinate in worst
+            ],
+            "lll_elapsed_seconds": lll_elapsed,
+            "elapsed_seconds": time.monotonic() - started,
+        }
+        rounds.append(record)
+        warm_candidates = [candidates[index] for index in selected]
+        payload = {
+            "schema": "ust.g3ei.h02.component12.warm-span-target-lattice.v1",
+            "source_G3EF": {
+                "path": G3EF_OUTPUT.relative_to(ROOT).as_posix(),
+                "sha256": sha256(G3EF_OUTPUT),
+            },
+            "source_residue": {
+                "path": RESIDUE.relative_to(ROOT).as_posix(),
+                "sha256": sha256(RESIDUE),
+            },
+            "matrix": {
+                "path": MATRIX.relative_to(ROOT).as_posix(),
+                "sha256": sha256(MATRIX),
+            },
+            "backend": {
+                "name": "fplll",
+                "version": "5.5.0",
+                "mode": arguments.fplll_mode,
+                "float_type": (
+                    None
+                    if arguments.fplll_mode == "wrapper"
+                    else arguments.fplll_float
+                ),
+                "lovasz_condition": True,
+                "early_reduction": False,
+            },
+            "rounds": rounds,
+            "selected_candidate_free_coefficients": warm_candidates,
+            "exact_replay_nonzero_slots": exact_nonzeros,
+            "exact_replay_slots": exact_slots,
+            "exact_kernel_closed": exact_nonzeros == 0,
+            "claim_boundary": (
+                "The warm-span lattice is a candidate search. Only ten independent "
+                "vectors with literal zero Q(gamma) replay promote component12."
+            ),
+        }
+        write_gzip_atomic(arguments.output, payload)
+        print(
+            f"G3EI round={record['round']} targets={len(targets)} "
+            f"lattice={len(lattice)} lll={lll_elapsed:.3f}s "
+            f"over={record['coefficients_over_threshold']} "
+            f"exact_nonzeros={exact_nonzeros} "
+            f"worst={[item[2] for item in worst]} "
+            f"elapsed={record['elapsed_seconds']:.3f}s",
+            flush=True,
+        )
+        if exact_nonzeros == 0:
+            break
+        targets = sorted(set(targets) | {item[2] for item in worst})
+
+    print(
+        f"G3EI_FINAL exact_kernel_closed={exact_nonzeros == 0} "
+        f"exact_nonzeros={exact_nonzeros} output={arguments.output}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

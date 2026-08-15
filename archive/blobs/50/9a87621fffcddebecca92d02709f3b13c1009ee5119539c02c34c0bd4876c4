@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ust.g3fs.h02.component20.qgamma-inverse-source-promotion.v1",
+  "title": "UST.G3FS component-20 characteristic-zero inverse-source promotion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "inputs",
+    "source_derivation",
+    "primitive_payload",
+    "exact_replay",
+    "checks",
+    "guardrails"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ust.g3fs.h02.component20.qgamma-inverse-source-promotion.v1"
+    },
+    "status": {
+      "const": "CLOSED_EXACT_QGAMMA_COMPONENT20_INVERSE_SOURCE_RANK36"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["G3EX", "G3FK", "G3FR"],
+      "properties": {
+        "G3EX": {"$ref": "#/$defs/artifact"},
+        "G3FK": {"$ref": "#/$defs/artifact"},
+        "G3FR": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "source_derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "formula", "cox_degree_check", "same_source_check"],
+      "properties": {
+        "kind": {"const": "selected_four_normal_cayley_koszul_formula"},
+        "formula": {"type": "string", "minLength": 1},
+        "cox_degree_check": {"const": true},
+        "same_source_check": {"const": true}
+      }
+    },
+    "primitive_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["degree19", "degree16", "degree15", "artifact"],
+      "properties": {
+        "degree19": {"$ref": "#/$defs/primitiveLane"},
+        "degree16": {"$ref": "#/$defs/primitiveLane"},
+        "degree15": {"$ref": "#/$defs/primitiveLane"},
+        "artifact": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "exact_replay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "top_derivative_dimensions",
+        "degree16_derivative_dimension",
+        "degree15_direct_sum_dimensions",
+        "degree15_dual_rank",
+        "annihilator_rank",
+        "g3ex_zero_residual_slots",
+        "nonzero_minor36"
+      ],
+      "properties": {
+        "top_derivative_dimensions": {
+          "type": "array",
+          "prefixItems": [
+            {"const": 1}, {"const": 3}, {"const": 6}, {"const": 10}, {"const": 15}
+          ],
+          "items": false
+        },
+        "degree16_derivative_dimension": {"const": 3},
+        "degree15_direct_sum_dimensions": {
+          "type": "array",
+          "prefixItems": [{"const": 18}, {"const": 3}, {"const": 15}],
+          "items": false
+        },
+        "degree15_dual_rank": {"const": 36},
+        "annihilator_rank": {"const": 100},
+        "g3ex_zero_residual_slots": {"const": 0},
+        "nonzero_minor36": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "checks": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"const": true}
+    },
+    "guardrails": {
+      "type": "object",
+      "additionalProperties": {"const": false}
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "primitiveLane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["degree", "count", "coordinate_field", "derivation_identity"],
+      "properties": {
+        "degree": {"type": "integer", "enum": [15, 16, 19]},
+        "count": {"type": "integer", "enum": [1, 18]},
+        "coordinate_field": {"const": "Q(gamma)"},
+        "derivation_identity": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

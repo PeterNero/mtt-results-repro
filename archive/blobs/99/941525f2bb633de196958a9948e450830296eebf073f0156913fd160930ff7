@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Independently verify the emitted G3FX adjugate homotopy."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fj_component20_k3_normal_matrix_factorization as normal_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "evidence/ust_g3fx/H02.component20.adjugate_normal_homotopy.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def polynomial(exponents: np.ndarray, coefficients: np.ndarray, variables: tuple[sp.Symbol, ...]) -> sp.Expr:
+    return sp.expand(
+        sum(
+            int(value) * sp.prod(variable ** int(power) for variable, power in zip(variables, exponent, strict=True))
+            for exponent, value in zip(exponents, coefficients, strict=True)
+        )
+    )
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fx.h02.component20.adjugate-normal-homotopy.v1", "schema")
+    artifact = np.load(ROOT / packet["homotopy"]["artifact"]["path"], allow_pickle=False)
+    x, y, z, w = sp.symbols("x y z w")
+    variables = (x, y, z, w)
+    xyz = (x, y, z)
+    q = x * z - y**2
+    g3 = sum(c * x**e[0] * y**e[1] * z**e[2] for e, c in conic.G3_TERMS.items())
+    r, rbar = w + g3, w - g3
+    h4 = polynomial(np.asarray(normal_runtime.homogeneous_exponents(4)), artifact["H4_coefficients"], xyz)
+    k3 = sp.expand(q * h4 + r * rbar)
+    hx_exp = artifact["xyz_multiplier_weighted_exponents"]
+    hw_exp = artifact["w_multiplier_weighted_exponents"]
+    b_exp = np.asarray(normal_runtime.homogeneous_exponents(6), dtype=np.int16)
+    d_exp = np.asarray(normal_runtime.homogeneous_exponents(7), dtype=np.int16)
+    for field in range(6):
+        h = [
+            polynomial(hx_exp, artifact["xyz_multiplier_coefficients"][field, component], variables)
+            for component in range(3)
+        ] + [polynomial(hw_exp, artifact["w_multiplier_coefficients"][field], variables)]
+        b6 = polynomial(b_exp, artifact["B6_gamma_coordinates"][:, field], xyz)
+        d7 = polynomial(d_exp, artifact["D7_gamma_coordinates"][:, field], xyz)
+        left = sp.expand(sum(value * sp.diff(k3, variable) for value, variable in zip(h, variables, strict=True)))
+        jacobian = sp.Matrix([q, h4, rbar, r]).jacobian(variables)
+        require(sp.expand(left - jacobian.det() * (q * d7 + r * b6)) == 0, f"field coordinate {field}")
+    require(packet["homotopy"]["bare_multiplier_weighted_degrees"] == [10, 10, 10, 12], "degrees")
+    require(packet["Cox_degree_audit"]["adjugate_identity_target_degree"] == [15, 1, 2], "higher Cox degree")
+    require(packet["Cox_degree_audit"]["frozen_H02_target_degree"] == [9, 1, 2], "frozen Cox degree")
+    require(all(packet["checks"].values()) and not any(packet["guardrails"].values()), "claim discipline")
+    print("UST.G3FX independent verification: PASS field_coordinates=6 literal_residuals=0")
+
+
+if __name__ == "__main__":
+    main()

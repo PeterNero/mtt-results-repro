@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Probe canonical conic transvectants for the missing residue-source map."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fy_pdelta_socle_kernel_source as socle
+import build_ust_g3fz_component20_second_jet_o8_source as second_jet
+import probe_ust_g3fy_selected_degree21_source_span as runtime
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def multi_derivative(
+    vector: np.ndarray,
+    degree: int,
+    orders: tuple[int, int, int],
+    prime: int,
+) -> np.ndarray:
+    result = vector
+    current_degree = degree
+    for variable, count in enumerate(orders):
+        for _ in range(count):
+            result = second_jet.derivative(result, current_degree, variable, prime)
+            current_degree -= 1
+    return result
+
+
+def conic_transvectant(
+    left9: np.ndarray,
+    right6: np.ndarray,
+    order: int,
+    prime: int,
+) -> np.ndarray:
+    """Return <d^r left,d^r right>_(Hess(q)^-1) in degree 15-2r."""
+    require(0 <= order <= 6, "transvectant order")
+    result_degree = 15 - 2 * order
+    result = np.zeros(len(graded.homogeneous_exponents(result_degree)), dtype=np.int64)
+    inverse_two = pow(2, -1, prime)
+    factorial_order = math.factorial(order)
+    for x_count in range(order + 1):
+        for y_count in range(order - x_count + 1):
+            z_count = order - x_count - y_count
+            left_orders = (x_count, y_count, z_count)
+            right_orders = (z_count, y_count, x_count)
+            multiplicity = (
+                factorial_order
+                // math.factorial(x_count)
+                // math.factorial(y_count)
+                // math.factorial(z_count)
+            )
+            weight = multiplicity * pow(-inverse_two % prime, y_count, prime) % prime
+            left = multi_derivative(left9, 9, left_orders, prime)
+            right = multi_derivative(right6, 6, right_orders, prime)
+            result = (
+                result
+                + weight
+                * runtime.product(
+                    left,
+                    9 - order,
+                    right,
+                    6 - order,
+                    prime,
+                )
+            ) % prime
+
+    return result
+
+
+def selected_factors(
+    degree: int,
+    q: np.ndarray,
+    g3: np.ndarray,
+    h4: np.ndarray,
+    pdelta: np.ndarray,
+    prime: int,
+) -> dict[str, np.ndarray]:
+    generators = (
+        ("q", q, 2),
+        ("G3", g3, 3),
+        ("H4", h4, 4),
+        ("Pdelta", pdelta, 6),
+    )
+    factors: dict[str, np.ndarray] = {}
+    for q_power in range(degree // 2 + 1):
+        for g_power in range(degree // 3 + 1):
+            for h_power in range(degree // 4 + 1):
+                for p_power in range(degree // 6 + 1):
+                    powers = (q_power, g_power, h_power, p_power)
+                    if sum(
+                        power * generator_degree
+                        for power, (_, _, generator_degree) in zip(
+                            powers, generators, strict=True
+                        )
+                    ) != degree:
+                        continue
+                    value = np.asarray([1], dtype=np.int64)
+                    value_degree = 0
+                    labels: list[str] = []
+                    for power, (label, generator, generator_degree) in zip(
+                        powers, generators, strict=True
+                    ):
+                        for _ in range(power):
+                            value = runtime.product(
+                                value,
+                                value_degree,
+                                generator,
+                                generator_degree,
+                                prime,
+                            )
+                            value_degree += generator_degree
+                        if power:
+                            labels.append(label if power == 1 else f"{label}^{power}")
+                    factors["*".join(labels) or "1"] = value
+    require(factors, f"selected factors degree {degree}")
+    return factors
+
+
+def fiber_candidates(
+    kernel18: np.ndarray,
+    coefficient_vectors: list[list[int]],
+    gamma: int,
+    prime: int,
+    factors_by_order: list[dict[str, np.ndarray]],
+) -> tuple[list[str], list[np.ndarray]]:
+    labels: list[str] = []
+    candidates: list[np.ndarray] = []
+    for theta in range(3):
+        a_theta = runtime.evaluate_selected_form(
+            coefficient_vectors, theta, gamma, prime
+        )
+        for order in range(7):
+            contracted = np.stack(
+                [
+                    conic_transvectant(
+                        a_theta,
+                        kernel18[:, column],
+                        order,
+                        prime,
+                    )
+                    for column in range(kernel18.shape[1])
+                ],
+                axis=1,
+            )
+            for factor_label, factor in factors_by_order[order].items():
+                candidate = np.stack(
+                    [
+                        runtime.product(
+                            contracted[:, column],
+                            15 - 2 * order,
+                            factor,
+                            2 * order,
+                            prime,
+                        )
+                        for column in range(kernel18.shape[1])
+                    ],
+                    axis=1,
+                )
+                labels.append(f"{factor_label}*C_{order}(A{theta},u)")
+                candidates.append(candidate)
+    return labels, candidates
+
+
+def containment_system(
+    candidates: list[np.ndarray], target: np.ndarray, prime: int
+) -> tuple[np.ndarray, np.ndarray]:
+    _, _, annihilator = graded.rref(target.T, prime, emit_nullspace=True)
+    require(
+        annihilator is not None and annihilator.shape == (136, 118),
+        "target annihilator",
+    )
+    obstruction = np.stack(
+        [
+            (annihilator.T @ candidate % prime).reshape(-1)
+            for candidate in candidates
+        ],
+        axis=1,
+    )
+    rank, _, nullspace = graded.rref(obstruction, prime, emit_nullspace=True)
+    require(nullspace is not None, "containment nullspace")
+    return obstruction, nullspace
+
+
+def main() -> None:
+    (
+        _base,
+        _pdelta_packet,
+        g3bi,
+        sextic,
+        g3_polynomial,
+        h4_polynomial,
+        pdelta_polynomial,
+    ) = socle.selected_polynomials()
+    arrays = np.load(runtime.G3FR, allow_pickle=False)
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+    primes = tuple(int(value) for value in arrays["primes"])
+    roots = arrays["roots"].astype(np.int64)
+    require(roots.shape == (8, 6), "G3FR fiber chart")
+
+    x, y, z = sextic.gens
+    q_polynomial = runtime.sp.Poly(x * z - y**2, x, y, z)
+    anchor_prime = primes[0]
+    anchor_kernel, _ = runtime.pdelta_kernel(
+        sextic, pdelta_polynomial, anchor_prime
+    )
+    anchor_q = runtime.polynomial_vector(q_polynomial, 2, anchor_prime)
+    anchor_g3 = runtime.polynomial_vector(g3_polynomial, 3, anchor_prime)
+    anchor_h4 = runtime.polynomial_vector(h4_polynomial, 4, anchor_prime)
+    anchor_pdelta = runtime.polynomial_vector(
+        pdelta_polynomial, 6, anchor_prime
+    )
+    factors_by_order = [
+        selected_factors(
+            2 * order,
+            anchor_q,
+            anchor_g3,
+            anchor_h4,
+            anchor_pdelta,
+            anchor_prime,
+        )
+        for order in range(7)
+    ]
+    labels, anchor_candidates = fiber_candidates(
+        anchor_kernel,
+        coefficient_vectors,
+        int(roots[0, 0]),
+        anchor_prime,
+        factors_by_order,
+    )
+    target = arrays["degree15_primitives"][0, 0].astype(np.int64) % anchor_prime
+    obstruction, nullspace = containment_system(
+        anchor_candidates, target, anchor_prime
+    )
+    anchor_rank = graded.rref(obstruction, anchor_prime)[0]
+    print(
+        f"G3GI anchor candidates={len(labels)} obstruction_rank={anchor_rank} "
+        f"nullity={nullspace.shape[1]}",
+        flush=True,
+    )
+    for index, candidate in enumerate(anchor_candidates):
+        candidate_rank = graded.rref(candidate, anchor_prime)[0]
+        joint_rank = graded.rref(
+            np.concatenate((candidate, target), axis=1), anchor_prime
+        )[0]
+        if joint_rank < 36:
+            print(
+                f"G3GI near label={labels[index]} rank={candidate_rank} "
+                f"joint={joint_rank}",
+                flush=True,
+            )
+
+    if nullspace.shape[1] == 0:
+        print(
+            f"G3GI RESULT: canonical {len(labels)}-source conic family excluded "
+            "at anchor"
+        )
+        return
+
+    for source_index in range(nullspace.shape[1]):
+        coefficients = nullspace[:, source_index]
+        combined = sum(
+            int(coefficient) * candidate
+            for coefficient, candidate in zip(
+                coefficients, anchor_candidates, strict=True
+            )
+        ) % anchor_prime
+        rank = graded.rref(combined, anchor_prime)[0]
+        joint = graded.rref(
+            np.concatenate((combined, target), axis=1), anchor_prime
+        )[0]
+        support = [
+            labels[index]
+            for index in np.flatnonzero(coefficients)
+        ]
+        print(
+            f"G3GI anchor_solution={source_index} rank={rank} joint={joint} "
+            f"support={support}",
+            flush=True,
+        )
+
+
+if __name__ == "__main__":
+    main()

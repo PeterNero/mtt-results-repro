@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Verify UST.G3N fiber-Serre pairing and nonzero Yoneda column."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3n_fiber_serre_nonzero_yoneda.packet.json"
+RESULT_PATH = ROOT / "state" / "ust_g3m_invariant_yoneda_column.result.json"
+G3L_PATH = ROOT / "state" / "ust_g3l_monad_yoneda_rank_four.packet.json"
+G3M_PATH = ROOT / "state" / "ust_g3m_conjugate_clock_fixed_yoneda_column.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_sources(packet: dict, lock: dict) -> tuple[dict, dict]:
+    for key, path in (
+        ("g3l_monad_yoneda", G3L_PATH),
+        ("g3m_fixed_column", G3M_PATH),
+    ):
+        source = packet["inputs"][key]
+        require(source["path"] == str(path.relative_to(ROOT)).replace("\\", "/"), f"{key} path")
+        require(source["sha256"] == sha256(path), f"{key} hash")
+
+    for key in ("holomorphic_hartshorne_serre_source", "qutrit_orbit_atlas"):
+        source = packet["inputs"][key]
+        repository = next(item for item in lock["repositories"] if item["id"] == source["repository_id"])
+        locked = next(item for item in repository["sources"] if item["path"] == source["path"])
+        require(source["sha256"] == locked["sha256"], f"{key} hash")
+    return load(G3L_PATH), load(G3M_PATH)
+
+
+def verify_kunneth_serre(packet: dict) -> None:
+    surface = packet["support_surface"]
+    require(surface["surface"] == "A=E_B x E_f", "support surface")
+    require(surface["fiber_degree_D"] == 3, "fiber line degree")
+    require(surface["curve"] == "Gamma_0=(a*T_0=0) in |H*D|", "curve equation")
+
+    data = packet["kunneth_serre"]
+    # Riemann-Roch on a genus-one curve gives h0(D)=deg(D) and, by Serre
+    # duality, h1(D^-1)=h0(D) for positive degree D.
+    genus = 1
+    degree = surface["fiber_degree_D"]
+    h0_d = degree + 1 - genus
+    h1_d_inverse = h0_d
+    require(h0_d == data["H0_Ef_D_dimension"], "elliptic Riemann-Roch h0(D)")
+    require(h1_d_inverse == data["H1_A_D_inverse_dimension"], "Serre dual h1(D^-1)")
+    require(data["H1_A_D_inverse_dimension"] == 3, "H1(D^-1) dimension")
+    require(data["H0_Ef_D_dimension"] == 3, "H0(D) dimension")
+    pairing = sp.Matrix(data["pairing_matrix"])
+    require(pairing == sp.eye(3), "normalized Serre pairing")
+
+    t0_row = sp.Matrix([data["T0_multiplication_row"]])
+    require(t0_row.rank() == 1, "T0 multiplication rank")
+    kernel = t0_row.nullspace()
+    require(len(kernel) == data["T0_kernel_dimension"] == 2, "T0 kernel dimension")
+    require(data["T0_kernel_basis"] == ["beta_1", "beta_2"], "T0 kernel basis")
+
+
+def verify_fixed_normal_column(packet: dict, g3l: dict, g3m: dict) -> None:
+    fixed = packet["clock_fixed_pair"]
+    theta_weights = fixed["theta_weight_exponents_mod3"]
+    dual_weights = fixed["dual_weight_exponents_mod3"]
+    copy_weights = fixed["generator_copy_weight_exponents_mod3"]
+    require(theta_weights == [0, 1, 2], "theta weights")
+    require(dual_weights == [0, 2, 1], "dual weights")
+    require(all((theta_weights[i] + dual_weights[i]) % 3 == 0 for i in range(3)), "dual characters")
+    require((copy_weights[0] + dual_weights[1]) % 3 == fixed["u_weight_mod3"] == 0, "u fixed")
+    require((copy_weights[1] + dual_weights[2]) % 3 == fixed["v_weight_mod3"] == 0, "v fixed")
+    require(fixed["ambient_fixed_dimension"] == 2, "fixed ambient dimension")
+    require(g3m["canonical_fixed_line"]["ambient_fixed_dimension"] == 2, "G3M fixed ambient")
+
+    fermat = packet["fermat_restriction"]
+    require(fermat["coordinate"] == "y=T_2/T_1", "Fermat chart coordinate")
+    require(fermat["quotient_basis"] == ["1", "y", "y^2"], "Fermat quotient basis")
+    ordinary_span = sp.Matrix([[1, 0], [0, 1], [0, 0]])
+    residual = sp.Matrix([0, 0, 1])
+    require(ordinary_span.rank() == 2, "ordinary theta restriction rank")
+    require(ordinary_span.row_join(residual).rank() == 3, "residual y^2 class")
+    require(fermat["residual_nonzero_mod_theta_span"], "Fermat residual decision")
+
+    edge = packet["normal_edge"]
+    normal = sp.Matrix(edge["fixed_matrix"])
+    require(normal == sp.Matrix([[1, 1]]), "fixed normal row")
+    require(normal.rank() == edge["fixed_matrix_rank"] == 1, "normal rank")
+    require(edge["u_image"] == edge["v_image"] == "eta_f", "dual-pair images")
+    require(edge["target_witness_nonzero"], "vertical target witness")
+
+    quotient = packet["boundary_and_quotient"]
+    boundary = sp.Matrix(quotient["boundary_vector"])
+    require(boundary == sp.Matrix([1, -1]), "boundary vector")
+    require(normal * boundary == sp.zeros(1, 1), "boundary killed")
+    require(len(normal.nullspace()) == quotient["normal_symbol_kernel_dimension"] == 1, "normal kernel")
+    require(quotient["boundary_fixed_dimension"] == 1, "boundary dimension")
+    require(quotient["boundary_equals_normal_kernel"], "boundary/kernel identity")
+    require(quotient["quotient_dimension"] == 1, "quotient dimension")
+
+    representative = sp.Matrix([1, 0])
+    require(normal * representative == sp.Matrix([1]), "quotient image")
+    require(quotient["quotient_image_nonzero"], "quotient nonzero")
+    require(g3l["yoneda_edge"]["normal_symbol_pointwise_surjective"], "G3L normal symbol")
+    require(g3l["long_exact_sequence"]["q_kernel_character_multiplicities"]["trivial"] == 1, "G3L fixed quotient")
+
+
+def verify_decision(packet: dict) -> None:
+    decision = packet["yoneda_decision"]
+    require(decision["normal_edge_nonzero"], "normal edge decision")
+    require(decision["mu_E_e0_nonzero"], "Yoneda column decision")
+    require(not decision["connecting_lift_exists"], "connecting lift promoted")
+    require(decision["column_decision"] == "NONZERO", "column label")
+    require(decision["three_orbit_columns_nonzero"], "orbit transport")
+
+    frontier = packet["frontier"]
+    require(frontier["nine_direction_search_retired"], "nine-direction search")
+    require(frontier["five_column_physical_search_retired"], "five-column search")
+    require(not frontier["one_column_open"], "column left open")
+    require(frontier["locked_bidirectional_cohesive_hs_route_retired"], "route not retired")
+    require(frontier["direct_global_repaired_g3h_route_open"], "direct route incorrectly retired")
+    require(not frontier["unrelated_hidden_presentations_excluded"], "unrelated routes excluded")
+    require(not frontier["physical_hidden_W9_constructed"], "W9 promoted")
+    require(not frontier["B_HS_01_closed"], "B.HS.01 promoted")
+    require(packet["continuous_fit_parameters"] == 0, "fit parameter introduced")
+    require(packet["observed_inputs"] == 0, "observed input introduced")
+
+
+def verify_filled_contract(packet: dict) -> None:
+    result = load(RESULT_PATH)
+    require(result["schema"] == "mtt.unified-source.q79-invariant-yoneda-column.v1", "result schema")
+    require(result["source_hash"] == sha256(G3M_PATH), "result source hash")
+    require(result["orbit_member"] == 0, "result orbit member")
+    require(result["stabilizer"] == "Z_0", "result stabilizer")
+    require(result["domain_dimension"] == 1, "result domain")
+    require(result["column_decision"] == "NONZERO", "result decision")
+    require(result["empirical_inputs"] == [], "result empirical inputs")
+    require(not result["physical_promotion_requested"], "result promotion")
+
+    for key in (
+        "fixed_quotient_line_artifact",
+        "cech_representative_artifact",
+        "target_basis_artifact",
+        "yoneda_column_artifact",
+        "connecting_lift_artifact",
+        "shift_transport_artifact",
+    ):
+        artifact = result[key]
+        path = ROOT / artifact["path"]
+        require(path.is_file(), f"{key} path")
+        require(artifact["sha256"] == sha256(path), f"{key} hash")
+
+    require(packet["yoneda_decision"]["column_decision"] == result["column_decision"], "packet/result decision")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    require(packet["schema"] == "mtt.unified-source.q79-fiber-serre-nonzero-yoneda.v1", "packet schema")
+    require(packet["theorem_id"] == "UST.G3N", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_INVARIANT_YONEDA_COLUMN_NONZERO_LOCKED_BIDIRECTIONAL_HS_ROUTE_RETIRED",
+        "status",
+    )
+    g3l, g3m = verify_sources(packet, lock)
+    verify_kunneth_serre(packet)
+    verify_fixed_normal_column(packet, g3l, g3m)
+    verify_decision(packet)
+    verify_filled_contract(packet)
+
+    print("UST.G3N fiber-Serre nonzero Yoneda-column theorem: PASS")
+    print("T0 transgression kernel: span(beta_1,beta_2)")
+    print("fixed normal row: [1 1], boundary: [1 -1]")
+    print("selected quotient column: NONZERO")
+    print("locked bidirectional cohesive HS completion: RETIRED")
+
+
+if __name__ == "__main__":
+    main()

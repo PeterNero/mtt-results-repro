@@ -1,0 +1,161 @@
+# UST.G3FF: H02 Component-20 Conic Fourth-Normal Source Theorem
+
+## Status
+
+`CLOSED_EXACT_QGAMMA_CONIC_QUOTIENT_AND_48_FIBER_FOURTH_NORMAL_PROFILE_INTERTWINER_OPEN`
+
+This theorem combines one exact characteristic-zero source identity with an
+independent exact finite-field normal-filtration campaign. It does not yet
+identify the full characteristic-zero endpoint quotient with the displayed
+normal carrier.
+
+## Setup
+
+Let
+
+```text
+q = xz - y^2
+```
+
+be the selected root conic in the G3BI start member. Its root graph is
+
+```text
+Rminus: q = 0,  w = -G3(x,y,z).
+```
+
+The G3BI root-containment correction supplies three degree-nine coefficient
+rows `A0,A1,A2` over `Q(gamma)`. The canonical component-20 split kernels from
+G3DI--G3DU are
+
+```text
+K_15 subset Sym^15(k^3),  dim K_15 = 100,
+```
+
+at six roots over each of eight independent split primes.
+
+## Exact Source Identity
+
+After the literal substitution `w=-G3`, coefficientwise division over the
+six-coordinate power basis of `Q(gamma)` gives
+
+```text
+(A0-A1)|_(w=-G3) = q D7,
+```
+
+where
+
+```text
+D7 in Sym^7(Q(gamma)^3),
+dim Sym^7 = 36.
+```
+
+The stored coefficient table has shape `36 x 6`; 35 of its 36 monomial rows
+are nonzero and its largest absolute power-basis coordinate is 590. Every one
+of the six integer-coordinate divisions has zero remainder. Thus this part is
+an exact identity over `Q(gamma)`, not a modular reconstruction.
+
+## Conic Normal Filtration
+
+For each split fiber define
+
+```text
+K_j = {f in Sym^(15-2j)(k^3) : q^j f lies in K_15}.
+```
+
+All 48 canonical fibers have exactly the same dimensions:
+
+```text
+j:          0   1   2   3  4  5  6  7
+dim K_j:  100  69  42  19  0  0  0  0.
+```
+
+The successive dimensions are therefore
+
+```text
+31, 27, 23, 19,
+```
+
+which are the full restriction dimensions on the conic in degrees
+`30,26,22,18`. In particular,
+
+```text
+100 = 31 + 27 + 23 + 19.
+```
+
+At normal order four the intersection vanishes, and direct rank computation
+on every fiber proves
+
+```text
+K_15 direct_sum q^4 Sym^7(k^3) = Sym^15(k^3).
+```
+
+The complementary dimension is
+
+```text
+136 - 100 = 36 = dim Sym^7.
+```
+
+## Proof Certificate
+
+The builder reconstructs the G3BI polynomials from the hash-bound selected
+coefficient vectors, substitutes the locked cubic `G3`, divides each number-
+field coordinate by `q`, and stores the resulting `D7` table. It then reads
+all 48 canonical component kernels and computes all eight conic-colon
+dimensions plus the fourth-normal direct-sum rank.
+
+The independent verifier does not import the builder. It:
+
+1. hash-binds G3BI, G3FE, all eight split packets, all 48 kernel archives and
+   the G3FF artifact;
+2. reconstructs `A0-A1` directly from the selected coefficient vectors;
+3. multiplies the stored `D7` by `xz-y^2` coefficientwise and checks literal
+   equality;
+4. independently constructs every `q^j` multiplication matrix;
+5. replays all 384 colon-intersection ranks and all 48 direct-sum ranks.
+
+Artifacts:
+
+```text
+build_ust_g3ff_component20_conic_fourth_normal_source.py
+verify_ust_g3ff_component20_conic_fourth_normal_source.py
+evidence/ust_g3ff/H02.component20.conic_fourth_normal_source.json
+evidence/ust_g3ff/H02.component20.conic_fourth_normal_source.npz
+```
+
+## Consequence
+
+The previously unexplained component-20 dimensions now have a selected
+geometric interpretation. The 100-dimensional kernel is exhausted by the
+first four conic-normal layers, while its 36-dimensional complement is the
+fourth-normal carrier `q^4 Sym^7`. Independently, the selected G3BI correction
+already emits an exact degree-seven conic quotient `D7` of that same
+dimension.
+
+This is stronger than a recurring modular rank profile: it identifies the
+specific root-conic filtration and an exact characteristic-zero source with
+the required carrier size.
+
+## Claim Boundary
+
+G3FF does not yet prove that the two exact structures are the same operator.
+In particular it does not prove:
+
+```text
+endpoint component-20 quotient = q^4 Sym^7,
+```
+
+does not promote the finite kernels themselves to `Q(gamma)`, and does not by
+itself prove the component-20 rank contribution 36 or the global H02 rank.
+
+## Next Required Object
+
+Construct over `Q(gamma)` a selected Koszul/normal-jet homotopy that absorbs
+normal orders zero through three into the ordered prior-source plus Jacobian
+image and induces the endpoint quotient map
+
+```text
+q^4 Sym^7 -> coker(prior source + Jacobian).
+```
+
+An exact denominator-safe nonzero `36 x 36` minor of that induced map would
+then promote the component-20 rank contribution to 36.

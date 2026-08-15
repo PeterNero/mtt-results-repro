@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Independently verify the G3BX support-level structural intertwiner."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as reduction
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bx_g3bi_h02_structural_intertwiner.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    repository = Path(record.get("repository_path", default_repository))
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_verified(record: dict[str, Any], default_repository: Path = ROOT) -> dict[str, Any]:
+    return json.loads(verify_record(record, default_repository).read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"] == "mtt.unified-source.g3bx-g3bi-h02-structural-intertwiner.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    inputs = packet["inputs"]
+    g3bw = load_verified(inputs["G3BW"])
+    g3bv = load_verified(inputs["G3BV"])
+    g3br = load_verified(inputs["G3BR"])
+    old = load_verified(inputs["prior_characteristic_zero_reference"])
+    arrays = np.load(verify_record(inputs["G3BW_arrays"]), allow_pickle=False)
+
+    new_hashes = g3bw["DM_reduction"]["hashes"]
+    old_hashes = old["H02_exact_DM_and_Woodbury_reduction"]["hashes"]
+    names = [
+        "exact_complement_pattern_sha256",
+        "matching_column_by_row_sha256",
+        "component_by_column_sha256",
+        "component_by_row_sha256",
+        "component_sizes_sha256",
+        "topological_component_order_sha256",
+    ]
+    matches = {name: new_hashes[name] == old_hashes[name] for name in names}
+    require(matches == packet["structural_intertwiner"]["structural_hash_matches"], "structural matches")
+    require(all(matches.values()), "all structural hashes")
+
+    sizes = arrays["component_sizes"]
+    nontrivial = np.flatnonzero(sizes > 1)
+    require(nontrivial.size == 1, "one nontrivial component")
+    core = int(nontrivial[0])
+    core_mask = arrays["internal_gamma_mask"] & (
+        arrays["component_by_row"][arrays["gamma_rows"]] == core
+    )
+    rows = np.unique(arrays["gamma_rows"][core_mask]).astype(np.int32)
+    columns = np.unique(arrays["gamma_columns"][core_mask]).astype(np.int32)
+    active_hashes = {
+        "active_core_rows_sha256": reduction.array_hash(rows, "<i4"),
+        "active_core_columns_sha256": reduction.array_hash(columns, "<i4"),
+    }
+    require(active_hashes == packet["structural_intertwiner"]["active_coordinate_hashes"], "active hashes packet")
+    require(all(active_hashes[name] == old_hashes[name] for name in active_hashes), "old active hashes")
+    require((int(sizes[core]), rows.size, columns.size) == (24767, 15158, 17676), "core dimensions")
+
+    boundary = packet["coefficient_boundary"]
+    require(int(g3bv["endpoint_chart"]["determinant_mod11"]) == 0, "corrected old-anchor singularity")
+    require(int(g3br["endpoint_chart"]["determinant_mod21817"]) == 419, "corrected anchor determinant")
+    require(boundary["prior_reference_anchor"] == {"prime": 11, "gamma_root": 3, "reported_old_determinant": 2}, "old boundary")
+    require(boundary["corrected_endpoint_at_prior_anchor"]["determinant"] == 0, "new old-anchor boundary")
+    require(boundary["corrected_integral_anchor"]["determinant"] == 419, "new anchor boundary")
+
+    print("UST.G3BX selected G3BI H02 structural intertwiner verifier: PASS")
+    print(f"structural_hashes=6/6 active_hashes=2/2 core={sizes[core]} active={rows.size}x{columns.size}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Assemble an exact rank submap from completed full-source complement chunks."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import shutil
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_full_reuse as full_assembler
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as fixed_chunk
+import build_ust_g3ap_selected_cayley_target_macaulay_complement_chunk as complement
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+CHUNK_COUNT = 12
+LATEST = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_incremental_full_submap.latest.json"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def output_paths(indexes: list[int]) -> tuple[Path, Path]:
+    suffix = "-".join(f"{index:03d}" for index in indexes)
+    stem = f"ust_g3ap_selected_cayley_target_macaulay_incremental_chunks-{suffix}"
+    return STATE / f"{stem}.packed-sms", STATE / f"{stem}.packet.json"
+
+
+def current_indexes() -> list[int]:
+    return [
+        index
+        for index in range(CHUNK_COUNT)
+        if complement.paths(index, CHUNK_COUNT)["packet"].is_file()
+    ]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--chunks",
+        help="comma-separated zero-based completed chunk indexes; defaults to all current packets",
+    )
+    args = parser.parse_args()
+    if args.chunks:
+        indexes = sorted({int(value) for value in args.chunks.split(",")})
+    else:
+        indexes = current_indexes()
+    require(indexes and all(0 <= index < CHUNK_COUNT for index in indexes), "chunks")
+
+    leaders, _ = fixed_chunk.load_coordinates()
+    targets, _ = macaulay.coordinate_data(leaders)
+    full, balanced, missing = complement.selections(leaders)
+    require(
+        len(full) == complement.FULL_ROWS
+        and len(balanced) == complement.REUSED_ROWS
+        and len(missing) == complement.COMPLEMENT_ROWS,
+        "source partition",
+    )
+
+    balanced_packet = json.loads(
+        full_assembler.BALANCED_PACKET.read_text(encoding="ascii")
+    )
+    require(
+        balanced_packet["matrix"]["path"]
+        == relative(full_assembler.BALANCED_MATRIX)
+        and balanced_packet["matrix"]["sha256"]
+        == sha256(full_assembler.BALANCED_MATRIX)
+        and balanced_packet["matrix"]["rows"] == complement.REUSED_ROWS
+        and balanced_packet["matrix"]["columns"] == len(targets)
+        and balanced_packet["selection"]["selection_sha256"]
+        == complement.source_hash(balanced),
+        "balanced source matrix",
+    )
+
+    packets: list[tuple[Path, dict[str, object], int, int]] = []
+    selected_sources = list(balanced)
+    selected_rows = complement.REUSED_ROWS
+    complement_nonzeros = 0
+    for index in indexes:
+        paths = complement.paths(index, CHUNK_COUNT)
+        require(paths["packet"].is_file(), f"chunk packet {index}")
+        packet = json.loads(paths["packet"].read_text(encoding="ascii"))
+        selection = packet["selection"]
+        start = int(selection["complement_start_zero_based"])
+        stop = int(selection["complement_stop_exclusive_zero_based"])
+        require(
+            packet["schema"]
+            == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-complement-chunk.v1"
+            and all(packet["checks"].values())
+            and not any(packet["guardrails"].values())
+            and selection["chunk_index"] == index
+            and selection["chunk_count"] == CHUNK_COUNT
+            and selection["chunk_source_sha256"]
+            == complement.source_hash(missing[start:stop])
+            and selection["full_source_sha256"] == complement.source_hash(full)
+            and selection["reused_balanced_source_sha256"]
+            == complement.source_hash(balanced),
+            f"chunk identity {index}",
+        )
+        triples = ROOT / packet["execution"]["packed_triples"]["path"]
+        require(
+            triples == paths["triples"]
+            and triples.is_file()
+            and sha256(triples) == packet["execution"]["packed_triples"]["sha256"],
+            f"chunk triples {index}",
+        )
+        packets.append((paths["packet"], packet, start, stop))
+        selected_sources.extend(missing[start:stop])
+        selected_rows += stop - start
+        complement_nonzeros += int(packet["execution"]["nonzeros"])
+
+    require(
+        len(selected_sources) == len(set(selected_sources)) == selected_rows
+        and set(selected_sources).issubset(set(full)),
+        "exact selected source subset",
+    )
+    matrix_path, packet_path = output_paths(indexes)
+    balanced_nonzeros = int(balanced_packet["matrix"]["nonzeros"])
+    total_nonzeros = balanced_nonzeros + complement_nonzeros
+    with full_assembler.BALANCED_MATRIX.open("rb") as balanced_matrix:
+        header = [int(value) for value in balanced_matrix.readline().split()]
+        require(
+            header == [complement.REUSED_ROWS, len(targets), balanced_nonzeros],
+            "balanced matrix header",
+        )
+        with matrix_path.open("wb") as output:
+            output.write(
+                f"{complement.FULL_ROWS} {len(targets)} {total_nonzeros}\n".encode(
+                    "ascii"
+                )
+            )
+            shutil.copyfileobj(balanced_matrix, output, length=16 * 1024 * 1024)
+            for _, packet, _, _ in packets:
+                triples = ROOT / packet["execution"]["packed_triples"]["path"]
+                with triples.open("rb") as source:
+                    shutil.copyfileobj(source, output, length=16 * 1024 * 1024)
+
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "incremental-full-submap.v1"
+        ),
+        "date": "2026-08-11",
+        "status": "CANDIDATE_EXACT_FULL_MAP_SUBMATRIX_FOR_MONOTONE_RANK_WITNESS",
+        "inputs": {
+            "selected_source": record(macaulay.SOURCE),
+            "base_coordinate_packet": record(macaulay.INSPECT_PACKET),
+            "balanced_campaign": record(full_assembler.BALANCED_PACKET),
+            "balanced_matrix": record(full_assembler.BALANCED_MATRIX),
+            "complement_packets": [record(path) for path, _, _, _ in packets],
+        },
+        "selection": {
+            "declared_source_slots": complement.FULL_ROWS,
+            "selected_nonzero_source_rows": selected_rows,
+            "balanced_rows": complement.REUSED_ROWS,
+            "completed_complement_rows": selected_rows - complement.REUSED_ROWS,
+            "completed_chunk_indexes_zero_based": indexes,
+            "natural_full_source_sha256": complement.source_hash(full),
+            "selected_source_subset_sha256": complement.source_hash(selected_sources),
+            "selected_sources_are_distinct": True,
+            "selected_sources_are_a_subset_of_the_full_map": True,
+            "union_row_ids_are_preserved": True,
+        },
+        "matrix": {
+            **record(matrix_path),
+            "rows": complement.FULL_ROWS,
+            "columns": len(targets),
+            "nonzeros": total_nonzeros,
+            "reused_nonzeros": balanced_nonzeros,
+            "completed_complement_nonzeros": complement_nonzeros,
+        },
+        "checks": {
+            "the_balanced_50000_row_matrix_is_hash_bound": True,
+            "every_added_chunk_is_complete_and_hash_bound": True,
+            "all_added_source_ranges_are_disjoint": True,
+            "the_selected_rows_are_an_exact_subset_of_the_full_selected_map": True,
+            "the_final_union_row_identifiers_are_preserved": True,
+            "all_39726_target_coordinates_are_retained": True,
+        },
+        "guardrails": {
+            "claims_all_92979_source_rows_are_present": False,
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Find a nonzero rank-39,725 minor in this exact subset. Such a minor "
+            "is automatically a minor of the full selected map; independently "
+            "replay it and then test its quotient functional on all 92,979 rows."
+        ),
+    }
+    require(all(packet["checks"].values()), "incremental submap checks")
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    LATEST.write_text(
+        json.dumps(
+            {"packet": record(packet_path), "matrix": record(matrix_path)}, indent=2
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    print(
+        "G3AP incremental full-map submatrix: PASS "
+        f"chunks={','.join(str(index) for index in indexes)} "
+        f"selected_rows={selected_rows} nonzeros={total_nonzeros} rank=OPEN "
+        f"packet={relative(packet_path)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

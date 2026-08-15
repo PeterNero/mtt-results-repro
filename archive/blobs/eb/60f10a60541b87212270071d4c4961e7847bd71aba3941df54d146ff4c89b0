@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""Compress component 20's canonical split kernel into graded generators."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3DI = ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+EVIDENCE = ROOT / "evidence/ust_g3fd"
+GENERATORS = EVIDENCE / "H02.component20.graded_kernel_generators.p21817.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.graded_kernel_generators.json"
+
+PRIME = 21817
+ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+COMPONENT_DIMENSION = 136
+KERNEL_DIMENSION = 100
+EXPECTED_IDEAL_PROFILE = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 11, 20, 46, 100)
+EXPECTED_GENERATOR_COUNTS = {11: 4, 14: 15, 15: 11}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def rref(
+    matrix: np.ndarray, prime: int, *, emit_nullspace: bool = False
+) -> tuple[int, tuple[int, ...], np.ndarray | None]:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    rows, columns = work.shape
+    pivot_row = 0
+    pivots: list[int] = []
+    for column in range(columns):
+        choices = np.flatnonzero(work[pivot_row:, column])
+        if choices.size == 0:
+            continue
+        selected = pivot_row + int(choices[0])
+        if selected != pivot_row:
+            work[[pivot_row, selected]] = work[[selected, pivot_row]]
+        work[pivot_row] = (
+            work[pivot_row] * pow(int(work[pivot_row, column]), -1, prime)
+        ) % prime
+        for row in range(rows):
+            if row != pivot_row and work[row, column]:
+                work[row] = (
+                    work[row] - int(work[row, column]) * work[pivot_row]
+                ) % prime
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    if not emit_nullspace:
+        return pivot_row, tuple(pivots), None
+    pivot_set = set(pivots)
+    free = [column for column in range(columns) if column not in pivot_set]
+    nullspace = np.zeros((columns, len(free)), dtype=np.int64)
+    for local, column in enumerate(free):
+        nullspace[column, local] = 1
+        for row, pivot in enumerate(pivots):
+            nullspace[pivot, local] = (-work[row, column]) % prime
+    return pivot_row, tuple(pivots), nullspace
+
+
+def ideal_piece(
+    annihilator: np.ndarray,
+    degree: int,
+    prime: int,
+) -> tuple[np.ndarray, tuple[int, ...], tuple[int, ...]]:
+    basis15 = homogeneous_exponents(15)
+    lookup15 = {exponent: index for index, exponent in enumerate(basis15)}
+    basis = homogeneous_exponents(degree)
+    multipliers = homogeneous_exponents(15 - degree)
+    equations = np.empty(
+        (len(multipliers) * annihilator.shape[0], len(basis)), dtype=np.int64
+    )
+    for column, exponent in enumerate(basis):
+        for local, multiplier in enumerate(multipliers):
+            product = tuple(
+                exponent[index] + multiplier[index] for index in range(3)
+            )
+            first = local * annihilator.shape[0]
+            equations[first : first + annihilator.shape[0], column] = (
+                annihilator[:, lookup15[product]]
+            )
+    rank, pivots, nullspace = rref(equations, prime, emit_nullspace=True)
+    require(nullspace is not None, "ideal-piece nullspace")
+    free = tuple(column for column in range(len(basis)) if column not in set(pivots))
+    require(nullspace.shape == (len(basis), len(basis) - rank), "ideal-piece shape")
+    return nullspace, pivots, free
+
+
+def multiply_space(
+    vectors: np.ndarray,
+    source_degree: int,
+    target_degree: int,
+    prime: int,
+) -> np.ndarray:
+    require(target_degree >= source_degree, "nonnegative multiplier degree")
+    source = homogeneous_exponents(source_degree)
+    target = homogeneous_exponents(target_degree)
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    multipliers = homogeneous_exponents(target_degree - source_degree)
+    columns: list[np.ndarray] = []
+    for vector in vectors.T:
+        for multiplier in multipliers:
+            product = np.zeros(len(target), dtype=np.int64)
+            for row, exponent in enumerate(source):
+                shifted = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                product[target_lookup[shifted]] = vector[row]
+            columns.append(product % prime)
+    if not columns:
+        return np.zeros((len(target), 0), dtype=np.int64)
+    return np.stack(columns, axis=1) % prime
+
+
+def complement_columns(
+    base: np.ndarray, candidates: np.ndarray, prime: int
+) -> tuple[np.ndarray, tuple[int, ...], int]:
+    combined = np.concatenate((base, candidates), axis=1)
+    rank, pivots, _ = rref(combined, prime)
+    base_rank, _, _ = rref(base, prime)
+    selected = tuple(
+        column - base.shape[1]
+        for column in pivots
+        if column >= base.shape[1]
+    )
+    require(rank == base_rank + len(selected), "complement rank accounting")
+    return candidates[:, selected], selected, rank
+
+
+def interpolate(values: np.ndarray) -> np.ndarray:
+    require(values.shape[0] == len(ROOTS), "six-root values")
+    vandermonde = np.asarray(
+        [[pow(root, degree, PRIME) for degree in range(6)] for root in ROOTS],
+        dtype=np.int64,
+    )
+    _, _, inverse_columns = rref(vandermonde, PRIME, emit_nullspace=False)
+    require(inverse_columns is None, "RREF does not return an inverse")
+    augmented = np.concatenate(
+        (vandermonde, np.eye(6, dtype=np.int64)), axis=1
+    )
+    for column in range(6):
+        choices = np.flatnonzero(augmented[column:, column])
+        require(choices.size > 0, "Vandermonde pivot")
+        selected = column + int(choices[0])
+        if selected != column:
+            augmented[[column, selected]] = augmented[[selected, column]]
+        augmented[column] = (
+            augmented[column]
+            * pow(int(augmented[column, column]), -1, PRIME)
+        ) % PRIME
+        for row in range(6):
+            if row != column and augmented[row, column]:
+                augmented[row] = (
+                    augmented[row]
+                    - int(augmented[row, column]) * augmented[column]
+                ) % PRIME
+    inverse = augmented[:, 6:]
+    coefficients = np.empty(values.shape, dtype=np.uint16)
+    for degree in range(6):
+        accumulator = np.zeros(values.shape[1:], dtype=np.int64)
+        for root_index in range(6):
+            accumulator = (
+                accumulator
+                + values[root_index].astype(np.int64)
+                * int(inverse[degree, root_index])
+            ) % PRIME
+        coefficients[degree] = accumulator.astype(np.uint16)
+    return coefficients
+
+
+def evaluate(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.int64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value.astype(np.uint16)
+
+
+def main() -> None:
+    g3di = load(G3DI)
+    require(all(g3di["checks"].values()), "G3DI checks")
+    require(tuple(g3di["field"]["roots"]) == ROOTS, "G3DI roots")
+    root_payloads = {
+        int(row["gamma_root"]): row for row in g3di["root_kernels"]
+    }
+    require(tuple(root_payloads) == ROOTS, "ordered root payloads")
+
+    value_blocks: dict[int, list[np.ndarray]] = {11: [], 14: [], 15: []}
+    fiber_rows: list[dict[str, object]] = []
+    normalization_profiles: list[tuple[object, ...]] = []
+
+    for root in ROOTS:
+        payload = kernel_runtime.read_kernel(
+            ROOT / root_payloads[root]["kernel"]["path"]
+        )
+        require(payload["prime"] == PRIME, "kernel prime")
+        dependent = payload["dependent"]
+        relation_indices = np.flatnonzero(
+            (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+        )
+        require(relation_indices.size == KERNEL_DIMENSION, "component relation count")
+        kernel = (
+            payload["matrix"][COMPONENT_START:COMPONENT_PAST, :][
+                :, relation_indices
+            ]
+            .toarray()
+            .astype(np.int64)
+            % PRIME
+        )
+        kernel_rank, _, annihilator_columns = rref(
+            kernel.T, PRIME, emit_nullspace=True
+        )
+        require(kernel_rank == KERNEL_DIMENSION, "component kernel rank")
+        require(annihilator_columns is not None, "annihilator basis")
+        annihilator = annihilator_columns.T
+        require(annihilator.shape == (36, COMPONENT_DIMENSION), "annihilator shape")
+        require(np.count_nonzero((annihilator @ kernel) % PRIME) == 0, "annihilator replay")
+
+        pieces: dict[int, np.ndarray] = {}
+        ideal_profile: list[int] = []
+        piece_charts: dict[int, tuple[tuple[int, ...], tuple[int, ...]]] = {}
+        for degree in range(16):
+            piece, pivots, free = ideal_piece(annihilator, degree, PRIME)
+            pieces[degree] = piece
+            ideal_profile.append(piece.shape[1])
+            piece_charts[degree] = (pivots, free)
+        require(tuple(ideal_profile) == EXPECTED_IDEAL_PROFILE, "graded ideal profile")
+
+        generators11 = pieces[11]
+        generated12 = multiply_space(generators11, 11, 12, PRIME)
+        generated13 = multiply_space(generators11, 11, 13, PRIME)
+        generated14 = multiply_space(generators11, 11, 14, PRIME)
+        ranks11 = {
+            12: rref(generated12, PRIME)[0],
+            13: rref(generated13, PRIME)[0],
+            14: rref(generated14, PRIME)[0],
+        }
+        require(ranks11 == {12: 11, 13: 20, 14: 31}, "degree-11 growth")
+        generators14, selected14, rank14 = complement_columns(
+            generated14, pieces[14], PRIME
+        )
+        require(generators14.shape[1] == 15 and rank14 == 46, "degree-14 generators")
+
+        prior15 = np.concatenate(
+            (
+                multiply_space(generators11, 11, 15, PRIME),
+                multiply_space(generators14, 14, 15, PRIME),
+            ),
+            axis=1,
+        )
+        prior15_rank = rref(prior15, PRIME)[0]
+        require(prior15_rank == 89, "pre-degree-15 generated rank")
+        generators15, selected15, rank15 = complement_columns(
+            prior15, kernel, PRIME
+        )
+        require(generators15.shape[1] == 11 and rank15 == 100, "degree-15 generators")
+
+        all_degree15 = np.concatenate((prior15, generators15), axis=1)
+        generated_rank = rref(all_degree15, PRIME)[0]
+        combined_rank = rref(np.concatenate((all_degree15, kernel), axis=1), PRIME)[0]
+        require(generated_rank == combined_rank == KERNEL_DIMENSION, "kernel generation")
+
+        value_blocks[11].append(generators11.astype(np.uint16))
+        value_blocks[14].append(generators14.astype(np.uint16))
+        value_blocks[15].append(generators15.astype(np.uint16))
+        normalization_profile = (
+            piece_charts[11],
+            piece_charts[14],
+            selected14,
+            selected15,
+        )
+        normalization_profiles.append(normalization_profile)
+        fiber_rows.append(
+            {
+                "gamma_root": root,
+                "component_kernel_rank": kernel_rank,
+                "annihilator_rank": int(annihilator.shape[0]),
+                "ideal_profile_degrees0_through15": ideal_profile,
+                "degree11_generated_ranks": {
+                    str(degree): rank for degree, rank in ranks11.items()
+                },
+                "degree14_prior_rank": 31,
+                "degree14_new_generators": int(generators14.shape[1]),
+                "degree15_prior_rank": prior15_rank,
+                "degree15_new_generators": int(generators15.shape[1]),
+                "reconstructed_degree15_rank": generated_rank,
+                "reconstructed_plus_kernel_rank": combined_rank,
+            }
+        )
+        print(
+            f"G3FD gamma={root}: profile={ideal_profile[11:]} "
+            "generators=4+15+11 kernel_rank=100",
+            flush=True,
+        )
+
+    require(len(set(normalization_profiles)) == 1, "common normalization charts")
+    coefficients: dict[int, np.ndarray] = {}
+    interpolation_mismatches = 0
+    for degree, values in value_blocks.items():
+        stacked = np.stack(values, axis=0)
+        coefficients[degree] = interpolate(stacked)
+        interpolation_mismatches += sum(
+            int(np.count_nonzero(evaluate(coefficients[degree], root) != stacked[index]))
+            for index, root in enumerate(ROOTS)
+        )
+    require(interpolation_mismatches == 0, "generator interpolation replay")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        GENERATORS,
+        roots=np.asarray(ROOTS, dtype=np.int32),
+        degree11_power_basis=coefficients[11],
+        degree14_power_basis=coefficients[14],
+        degree15_power_basis=coefficients[15],
+    )
+
+    field_coefficients = sum(
+        len(homogeneous_exponents(degree)) * count
+        for degree, count in EXPECTED_GENERATOR_COUNTS.items()
+    )
+    old_field_coefficients = 5411 * 100
+    packet = {
+        "schema": "ust.g3fd.h02.component20.graded-kernel-generators.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FD",
+        "status": "CLOSED_EXACT_COMPONENT20_SPLIT_ALGEBRA_GRADED_GENERATOR_REDUCTION_CHARZERO_OPEN",
+        "input": {
+            "G3DI": record(G3DI),
+        },
+        "field": {
+            "prime": PRIME,
+            "roots": list(ROOTS),
+            "algebra": "F_21817[gamma]/(m_gamma), split across all six roots",
+        },
+        "component": {
+            "index": 20,
+            "carrier": "Sym^15(k^3)",
+            "dimension": COMPONENT_DIMENSION,
+            "canonical_kernel_dimension": KERNEL_DIMENSION,
+            "quotient_dimension": COMPONENT_DIMENSION - KERNEL_DIMENSION,
+        },
+        "graded_kernel_ideal": {
+            "definition": "I_d={f in Sym^d : f*Sym^(15-d) is contained in K_15}",
+            "hilbert_profile_degrees0_through15": list(EXPECTED_IDEAL_PROFILE),
+            "minimal_generator_counts": {
+                str(degree): count for degree, count in EXPECTED_GENERATOR_COUNTS.items()
+            },
+            "degree11_growth_ranks_in_degrees12_13_14": [11, 20, 31],
+            "rank_before_degree14_generators": 31,
+            "rank_after_degree14_generators": 46,
+            "rank_before_degree15_generators": 89,
+            "rank_after_degree15_generators": 100,
+            "common_normalization_chart_at_all_six_roots": True,
+            "fibers": fiber_rows,
+        },
+        "split_algebra_generators": {
+            "artifact": record(GENERATORS),
+            "power_basis_shapes": {
+                "degree11": list(coefficients[11].shape),
+                "degree14": list(coefficients[14].shape),
+                "degree15": list(coefficients[15].shape),
+            },
+            "interpolation_evaluation_mismatches": interpolation_mismatches,
+        },
+        "promotion_reduction": {
+            "previous_normalized_full_kernel_field_coefficients": old_field_coefficients,
+            "graded_generator_field_coefficients": field_coefficients,
+            "previous_power_basis_scalars": old_field_coefficients * 6,
+            "graded_generator_power_basis_scalars": field_coefficients * 6,
+            "compression_factor": old_field_coefficients / field_coefficients,
+            "fraction_removed": 1.0 - field_coefficients / old_field_coefficients,
+        },
+        "checks": {
+            "all_six_canonical_G3DI_component20_kernels_have_rank100": True,
+            "the_same_graded_ideal_profile_occurs_at_all_six_roots": True,
+            "the_same_normalization_charts_occur_at_all_six_roots": True,
+            "four_degree11_fifteen_degree14_and_eleven_degree15_generators_are_minimal_by_degree": True,
+            "the30_generators_reconstruct_the_full_degree15_kernel_at_every_root": True,
+            "six_root_power_basis_interpolation_replays_without_mismatch": True,
+            "the_characteristic_zero_promotion_payload_is_reduced_from541100_to3608_field_coefficients": field_coefficients == 3608,
+        },
+        "guardrails": {
+            "claims_the30_generators_lift_to_Qgamma": False,
+            "claims_the_full_5411_coordinate_lift_is_reconstructed": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fdComponent20GradedKernelGeneratorReduction",
+            "tier": "CLOSED_EXACT_COMPLETE_SPLIT_ALGEBRA_GRADED_GENERATOR_REDUCTION",
+            "statement": (
+                "At every root of the selected sextic modulo 21817, the canonical "
+                "100-dimensional component-20 kernel K_15 inside Sym^15(k^3) is the "
+                "degree-15 part of the largest graded ideal contained in K_15. Its "
+                "Hilbert profile is (0,...,0,4,11,20,46,100), and it has exactly four "
+                "minimal generators in degree11, fifteen in degree14 and eleven in "
+                "degree15. Their monomial multiples span K_15 exactly. The common "
+                "normalization charts allow a zero-mismatch split-algebra power-basis "
+                "encoding, reducing the next promotion object from541100 to3608 field "
+                "coefficients. This is a finite split-algebra theorem, not yet a "
+                "Q(gamma) promotion."
+            ),
+        },
+        "next_required_object": (
+            "Emit the same30 normalized graded generators at independent completely "
+            "split primes, reconstruct their3608 Q(gamma) coefficients, and replay "
+            "the generated degree15 kernel against the exact component20 source map."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FD component20 graded kernel generators: PASS "
+        f"generators=30 field_coefficients={field_coefficients} "
+        f"compression={old_field_coefficients / field_coefficients:.3f}x"
+    )
+
+
+if __name__ == "__main__":
+    main()

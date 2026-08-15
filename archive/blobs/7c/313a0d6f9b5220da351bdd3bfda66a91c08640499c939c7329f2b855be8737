@@ -1,0 +1,136 @@
+# UST.G3BI Explicit Smooth Root-Containing Start-Member Theorem
+
+## Result
+
+There is now a fully explicit smooth characteristic-zero eta9 member containing
+the selected root curve used by `UST.G3BG`.  It is defined over the same locked
+number field `Q(gamma)` as the B67 lift, contains
+
+```text
+Rminus x {[1:-1:0]},
+```
+
+and passes exact basepoint and smoothness audits by good reduction.  This
+discharges the start-member clause forced by the `UST.G3BH` no-go.  It does not
+construct the nonconstant path or Gauss-Manin transport to fixed B89.
+
+## 1. Exact Construction
+
+Write the locked B67 number-field section as
+
+```text
+F=A0*T0+A1*T1+A2*T2
+```
+
+over
+
+```text
+Q(gamma),
+M(gamma)=gamma^6+24 gamma^5+89 gamma^4+44 gamma^3
+         +33 gamma^2+16 gamma+64.
+```
+
+At the exact Fermat point `p0=[1:-1:0]`, containment of the root curve is
+equivalent to
+
+```text
+(A0-A1)|Rminus=0.
+```
+
+Parameterize `Rminus` by
+
+```text
+x=s^2, y=s*t, z=t^2, w=-G3.
+```
+
+Restriction of degree-nine ordinary K3 monomials onto the conic is onto the
+19-dimensional space of binary forms of degree 18.  A canonical 19-term right
+inverse is especially simple: for `j=0,...,18`, set
+
+```text
+c=floor(j/2), b=j mod 2, a=9-b-c.
+```
+
+Then `x^a y^b z^c` restricts to `s^(18-j)t^j`.  Add the `j`th coefficient of
+`(A1-A0)|Rminus` to that monomial in `A0`.  Coefficientwise substitution over
+`Q(gamma)` then gives exactly
+
+```text
+A0|Rminus=A1|Rminus.
+```
+
+No root-preserving search displacement is needed: candidate index zero is the
+selected member.
+
+## 2. Exact Smoothness Certificate
+
+The same sextic field has the degree-one good-reduction prime
+
+```text
+(11,gamma-3),  M(3)=0 mod 11.
+```
+
+The corrected equation was audited on every standard product chart.  Exact
+Singular reduction over `GF(11)` gives:
+
+```text
+basepoint unit ideals:   3/3
+smoothness unit ideals:  9/9
+timeouts:                0
+```
+
+The smoothness ideals impose the K3 equation, the Fermat elliptic equation,
+the corrected eta9 equation, and the Lagrange-multiplier Jacobian rank-drop
+conditions.  Their being unit ideals proves that the special fiber is
+basepoint-free and smooth.  Proper smooth good reduction therefore proves
+that the displayed member over `Q(gamma)` is smooth.
+
+## 3. What Changed
+
+Before G3BI, the root-containing family was known abstractly, while G3BH had
+proved that the root cannot already be contained in fixed B89 or in its
+selected same-residue neighborhood.  The transport program lacked a concrete
+smooth starting equation.
+
+G3BI supplies that equation, all 249 number-field coefficient vectors, the
+exact 19-term correction, 12 hash-bound Singular scripts, and their unit-ideal
+certificates.  The construction uses no observed values, continuous fit
+parameters, or discrete search choice.
+
+## 4. Remaining Frontier
+
+The next object is now narrower:
+
+1. construct a hash-bound nonconstant path in the smooth eta9 locus from the
+   G3BI member to fixed B89;
+2. transport only `z4=(-e2+2f2) tensor u_B` integrally along that path;
+3. emit its terminal integral coordinates or a certified meridian word;
+4. execute the normalized 248-row readout and apply `UST.G3BD`.
+
+## Claim Boundary
+
+G3BI does not construct:
+
+- a smooth path to fixed B89;
+- an integral Gauss-Manin transport matrix or terminal vector;
+- a B89 meridian word;
+- a 248-coordinate period/residue readout;
+- a decision of `beta_C`; or
+- closure of `B.ETA9.01`, `B.ETA9.02`, or the visible HYM endpoint.
+
+## Reproduction
+
+To regenerate the evidence from the locked historical source packets:
+
+```powershell
+python extract_ust_g3bi_explicit_root_start_evidence.py `
+  --source-root "C:\path\to\20 Mathematical Language Discovery Program" `
+  --max-candidates 1 --timeout 180
+```
+
+Machine-independent replay within this repository is:
+
+```powershell
+python build_ust_g3bi_explicit_root_start.py
+python verify_ust_g3bi_explicit_root_start.py
+```

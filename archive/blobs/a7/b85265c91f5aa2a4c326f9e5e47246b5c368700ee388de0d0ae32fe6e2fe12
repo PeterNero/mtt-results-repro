@@ -1,0 +1,262 @@
+// Adaptive exact G3AP minor search weighted by stored pivot-vector work.
+//
+// The imported library supplies the independently self-tested field,
+// eliminator, CSR loader, determinant convention, and quotient replay.  This
+// scheduler refines the count score by summing the exact normalized basis-row
+// sizes that an original support must cross before its first free target.
+
+#define UST_F1016_GREEDY_LIBRARY
+#include "ust_f1016_sparse_column_minor_greedy.cpp"
+
+namespace {
+
+struct WeightedItem {
+    std::uint64_t score;
+    std::uint64_t terms;
+    std::uint32_t row;
+
+    bool operator>(const WeightedItem& other) const {
+        if (score != other.score) {
+            return score > other.score;
+        }
+        if (terms != other.terms) {
+            return terms > other.terms;
+        }
+        return row > other.row;
+    }
+};
+
+std::uint64_t weighted_support_score(
+    const GreedyStoredMatrix& matrix,
+    std::uint32_t row,
+    const std::vector<std::uint32_t>& original_to_priority,
+    const std::vector<bool>& occupied_priority,
+    const std::vector<std::uint64_t>& pivot_terms) {
+    std::uint32_t first_free = std::numeric_limits<std::uint32_t>::max();
+    for (std::uint64_t index = matrix.offsets[row];
+         index < matrix.offsets[row + 1]; ++index) {
+        const auto priority = original_to_priority[matrix.targets[index]];
+        if (!occupied_priority[priority]) {
+            first_free = std::min(first_free, priority);
+        }
+    }
+    std::uint64_t score = 0;
+    for (std::uint64_t index = matrix.offsets[row];
+         index < matrix.offsets[row + 1]; ++index) {
+        const auto priority = original_to_priority[matrix.targets[index]];
+        if (occupied_priority[priority] &&
+            (first_free == std::numeric_limits<std::uint32_t>::max() ||
+             priority < first_free)) {
+            score += pivot_terms[priority];
+        }
+    }
+    return score;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        if (argc < 2) {
+            throw std::runtime_error(
+                "usage: ust_f1016_sparse_column_minor_weighted MATRIX "
+                "[--target-rank N] [--output FILE] [--progress-seconds S]");
+        }
+        const std::string matrix_path = argv[1];
+        std::string output_path = matrix_path + ".weighted.minor.out";
+        std::size_t requested_rank = 0;
+        double progress_seconds = 10.0;
+        for (int index = 2; index < argc; ++index) {
+            const std::string argument = argv[index];
+            if (argument == "--target-rank" && index + 1 < argc) {
+                requested_rank = static_cast<std::size_t>(std::stoull(argv[++index]));
+            } else if (argument == "--output" && index + 1 < argc) {
+                output_path = argv[++index];
+            } else if (argument == "--progress-seconds" && index + 1 < argc) {
+                progress_seconds = std::stod(argv[++index]);
+            } else {
+                throw std::runtime_error("unknown or incomplete argument: " + argument);
+            }
+        }
+
+        GreedyStoredMatrix matrix = load_greedy_matrix(matrix_path);
+        const auto& header = matrix.header;
+        const std::size_t target_rank = requested_rank == 0
+            ? static_cast<std::size_t>(std::min(header.source_rows, header.target_coordinates))
+            : requested_rank;
+        if (target_rank == 0 || target_rank > header.source_rows ||
+            target_rank > header.target_coordinates) {
+            throw std::runtime_error("invalid target rank");
+        }
+
+        std::vector<std::uint32_t> priority_to_original(header.target_coordinates);
+        std::iota(priority_to_original.begin(), priority_to_original.end(), 0);
+        std::stable_sort(
+            priority_to_original.begin(), priority_to_original.end(),
+            [&matrix](std::uint32_t left, std::uint32_t right) {
+                if (matrix.incidence[left] != matrix.incidence[right]) {
+                    return matrix.incidence[left] < matrix.incidence[right];
+                }
+                return left < right;
+            });
+        std::vector<std::uint32_t> original_to_priority(header.target_coordinates);
+        for (std::size_t priority = 0; priority < priority_to_original.size(); ++priority) {
+            original_to_priority[priority_to_original[priority]] =
+                static_cast<std::uint32_t>(priority);
+        }
+
+        ExactEliminator eliminator(
+            header.target_coordinates, original_to_priority, priority_to_original);
+        std::vector<std::uint32_t> selected_source_rows;
+        std::vector<std::uint32_t> pivot_target_coordinates;
+        std::vector<Element> pivot_coefficients;
+        selected_source_rows.reserve(target_rank);
+        pivot_target_coordinates.reserve(target_rank);
+        pivot_coefficients.reserve(target_rank);
+        std::vector<bool> occupied_priority(header.target_coordinates, false);
+        std::vector<std::uint64_t> pivot_terms(header.target_coordinates, 0);
+
+        std::priority_queue<
+            WeightedItem, std::vector<WeightedItem>, std::greater<WeightedItem>> queue;
+        for (std::uint32_t row = 0; row < header.source_rows; ++row) {
+            const auto terms = matrix.offsets[row + 1] - matrix.offsets[row];
+            if (terms != 0) {
+                queue.push(WeightedItem{0, terms, row});
+            }
+        }
+
+        const auto started = std::chrono::steady_clock::now();
+        auto next_progress = started + std::chrono::duration<double>(progress_seconds);
+        std::uint64_t processed_sources = 0;
+        std::uint64_t rescored_sources = 0;
+        std::uint64_t maximum_weighted_score = 0;
+        while (!queue.empty() && eliminator.rank() < target_rank) {
+            const WeightedItem item = queue.top();
+            queue.pop();
+            const auto score = weighted_support_score(
+                matrix, item.row, original_to_priority, occupied_priority, pivot_terms);
+            if (score > item.score) {
+                queue.push(WeightedItem{score, item.terms, item.row});
+                ++rescored_sources;
+                continue;
+            }
+            maximum_weighted_score = std::max(maximum_weighted_score, score);
+            for (std::uint64_t index = matrix.offsets[item.row];
+                 index < matrix.offsets[item.row + 1]; ++index) {
+                eliminator.set_original_value(
+                    matrix.targets[index], unpack(matrix.packed_values[index]));
+            }
+            const auto old_rank = eliminator.rank();
+            const auto old_basis_terms = eliminator.basis_terms();
+            eliminator.insert(
+                item.row, selected_source_rows, pivot_target_coordinates,
+                pivot_coefficients);
+            ++processed_sources;
+            if (eliminator.rank() != old_rank) {
+                const auto pivot_original = pivot_target_coordinates.back();
+                const auto pivot_priority = original_to_priority[pivot_original];
+                occupied_priority[pivot_priority] = true;
+                pivot_terms[pivot_priority] =
+                    eliminator.basis_terms() - old_basis_terms;
+                if (pivot_terms[pivot_priority] == 0) {
+                    throw std::runtime_error("new pivot has an empty normalized basis row");
+                }
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_progress) {
+                const auto elapsed = std::chrono::duration<double>(now - started).count();
+                std::cout << "row_order=adaptive-weighted-support"
+                          << " processed=" << processed_sources << '/' << header.source_rows
+                          << " rank=" << eliminator.rank() << '/' << target_rank
+                          << " rescored=" << rescored_sources
+                          << " weighted_score_max=" << maximum_weighted_score
+                          << " basis_terms=" << eliminator.basis_terms()
+                          << " max_terms=" << eliminator.maximum_working_terms()
+                          << " reductions=" << eliminator.reductions()
+                          << " elapsed=" << std::fixed << std::setprecision(1)
+                          << elapsed << "s\n" << std::flush;
+                next_progress = now + std::chrono::duration<double>(progress_seconds);
+            }
+        }
+        if (eliminator.rank() != target_rank) {
+            throw std::runtime_error(
+                "requested exact rank was not reached; reached " +
+                std::to_string(eliminator.rank()));
+        }
+        const Element determinant =
+            minor_determinant(pivot_target_coordinates, pivot_coefficients);
+        if (is_zero(determinant)) {
+            throw std::runtime_error("selected exact minor has zero determinant");
+        }
+
+        const bool emit_quotient_functional = target_rank + 1 == header.target_coordinates;
+        std::uint32_t quotient_normalization_coordinate = 0;
+        std::vector<Element> quotient_functional;
+        std::uint64_t quotient_verified_entries = 0;
+        if (emit_quotient_functional) {
+            auto quotient = eliminator.quotient_functional();
+            quotient_normalization_coordinate = quotient.first;
+            quotient_functional = std::move(quotient.second);
+            quotient_verified_entries =
+                verify_quotient_functional(matrix_path, header, quotient_functional);
+        }
+
+        const auto finished = std::chrono::steady_clock::now();
+        const auto elapsed = std::chrono::duration<double>(finished - started).count();
+        std::ofstream output(output_path);
+        if (!output) {
+            throw std::runtime_error("cannot open output certificate");
+        }
+        output << "SCHEMA MTTF1016SparseColumnMinorExactOutput.v2\n";
+        output << "STATUS EXACT_F1016_NONZERO_MINOR_FOUND\n";
+        output << "ROW_ORDER adaptive-weighted-support\n";
+        output << "FIELD_PRIME 101\n";
+        output << "FIELD_DEGREE 6\n";
+        output << "FIELD_MINPOLY_PACKED_LOWER 64,16,33,44,89,24\n";
+        output << "SOURCE_ROWS " << header.source_rows << '\n';
+        output << "TARGET_COORDINATES " << header.target_coordinates << '\n';
+        output << "MATRIX_NONZEROS " << header.nonzeros << '\n';
+        output << "PROCESSED_SOURCE_ROWS " << processed_sources << '\n';
+        output << "RESCORED_SOURCE_ROWS " << rescored_sources << '\n';
+        output << "MAXIMUM_WEIGHTED_SUPPORT_SCORE " << maximum_weighted_score << '\n';
+        output << "MINOR_SIZE " << target_rank << '\n';
+        output << "MINOR_DETERMINANT_PACKED " << pack(determinant) << '\n';
+        output << "BASIS_TERMS " << eliminator.basis_terms() << '\n';
+        output << "MAXIMUM_WORKING_TERMS " << eliminator.maximum_working_terms() << '\n';
+        output << "REDUCTIONS " << eliminator.reductions() << '\n';
+        output << "COEFFICIENT_UPDATES " << eliminator.coefficient_updates() << '\n';
+        output << "QUOTIENT_FUNCTIONAL_EMITTED "
+               << (emit_quotient_functional ? 1 : 0) << '\n';
+        if (emit_quotient_functional) {
+            output << "QUOTIENT_NORMALIZATION_TARGET_COORDINATE_ZERO_BASED "
+                   << quotient_normalization_coordinate << '\n';
+            output << "QUOTIENT_FUNCTIONAL_VERIFIED_SOURCE_ROWS "
+                   << header.source_rows << '\n';
+            output << "QUOTIENT_FUNCTIONAL_VERIFIED_MATRIX_NONZEROS "
+                   << quotient_verified_entries << '\n';
+        }
+        output << "ELAPSED_SECONDS " << std::fixed << std::setprecision(6)
+               << elapsed << '\n';
+        write_vector(output, "SELECTED_SOURCE_ROWS_ZERO_BASED", selected_source_rows);
+        write_vector(
+            output, "PIVOT_TARGET_COORDINATES_ZERO_BASED", pivot_target_coordinates);
+        write_elements(output, "PIVOT_COEFFICIENTS_PACKED", pivot_coefficients);
+        if (emit_quotient_functional) {
+            write_elements(output, "QUOTIENT_FUNCTIONAL_PACKED", quotient_functional);
+        }
+        output << "END_CERTIFICATE\n";
+
+        std::cout << "SUCCESS row_order=adaptive-weighted-support"
+                  << " rank=" << target_rank
+                  << " determinant_packed=" << pack(determinant)
+                  << " processed=" << processed_sources
+                  << " rescored=" << rescored_sources
+                  << " elapsed=" << std::fixed << std::setprecision(3)
+                  << elapsed << "s output=" << output_path << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "ERROR " << error.what() << '\n';
+        return 1;
+    }
+}

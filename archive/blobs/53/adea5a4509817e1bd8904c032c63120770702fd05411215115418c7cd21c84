@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Independently verify the exact UST.G3EA component-9 lift."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as dm_runtime
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ea_h02_component9_gradient_elliptic_lift.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checked(record: dict[str, Any], repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    path = repository / relative
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def load_checked(record: dict[str, Any], repository: Path = ROOT) -> dict[str, Any]:
+    return json.loads(checked(record, repository).read_text(encoding="utf-8"))
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (left, middle, degree - left - middle)
+        for left in range(degree + 1)
+        for middle in range(degree - left + 1)
+    ]
+
+
+def sparse_matrix(
+    entries: dict[tuple[int, int], int], shape: tuple[int, int]
+) -> sparse.csc_matrix:
+    triples = [(row, column, value) for (row, column), value in entries.items() if value]
+    if not triples:
+        return sparse.csc_matrix(shape, dtype=np.int64)
+    rows, columns, values = zip(*sorted(triples), strict=True)
+    return sparse.csc_matrix(
+        (np.asarray(values, dtype=np.int64), (rows, columns)), shape=shape
+    )
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(
+        packet["schema"] == "mtt.unified-source.g3ea-h02-component9-gradient-elliptic-lift.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+
+    inputs = packet["inputs"]
+    g3bi = load_checked(inputs["G3BI"])
+    g3bw = load_checked(inputs["G3BW"])
+    g3de = load_checked(inputs["G3DE"])
+    g3dx = load_checked(inputs["G3DX"])
+    g3dz = load_checked(inputs["G3DZ"])
+    require(
+        all(all(value["checks"].values()) for value in (g3bi, g3bw, g3de, g3dx, g3dz)),
+        "input checks",
+    )
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay = load_checked(inputs["H02_Macaulay"], mld)
+    factor = load_checked(inputs["H02_coordinate_factorization"], mld)
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    descriptor_lookup = {descriptor: index for index, descriptor in enumerate(descriptors)}
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+
+    selection = np.load(checked(g3de["factorization"]["selection"]), allow_pickle=False)
+    selected_updates = selection["selected_columns"].astype(np.int32)
+    component_coordinates = selected_updates[2555:2890]
+    component_descriptors = [descriptors[int(column)] for column in component_coordinates]
+    require(
+        [sum(item[0] == generator for item in component_descriptors) for generator in (0, 1, 2)]
+        == [8, 195, 132],
+        "component9 descriptor split",
+    )
+
+    degree18 = homogeneous_exponents(18)
+    degree27 = homogeneous_exponents(27)
+    degree27_lookup = {exponent: index for index, exponent in enumerate(degree27)}
+    correction = dm_runtime.correction_derivatives_exact(g3bi)
+    expected_coefficients: list[dict[tuple[int, int], int]] = [defaultdict(int) for _ in range(6)]
+    for column, (generator, multiplier) in enumerate(component_descriptors):
+        for exponent, coefficients in correction[generator].items():
+            product = tuple(multiplier[index] + exponent[index] for index in range(3))
+            row = degree27_lookup[product]
+            for degree, coefficient in enumerate(coefficients):
+                expected_coefficients[degree][(row, column)] += int(coefficient)
+    for local, multiplier in enumerate(degree18):
+        for exponent, coefficients in correction[4].items():
+            product = tuple(multiplier[index] + exponent[index] for index in range(3))
+            row = degree27_lookup[product]
+            for degree, coefficient in enumerate(coefficients):
+                expected_coefficients[degree][(row, 335 + local)] -= int(coefficient)
+    expected_presentations = [
+        sparse_matrix(entries, (406, 525)) for entries in expected_coefficients
+    ]
+    stored_presentations = []
+    for degree, record in enumerate(packet["exact_source_presentation"]["coefficient_matrices"]):
+        matrix = sparse.load_npz(checked(record)).tocsc().astype(np.int64)
+        require((matrix != expected_presentations[degree]).nnz == 0, f"presentation degree {degree}")
+        stored_presentations.append(matrix)
+
+    source_entries = {(2555 + local, local): 1 for local in range(335)}
+    for local in range(190):
+        source_entries[(local, 335 + local)] = 1
+        source_entries[(570 + local, 335 + local)] = 1
+    expected_source = sparse_matrix(source_entries, (6022, 525))
+    stored_source = sparse.load_npz(
+        checked(packet["exact_lift"]["source_matrix"])
+    ).tocsc().astype(np.int64)
+    require((stored_source != expected_source).nnz == 0, "source map")
+
+    expected_lift_entries: list[dict[tuple[int, int], int]] = [defaultdict(int) for _ in range(6)]
+    for local, multiplier18 in enumerate(degree18):
+        for exponent, coefficients in correction[4].items():
+            multiplier = list(exponent)
+            for index in range(3):
+                multiplier[index] += multiplier18[index]
+            multiplier[9] += 1
+            coordinate = descriptor_lookup[(8, tuple(multiplier))]
+            for degree, coefficient in enumerate(coefficients):
+                expected_lift_entries[degree][(coordinate, 335 + local)] -= int(coefficient)
+    expected_lifts = [
+        sparse_matrix(entries, (42458, 525)) for entries in expected_lift_entries
+    ]
+    stored_lifts = []
+    for degree, record in enumerate(packet["exact_lift"]["lift_gamma_coefficients"]):
+        matrix = sparse.load_npz(checked(record)).tocsc().astype(np.int64)
+        require((matrix != expected_lifts[degree]).nnz == 0, f"lift degree {degree}")
+        stored_lifts.append(matrix)
+    used = np.unique(np.concatenate([matrix.nonzero()[0] for matrix in stored_lifts]))
+    require(used.size == 370, "full-complement lift support")
+
+    dm = np.load(checked(g3bw["DM_reduction"]["arrays"]), allow_pickle=False)
+    complement_rows = dm["complement_rows"].astype(np.int32)
+    complement_lookup = {int(row): index for index, row in enumerate(complement_rows)}
+    expected_embedding_entries = {}
+    for column, exponent27 in enumerate(degree27):
+        exponent = list(exponent27) + [0] * 7
+        exponent[4] = 3
+        exponent[9] = 2
+        expected_embedding_entries[(complement_lookup[target_lookup[tuple(exponent)]], column)] = 1
+    expected_embedding = sparse_matrix(expected_embedding_entries, (42458, 406))
+    stored_embedding = sparse.load_npz(
+        checked(packet["exact_lift"]["presentation_embedding"])
+    ).tocsc().astype(np.int64)
+    require((stored_embedding != expected_embedding).nnz == 0, "presentation embedding")
+
+    u_coefficients = [
+        sparse.load_npz(checked(record)).tocsr().astype(np.int64)
+        for record in g3de["factorization"]["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(checked(record)).tocsr().astype(np.int64)
+        for record in g3de["factorization"]["W_gamma_coefficients"]
+    ]
+    residual_nonzeros = []
+    for degree, lift in enumerate(stored_lifts):
+        action_entries: dict[tuple[int, int], int] = defaultdict(int)
+        coo = lift.tocoo()
+        for coordinate, source_column, value in zip(coo.row, coo.col, coo.data, strict=True):
+            generator, multiplier = descriptors[int(coordinate)]
+            require(generator == 8, "dPhi/dv lift")
+            for variable in (4, 5, 6):
+                exponent = list(multiplier)
+                exponent[variable] += 3
+                action_entries[(complement_lookup[target_lookup[tuple(exponent)]], int(source_column))] += int(value)
+        action = sparse_matrix(action_entries, (42458, 525))
+        residual = (
+            action + u_coefficients[degree] @ stored_source
+            - stored_embedding @ stored_presentations[degree]
+        ).tocsc()
+        residual.eliminate_zeros()
+        residual_nonzeros.append(int(residual.nnz))
+    require(residual_nonzeros == [0] * 6, "factorization identity")
+    require(
+        [int(matrix[:, used].nnz) for matrix in w_coefficients] == [0] * 6,
+        "W lift identity",
+    )
+
+    rank_matrix = checked(packet["exact_source_presentation"]["number_field_matrix"])
+    rank_tool = checked(inputs["exact_number_field_rank_tool"])
+    completed = subprocess.run(
+        [sys.executable, str(rank_tool), str(rank_matrix)], cwd=ROOT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    require(completed.returncode == 0, f"exact rank replay: {completed.stdout[-2000:]}")
+    match = re.search(r"\brank=(\d+)\b", completed.stdout)
+    require(match is not None and int(match.group(1)) == 359, "exact rank359 replay")
+    rank_certificate = load_checked(packet["exact_source_presentation"]["rank_certificate"])
+    require(
+        rank_certificate["result"]["rank"] == 359
+        and rank_certificate["result"]["nullity"] == 166
+        and rank_certificate["result"]["row_dependency_dimension"] == 47
+        and rank_certificate["result"]["row_eliminations"] == 6404,
+        "rank certificate",
+    )
+
+    leading = max(correction[4], key=lambda exponent: exponent[:3])
+    require(any(correction[4][leading]), "nonzero C0 leading coefficient")
+    require(
+        len({tuple(leading[index] + term[index] for index in range(3)) for term in degree18}) == 190,
+        "T-block injection",
+    )
+    component = g3dx["prefix_gap_localization"]["component_rows"][9]
+    require(
+        component["finite_rank_increment"] == 169
+        and 335 - 166 == packet["rank_promotion"]["component9_rank_over_Q_gamma"] == 169
+        and packet["rank_promotion"]["promoted_global_Q_rank_interval"] == [4748, 5112]
+        and packet["rank_promotion"]["remaining_global_gap"] == 364,
+        "rank promotion",
+    )
+    print(
+        "UST.G3EA independent verification: PASS "
+        "M9_rank=359 kernel=166 A0L+UN=embed(M9) WL=0 "
+        "component9_rank=169 global_Q_interval=4748..5112"
+    )
+
+
+if __name__ == "__main__":
+    main()

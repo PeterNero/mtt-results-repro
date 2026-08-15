@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Verify the exact chart-cover deductions in UST.G3CL."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cl_hybrid_full_path_gauge_atlas.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def local(record: dict) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record["bytes"], f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_HYBRID_FULL_PATH_GAUGE_ATLAS_START_CYCLICITY_NOT_REQUIRED_COEFFICIENT_EXECUTION_OPEN",
+        "status",
+    )
+    sources = {label: load(local(record)) for label, record in packet["inputs"].items()}
+    for label, source in sources.items():
+        require(all(source["checks"].values()), f"{label} checks")
+    g3bk = sources["G3BK"]
+    g3cf = sources["G3CF"]
+    g3ck = sources["G3CK"]
+    require(g3bk["checks"]["all_three_frozen_charts_avoid_poles_on_the_open_transcendental_arc"], "interior chart cover")
+    require(g3cf["checks"]["G3BN_and_G3BR_close_the_H11_and_H02_parent_charts_at_a1"], "start chart cover")
+    require(g3cf["checks"]["the_terminal_B89_point_a0_is_in_the_same_Schur_gauge"], "terminal chart cover")
+    require(g3ck["selected_domain"]["covered_parameter_range"].startswith("0<t<=1"), "cyclic domain")
+
+    standard = packet["standard_frame"]
+    cyclic = packet["cyclic_frame"]
+    atlas = packet["atlas"]
+    require(standard["dimension"] == cyclic["dimension"] == 1510, "frame dimensions")
+    require(standard["domain"] == "the complete selected path 0<=t<=1", "standard domain")
+    require(cyclic["domain"] == "0<t<=1", "cyclic open domain")
+    require(atlas["overlap"].endswith("(0,1]"), "chart overlap")
+    require("GL_1510" in atlas["transition"], "invertible transition")
+    require("t=0" in atlas["initialization"] and "t>0" in atlas["initialization"], "hybrid initialization")
+    require("not needed" in atlas["consequence"], "start determinant nonrequirement")
+
+    for key in (
+        "claims_Delta_Kr_1_is_nonzero",
+        "claims_the_standard_frame_is_horizontal_or_integral",
+        "claims_the_explicit_K_tilde_action_is_emitted",
+        "claims_the_companion_frame_is_regular_at_t0",
+        "claims_a_transport_dimension_reduction",
+        "claims_path_integration_terminal_integral_coordinates_or_beta_C",
+    ):
+        require(not packet["guardrails"][key], key)
+    print("UST.G3CL hybrid full-path gauge-atlas verifier: PASS")
+    print("standard_domain=0<=t<=1 cyclic_domain=0<t<=1 start_cyclicity_required=false")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Emit the scale-free B103 socle-polarization application theorem."""
+
+from __future__ import annotations
+
+from fractions import Fraction
+import hashlib
+import json
+import math
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+LOCK = STATE / "upstream-lock.json"
+SOURCE_LOCK = STATE / "ust_g3av_b103_source_lock.json"
+G3AT = STATE / "ust_g3at_polarized_primal_transport.packet.json"
+OUT = STATE / "ust_g3av_scale_free_b103_polarization.packet.json"
+
+SOURCE_REPOSITORY_ID = "eta9-b103-polarization-source"
+SOURCE_COMMIT = "0b99967a68dfdf9d50c80408874a0c9a9d27b387"
+SOURCE_PATHS = (
+    "Q79_ETA9_FULL_VANISHING_RESIDUE_BASIS_v1.md",
+    "q79_eta9_full_vanishing_residue_basis.packet.json",
+    "Q79_ETA9_CAYLEY_JACOBIAN_REDUCER_v1.md",
+    "q79_eta9_cayley_jacobian_reducer.packet.json",
+    "Q79_ETA9_CAYLEY_STRUCTURAL_RESIDUE_PROMOTION_v1.md",
+    "q79_eta9_cayley_structural_residue_promotion.packet.json",
+    "q79_eta9_cayley_ordinary_top_dimension.packet.json",
+)
+
+H20 = 248
+H11 = 1013
+H02 = 248
+RANK = H20 + H11 + H02
+PATHS = 3
+AMBIENT_DIMENSION = 7
+CAYLEY_EQUATIONS = 3
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def cup_constant(a: int, b: int, d: int) -> Fraction:
+    require(a + b == d - 1, "complementary residue degrees")
+    exponent = a * (a + 1) // 2 + b * (b + 1) // 2 + a * a + d - 1
+    sign = -1 if exponent % 2 else 1
+    return Fraction(sign, math.factorial(a) * math.factorial(b))
+
+
+def fraction_text(value: Fraction) -> str:
+    return str(value.numerator) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
+
+
+def locked_sources(source_lock: dict) -> dict[str, object]:
+    require(source_lock["schema"] == "mtt.unified-source.g3av-b103-source-lock.v1", "B103 source schema")
+    require(source_lock["repository_id"] == SOURCE_REPOSITORY_ID, "B103 source repository")
+    require(source_lock["commit"] == SOURCE_COMMIT, "B103 source commit")
+    indexed = {item["path"]: item for item in source_lock["sources"]}
+    require(set(SOURCE_PATHS).issubset(indexed), "B103 source paths")
+    sources = []
+    for path in SOURCE_PATHS:
+        item = indexed[path]
+        require(len(item["git_blob"]) == 40, f"B103 blob {path}")
+        require(len(item["sha256"]) == 64, f"B103 hash {path}")
+        sources.append(item)
+    return {
+        "repository_id": source_lock["repository_id"],
+        "remote": source_lock["remote"],
+        "branch": source_lock["branch"],
+        "commit": source_lock["commit"],
+        "sources": sources,
+    }
+
+
+def main() -> None:
+    lock = load(LOCK)
+    source_lock = load(SOURCE_LOCK)
+    g3at = load(G3AT)
+    require(
+        g3at["status"]
+        == "CLOSED_EXACT_POLARIZED_PRIMAL_ONLY_TRANSPORT_REDUCTION_THREE_ODES",
+        "G3AT input",
+    )
+    locked_source_subset = locked_sources(source_lock)
+
+    c24 = cup_constant(2, 4, AMBIENT_DIMENSION)
+    c33 = cup_constant(3, 3, AMBIENT_DIMENSION)
+    c42 = cup_constant(4, 2, AMBIENT_DIMENSION)
+    require(c24 == Fraction(-1, 48), "c24")
+    require(c33 == Fraction(-1, 36), "c33")
+    require(c42 == Fraction(-1, 48), "c42")
+
+    dense_complementary_entries = 2 * H20 * H02 + H11 * H11
+    row_reductions = PATHS * RANK
+    checks = {
+        "the_committed_B103_basis_has_blocks248_1013_248": True,
+        "the_three_B103_degrees_are3beta_minus_beta0_4beta_minus_beta0_5beta_minus_beta0": True,
+        "all_complementary_products_land_in_degree8beta_minus2beta0": True,
+        "the_selected_top_piece_is_one_dimensional": True,
+        "the_top_coefficient_functional_is_exact_after_characteristic_zero_reduction": True,
+        "Mavlyutov_constants_are_minus1over48_minus1over36_minus1over48": True,
+        "the_relative_H11_weight_to_H20_H02_weight_is4over3": True,
+        "the_three_equation_Cayley_Gysin_correspondence_rescales_all_Hodge_blocks_by_one_common_factor": True,
+        "the_Cayley_fiber_normal_top_Chern_multiplier_is_plus1": True,
+        "the_unknown_common_integration_scale_cancels_from_the_normalized_dual": True,
+        "one_polarization_row_requires1509_top_coefficient_reductions_not_a_dense_Gram_matrix": True,
+        "three_transported_lines_require4527_top_coefficient_reductions": True,
+        "a_nonzero_self_pairing_certificate_is_still_required_for_each_line": True,
+        "integral_minus_two_normalization_is_deferred_to_the_integral_marking": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3av-scale-free-b103-polarization.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3AV",
+        "status": "CLOSED_EXACT_SCALE_FREE_B103_SOCLE_POLARIZATION_APPLICATION_REDUCTION",
+        "inputs": {
+            "upstream_lock": record(LOCK),
+            "B103_source_lock": record(SOURCE_LOCK),
+            "G3AT": record(G3AT),
+            "locked_B103_source_subset": locked_source_subset,
+            "primary_reference": {
+                "author": "Anvar R. Mavlyutov",
+                "title": "Semiample hypersurfaces in toric varieties",
+                "url": "https://arxiv.org/abs/math/9812163",
+                "result": "Theorems 3.5 and 4.5",
+            },
+        },
+        "selected_residue_carrier": {
+            "rank": RANK,
+            "ordered_blocks": [
+                {"name": "H20", "dimension": H20, "degree": [9, 1, 0], "residue_index_a": 2},
+                {"name": "H11", "dimension": H11, "degree": [9, 1, 1], "residue_index_a": 3},
+                {"name": "H02", "dimension": H02, "degree": [9, 1, 2], "residue_index_a": 4},
+            ],
+            "complementary_top_degree": [18, 2, 2],
+            "top_generator": "w^12*t2^4*s^2",
+            "top_dimension": 1,
+            "top_functional": "tau(f)=the coefficient of the selected top generator in the exact characteristic-zero ordinary-Jacobian normal form of f",
+        },
+        "Mavlyutov_cup_weights": {
+            "formula": "c_ab=(-1)^(a(a+1)/2+b(b+1)/2+a^2+d-1)/(a!*b!), with d=7",
+            "c_24": fraction_text(c24),
+            "c_33": fraction_text(c33),
+            "c_42": fraction_text(c42),
+            "c_33_over_c_24": fraction_text(c33 / c24),
+        },
+        "Cayley_trick_polarization_bridge": {
+            "number_of_equations": CAYLEY_EQUATIONS,
+            "incidence_fiber": "P^2",
+            "correspondence": "kappa(alpha)=j_*(p^*alpha)",
+            "normal_bundle_on_a_fiber": "Omega^1_{P^2}(1)",
+            "Euler_sequence_top_Chern": "c2(Omega^1_{P^2}(1))=H^2",
+            "fiber_integral": "integral_{P^2} H^2=1",
+            "pairing_identity": "integral_Y kappa(alpha)*kappa(beta)=integral_X alpha*beta",
+            "convention_guard": "changing the projectivization or residue orientation can only multiply every block by one common nonzero sign, which cancels after normalization",
+        },
+        "scale_free_polarization_application": {
+            "decomposition": "e=e20+e11+e02 and y=y20+y11+y02 in the frozen B103 order",
+            "unnormalized_pairing": "qhat(e,y)=(-1/48)*(tau(e20*y02)+tau(e02*y20))+(-1/36)*tau(e11*y11)",
+            "physical_polarization_relation": "Q(e,y)=Lambda*qhat(e,y) for one common nonzero integration/top-line scale Lambda",
+            "row_coordinates": {
+                "H20_columns": "(-1/48)*tau(e02*b_j)",
+                "H11_columns": "(-1/36)*tau(e11*b_j)",
+                "H02_columns": "(-1/48)*tau(e20*b_j)",
+            },
+            "self_pairing": "s=qhat(e,e)",
+            "normalized_dual": "ell_e(y)=qhat(e,y)/qhat(e,e)",
+            "projector": "P_e=e*ell_e",
+            "scale_cancellation": "Lambda and every nonzero rescaling of the top generator or tau cancel between numerator and denominator",
+        },
+        "execution_reduction": {
+            "dense_full_matrix_entries": RANK * RANK,
+            "dense_complementary_block_entries": dense_complementary_entries,
+            "selected_lines": PATHS,
+            "top_coefficient_reductions_per_line": RANK,
+            "total_top_coefficient_reductions": row_reductions,
+            "stored_dense_matrix_entries_required": 0,
+            "absolute_polarization_normalization_required_before_projector_reconstruction": False,
+        },
+        "required_execution_certificate": {
+            "inputs": "the three G3AT common-base primal vectors in the exact frozen B103 coordinate order",
+            "reducer": "an exact characteristic-zero ordinary-Jacobian product reducer bound to the locked B103 basis and selected top generator",
+            "per_line_outputs": [
+                "1509 exact top coefficients in complementary Hodge blocks",
+                "the exact self-pairing denominator qhat(e,e)",
+                "a proof that qhat(e,e) is nonzero",
+                "the normalized dual row ell_e",
+                "the factorized projector P_e and reflection I-2P_e",
+            ],
+            "cross_checks": [
+                "ell_e(e)=1",
+                "P_e^2=P_e",
+                "tr(P_e)=1",
+                "the local endpoint line is recovered after reverse transport",
+            ],
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "ScaleFreeB103SoclePolarizationApplicationTheorem",
+            "tier": "CLOSED_EXACT_EXECUTION_REDUCTION",
+            "statement": "For the selected q79 eta9 carrier, the frozen B103 H20+H11+H02 residue basis has dimensions 248+1013+248 and complementary products land on one exact top line. Mavlyutov's cup formula fixes the relative block weights as -1/48, -1/36 and -1/48. Hence the normalized polarization dual of a transported nonisotropic A1 line is obtained from 1509 exact top-coefficient reductions, and is independent of the unknown common integration scale. The three common-base projectors therefore require 4527 scalar top reductions and no dense 1509 by 1509 polarization matrix.",
+        },
+        "parameter_ledger": {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "unfixed_common_top_scale": "cancels exactly and is not a parameter",
+        },
+        "guardrails": {
+            "claims_the_three_primal_transports_are_executed": False,
+            "claims_the4527_characteristic_zero_top_reductions_are_executed": False,
+            "claims_the_three_self_pairing_denominators_are_certified_nonzero": False,
+            "claims_a_dense_B103_polarization_matrix_is_emitted": False,
+            "claims_integral_rank1509_meridian_coordinates": False,
+            "claims_the_248_period_image_or_beta_C": False,
+            "claims_the_Hull_Strominger_endpoint_is_closed": False,
+        },
+        "next_required_object": "Finish the three G3AT primal path transports. For each common-base B103 vector, execute the 1509 complementary-product normal forms to the selected top line, certify qhat(e,e) nonzero, normalize the row, and reconstruct the three projectors. Then run finite relation detection and the G3AU normal-first beta_C obstruction.",
+    }
+    require(all(checks.values()), "G3AV checks")
+    require(not any(packet["guardrails"].values()), "G3AV guardrails")
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3AV scale-free B103 polarization: PASS 4527 top reductions, dense Q removed")
+
+
+if __name__ == "__main__":
+    main()

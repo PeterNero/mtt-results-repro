@@ -1,0 +1,194 @@
+# UST.G3AE: Second-H First-Order Joint Graph/Coefficient Lift Theorem
+
+## Status
+
+`CLOSED_EXACT_FINITE_RING_FIRST_ORDER_CONSTRUCTIVE_LIFT`
+
+`UST.G3AD` proves that the independently chosen smooth integer-`gamma`
+coefficient lift does not contain the selected second primitive-`H` graph.
+This theorem answers the immediate follow-up:
+
+> Is that nonzero row an obstruction to the graph-Prym family, or only to the
+> independently chosen coefficient lift?
+
+At first `101`-adic order it is only an obstruction to the fixed lift. The
+coefficient vector can be deformed together with the graph so that containment
+is restored exactly modulo `101^2`.
+
+## 1. Fixed Data
+
+The theorem freezes all G3AD conventions:
+
+```text
+R_2=(Z/101^2 Z)[gamma]/(M),
+y=1,
+z=r x+w,
+y_h^2=F_6(x,1,r x+w),
+
+T_0=12Q^2-k S y_h,
+T_1=12Q^2+k S y_h,
+T_2=6P Q.
+```
+
+It also freezes the selected Hensel embedding of the graph's cubic field into
+`R_2`. No graph source or map coefficient is changed in this step.
+
+The unknown is only the first coefficient correction
+
+```text
+F_joint = F_Q + 101 delta_F mod 101^2.
+```
+
+## 2. Restriction Derivative
+
+The eta9 equation has three target coordinates. For each target coordinate its
+base coefficient has
+
+```text
+55 degree-nine base monomials
++28 degree-six monomials multiplying the K3 sheet
+=83 coefficients.
+```
+
+Thus `delta_F` has `3*83=249` coefficient slots over the residue field
+
+```text
+k=F_101[gamma]/(M).
+```
+
+Restriction to the selected graph, followed by reduction by the sheet
+relation, gives 32 rows:
+
+```text
+16 even coefficients of x^0,...,x^15,
+16 odd  coefficients of x^0,...,x^15.
+```
+
+The resulting linear map is
+
+```text
+L_Gamma2 : k^249 -> k^32.
+```
+
+Direct row reduction in the displayed monomial order gives
+
+```text
+rank(L_Gamma2) = 26,
+nullity(L_Gamma2) = 223.
+```
+
+The six-dimensional cokernel is important: an arbitrary 32-row defect cannot
+be repaired. The G3AD defect is not arbitrary, however. It obeys all six
+compatibility relations and lies in `im(L_Gamma2)`.
+
+## 3. Canonical Finite Correction
+
+Let `o_G3AD` be the divided-by-`101` restriction of the fixed lift. Solve
+
+```text
+L_Gamma2(delta_F) = -o_G3AD.
+```
+
+To make the emitted finite witness deterministic, use reduced row echelon
+form in the displayed 249-column order and set every free variable to zero.
+The pivot columns are
+
+```text
+0,1,3,6,10,15,21,28,36,45,
+55,56,58,61,65,70,76,
+83,84,86,89,93,98,104,111,119.
+```
+
+The resulting correction has exactly 26 nonzero coefficient entries. Their
+complete six-coordinate values are stored in
+`state/ust_g3ae_second_h_joint_coefficient_lift.packet.json`.
+
+This RREF convention is a reproducible witness rule. It is not claimed to be
+an intrinsic MTT selection principle.
+
+## 4. Exact Substitution Check
+
+The verifier does not stop at the linear equation. It reconstructs all 249
+corrected coefficients in `R_2`, substitutes the unchanged Hensel-lifted graph
+map and reduces by the exact K3 sheet relation. Every coefficient vanishes:
+
+```text
+(F_Q+101 delta_F)|Gamma_2 = 0 mod 101^2
+```
+
+in all 16 even and 16 odd rows.
+
+## 5. Theorem
+
+**Second-H First-Order Joint Graph/Coefficient Lift Theorem.** For the selected
+second primitive-`H` graph lift of UST.G3AD, the eta9 coefficient restriction
+derivative has rank 26 over `F_101[gamma]/(M)`. The G3AD first-order defect lies
+in its image. Consequently there exists an eta9 coefficient lift, reducing to
+the same finite-field equation, whose restriction to the unchanged selected
+graph vanishes modulo `101^2`. The displayed RREF rule emits one exact such
+lift.
+
+**Proof.** Construct the 32 by 249 matrix by restricting every coefficient
+basis monomial and multiplying by its corresponding marked Fermat coordinate.
+Exact finite-field elimination gives rank 26 and the displayed pivot set. The
+augmented system is consistent. The emitted vector multiplies to the negative
+G3AD defect. Full substitution in `R_2`, before division by `101`, gives the
+zero 32-row vector. QED.
+
+## 6. Meaning
+
+Together G3AD and G3AE distinguish two statements that must not be confused:
+
+```text
+The fixed independently lifted F_Q contains the selected graph:
+    FALSE modulo 101^2.
+
+Some jointly lifted eta9 coefficient vector contains that graph:
+    TRUE modulo 101^2 for the second-H component.
+```
+
+This is positive evidence for the graph-preserving-family route. It is also a
+warning against promoting an arbitrary coefficient lift merely because its
+special fiber contains the desired graph.
+
+## 7. Exact Boundary
+
+The theorem does not yet provide:
+
+- simultaneous containment of the first `H`, second `H` and `4H` graphs;
+- an all-orders or convergent `101`-adic coefficient lift;
+- an algebraic characteristic-zero coefficient member;
+- smoothness of the emitted finite-precision corrected member;
+- an intrinsic selection among the 223 free first-order directions;
+- the analytic `beta_C` value;
+- the twisted visible `V_3`, its HYM connection or a physical
+  Hull-Strominger endpoint.
+
+The 223-dimensional kernel is not a ledger of physical free parameters. It is
+the affine freedom in one underdetermined finite restriction problem. The
+canonical witness fixes it algorithmically, but MTT has not selected that
+witness as physical.
+
+## 8. Next Construction
+
+The next finite target is a simultaneous union solve:
+
+```text
+lift first-H map
++ lift second-H map
++ embed the exact 4H map
++ solve one compatible global coefficient correction
+```
+
+through `101^2`, then iterate if its all-component derivative remains
+surjective onto the compatible target. Only after that same member is fixed
+should the rank-248 `beta_C` functional be evaluated.
+
+## 9. Reproduction
+
+```text
+python build_ust_g3ae_second_h_joint_coefficient_lift.py
+python verify_ust_g3ae_second_h_joint_coefficient_lift.py
+python verify.py
+```
+

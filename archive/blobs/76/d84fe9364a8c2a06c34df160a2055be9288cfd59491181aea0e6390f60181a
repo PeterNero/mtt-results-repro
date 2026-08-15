@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Select a hash-certified Cayley reduction basis valid through degree 44."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+FULL_RESULT = ROOT / "state" / "ust_g3al_selected_cayley_basis.result.json"
+BOUNDED_PACKET = ROOT / "state" / "ust_g3ap_selected_cayley_bounded_top.packet.json"
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _checked_cache(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    if not path.is_file() or sha256(path) != record["sha256"]:
+        raise AssertionError(f"{label} cache hash")
+    return path
+
+
+def selected_degree44_basis() -> dict[str, object]:
+    """Prefer a full basis, otherwise use the certified degree-44 cache."""
+    if FULL_RESULT.is_file():
+        result = json.loads(FULL_RESULT.read_text(encoding="ascii"))
+        if result.get("passed") is True and result.get("cache"):
+            cache_record = result["cache"]
+            cache = _checked_cache(cache_record, "full")
+            return {
+                "kind": "full_standard_basis",
+                "cache": cache,
+                "cache_record": cache_record,
+                "certificate": {
+                    "path": str(FULL_RESULT.relative_to(ROOT)).replace("\\", "/"),
+                    "sha256": sha256(FULL_RESULT),
+                },
+                "valid_through_scalar_degree": None,
+            }
+    if not BOUNDED_PACKET.is_file():
+        raise AssertionError("no selected Cayley basis valid through degree 44")
+    packet = json.loads(BOUNDED_PACKET.read_text(encoding="ascii"))
+    if (
+        packet.get("schema")
+        != "mtt.unified-source.g3ap-selected-cayley-bounded-top.v1"
+        or packet.get("status")
+        != "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_DIMENSION_ONE"
+        or not all(packet.get("checks", {}).values())
+    ):
+        raise AssertionError("bounded degree-44 certificate is not closed")
+    execution = packet["execution"]
+    cache_record = execution["bounded_basis_cache"]
+    if (
+        int(execution["scalar_degree_bound"]) != 44
+        or int(cache_record["valid_through_scalar_degree"]) != 44
+        or cache_record["isSB_trust_attribute_stored"] is not False
+    ):
+        raise AssertionError("bounded basis scope")
+    cache = _checked_cache(cache_record, "bounded")
+    return {
+        "kind": "homogeneous_standard_basis_truncated_through_degree_44",
+        "cache": cache,
+        "cache_record": cache_record,
+        "certificate": {
+            "path": str(BOUNDED_PACKET.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(BOUNDED_PACKET),
+        },
+        "valid_through_scalar_degree": 44,
+    }

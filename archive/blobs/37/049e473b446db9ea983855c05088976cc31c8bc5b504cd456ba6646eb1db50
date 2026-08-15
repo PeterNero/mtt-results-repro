@@ -1,0 +1,72 @@
+# UST.G3CH Cancelled-H02 Riccati Source-Jet Theorem
+
+## Status
+
+`CLOSED_EXACT_GF11_CANCELLED_H02_RICCATI_SOURCE_JET_TARGET_FIXED_COORDINATE_SOURCE_REJECTED_SELECTED_SOURCE_JET_OPEN`
+
+## Construction
+
+At the selected good fiber, write the static lower graph data as
+
+```text
+X = J^{-1} L,     y = J^{-1} b_lower.
+```
+
+The H02-by-H20 block `X_H02` is an invertible `248 x 248` matrix with
+determinant `10 mod 11`. Therefore there is a unique vector `v` satisfying
+
+```text
+X_H02 v = y_H02.
+```
+
+For `w=Xv-y`, the H02 component vanishes exactly. This cancellation is the
+key point: differentiating `Jw=Lv-b_lower` now requires connection derivatives
+only for an H20 input and an H11 input. It never invokes the still-open H02
+connection derivative or a pole-seven toric return.
+
+The affine chart identity `M(a)c(a)=r(a)` is differentiated exactly as
+
+```text
+c'(0) = M(0)^{-1}(r'(0)-M'(0)c(0)).
+```
+
+The frozen H02-to-H11 divergence map is linear, so it applies directly to the
+coordinate jet. This emits exact vectors `L'v` and `J'w`.
+
+## Necessary source jet
+
+If both Schur-Riccati equations held, their cancelled combination would give
+
+```text
+w' = X (b_eff-Sv).
+```
+
+Differentiating the static identity gives
+
+```text
+Jw' + J'w = L'v-b_lower'.
+```
+
+Consequently there is one and only one compatible terminal source jet:
+
+```text
+b_lower' = L'v-J'w-JX(b_eff-Sv).
+```
+
+The emitted target has `1,147` nonzero entries. Hence the constant B103
+coordinate continuation, whose source jet is zero, fails this necessary
+condition in exactly `1,147` entries.
+
+This theorem does not select the required nonzero source jet and does not
+validate 249-dimensional transport. It turns that question into one exact,
+entrywise source-section test.
+
+## Verification
+
+```text
+python build_ust_g3ch_cancelled_h02_riccati_source_jet.py --resume
+python verify_ust_g3ch_cancelled_h02_riccati_source_jet.py
+```
+
+The packet is
+`state/ust_g3ch_cancelled_h02_riccati_source_jet.packet.json`.

@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Verify UST.G3J reverse Ext representation and local-freeness no-go."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3j_reverse_ext_representation_nogo.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+G3I_PATH = ROOT / "state" / "ust_g3i_bidirectional_ext.packet.json"
+G3G_PATH = ROOT / "state" / "ust_g3g_two_fiber_stable_recombination.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def locked_source(lock: dict, source_path: str) -> dict:
+    repository = next(
+        item for item in lock["repositories"] if item["id"] == "q79-quantum-gravity"
+    )
+    return next(item for item in repository["sources"] if item["path"] == source_path)
+
+
+def dimension(multiplicities: dict[str, int]) -> int:
+    return sum(multiplicities.values())
+
+
+def add(*rows: dict[str, int]) -> dict[str, int]:
+    keys = ("trivial", "chi", "chi2")
+    return {key: sum(row[key] for row in rows) for key in keys}
+
+
+def subtract(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+    return {key: left[key] - right[key] for key in left}
+
+
+def main() -> None:
+    packet = load_json(PACKET_PATH)
+    lock = load_json(LOCK_PATH)
+    g3i = load_json(G3I_PATH)
+    g3g = load_json(G3G_PATH)
+
+    require(
+        packet["schema"] == "mtt.unified-source.q79-reverse-ext-representation-nogo.v1",
+        "bad G3J packet schema",
+    )
+    require(packet["theorem_id"] == "UST.G3J", "bad theorem id")
+    require(
+        packet["inputs"]["g3i_bidirectional_ext"]["sha256"] == sha256(G3I_PATH),
+        "G3I packet hash mismatch",
+    )
+    require(
+        packet["inputs"]["g3g_stable_recombination"]["sha256"] == sha256(G3G_PATH),
+        "G3G packet hash mismatch",
+    )
+    for key in (
+        "hartshorne_serre_source",
+        "hartshorne_serre_orbit_atlas",
+        "global_alpha_twisted_object",
+    ):
+        source = packet["inputs"][key]
+        require(
+            source["sha256"] == locked_source(lock, source["path"])["sha256"],
+            f"upstream lock mismatch for {source['path']}",
+        )
+
+    clock = packet["clock_geometry"]
+    require(clock["dual_graph_cycle_dimension"] == 6 - 5 + 1 == 2, "bad graph b1")
+    components = clock["component_h1_character_multiplicities"]
+    graph = clock["graph_cycle_character_multiplicities"]
+    omega = clock["h0_omega_character_multiplicities"]
+    require(components == {"trivial": 3, "chi": 1, "chi2": 1}, "bad component rep")
+    require(graph == {"trivial": 0, "chi": 1, "chi2": 1}, "bad graph rep")
+    require(add(components, graph) == omega, "normalization representation mismatch")
+    require(dimension(omega) == clock["arithmetic_genus"] == 7, "canonical dimension")
+
+    section_map = packet["six_to_seven_map"]
+    source = section_map["source_character_multiplicities"]
+    target = section_map["target_character_multiplicities"]
+    kernel = section_map["kernel_character_multiplicities"]
+    cokernel = section_map["cokernel_character_multiplicities"]
+    image = subtract(source, kernel)
+    require(dimension(source) == 6 and dimension(target) == 7, "six-to-seven count")
+    require(image == {"trivial": 0, "chi": 2, "chi2": 2}, "bad image rep")
+    require(section_map["total_rank"] == dimension(image) == 4, "bad map rank")
+    require(subtract(target, image) == cokernel, "bad cokernel rep")
+    require(cokernel == {"trivial": 3, "chi": 0, "chi2": 0}, "cokernel not invariant")
+
+    reverse = packet["reverse_ext"]
+    tail = {"trivial": 0, "chi": reverse["h1_OX_H"], "chi2": reverse["h1_OX_H"]}
+    expected_reverse = add(cokernel, tail)
+    require(reverse["map_h1_OH2_to_h1_omega_is_zero_by_character"], "tail map not zero")
+    require(reverse["character_multiplicities"] == expected_reverse, "bad reverse rep")
+    require(reverse["dimension"] == dimension(expected_reverse) == 9, "reverse dimension")
+    require(reverse["clock_fixed_dimension"] == expected_reverse["trivial"] == 3, "fixed count")
+    require(reverse["projective_nonzero_class_dimension"] == 8, "bad P(R) dimension")
+    require(reverse["projective_clock_fixed_locus_dimension"] == 2, "bad fixed P2")
+    require(not reverse["clock_selects_unique_class"], "clock silently selects a class")
+    require(g3i["reverse_ext"]["dimension_lower_bound"] <= reverse["dimension"], "G3I regression")
+
+    typing = packet["action_typing"]
+    require(typing["clock_stabilizes_single_curve"], "clock stabilizer lost")
+    require(typing["shift_cycles_three_curves"], "shift orbit lost")
+    require(not typing["shift_is_endomorphism_of_single_reverse_ext"], "ill-typed shift")
+    require(typing["full_E3_action_requires_global_orbit_chain_maps"], "chain maps bypassed")
+    require(not typing["analytic_alpha_is_source_ext_character"], "alpha mistyped")
+    require(not typing["finite_sigma_identified_with_analytic_alpha"], "twists conflated")
+
+    local = packet["local_algebra_nogo"]
+    require(local["gamma_is_codimension_two_lci"], "regular sequence missing")
+    require(local["minimal_generator_count_of_I"] == 2, "bad ideal generator count")
+    require(not local["I_is_free_rank_one"], "codimension-two ideal declared invertible")
+    require(local["reverse_quotient_is_invertible"], "reverse quotient not a line")
+    require(local["every_reverse_extension_splits_on_stalks"], "local split missing")
+    require(not local["reverse_middle_is_locally_free"], "reverse sheaf silently free")
+    require(local["reverse_middle_is_perfect_of_projective_dimension_one"], "perfect tier lost")
+    require(local["fiber_restriction_has_torsion"], "fiber torsion not detected")
+    require(not local["equals_g3g_stable_locally_free_repair"], "false G3G match")
+    require(g3g["stable_recombination"]["middle_is_stable"], "G3G stable target required")
+    require(g3g["fourier_mukai_repair"]["shifted_skyscraper_count_after_local_repair"] == 0, "G3G repair regressed")
+
+    frontier = packet["frontier"]
+    require(not frontier["reverse_extension_route_passes_endpoint_contract"], "reverse route passed")
+    require(frontier["reverse_extension_route_state"] == "RETIRED_EXACT_NOGO", "route not retired")
+    require(
+        frontier["direct_g3h_global_repaired_object_route_forced_within_hs_program"],
+        "direct HS route not forced",
+    )
+    require(
+        not frontier["scope_excludes_unrelated_hidden_presentations"],
+        "G3J overclaims unrelated hidden-route exclusion",
+    )
+    require(not frontier["global_g3h_object_constructed"], "global object silently promoted")
+    require(not frontier["physical_hidden_W9_constructed"], "W9 silently promoted")
+    require(not frontier["B_HS_01_closed"], "B.HS.01 silently closed")
+    require(packet["continuous_fit_parameters"] == 0, "fit parameter introduced")
+    require(packet["observed_inputs"] == 0, "observed input introduced")
+
+    print("UST.G3J reverse Ext representation/no-go theorem: PASS")
+    print("Ext1(O(-H),E_0) = 3*(1+chi+chi^2), dimension 9")
+    print("clock-fixed dimension 3; shift acts on the three-member orbit")
+    print("all reverse middles are locally split nonbundles; G3G match excluded")
+    print("remaining HS route in G3J: closed downstream at repair/local-freeness tier by G3R")
+
+
+if __name__ == "__main__":
+    main()

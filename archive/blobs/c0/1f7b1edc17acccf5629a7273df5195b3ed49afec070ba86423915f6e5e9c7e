@@ -1,0 +1,270 @@
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <queue>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr std::uint32_t kUnmatched = std::numeric_limits<std::uint32_t>::max();
+constexpr std::int32_t kInfinity = std::numeric_limits<std::int32_t>::max();
+
+struct Chart {
+    std::uint64_t prime{};
+    std::uint64_t rows{};
+    std::uint64_t columns{};
+    std::uint64_t nonzeros{};
+    std::vector<std::uint64_t> indptr;
+    std::vector<std::uint32_t> indices;
+};
+
+template <typename T>
+void read_exact(std::ifstream& input, T* destination, std::size_t count) {
+    input.read(
+        reinterpret_cast<char*>(destination),
+        static_cast<std::streamsize>(sizeof(T) * count));
+    if (!input) throw std::runtime_error("truncated chart binary");
+}
+
+Chart read_chart(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot open chart: " + path);
+    std::array<char, 8> magic{};
+    read_exact(input, magic.data(), magic.size());
+    const std::array<char, 8> expected{'M','T','T','S','P','C','1','\0'};
+    if (magic != expected) throw std::runtime_error("unexpected chart magic");
+    Chart chart;
+    std::uint64_t quotient_units{}, image_rank{};
+    read_exact(input, &chart.prime, 1);
+    read_exact(input, &chart.rows, 1);
+    read_exact(input, &chart.columns, 1);
+    read_exact(input, &chart.nonzeros, 1);
+    read_exact(input, &quotient_units, 1);
+    read_exact(input, &image_rank, 1);
+    if (chart.rows == 0 || chart.rows != chart.columns ||
+        chart.rows > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("a nonempty square uint32 chart is required");
+    }
+    chart.indptr.resize(chart.columns + 1);
+    chart.indices.resize(chart.nonzeros);
+    std::vector<std::uint32_t> data(chart.nonzeros);
+    read_exact(input, chart.indptr.data(), chart.indptr.size());
+    read_exact(input, chart.indices.data(), chart.indices.size());
+    read_exact(input, data.data(), data.size());
+    if (chart.indptr.front() != 0 || chart.indptr.back() != chart.nonzeros) {
+        throw std::runtime_error("invalid CSC endpoints");
+    }
+    for (std::size_t column = 0; column < chart.columns; ++column) {
+        if (chart.indptr[column] > chart.indptr[column + 1]) {
+            throw std::runtime_error("nonmonotone CSC pointers");
+        }
+    }
+    for (std::size_t index = 0; index < chart.nonzeros; ++index) {
+        if (chart.indices[index] >= chart.rows || data[index] == 0 ||
+            data[index] >= chart.prime) {
+            throw std::runtime_error("invalid CSC entry");
+        }
+    }
+    return chart;
+}
+
+std::vector<std::uint32_t> parse_dimensions(const std::string& text) {
+    std::vector<std::uint32_t> values;
+    std::stringstream stream(text);
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+        if (token.empty()) throw std::runtime_error("empty component dimension");
+        const auto value = std::stoul(token);
+        if (value == 0 || value > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::runtime_error("invalid component dimension");
+        }
+        values.push_back(static_cast<std::uint32_t>(value));
+    }
+    if (values.empty()) throw std::runtime_error("component dimensions are required");
+    return values;
+}
+
+class IncrementalMatcher {
+public:
+    explicit IncrementalMatcher(std::vector<std::vector<std::uint32_t>> adjacency)
+        : adjacency_(std::move(adjacency)),
+          left_to_right_(adjacency_.size(), kUnmatched),
+          right_to_left_(adjacency_.size(), kUnmatched),
+          distance_(adjacency_.size(), kInfinity) {}
+
+    std::uint32_t maximize(std::uint32_t active) {
+        if (active < active_ || active > adjacency_.size()) {
+            throw std::runtime_error("active size must increase within the chart");
+        }
+        active_ = active;
+        while (breadth_first_search()) {
+            for (std::uint32_t left = 0; left < active_; ++left) {
+                if (left_to_right_[left] == kUnmatched && augment(left)) {
+                    ++rank_;
+                }
+            }
+        }
+        return rank_;
+    }
+
+private:
+    bool breadth_first_search() {
+        std::queue<std::uint32_t> queue;
+        for (std::uint32_t left = 0; left < active_; ++left) {
+            if (left_to_right_[left] == kUnmatched) {
+                distance_[left] = 0;
+                queue.push(left);
+            } else {
+                distance_[left] = kInfinity;
+            }
+        }
+        bool reaches_free_right = false;
+        while (!queue.empty()) {
+            const auto left = queue.front();
+            queue.pop();
+            for (const auto right : adjacency_[left]) {
+                if (right >= active_) break;
+                const auto next_left = right_to_left_[right];
+                if (next_left == kUnmatched) {
+                    reaches_free_right = true;
+                } else if (distance_[next_left] == kInfinity) {
+                    distance_[next_left] = distance_[left] + 1;
+                    queue.push(next_left);
+                }
+            }
+        }
+        return reaches_free_right;
+    }
+
+    bool augment(std::uint32_t left) {
+        for (const auto right : adjacency_[left]) {
+            if (right >= active_) break;
+            const auto next_left = right_to_left_[right];
+            if (next_left == kUnmatched ||
+                (distance_[next_left] == distance_[left] + 1 && augment(next_left))) {
+                left_to_right_[left] = right;
+                right_to_left_[right] = left;
+                return true;
+            }
+        }
+        distance_[left] = kInfinity;
+        return false;
+    }
+
+    std::vector<std::vector<std::uint32_t>> adjacency_;
+    std::vector<std::uint32_t> left_to_right_;
+    std::vector<std::uint32_t> right_to_left_;
+    std::vector<std::int32_t> distance_;
+    std::uint32_t active_{};
+    std::uint32_t rank_{};
+};
+
+std::vector<std::vector<std::uint32_t>> row_adjacency(const Chart& chart) {
+    std::vector<std::uint32_t> degrees(chart.rows, 0);
+    for (const auto row : chart.indices) ++degrees[row];
+    std::vector<std::vector<std::uint32_t>> adjacency(chart.rows);
+    for (std::size_t row = 0; row < chart.rows; ++row) {
+        adjacency[row].reserve(degrees[row]);
+    }
+    for (std::uint32_t column = 0; column < chart.columns; ++column) {
+        for (auto index = chart.indptr[column]; index < chart.indptr[column + 1]; ++index) {
+            adjacency[chart.indices[index]].push_back(column);
+        }
+    }
+    return adjacency;
+}
+
+void self_test() {
+    std::vector<std::vector<std::uint32_t>> adjacency{
+        {0}, {0, 1}, {1, 2}, {2, 3}, {3, 4}, {4, 5}};
+    IncrementalMatcher matcher(std::move(adjacency));
+    const std::array<std::uint32_t, 4> active{2, 3, 5, 6};
+    const std::array<std::uint32_t, 4> expected{2, 3, 5, 6};
+    for (std::size_t index = 0; index < active.size(); ++index) {
+        if (matcher.maximize(active[index]) != expected[index]) {
+            throw std::runtime_error("incremental matching self-test failed");
+        }
+    }
+    std::cout << "SELF_TEST SUCCESS\n";
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        std::string chart_path, log_path, dimensions_text;
+        std::uint32_t base = 0;
+        bool run_self_test = false;
+        for (int index = 1; index < argc; ++index) {
+            const std::string argument = argv[index];
+            if (argument == "--chart" && index + 1 < argc) chart_path = argv[++index];
+            else if (argument == "--log" && index + 1 < argc) log_path = argv[++index];
+            else if (argument == "--base" && index + 1 < argc) {
+                base = static_cast<std::uint32_t>(std::stoul(argv[++index]));
+            } else if (argument == "--components" && index + 1 < argc) {
+                dimensions_text = argv[++index];
+            } else if (argument == "--self-test") {
+                run_self_test = true;
+            } else {
+                throw std::runtime_error("unknown or incomplete argument: " + argument);
+            }
+        }
+        if (run_self_test) {
+            self_test();
+            return 0;
+        }
+        if (chart_path.empty() || log_path.empty() || base == 0 || dimensions_text.empty()) {
+            throw std::runtime_error("--chart, --log, --base and --components are required");
+        }
+        const auto chart = read_chart(chart_path);
+        const auto dimensions = parse_dimensions(dimensions_text);
+        std::uint64_t total = base;
+        for (const auto dimension : dimensions) total += dimension;
+        if (total != chart.rows) throw std::runtime_error("component dimensions do not fill chart");
+
+        const auto started = std::chrono::steady_clock::now();
+        IncrementalMatcher matcher(row_adjacency(chart));
+        std::ofstream log(log_path);
+        if (!log) throw std::runtime_error("cannot open log: " + log_path);
+        log << "SCHEMA MTTH02IncrementalPrefixMatching.v1\n";
+        log << "STATUS RUNNING\n";
+        log << "PRIME " << chart.prime << '\n';
+        log << "ROWS " << chart.rows << '\n';
+        log << "NONZEROS " << chart.nonzeros << '\n';
+        log << "BASE " << base << '\n';
+        log << "COMPONENTS " << dimensions.size() << '\n';
+
+        auto active = base;
+        auto rank = matcher.maximize(active);
+        log << "PREFIX -1 " << active << " 0 " << rank << ' ' << active - rank << '\n';
+        log.flush();
+        std::cout << "PREFIX base active=" << active << " rank=" << rank << '\n' << std::flush;
+        for (std::size_t component = 0; component < dimensions.size(); ++component) {
+            active += dimensions[component];
+            rank = matcher.maximize(active);
+            log << "PREFIX " << component << ' ' << active << ' ' << dimensions[component]
+                << ' ' << rank << ' ' << active - rank << '\n';
+            log.flush();
+            std::cout << "PREFIX component=" << component << " active=" << active
+                      << " rank=" << rank << " nullity=" << active - rank << '\n'
+                      << std::flush;
+        }
+        const auto elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        log << "ELAPSED_SECONDS " << elapsed << '\n';
+        log << "STATUS SUCCESS\n";
+        log << "END_CERTIFICATE\n";
+        std::cout << "SUCCESS rank=" << rank << " elapsed=" << elapsed << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "ERROR " << error.what() << '\n';
+        return 1;
+    }
+}

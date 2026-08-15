@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Independent checks for the G3BE Hartshorne-Serre support no-go."""
+
+from __future__ import annotations
+
+import json
+import math
+from fractions import Fraction
+from pathlib import Path
+
+import build_ust_g3be_delta_trivial_hs_elementary_transform_nogo as builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3be_delta_trivial_hs_elementary_transform_nogo.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="ascii"))
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3be-delta-trivial-hs-elementary-transform-nogo.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_NOGO_FOR_ORDINARY_CARTIER_LINE_ON_DELTA_TRIVIAL_HS_SUPPORT_NEXT_SUPPORT_SELECTION_OPEN",
+        "G3BE packet",
+    )
+    require(all(packet["checks"].values()), "G3BE checks")
+    require(not any(packet["guardrails"].values()), "G3BE guardrails")
+
+    evidence = load(builder.EVIDENCE)
+    require(
+        {name: item["sha256"] for name, item in evidence["source_packets"].items()}
+        == builder.EXPECTED_SOURCE_HASHES,
+        "source packet locks",
+    )
+    coefficients = evidence["selected_support"]["base_quartic_coefficients"]
+    invariant_i, invariant_j, discriminant_numerator, j_base = builder.binary_quartic_invariants(
+        coefficients
+    )
+    require((invariant_i, invariant_j) == (25465, 8111918), "quartic invariants")
+    require(discriminant_numerator == 249556039776, "quartic discriminant numerator")
+    require(discriminant_numerator // 27 == 9242816288, "quartic discriminant")
+    require(j_base == Fraction(132105539357000, 288838009), "exact j")
+    require(math.gcd(j_base.numerator, j_base.denominator) == 1, "reduced j")
+    require(j_base.denominator != 1, "nonintegral rational j")
+
+    phi3 = builder.parse_phi3_specialization(builder.PHI3)
+    scale = 12288000
+    require(
+        phi3 == {0: 0, 1: scale**3, 2: 3 * scale**2, 3: 3 * scale, 4: 1},
+        "official Phi3 specialization",
+    )
+    require(builder.evaluate_polynomial(phi3, j_base) != 0, "degree-three no-go")
+    require(builder.evaluate_polynomial(phi3, Fraction(0)) == 0, "j zero control")
+    require(builder.evaluate_polynomial(phi3, Fraction(-scale)) == 0, "CM neighbor control")
+
+    # With Hom(E_B,E_f)=0, every integral numerical line class is aA+bB.
+    # The Gysin row b=-6 makes its square -12a, never -6 for integral a.
+    for vertical_coefficient in range(-1000, 1001):
+        square = 2 * vertical_coefficient * -6
+        require(square != -6, "bounded integral NS replay")
+    require(Fraction(-6, -12) == Fraction(1, 2), "exact Diophantine obstruction")
+
+    theorem = packet["theorem"]
+    require(
+        "End^0" in theorem["nonisogeny"]
+        and "denominator 288838009" in theorem["nonisogeny"]
+        and "a=1/2" in theorem["Diophantine_cutset"]
+        and "conductor gluing" in theorem["normalization_extension"],
+        "theorem chain serialized",
+    )
+    require(
+        packet["readiness_effect"]["visible_V3_existence"] == "OPEN_NOT_EXCLUDED"
+        and packet["readiness_effect"]["beta_C"] == "OPEN_UNCHANGED"
+        and packet["readiness_effect"]["primary_visible_route"]
+        == "EXISTING_G3AC_G3AJ_TWISTED_GRAPH_PRYM_PLUS_G3BC_G3BD_DELIGNE_DECISION"
+        and packet["readiness_effect"]["ordinary_support_fallback"]
+        == "OPEN_SIMULTANEOUS_DELTA_TRIVIALITY_AND_MINUS6_MIXED_CLASS",
+        "scope guard",
+    )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BE"]["state"]
+        == "closed_exact_nogo_ordinary_cartier_line_on_delta_trivial_hs_support"
+        and gates["UST.G3BE"]["depends_on"] == ["UST.G3E", "UST.G3AC"],
+        "G3BE frontier gate",
+    )
+    require(
+        "nonintegral rational" in frontier["frontier_delta_g3be"]
+        and "simultaneously" in frontier["frontier_delta_g3be"]
+        and "not" in frontier["frontier_delta_g3be"].lower(),
+        "G3BE frontier delta",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BE" in document.read_text(encoding="utf-8"), f"G3BE integration {document.name}")
+    theorem_text = (
+        ROOT / "UST_G3BE_DELTA_TRIVIAL_HS_ELEMENTARY_TRANSFORM_NOGO_THEOREM_v1.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "does not exclude the visible bundle" in theorem_text
+        and "288838009" in theorem_text
+        and "a=1/2" in theorem_text,
+        "G3BE theorem guardrails",
+    )
+    require(
+        "primary visible route is not a new support search" in theorem_text
+        and "optional ordinary rank-one fallback" in theorem_text,
+        "G3BE anti-loop route binding",
+    )
+    print("UST.G3BE delta-trivial HS support: PASS non-CM, NS and GRR no-go replay")
+
+
+if __name__ == "__main__":
+    main()

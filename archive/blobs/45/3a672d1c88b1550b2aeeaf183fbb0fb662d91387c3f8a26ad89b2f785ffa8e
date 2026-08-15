@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Recover exact module leaders from a completed Singular cache.
+
+Early G3AP hedge scripts used the nonexistent public command ``leadcomp`` in
+their final print loop.  The expensive ``std`` result and cache are unaffected.
+This helper reloads such a cache in the same selected quotient ring and derives
+the component of each leading term from ``lead(vector)``.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import subprocess
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def recovery_script(
+    source: str,
+    base_cache: Path,
+    module_cache: Path,
+    marker: str,
+    module_generator_count: int,
+    canonical_component: int,
+) -> str:
+    return weighted.weighted_base_prefix(source) + f'''option(noredTail);
+def cachedBase=read("ssi:r {relative(base_cache)}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+int i;
+print("{marker}_BASE_GB_SIZE="+string(size(GI)));
+for (i=1;i<=size(GI);i++)
+{{ print("{marker}_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GI[i]))); }}
+qring q=GI;
+def cachedModule=read("ssi:r {relative(module_cache)}");
+module G=cachedModule;
+attrib(G,"isSB",1);
+vector canonicalSocle=w^12*t2^4*gen({canonical_component});
+vector canonicalNormal=reduce(canonicalSocle,G);
+print("{marker}_BOUND={weighted.TARGET_SCALAR_DEGREE}");
+print("{marker}_MODULE_GENERATORS={module_generator_count}");
+print("{marker}_MODULE_GB_SIZE="+string(size(G)));
+print("{marker}_CANONICAL_NORMAL_ZERO="+string(canonicalNormal==0));
+print("{marker}_CANONICAL_NORMAL="+string(canonicalNormal));
+for (i=1;i<=size(G);i++)
+{{
+  print("{marker}_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("{marker}_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+print("{marker}_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def recover(
+    *,
+    source_path: Path,
+    base_cache: Path,
+    module_cache: Path,
+    marker: str,
+    module_generator_count: int,
+    canonical_component: int,
+    script_path: Path,
+    output_path: Path,
+    timeout: int,
+) -> str:
+    if not source_path.is_file():
+        raise AssertionError("selected source for cache recovery")
+    if not base_cache.is_file() or base_cache.stat().st_size == 0:
+        raise AssertionError("base cache for recovery")
+    if not module_cache.is_file() or module_cache.stat().st_size == 0:
+        raise AssertionError("module cache for recovery")
+    script_path.write_text(
+        recovery_script(
+            source_path.read_text(encoding="ascii"),
+            base_cache,
+            module_cache,
+            marker,
+            module_generator_count,
+            canonical_component,
+        ),
+        encoding="ascii",
+    )
+    completed = subprocess.run(
+        singular_command(ROOT, script_path),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    output_path.write_text(completed.stdout, encoding="utf-8")
+    if completed.returncode != 0:
+        raise AssertionError("module cache recovery execution")
+    if any(line.lstrip().startswith("?") for line in completed.stdout.splitlines()):
+        raise AssertionError("module cache recovery Singular error")
+    if f"{marker}_LEADER_EXPORT_PASS" not in completed.stdout:
+        raise AssertionError("module cache recovery marker")
+    return completed.stdout

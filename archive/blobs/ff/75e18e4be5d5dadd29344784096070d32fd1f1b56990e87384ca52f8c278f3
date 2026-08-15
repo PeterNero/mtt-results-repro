@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Adopt the smooth-primal plus nine-original-flex G3AO uvs certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ao_selected_cayley_toric_uvs_cusp_original_msolve_inputs as flex_inputs
+import build_ust_g3ao_selected_cayley_toric_uvs_cusp_split_msolve_inputs as split
+import build_ust_g3ao_selected_cayley_toric_uvs_primal_msolve_input as smooth_inputs
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_msolve_runtime import msolve_output_is_unit_ideal
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verified_execution(path: Path, schema: str, source_hash: str) -> dict[str, object]:
+    require(path.is_file(), f"execution packet {path.name}")
+    packet = json.loads(path.read_text(encoding="ascii"))
+    require(packet["schema"] == schema, f"{path.name} schema")
+    require(packet["source_sha256"] == source_hash, f"{path.name} source")
+    require(packet["passed"] is True and packet["unit_ideal"] is True, f"{path.name} unit ideal")
+    require(packet["returncode"] == 0 and packet["timed_out"] is False, f"{path.name} completion")
+    require(packet["backend"]["probabilistic_linearization_used"] is False, f"{path.name} exact backend")
+    for key in ("output", "log"):
+        artifact = direct.CAMPAIGN / packet[key]["path"]
+        require(artifact.is_file() and sha256(artifact) == packet[key]["sha256"], f"{path.name} {key}")
+    output = direct.CAMPAIGN / packet["output"]["path"]
+    require(msolve_output_is_unit_ideal(output.read_text(encoding="utf-8")), f"{path.name} raw unit basis")
+    return packet
+
+
+def main() -> None:
+    source_hash = sha256(direct.SOURCE)
+    smooth_input_packet = json.loads(smooth_inputs.OUT.read_text(encoding="ascii"))
+    flex_input_packet = json.loads(flex_inputs.OUT.read_text(encoding="ascii"))
+    for name, packet in (("smooth", smooth_input_packet), ("flex", flex_input_packet)):
+        require(packet["source_sha256"] == source_hash, f"{name} input source")
+        require(all(packet["checks"].values()), f"{name} input checks")
+
+    smooth_execution_path = smooth_inputs.CAMPAIGN / "smooth.msolve.packet.json"
+    smooth_execution = verified_execution(
+        smooth_execution_path,
+        "mtt.unified-source.g3ao-uvs-smooth-primal-msolve.v1",
+        source_hash,
+    )
+    require(
+        smooth_execution["input_packet"]["sha256"] == sha256(smooth_inputs.OUT),
+        "smooth execution input packet",
+    )
+
+    flex_executions: dict[str, dict[str, object]] = {}
+    flex_dependencies: dict[str, dict[str, str]] = {}
+    for case in split.CASES:
+        for root in split.ROOTS:
+            component = f"{case}_{root}"
+            path = flex_inputs.CAMPAIGN / f"{component}.msolve.packet.json"
+            packet = verified_execution(
+                path,
+                "mtt.unified-source.g3ao-uvs-original-flex-msolve-component.v1",
+                source_hash,
+            )
+            require(packet["component"] == component, f"{component} execution label")
+            require(packet["input_packet"]["sha256"] == sha256(flex_inputs.OUT), f"{component} input packet")
+            flex_executions[component] = packet
+            flex_dependencies[component] = {
+                "path": str(path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                "sha256": sha256(path),
+            }
+
+    label = direct.label(direct.BASE, direct.ELLIPTIC, ("u", "v", "s"))
+    canonical = {
+        "schema": "mtt.unified-source.g3ao-selected-cayley-toric-orbit.v1",
+        "label": label,
+        "source_sha256": source_hash,
+        "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+        "supports": {
+            "base": list(direct.BASE),
+            "elliptic": list(direct.ELLIPTIC),
+            "Cayley_fiber": ["u", "v", "s"],
+        },
+        "script": smooth_input_packet["export_script"],
+        "output": smooth_input_packet["raw_output"],
+        "algorithm": "uvs_smooth_primal_and_nine_original_flex_msolve_f4_exact",
+        "certificate_method": "uvs_primal_contact_and_original_flex_prime_field_f4_elimination",
+        "dependencies": {
+            "smooth_input_packet": {
+                "path": str(smooth_inputs.OUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                "sha256": sha256(smooth_inputs.OUT),
+            },
+            "smooth_execution": {
+                "path": str(smooth_execution_path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                "sha256": sha256(smooth_execution_path),
+            },
+            "flex_input_packet": {
+                "path": str(flex_inputs.OUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                "sha256": sha256(flex_inputs.OUT),
+            },
+            "flex_executions": flex_dependencies,
+        },
+        "proof_scope": {
+            "the_exact_bidual_identity_splits_every_elliptic_contact_into_smooth_or_one_of_nine_flexes": True,
+            "the_smooth_primal_chart_covers_every_smooth_contact_and_retains_all_base_proportionality_equations": True,
+            "the_smooth_contact_locus_has_an_exact_prime_field_F4_unit_ideal": True,
+            "the_nine_flex_systems_retain_C_all_base_derivatives_and_both_elliptic_derivatives": True,
+            "the_nine_flex_systems_retain_nonzero_lambdaU_and_lambdaV": True,
+            "all_nine_original_flex_systems_have_exact_prime_field_F4_unit_ideals": True,
+            "no_probabilistic_linearization_is_used": True,
+            "the_original_full_support_uvs_critical_locus_is_empty": True,
+        },
+        "elapsed_seconds": float(smooth_execution["elapsed_seconds"])
+        + sum(float(packet["elapsed_seconds"]) for packet in flex_executions.values()),
+        "returncode": 0,
+        "timed_out": False,
+        "passed": True,
+    }
+    canonical_path = direct.CAMPAIGN / f"{label}.packet.json"
+    canonical_path.write_text(json.dumps(canonical, indent=2) + "\n", encoding="ascii")
+    print(f"{label}: ADOPTED EXACT SMOOTH-PRIMAL PLUS NINE-ORIGINAL-FLEX CERTIFICATE")
+
+
+if __name__ == "__main__":
+    main()

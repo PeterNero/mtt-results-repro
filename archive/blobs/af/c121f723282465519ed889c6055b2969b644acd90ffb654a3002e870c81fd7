@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""Build UST.G3AK, the full graph-incidence tangent/normal decomposition."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ad_fixed_fq_second_h_graph_obstruction as g3ad
+import build_ust_g3ae_second_h_joint_coefficient_lift as g3ae
+import build_ust_g3af_two_h_joint_coefficient_lift as g3af
+import build_ust_g3ag_three_graph_joint_coefficient_lift as g3ag
+
+
+ROOT = Path(__file__).resolve().parent
+G3AD = ROOT / "state" / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json"
+G3AF = ROOT / "state" / "ust_g3af_two_h_joint_coefficient_lift.packet.json"
+G3AG = ROOT / "state" / "ust_g3ag_three_graph_joint_coefficient_lift.packet.json"
+G3AH = ROOT / "state" / "ust_g3ah_formal_coefficient_kernel.packet.json"
+G3AI = ROOT / "state" / "ust_g3ai_second_h_marked_map_all_orders.packet.json"
+G3AJ = ROOT / "state" / "ust_g3aj_residue_ball_smooth_graph_prym.packet.json"
+OUT = ROOT / "state" / "ust_g3ak_full_graph_incidence_normal_decomposition.packet.json"
+MATRIX_OUT = ROOT / "state" / "ust_g3ak_incidence_matrix.f101e6.u8"
+
+P = 101
+Element = g3ad.Element
+Polynomial = dict[tuple[int, int, int], Element]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def add_term(
+    polynomial: Polynomial,
+    exponent: tuple[int, int, int],
+    coefficient: Element,
+    ring: g3ad.QuotientRing,
+) -> None:
+    value = ring.add(polynomial.get(exponent, ring.zero), coefficient)
+    if value == ring.zero:
+        polynomial.pop(exponent, None)
+    else:
+        polynomial[exponent] = value
+
+
+def multiply(
+    left: Polynomial, right: Polynomial, ring: g3ad.QuotientRing
+) -> Polynomial:
+    result: Polynomial = {}
+    for left_exponent, left_coefficient in left.items():
+        for right_exponent, right_coefficient in right.items():
+            exponent = tuple(a + b for a, b in zip(left_exponent, right_exponent))
+            add_term(
+                result,
+                exponent,  # type: ignore[arg-type]
+                ring.mul(left_coefficient, right_coefficient),
+                ring,
+            )
+    return result
+
+
+def homogeneous_monomials(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree, -1, -1)
+        for y_power in range(degree - x_power, -1, -1)
+    ]
+
+
+def rref(
+    matrix: list[list[Element]], ring: g3ad.QuotientRing
+) -> tuple[list[list[Element]], list[int]]:
+    work = [list(row) for row in matrix]
+    row_count = len(work)
+    column_count = len(work[0]) if work else 0
+    require(all(len(row) == column_count for row in work), "rectangular matrix")
+    pivots: list[int] = []
+    pivot_row = 0
+    for column in range(column_count):
+        selected = next(
+            (row for row in range(pivot_row, row_count) if work[row][column] != ring.zero),
+            None,
+        )
+        if selected is None:
+            continue
+        work[pivot_row], work[selected] = work[selected], work[pivot_row]
+        inverse = ring.inverse_field(work[pivot_row][column])
+        work[pivot_row] = [ring.mul(value, inverse) for value in work[pivot_row]]
+        for row in range(row_count):
+            if row == pivot_row or work[row][column] == ring.zero:
+                continue
+            factor = work[row][column]
+            work[row] = [
+                ring.sub(value, ring.mul(factor, pivot_value))
+                for value, pivot_value in zip(work[row], work[pivot_row])
+            ]
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == row_count:
+            break
+    return work, pivots
+
+
+def matrix_vector(
+    matrix: list[list[Element]], vector: list[Element], ring: g3ad.QuotientRing
+) -> list[Element]:
+    result: list[Element] = []
+    for row in matrix:
+        value = ring.zero
+        for entry, coordinate in zip(row, vector):
+            value = ring.add(value, ring.mul(entry, coordinate))
+        result.append(value)
+    return result
+
+
+def canonical_kernel_basis(
+    reduced: list[list[Element]], pivots: list[int], ring: g3ad.QuotientRing
+) -> tuple[list[int], list[list[Element]]]:
+    column_count = len(reduced[0])
+    free = [column for column in range(column_count) if column not in set(pivots)]
+    basis: list[list[Element]] = []
+    for free_column in free:
+        vector = [ring.zero] * column_count
+        vector[free_column] = ring.one
+        for row, pivot_column in enumerate(pivots):
+            vector[pivot_column] = ring.neg(reduced[row][free_column])
+        basis.append(vector)
+    return free, basis
+
+
+def coefficient_vector(
+    g3ad_packet: dict, basis: list[dict[str, object]], ring: g3ad.QuotientRing
+) -> list[Element]:
+    by_key = {
+        (
+            int(row["target_coordinate"]),
+            str(row["basis_kind"]),
+            tuple(int(value) for value in row["powers_xyz"]),
+        ): ring.element(row["gamma_coefficients_ascending"])
+        for row in g3ad_packet["fixed_FQ"]["nonzero_gamma_rows"]
+    }
+    return [
+        by_key.get(
+            (
+                int(row["target_coordinate"]),
+                str(row["basis_kind"]),
+                tuple(int(value) for value in row["powers_xyz"]),
+            ),
+            ring.zero,
+        )
+        for row in basis
+    ]
+
+
+def graph_union(
+    g3ad_packet: dict, g3af_packet: dict, ring: g3ad.QuotientRing
+) -> tuple[Polynomial, dict[str, object]]:
+    first_source = g3af_packet["selected_first_H_graph"]["source_coordinates_mod1012"]
+    first_r = ring.constant(int(first_source["r"]) % P)
+    first_w = ring.constant(int(first_source["w"]) % P)
+    second = g3ae.graph_data(g3ad_packet, ring)["source"]
+    first_line: Polynomial = {
+        (0, 0, 1): ring.one,
+        (1, 0, 0): ring.neg(first_r),
+        (0, 1, 0): ring.neg(first_w),
+    }
+    second_line: Polynomial = {
+        (0, 0, 1): ring.one,
+        (1, 0, 0): ring.neg(second["r"]),
+        (0, 1, 0): ring.neg(second["w"]),
+    }
+    quartic: Polynomial = {
+        (4, 0, 0): ring.constant(8),
+        (2, 1, 1): ring.constant(8),
+        (1, 3, 0): ring.constant(8),
+        (1, 0, 3): ring.constant(-3),
+        (0, 2, 2): ring.constant(8),
+    }
+    union = multiply(multiply(first_line, second_line, ring), quartic, ring)
+    require(union and all(sum(exponent) == 6 for exponent in union), "degree-six union")
+    source = {
+        "first_H_line": "z-r1*x-w1*y",
+        "first_H_r_gamma_coordinates": list(first_r),
+        "first_H_w_gamma_coordinates": list(first_w),
+        "second_H_line": "z-r2*x-w2*y",
+        "second_H_r_gamma_coordinates": list(second["r"]),
+        "second_H_w_gamma_coordinates": list(second["w"]),
+        "four_H_quartic": "8*x^4+8*x^2*y*z+8*x*y^3-3*x*z^3+8*y^2*z^2",
+        "union_terms": [
+            {"powers_xyz": list(exponent), "gamma_coefficients": list(union[exponent])}
+            for exponent in sorted(union)
+        ],
+    }
+    return union, source
+
+
+def principal_slice(
+    union: Polynomial,
+    coefficient_basis: list[dict[str, object]],
+    ring: g3ad.QuotientRing,
+) -> tuple[list[list[Element]], list[dict[str, object]]]:
+    lookup = {
+        (
+            int(row["target_coordinate"]),
+            str(row["basis_kind"]),
+            tuple(int(value) for value in row["powers_xyz"]),
+        ): index
+        for index, row in enumerate(coefficient_basis)
+    }
+    columns: list[list[Element]] = []
+    labels: list[dict[str, object]] = []
+    degree_three = homogeneous_monomials(3)
+    require(len(degree_three) == 10, "ten degree-three monomials")
+    for target_coordinate in range(3):
+        for monomial in degree_three:
+            vector = [ring.zero] * len(coefficient_basis)
+            for exponent, coefficient in union.items():
+                output = tuple(a + b for a, b in zip(exponent, monomial))
+                index = lookup[(target_coordinate, "base_degree9", output)]
+                vector[index] = coefficient
+            columns.append(vector)
+            labels.append(
+                {
+                    "target_coordinate": target_coordinate,
+                    "kind": "s_union_times_degree3",
+                    "powers_xyz": list(monomial),
+                }
+            )
+        vector = [ring.zero] * len(coefficient_basis)
+        for exponent, coefficient in union.items():
+            index = lookup[(target_coordinate, "K3_sheet_times_degree6", exponent)]
+            vector[index] = coefficient
+        columns.append(vector)
+        labels.append(
+            {
+                "target_coordinate": target_coordinate,
+                "kind": "s_union_times_K3_sheet",
+                "powers_xyz": [0, 0, 0],
+            }
+        )
+    require(len(columns) == 33, "principal slice has 33 columns")
+    return columns, labels
+
+
+def transpose(columns: list[list[Element]]) -> list[list[Element]]:
+    return [list(row) for row in zip(*columns)]
+
+
+def main() -> None:
+    packets = {path.stem: load(path) for path in (G3AD, G3AF, G3AG, G3AH, G3AI, G3AJ)}
+    g3ad_packet = packets[G3AD.stem]
+    g3af_packet = packets[G3AF.stem]
+    g3ag_packet = packets[G3AG.stem]
+    g3ah_packet = packets[G3AH.stem]
+    g3ai_packet = packets[G3AI.stem]
+    g3aj_packet = packets[G3AJ.stem]
+    require(g3ag_packet["theorem_id"] == "UST.G3AG", "G3AG input")
+    require(g3ah_packet["theorem_id"] == "UST.G3AH", "G3AH input")
+    require(g3ai_packet["theorem_id"] == "UST.G3AI", "G3AI input")
+    require(g3aj_packet["theorem_id"] == "UST.G3AJ", "G3AJ input")
+
+    relation = g3ad_packet["completion_ring"]["gamma_relation_coefficients_ascending"]
+    ring = g3ad.QuotientRing(P, relation)
+    mu = ring.element(g3ad_packet["completion_ring"]["mu_residue_gamma_coordinates"])
+    basis = g3ae.coefficient_basis()
+    first = g3af.first_graph_data(g3af_packet["selected_first_H_graph"], ring)
+    second = g3ae.graph_data(g3ad_packet, ring)
+    four_targets = g3ag.target_forms(ring, 28, mu)
+    incidence = (
+        g3af.matrix_for_graph(basis, first, ring)
+        + g3af.matrix_for_graph(basis, second, ring)
+        + g3ag.four_h_matrix(basis, four_targets, ring)
+    )
+    serialized_incidence = [[list(value) for value in row] for row in incidence]
+    matrix_bytes = bytes(
+        coordinate
+        for row in serialized_incidence
+        for element in row
+        for coordinate in element
+    )
+    require(len(matrix_bytes) == 168 * 249 * 6, "incidence matrix byte count")
+    MATRIX_OUT.write_bytes(matrix_bytes)
+    system = g3ag_packet["simultaneous_linear_system"]
+    require(system["shape"] == [168, 249], "incidence shape")
+    require(canonical_hash(serialized_incidence) == system["stacked_matrix_sha256"], "G3AG matrix hash")
+
+    reduced, pivots = rref(incidence, ring)
+    require(len(pivots) == 126, "incidence rank 126")
+    free_columns, kernel_basis = canonical_kernel_basis(reduced, pivots, ring)
+    require(len(free_columns) == len(kernel_basis) == 123, "kernel rank 123")
+    require(
+        all(all(value == ring.zero for value in matrix_vector(incidence, vector, ring)) for vector in kernel_basis),
+        "canonical kernel basis",
+    )
+
+    selected_member = coefficient_vector(g3ad_packet, basis, ring)
+    require(all(value == ring.zero for value in matrix_vector(incidence, selected_member, ring)), "selected member in kernel")
+    union, union_source = graph_union(g3ad_packet, g3af_packet, ring)
+    principal_columns, principal_labels = principal_slice(union, basis, ring)
+    require(
+        all(all(value == ring.zero for value in matrix_vector(incidence, vector, ring)) for vector in principal_columns),
+        "principal slice lies in full kernel",
+    )
+
+    free_coordinate_columns = [
+        [vector[index] for index in free_columns]
+        for vector in [selected_member] + principal_columns
+    ]
+    coordinate_rows = transpose(free_coordinate_columns)
+    _, base_pivots = rref(transpose(coordinate_rows), ring)
+    require(len(base_pivots) == 34, "radial plus principal slice rank 34")
+    extra_free_positions = [index for index in range(123) if index not in set(base_pivots)]
+    require(len(extra_free_positions) == 89, "89 omitted graph-preserving directions")
+    extra_vectors = [kernel_basis[index] for index in extra_free_positions]
+    projective_tangent_columns = principal_columns + extra_vectors
+    kernel_frame = [selected_member] + projective_tangent_columns
+    _, kernel_frame_pivots = rref(transpose(kernel_frame), ring)
+    require(len(kernel_frame_pivots) == 123, "full kernel frame")
+    require(len(projective_tangent_columns) == 122, "projective tangent rank")
+
+    complement_columns = []
+    for column in pivots:
+        vector = [ring.zero] * 249
+        vector[column] = ring.one
+        complement_columns.append(vector)
+    full_frame = kernel_frame + complement_columns
+    _, full_frame_pivots = rref(transpose(full_frame), ring)
+    require(len(full_frame_pivots) == 249, "kernel plus incidence complement spans source")
+
+    old_slice_quotient = 248 - 33
+    omitted_tangent = 122 - 33
+    true_normal = 248 - 122
+    require((old_slice_quotient, omitted_tangent, true_normal) == (215, 89, 126), "dimension decomposition")
+    require(old_slice_quotient == omitted_tangent + true_normal, "215=89+126")
+
+    packet = {
+        "schema": "mtt.unified-source.g3ak-full-graph-incidence-normal-decomposition.v1",
+        "theorem_id": "UST.G3AK",
+        "status": "CLOSED_EXACT_FULL_GRAPH_INCIDENCE_TANGENT122_TRUE_NORMAL126_SELECTED_RESIDUE_DECOMPOSITION",
+        "inputs": {
+            path.stem: {"path": str(path.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(path)}
+            for path in (G3AD, G3AF, G3AG, G3AH, G3AI, G3AJ)
+        },
+        "residue_field": {
+            "description": "F_101[gamma]/(M)",
+            "prime": P,
+            "gamma_relation_coefficients_ascending": relation,
+            "extension_degree": len(relation) - 1,
+        },
+        "incidence_certificate": {
+            "source_rank": 249,
+            "coordinate_row_count": 168,
+            "coordinate_row_redundancy": 42,
+            "geometric_target_rank": 126,
+            "rank": len(pivots),
+            "pivot_columns_zero_based": pivots,
+            "free_columns_zero_based": free_columns,
+            "matrix_sha256": canonical_hash(serialized_incidence),
+            "matrix_artifact": {
+                "path": str(MATRIX_OUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(MATRIX_OUT),
+                "bytes": len(matrix_bytes),
+                "shape": [168, 249, 6],
+                "layout": "row-major field elements; six ascending gamma coefficients per element",
+            },
+            "canonical_kernel_basis_sha256": canonical_hash(
+                [[list(value) for value in vector] for vector in kernel_basis]
+            ),
+        },
+        "selected_graph_union": union_source,
+        "principal_slice": {
+            "affine_rank": 33,
+            "labels": principal_labels,
+            "columns_sha256": canonical_hash(
+                [[list(value) for value in vector] for vector in principal_columns]
+            ),
+            "lies_in_full_incidence_kernel": True,
+            "selected_member_is_independent_from_slice": True,
+        },
+        "full_graph_preserving_frame": {
+            "affine_kernel_rank": 123,
+            "radial_rank": 1,
+            "projective_tangent_rank": 122,
+            "principal_tangent_rank": 33,
+            "additional_tangent_rank": 89,
+            "extra_kernel_basis_positions_zero_based": extra_free_positions,
+            "extra_kernel_free_columns_zero_based": [free_columns[index] for index in extra_free_positions],
+            "selected_member_sha256": canonical_hash([list(value) for value in selected_member]),
+            "projective_tangent_frame_sha256": canonical_hash(
+                [[list(value) for value in vector] for vector in projective_tangent_columns]
+            ),
+            "kernel_frame_sha256": canonical_hash(
+                [[list(value) for value in vector] for vector in kernel_frame]
+            ),
+        },
+        "exact_normal_sequence": {
+            "homogeneous_sequence": "0 -> K_123 -> V_249 -> R_126 -> 0",
+            "projective_sequence": "0 -> K/<F> (rank122) -> V/<F> (rank248) -> R (rank126) -> 0",
+            "old_principal_slice_sequence": "0 -> (K/<F>)/L_33 (rank89) -> (V/<F>)/L_33 (rank215) -> R_126 -> 0",
+            "dimension_identity": "215=89+126",
+            "true_incidence_normal_rank": 126,
+            "old_215_quotient_was_not_purely_normal": True,
+            "incidence_complement_standard_columns_zero_based": pivots,
+            "full_249_frame_rank": len(full_frame_pivots),
+        },
+        "checks": {
+            "G3AG_incidence_matrix_is_reconstructed_hash_exactly": True,
+            "selected_residue_incidence_rank_is126": True,
+            "canonical_incidence_kernel_rank_is123": True,
+            "selected_F0_residue_member_lies_in_the_kernel": True,
+            "degree_six_union_of_H_H_4H_source_equations_is_emitted": True,
+            "all33_principal_s_union_directions_lie_in_the_full_kernel": True,
+            "F0_plus_the33_principal_directions_have_rank34": True,
+            "exactly89_additional_kernel_directions_complete_the_projective_tangent": True,
+            "the_projective_graph_preserving_tangent_has_rank122": True,
+            "the_true_incidence_normal_quotient_has_rank126": True,
+            "the_old_rank215_slice_quotient_splits_dimensionally_as89_plus126": True,
+            "kernel_frame_plus126_incidence_complement_columns_has_rank249": True,
+        },
+        "theorem": {
+            "name": "FullGraphIncidenceTangentAndNormalDecompositionTheorem",
+            "statement": (
+                "On the selected eta9 residue carrier, the three-graph incidence map V_249 to R_126 has "
+                "rank 126 and kernel K of rank 123. The selected member F and the 33 principal s_union*H "
+                "directions span rank 34 inside K. A canonical exact extension supplies 89 further "
+                "graph-preserving directions, so K/<F> has rank 122. Consequently the true projective "
+                "incidence-normal quotient has rank 126. The earlier quotient by only the 33-direction "
+                "principal slice has rank 215 because it contains both the omitted rank-89 tangent sector "
+                "and the rank-126 true normal sector."
+            ),
+            "tier": "CLOSED_EXACT_SELECTED_RESIDUE_LINEAR_ALGEBRA_AND_FORMAL_RANK_PROMOTION",
+        },
+        "frontier_delta": {
+            "old_structural_normal_compatibility_count": 215,
+            "corrected_full_incidence_normal_compatibility_count": 126,
+            "newly_exposed_graph_preserving_tangent_directions": 89,
+            "next_required_object": (
+                "Evaluate the carrier-specific primitive Deligne/Gauss-Manin response on the full "
+                "rank-122 projective tangent frame, not only the 33 principal directions; then test the "
+                "rank-126 conormal component and solve the residual rank-122 system."
+            ),
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_physics_inputs": 0,
+            "rank123_is_deformation_module_not_physical_parameter_count": True,
+            "rank89_is_omitted_tangent_dimension_not_new_knobs": True,
+        },
+        "guardrails": {
+            "claims_the_fixed_CQ_D_N_S_matrices_transfer_to_this_carrier": False,
+            "claims_the_full_Deligne_derivative_is_computed": False,
+            "claims_beta_C_is_emitted_or_zero": False,
+            "claims_the126_incidence_conormal_rows_are_Deligne_syzygies": False,
+            "claims_a_physical_kernel_direction_is_selected": False,
+            "claims_visible_V3_HYM_or_Hull_Strominger_endpoint": False,
+            "closes_B_ETA9_01": False,
+            "closes_B_ETA9_02": False,
+            "closes_B_HS_01": False,
+        },
+    }
+    require(all(packet["checks"].values()), "G3AK checks")
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AK full graph-incidence decomposition: BUILT")
+    print("projective graph tangent: 122 = 33 + 89")
+    print("old slice quotient: 215 = omitted tangent 89 + true normal 126")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Verify the G3BL H11 GF(11) endpoint initializer obstruction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import struct
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bk_correction_pencil_operator_compiler as compiler
+import probe_ust_g3bl_endpoint_chart_unit as probe
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bl_h11_proof_prime_initializer_nogo.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], repository: Path | None = None) -> Path:
+    path = (
+        repository / record["repository_relative_path"]
+        if repository is not None
+        else ROOT / record["path"]
+    )
+    require(path.is_file(), f"record path {path}")
+    require(sha256(path) == record["sha256"], f"record hash {path.name}")
+    require(path.stat().st_size == record["bytes"], f"record bytes {path.name}")
+    return path
+
+
+def read_rhs(path: Path) -> sparse.csc_matrix:
+    raw = path.read_bytes()
+    require(raw[:8] == b"MTTRHS1\0", "RHS magic")
+    rows, columns, nonzeros = struct.unpack_from("<3Q", raw, 8)
+    offset = 8 + 3 * 8
+    indptr = np.frombuffer(raw, dtype="<u8", count=columns + 1, offset=offset)
+    offset += indptr.nbytes
+    indices = np.frombuffer(raw, dtype="<u4", count=nonzeros, offset=offset)
+    offset += indices.nbytes
+    data = np.frombuffer(raw, dtype=np.uint8, count=nonzeros, offset=offset)
+    offset += data.nbytes
+    require(offset == len(raw), "RHS byte count")
+    return sparse.csc_matrix(
+        (data.copy(), indices.copy(), indptr.astype(np.int64)), shape=(rows, columns)
+    )
+
+
+def reduced(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    value = matrix.astype(np.int16).tocsc()
+    value.sum_duplicates()
+    value.data %= PRIME
+    value.eliminate_zeros()
+    return value
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bl-h11-proof-prime-initializer-nogo.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "recorded checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    mld = probe.resolve_mld()
+    paths: dict[str, Path] = {}
+    for name, record in packet["inputs"].items():
+        paths[name] = verify_record(record, mld if "repository_relative_path" in record else None)
+
+    g3bi = load(paths["G3BI"])
+    g3bk = load(paths["G3BK"])
+    update = sparse.load_npz(paths["H11_update"]).tocsc()
+    active_columns = np.flatnonzero(np.diff(update.indptr)).astype(np.int32)
+    require(active_columns.size == 1186, "active columns")
+    active_rhs = read_rhs(paths["active_rhs"])
+    require((active_rhs != reduced(update[:, active_columns])).nnz == 0, "active RHS replay")
+    coordinates, quotient_units, image_rank = probe.read_coordinates(paths["active_coordinates"])
+    require(coordinates.shape == (5439, 1186) and image_rank == update.shape[1], "active coordinates")
+    selected_rows = quotient_units + active_columns
+    lemma = coordinates[selected_rows, :].toarray().astype(np.int16)
+    lemma[np.arange(1186), np.arange(1186)] += 1
+    lemma %= PRIME
+    rank, determinant = probe.determinant_and_rank_mod11(lemma)
+    left_null = probe.null_vector_mod11(lemma.T)
+    right_null = probe.null_vector_mod11(lemma)
+    full_right_null = np.asarray(coordinates.astype(np.int64) @ right_null, dtype=np.int64).ravel() % PRIME
+
+    factor_packet = load(paths["H11_factorization"])
+    csc_packet = load(paths["H11_CSC"])
+    macaulay = load(paths["H11_Macaulay"])
+    selected_original = np.asarray(
+        factor_packet["exact_coordinate_identity"]["selected_original_Jacobian_columns"],
+        dtype=np.int32,
+    )
+    base_matrix = sparse.load_npz(paths["H11_base_matrix"]).tocsc()
+    extras = np.setdiff1d(
+        np.arange(base_matrix.shape[1], dtype=np.int32), selected_original, assume_unique=True
+    )
+    require(extras.size == 1071, "unused columns")
+    correction = compiler.correction_terms(g3bi)
+    derivatives = compiler.derivative_generators(correction)
+    all_columns_factor = {
+        "exact_coordinate_identity": {
+            "selected_original_Jacobian_columns": list(range(int(macaulay["matrix"]["shape"][1])))
+        }
+    }
+    full_update = compiler.build_update(macaulay, all_columns_factor, derivatives)
+    expected_extra_rhs = reduced(base_matrix[:, extras] + full_update[:, extras])
+    extra_rhs = read_rhs(paths["unused_rhs"])
+    require((extra_rhs != expected_extra_rhs).nnz == 0, "unused endpoint RHS replay")
+    extra_coordinates, extra_quotient, extra_image = probe.read_coordinates(paths["unused_coordinates"])
+    require(extra_quotient == quotient_units and extra_image == image_rank, "unused coordinate typing")
+    require(extra_coordinates.shape == (5439, 1071), "unused coordinate shape")
+    left_evaluations = np.asarray(
+        left_null.astype(np.int64) @ extra_coordinates[selected_rows, :].astype(np.int64),
+        dtype=np.int64,
+    ).ravel() % PRIME
+
+    lemma_record = packet["determinant_lemma"]
+    require(rank == lemma_record["rank_mod11"] == 1185, "lemma rank")
+    require(determinant == lemma_record["determinant_mod11"] == 0, "lemma determinant")
+    require(np.count_nonzero(left_null) == lemma_record["left_null_support"] == 580, "left support")
+    require(np.count_nonzero(right_null) == lemma_record["right_null_support"] == 1064, "right support")
+    full = packet["full_endpoint_presentation"]
+    require(np.count_nonzero(full_right_null) == full["right_null_support_in_selected_chart"] == 4520, "full null support")
+    require(np.count_nonzero(left_evaluations) == full["unused_column_left_null_evaluations_nonzero"] == 0, "no repairs")
+    require(full["rank_mod11"] == 5438 and full["corank"] == 1, "full presentation rank")
+    require(packet["theorem"]["tier"] == "CLOSED_EXACT_GOOD_REDUCTION_PRESENTATION_NOGO", "theorem tier")
+    print("UST.G3BL H11 proof-prime initializer no-go verifier: PASS")
+    print("lemma_rank=1185/1186 augmented_rank=5438/5439 unused_repairs=0")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Continue G3EF with checkpointed production LLL and exact replay."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+import statistics
+import time
+from pathlib import Path
+from typing import Any
+
+import flint
+from flint import fmpz_mat
+
+from probe_ust_g3ec_component12_padic_kernel import invert_matrix_mod
+from probe_ust_g3ef_component12_six_embedding_lattice import (
+    MATRIX,
+    OUTPUT as G3EF_OUTPUT,
+    RESIDUE,
+    build_lattice,
+    candidate_vectors,
+    exact_replay,
+    independent_candidates,
+    interpolate_vectors,
+)
+from build_ust_g3ec_h02_component12_unit_pivot_reduction import ROOT
+from ust_fplll_backend import reduce_fplll
+
+
+OUTPUT = ROOT / "evidence/ust_g3eh/H02.component12.production_six_embedding_lattice.json.gz"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load_gzip(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_gzip_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.write("\n")
+    temporary.replace(path)
+
+
+def selected_samples(round_record: dict[str, Any], add_samples: int) -> list[int]:
+    return sorted(
+        {int(value) for value in round_record["samples"]}
+        | {
+            int(item["coordinate"])
+            for item in round_record["worst_new_coordinates"][:add_samples]
+        }
+    )
+
+
+def reduce_flint(
+    lattice: list[list[int]], delta: float, eta: float
+) -> list[list[int]]:
+    matrix = fmpz_mat(lattice)
+    reduced = matrix.lll(
+        delta=delta,
+        eta=eta,
+        rep="zbasis",
+        gram="approx",
+    )
+    return [[int(value) for value in row] for row in reduced.tolist()]
+
+
+def build_payload(
+    prior_hash: str,
+    rounds: list[dict[str, Any]],
+    candidates: list[list[int]],
+    selected: list[int],
+    exact_nonzeros: int,
+    exact_slots: int,
+    backend: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema": "ust.g3eh.h02.component12.production-six-embedding-lattice.v1",
+        "source_G3EF": {
+            "path": G3EF_OUTPUT.relative_to(ROOT).as_posix(),
+            "sha256": prior_hash,
+        },
+        "source_residue": {
+            "path": RESIDUE.relative_to(ROOT).as_posix(),
+            "sha256": sha256(RESIDUE),
+        },
+        "matrix": {
+            "path": MATRIX.relative_to(ROOT).as_posix(),
+            "sha256": sha256(MATRIX),
+        },
+        "backend": backend,
+        "rounds": rounds,
+        "selected_candidate_indices": selected,
+        "selected_candidate_free_coefficients": [
+            candidates[index] for index in selected
+        ],
+        "exact_replay_nonzero_slots": exact_nonzeros,
+        "exact_replay_slots": exact_slots,
+        "exact_kernel_closed": exact_nonzeros == 0,
+        "claim_boundary": (
+            "Only ten independent candidates with literal zero residual in the exact "
+            "Q(gamma) matrix promote component12. FLINT LLL and p-adic consistency "
+            "alone do not."
+        ),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--add-samples", type=int, default=5)
+    parser.add_argument("--candidate-count", type=int, default=20)
+    parser.add_argument("--threshold-bits", type=int, default=500)
+    parser.add_argument("--delta", type=float, default=0.75)
+    parser.add_argument("--eta", type=float, default=0.51)
+    parser.add_argument("--backend", choices=("fplll", "flint"), default="fplll")
+    parser.add_argument(
+        "--fplll-mode",
+        choices=("wrapper", "fast", "heuristic", "proved"),
+        default="heuristic",
+    )
+    parser.add_argument(
+        "--fplll-float",
+        choices=("mpfr", "dd", "qd", "dpe", "double", "longdouble"),
+        default="dpe",
+    )
+    parser.add_argument(
+        "--fplll-lovasz",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument(
+        "--fplll-early-reduction",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    arguments = parser.parse_args()
+    require(arguments.rounds > 0, "positive round count")
+    require(arguments.add_samples > 0, "positive sample increment")
+    require(arguments.candidate_count >= 10, "at least ten candidates")
+
+    prior = load_gzip(G3EF_OUTPUT)
+    require(prior["schema"] == "ust.g3ef.h02.component12.six-embedding-lattice.v1", "G3EF schema")
+    require(not prior["exact_kernel_closed"], "G3EF is still open")
+    require(prior["exact_replay_nonzero_slots"] == 3279, "G3EF residual")
+    prior_hash = sha256(G3EF_OUTPUT)
+
+    residue = load_gzip(RESIDUE)
+    require(residue["shape"] == [6, 956, 10], "residue shape")
+    modulus = int(residue["modulus"])
+    roots = [int(value) for value in residue["lifted_roots"]]
+    kernels = residue["kernels"]
+    vandermonde = [
+        [pow(root, degree, modulus) for degree in range(6)] for root in roots
+    ]
+    inverse_vandermonde = invert_matrix_mod(vandermonde, modulus)
+    free = set(int(value) for value in residue["free_columns"])
+    available = [coordinate for coordinate in range(956) if coordinate not in free]
+
+    flint_rounds: list[dict[str, Any]] = []
+    candidates = [
+        [int(value) for value in row]
+        for row in prior["selected_candidate_free_coefficients"]
+    ]
+    selected = list(range(10))
+    exact_nonzeros = int(prior["exact_replay_nonzero_slots"])
+    exact_slots = 1324 * 10
+    samples = selected_samples(prior["rounds"][-1], arguments.add_samples)
+
+    if arguments.resume:
+        current = load_gzip(arguments.output)
+        require(
+            current["schema"]
+            == "ust.g3eh.h02.component12.production-six-embedding-lattice.v1",
+            "resume schema",
+        )
+        require(current["source_G3EF"]["sha256"] == prior_hash, "resume G3EF hash")
+        require(not current["exact_kernel_closed"], "resume only an open stage")
+        flint_rounds = list(current["rounds"])
+        candidates = [
+            [int(value) for value in row]
+            for row in current["selected_candidate_free_coefficients"]
+        ]
+        selected = list(range(10))
+        exact_nonzeros = int(current["exact_replay_nonzero_slots"])
+        exact_slots = int(current["exact_replay_slots"])
+        samples = selected_samples(flint_rounds[-1], arguments.add_samples)
+
+    for local_round in range(arguments.rounds):
+        started = time.monotonic()
+        lattice = build_lattice(
+            kernels,
+            roots,
+            inverse_vandermonde,
+            modulus,
+            samples,
+            candidates,
+        )
+        lll_started = time.monotonic()
+        if arguments.backend == "fplll":
+            reduced_rows = reduce_fplll(
+                lattice,
+                arguments.delta,
+                arguments.eta,
+                arguments.fplll_mode,
+                arguments.fplll_float,
+                arguments.fplll_lovasz,
+                arguments.fplll_early_reduction,
+            )
+            backend = {
+                "name": "fplll",
+                "version": "5.5.0",
+                "mode": arguments.fplll_mode,
+                "float_type": arguments.fplll_float,
+                "lovasz_condition": arguments.fplll_lovasz,
+                "early_reduction": arguments.fplll_early_reduction,
+            }
+        else:
+            reduced_rows = reduce_flint(lattice, arguments.delta, arguments.eta)
+            backend = {
+                "name": "python-flint.fmpz_mat.lll",
+                "python_flint_version": str(flint.__version__),
+                "representation": "zbasis",
+                "gram": "approx",
+            }
+        lll_elapsed = time.monotonic() - lll_started
+        all_candidates = candidate_vectors(reduced_rows, arguments.candidate_count)
+        vectors = interpolate_vectors(
+            all_candidates,
+            kernels,
+            roots,
+            inverse_vandermonde,
+            modulus,
+        )
+        selected = independent_candidates(all_candidates)
+        require(len(selected) == 10, "ten independent candidate projections")
+        selected_vectors = [vectors[index] for index in selected]
+        exact_nonzeros, exact_slots = exact_replay(selected_vectors)
+
+        scores: list[tuple[int, int, int]] = []
+        all_bits: list[int] = []
+        for coordinate in available:
+            bits = [
+                abs(value).bit_length()
+                for vector in vectors
+                for value in vector[coordinate]
+            ]
+            all_bits.extend(bits)
+            scores.append(
+                (
+                    sum(value > arguments.threshold_bits for value in bits),
+                    max(bits),
+                    coordinate,
+                )
+            )
+        worst = sorted(
+            (score for score in scores if score[2] not in samples), reverse=True
+        )[: arguments.add_samples]
+        record = {
+            "round": len(prior["rounds"]) + len(flint_rounds),
+            "samples": list(samples),
+            "lattice_dimension": len(lattice),
+            "candidate_count": len(all_candidates),
+            "selected_independent_candidates": selected,
+            "coefficient_bit_median": statistics.median(all_bits),
+            "coefficient_bit_max": max(all_bits),
+            "coefficients_over_threshold": sum(
+                value > arguments.threshold_bits for value in all_bits
+            ),
+            "exact_replay_nonzero_slots": exact_nonzeros,
+            "exact_replay_slots": exact_slots,
+            "worst_new_coordinates": [
+                {"coordinate": coordinate, "over_threshold": count, "max_bits": maximum}
+                for count, maximum, coordinate in worst
+            ],
+            "lll_delta": arguments.delta,
+            "lll_eta": arguments.eta,
+            "lll_elapsed_seconds": lll_elapsed,
+            "elapsed_seconds": time.monotonic() - started,
+        }
+        flint_rounds.append(record)
+        candidates = [all_candidates[index] for index in selected]
+        payload = build_payload(
+            prior_hash,
+            flint_rounds,
+            candidates,
+            list(range(10)),
+            exact_nonzeros,
+            exact_slots,
+            backend,
+        )
+        write_gzip_atomic(arguments.output, payload)
+        print(
+            f"G3EH round={record['round']} samples={len(samples)} "
+            f"lattice={len(lattice)} lll={lll_elapsed:.3f}s "
+            f"median_bits={record['coefficient_bit_median']} "
+            f"max_bits={record['coefficient_bit_max']} "
+            f"over={record['coefficients_over_threshold']} "
+            f"exact_nonzeros={exact_nonzeros} "
+            f"worst={[item[2] for item in worst]} "
+            f"elapsed={record['elapsed_seconds']:.3f}s",
+            flush=True,
+        )
+        if exact_nonzeros == 0:
+            break
+        samples = sorted(set(samples) | {item[2] for item in worst})
+
+    print(
+        f"G3EH_FINAL exact_kernel_closed={exact_nonzeros == 0} "
+        f"exact_nonzeros={exact_nonzeros} output={arguments.output}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

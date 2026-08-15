@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Independently verify the exact selected-G3BI H02 DM/Woodbury reduction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components, maximum_bipartite_matching
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as builder
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    repository = Path(record.get("repository_path", default_repository))
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_verified(record: dict[str, Any], default_repository: Path = ROOT) -> dict[str, Any]:
+    return json.loads(verify_record(record, default_repository).read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"] == "mtt.unified-source.g3bw-g3bi-h02-dm-woodbury-reduction.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    coefficient_field = packet["coefficient_field"]
+    prime = int(coefficient_field["anchor_proof_place"]["prime"])
+    anchor = int(coefficient_field["integral_anchor"])
+    require((prime, anchor) == (21817, 5), "selected integral anchor")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    inputs = packet["inputs"]
+    g3bi = load_verified(inputs["G3BI"])
+    g3br = load_verified(inputs["G3BR"])
+    g3bv = load_verified(inputs["G3BV"])
+    macaulay = load_verified(inputs["H02_Macaulay"], mld)
+    csc = load_verified(inputs["H02_CSC"], mld)
+    factor = load_verified(inputs["H02_factorization"], mld)
+    load_verified(inputs["three_block_oracle"], mld)
+    base_packet = load_verified(inputs["base"], mld)
+    global_f0 = load_verified(inputs["global_F0"], mld)
+    b89 = load_verified(inputs["B89"], mld)
+    require(int(g3bv["endpoint_chart"]["determinant_mod11"]) == 0, "invalid old GF11 anchor rejected")
+
+    generators0, _, _ = oracle.exact_generators(base_packet, global_f0, b89)
+    corrections = builder.correction_derivatives_exact(g3bi)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = {int(value) for value in csc["binary"]["quotient_unit_rows"]}
+    complement_rows = [row for row in range(len(target)) if row not in quotient_rows]
+    complement_lookup = {ambient: local for local, ambient in enumerate(complement_rows)}
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    dimension = len(complement_rows)
+    require((len(target), len(quotient_rows), dimension) == (42706, 248, 42458), "H02 dimensions")
+
+    pattern_rows: list[int] = []
+    pattern_columns: list[int] = []
+    gamma_rows: list[int] = []
+    gamma_columns: list[int] = []
+    gamma_weights: list[int] = []
+    chart_indptr = [0]
+    chart_indices: list[int] = []
+    chart_data: list[int] = []
+    exact_digest = hashlib.sha256()
+    for row in sorted(quotient_rows):
+        chart_indices.append(row)
+        chart_data.append(1)
+        chart_indptr.append(len(chart_indices))
+    for column_index, descriptor in enumerate(descriptors):
+        exact = builder.endpoint_column(descriptor, generators0, corrections, target_lookup, oracle)
+        augmented_column = 248 + column_index
+        for ambient_row, coefficients in sorted(exact.items()):
+            exact_digest.update(f"{augmented_column}:{ambient_row}:".encode("ascii"))
+            exact_digest.update(",".join(str(value) for value in coefficients).encode("ascii"))
+            exact_digest.update(b"\n")
+            value = exporter.evaluate(coefficients, prime, anchor)
+            if value:
+                chart_indices.append(ambient_row)
+                chart_data.append(value)
+            local_row = complement_lookup.get(ambient_row)
+            if local_row is None:
+                continue
+            pattern_rows.append(local_row)
+            pattern_columns.append(column_index)
+            higher_weight = sum(coefficient != 0 for coefficient in coefficients[1:])
+            if higher_weight:
+                gamma_rows.append(local_row)
+                gamma_columns.append(column_index)
+                gamma_weights.append(higher_weight)
+        chart_indptr.append(len(chart_indices))
+
+    evaluated_chart = sparse.csc_matrix(
+        (
+            np.asarray(chart_data, dtype=np.uint32),
+            np.asarray(chart_indices, dtype=np.int32),
+            np.asarray(chart_indptr, dtype=np.int64),
+        ),
+        shape=(42706, 42706),
+        dtype=np.uint32,
+    )
+    g3br_chart, chart_prime, quotient_units, image_rank = initializer.read_chart(
+        verify_record(g3br["endpoint_chart"]["binary"])
+    )
+    require((chart_prime, quotient_units, image_rank) == (prime, 248, 42458), "G3BR chart header")
+    require((evaluated_chart != g3br_chart).nnz == 0, "anchor chart entrywise equality")
+    require(int(g3br["endpoint_chart"]["determinant_mod21817"]) == 419, "anchor determinant")
+
+    pattern = sparse.csr_matrix(
+        (
+            np.ones(len(pattern_rows), dtype=np.uint8),
+            (np.asarray(pattern_rows, dtype=np.int32), np.asarray(pattern_columns, dtype=np.int32)),
+        ),
+        shape=(dimension, dimension),
+    )
+    pattern.sum_duplicates()
+    pattern.data[:] = 1
+    stored_pattern = sparse.load_npz(verify_record(packet["DM_reduction"]["pattern"])).tocsr()
+    require((stored_pattern != pattern).nnz == 0, "stored exact pattern")
+    matching = maximum_bipartite_matching(pattern, perm_type="column").astype(np.int32)
+    require(np.count_nonzero(matching < 0) == 0, "perfect matching")
+    rows, columns = pattern.nonzero()
+    graph_sources = matching[rows]
+    graph_targets = columns.astype(np.int32)
+    graph = sparse.csr_matrix(
+        (np.ones(graph_sources.size, dtype=np.uint8), (graph_sources, graph_targets)),
+        shape=(dimension, dimension),
+    )
+    component_count, component_by_column = connected_components(graph, directed=True, connection="strong")
+    component_by_column = component_by_column.astype(np.int32)
+    component_by_row = component_by_column[matching]
+    component_sizes = np.bincount(component_by_column, minlength=component_count).astype(np.int32)
+    order = np.asarray(
+        builder.topological_order(
+            component_count,
+            component_by_column[graph_sources],
+            component_by_column[graph_targets],
+        ),
+        dtype=np.int32,
+    )
+    order_position = np.empty(component_count, dtype=np.int32)
+    order_position[order] = np.arange(component_count, dtype=np.int32)
+    backward_edges = int(
+        np.count_nonzero(
+            order_position[component_by_column[graph_sources]]
+            > order_position[component_by_column[graph_targets]]
+        )
+    )
+    require(backward_edges == 0, "condensation order")
+
+    gamma_row_array = np.asarray(gamma_rows, dtype=np.int32)
+    gamma_column_array = np.asarray(gamma_columns, dtype=np.int32)
+    gamma_weight_array = np.asarray(gamma_weights, dtype=np.uint8)
+    internal = component_by_row[gamma_row_array] == component_by_column[gamma_column_array]
+    internal_rows = gamma_row_array[internal]
+    internal_columns = gamma_column_array[internal]
+    internal_components = component_by_row[internal_rows]
+    reductions: list[dict[str, int]] = []
+    for component in np.unique(internal_components).tolist():
+        mask = internal_components == component
+        reductions.append(
+            {
+                "component_label": int(component),
+                "topological_position": int(order_position[component]),
+                "component_dimension": int(component_sizes[component]),
+                "active_internal_rows": int(np.unique(internal_rows[mask]).size),
+                "active_internal_columns": int(np.unique(internal_columns[mask]).size),
+                "nonconstant_internal_entries": int(np.count_nonzero(mask)),
+                "combined_higher_power_nonzeros": int(gamma_weight_array[internal][mask].sum(dtype=np.int64)),
+            }
+        )
+    reductions.sort(key=lambda row: (row["component_dimension"], row["active_internal_rows"]), reverse=True)
+    nontrivial = [row for row in reductions if row["component_dimension"] > 1]
+    histogram = Counter(int(value) for value in component_sizes)
+
+    arrays = np.load(verify_record(packet["DM_reduction"]["arrays"]), allow_pickle=False)
+    expected_arrays = {
+        "complement_rows": np.asarray(complement_rows, dtype=np.int32),
+        "matching_column_by_row": matching,
+        "component_by_column": component_by_column,
+        "component_by_row": component_by_row,
+        "component_sizes": component_sizes,
+        "topological_component_order": order,
+        "gamma_rows": gamma_row_array,
+        "gamma_columns": gamma_column_array,
+        "gamma_weights": gamma_weight_array,
+        "internal_gamma_mask": internal,
+    }
+    require(set(arrays.files) == set(expected_arrays), "stored array names")
+    for name, expected in expected_arrays.items():
+        require(np.array_equal(arrays[name], expected), f"stored array {name}")
+
+    reduction = packet["DM_reduction"]
+    require(int(reduction["exact_complement_pattern_nonzero_entries"]) == pattern.nnz == 2325539, "pattern nnz")
+    require(int(reduction["perfect_matching_size"]) == dimension, "matching size")
+    require(int(reduction["irreducible_components"]) == component_count == 17692, "component count")
+    require(int(reduction["singleton_components"]) == histogram[1] == 17691, "singletons")
+    require(int(reduction["non_singleton_components"]) == 1, "one non-singleton")
+    require(reduction["largest_component_sizes"] == sorted(component_sizes.tolist(), reverse=True)[:20], "largest components")
+    require(int(reduction["nonconstant_entries"]) == gamma_row_array.size, "nonconstant entries")
+    require(int(reduction["nonconstant_internal_entries"]) == np.count_nonzero(internal), "internal entries")
+    require(reduction["component_reductions"] == reductions, "component reductions")
+    require(int(reduction["active_nontrivial_components"]) == len(nontrivial) == 1, "one active core")
+    require(int(reduction["maximum_Woodbury_kernel_dimension"]) == max(row["active_internal_rows"] for row in nontrivial) == 15158, "Woodbury rows")
+    require(int(reduction["sum_nontrivial_Woodbury_active_rows"]) == 15158, "total Woodbury rows")
+    hashes = reduction["hashes"]
+    require(builder.pattern_hash(pattern) == hashes["exact_complement_pattern_sha256"], "pattern hash")
+    require(builder.array_hash(matching, "<i4") == hashes["matching_column_by_row_sha256"], "matching hash")
+    require(builder.array_hash(component_by_column, "<i4") == hashes["component_by_column_sha256"], "column components hash")
+    require(builder.array_hash(component_by_row, "<i4") == hashes["component_by_row_sha256"], "row components hash")
+    require(builder.array_hash(component_sizes, "<i4") == hashes["component_sizes_sha256"], "component sizes hash")
+    require(builder.array_hash(order, "<i4") == hashes["topological_component_order_sha256"], "order hash")
+    require(exact_digest.hexdigest() == packet["exact_endpoint"]["canonical_exact_image_entry_sha256"], "exact endpoint digest")
+    require(int(packet["exact_endpoint"]["anchor_nonzero_entries"]) == evaluated_chart.nnz, "anchor nnz")
+
+    core = nontrivial[0]
+    print("UST.G3BW selected G3BI H02 DM/Woodbury reduction verifier: PASS")
+    print(
+        f"pattern_nnz={pattern.nnz} components={component_count} core={core['component_dimension']} "
+        f"active_rows={core['active_internal_rows']} active_columns={core['active_internal_columns']} anchor_det=419"
+    )
+
+
+if __name__ == "__main__":
+    main()

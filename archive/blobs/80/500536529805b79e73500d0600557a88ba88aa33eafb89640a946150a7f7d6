@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+"""Execute the selected H11 B89 base action at one completely split prime."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import build_ust_g3cv_h11_fraction_free_path_woodbury as woodbury
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3CU = ROOT / "state" / "ust_g3cu_h11_exact_path_update_rank.packet.json"
+G3CV = ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3cw"
+OUT = ROOT / "state" / "ust_g3cw_h11_split_place_base_action.packet.json"
+PRIME = 21817
+ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+AMBIENT = 5439
+QUOTIENT = 1013
+COMPLEMENT = 4426
+RANK = 988
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc().astype(np.int64)
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result.astype(np.uint32)
+
+
+def as_scipy(payload: dict[str, Any]) -> sparse.csc_matrix:
+    return sparse.csc_matrix(
+        (
+            np.asarray(payload["data"], dtype=np.uint32),
+            np.asarray(payload["indices"], dtype=np.int32),
+            np.asarray(payload["indptr"], dtype=np.int64),
+        ),
+        shape=(int(payload["rows"]), int(payload["columns"])),
+        dtype=np.uint32,
+    )
+
+
+def dense_hash(values: np.ndarray) -> str:
+    canonical = np.asarray(values, dtype="<u2", order="C")
+    digest = hashlib.sha256()
+    digest.update(f"{canonical.shape[0]}x{canonical.shape[1]}\n".encode("ascii"))
+    digest.update(canonical.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def run_solver(
+    solver: Path,
+    mld: Path,
+    chart: Path,
+    rhs: Path,
+    output: Path | None,
+    log: Path,
+    determinant_only: bool = False,
+) -> str:
+    command = [
+        "wsl",
+        runtime.wsl_path(solver),
+        "--chart",
+        runtime.wsl_path(chart),
+        "--rhs",
+        runtime.wsl_path(rhs),
+    ]
+    if determinant_only:
+        command.append("--determinant-only")
+    else:
+        require(output is not None, "solution output")
+        command.extend(
+            [
+                "--output",
+                runtime.wsl_path(output),
+            ]
+        )
+    command.extend(["--log", runtime.wsl_path(log)])
+    completed = subprocess.run(
+        command,
+        cwd=mld,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = initializer.parse_log(log)
+    require(fields.get("STATUS") == "SUCCESS", f"solver status {chart.name}")
+    return completed.stdout.strip()
+
+
+def write_chart(exporter, path: Path, matrix: sparse.csc_matrix, quotient: int) -> None:
+    require(matrix.shape[0] == matrix.shape[1], "square chart")
+    exporter.write_chart(
+        path,
+        PRIME,
+        matrix.shape[0],
+        quotient,
+        matrix.shape[0] - quotient,
+        matrix.indptr.astype(np.uint64).tolist(),
+        matrix.indices.astype(np.uint32).tolist(),
+        matrix.data.astype(np.uint32).tolist(),
+    )
+
+
+def determinant(
+    exporter,
+    solver: Path,
+    mld: Path,
+    path: Path,
+    log: Path,
+    matrix: sparse.csc_matrix,
+    quotient: int = 0,
+) -> tuple[int, str, str]:
+    write_chart(exporter, path, matrix, quotient)
+    rhs = path.with_suffix(".unit.rhs.bin")
+    exporter.write_rhs(rhs, PRIME, matrix.shape[0], [0, 1], [0], [1])
+    chart_hash = sha256(path)
+    stdout = run_solver(solver, mld, path, rhs, None, log, determinant_only=True)
+    value = int(initializer.parse_log(log)["CHART_DETERMINANT"])
+    path.unlink()
+    rhs.unlink()
+    return value, chart_hash, stdout
+
+
+def interpolate_dense(
+    arithmetic,
+    values: np.ndarray,
+) -> np.ndarray:
+    require(values.shape[0] == len(ROOTS), "six root values")
+    lagrange = np.asarray(
+        [
+            arithmetic.interpolate(
+                list(ROOTS), [1 if row == column else 0 for row in range(6)], PRIME
+            )
+            for column in range(6)
+        ],
+        dtype=np.uint64,
+    )
+    coefficients = np.empty((6,) + values.shape[1:], dtype=np.uint16)
+    for degree in range(6):
+        accumulator = np.zeros(values.shape[1:], dtype=np.uint64)
+        for root_index in range(6):
+            accumulator += values[root_index].astype(np.uint64) * lagrange[root_index, degree]
+            accumulator %= PRIME
+        coefficients[degree] = accumulator.astype(np.uint16)
+    return coefficients
+
+
+def evaluate_dense(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.uint64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value.astype(np.uint16)
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3cu = load(G3CU)
+    g3cv = load(G3CV)
+    for packet, label in ((g3cu, "G3CU"), (g3cv, "G3CV")):
+        require(all(packet["checks"].values()), f"{label} checks")
+    require(int(g3cv["factorization"]["rank"]) == RANK, "G3CV rank")
+
+    update = g3cu["affine_path_update"]
+    delta_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in update["exact_gamma_coefficient_matrices"]
+    ]
+    factorization = g3cv["factorization"]
+    u_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factorization["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factorization["W_gamma_coefficients"]
+    ]
+    s_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factorization["S_gamma_coefficients"]
+    ]
+    arrays = np.load(ROOT / update["construction_arrays"]["path"], allow_pickle=False)
+    complement_rows = arrays["complement_rows"].astype(np.int32)
+    require(complement_rows.size == COMPLEMENT, "H11 complement rows")
+
+    residue_path = mld / "eta9_split_prime_H11_residues" / "H11.physical_H20_to_H11.p21817.packet.json"
+    residue = load(residue_path)
+    require(all(residue["checks"].values()), "split-prime H11 residue checks")
+    require(tuple(int(value) for value in residue["field"]["roots_of_selected_sextic"]) == ROOTS, "selected roots")
+    root_records = {int(item["gamma_root"]): item for item in residue["root_solves"]}
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    require(solver.is_file(), "split-prime solver")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    p_values = np.empty((6, COMPLEMENT, RANK), dtype=np.uint16)
+    q_values = np.empty((6, RANK, RANK), dtype=np.uint16)
+    root_summaries: list[dict[str, Any]] = []
+    for root_index, root in enumerate(ROOTS):
+        source_record = root_records[root]
+        base_chart_path = mld / source_record["chart"]["path"]
+        base_log_path = mld / source_record["solver_log"]["path"]
+        require(sha256(base_chart_path) == source_record["chart"]["sha256"], "base chart hash")
+        base_payload = arithmetic.read_csc(base_chart_path, b"MTTSPC1\0", 6)
+        base_chart = as_scipy(base_payload)
+        require(base_chart.shape == (AMBIENT, AMBIENT), "base chart shape")
+        require(int(base_payload["quotient_units"]) == QUOTIENT, "base quotient split")
+
+        u = woodbury.evaluate(u_coefficients, root).tocsc()
+        w = woodbury.evaluate(w_coefficients, root).tocsr()
+        s = woodbury.evaluate(s_coefficients, root).tocsc()
+        delta = woodbury.evaluate(delta_coefficients, root).tocsc()
+        require(u.shape == (COMPLEMENT, RANK), "U shape")
+        require(w.shape == (RANK, COMPLEMENT), "W shape")
+        require(s.shape == (RANK, RANK), "S shape")
+        require(delta.shape == (COMPLEMENT, COMPLEMENT), "Delta shape")
+
+        u_coo = u.tocoo()
+        rhs = sparse.csc_matrix(
+            (
+                u_coo.data.astype(np.uint32),
+                (complement_rows[u_coo.row], u_coo.col),
+            ),
+            shape=(AMBIENT, RANK),
+            dtype=np.uint32,
+        )
+        rhs.sum_duplicates()
+        rhs.data %= PRIME
+        rhs.eliminate_zeros()
+        rhs_path = EVIDENCE / f"H11.B89.base_action.p{PRIME}.g{root}.rhs.bin"
+        solution_path = EVIDENCE / f"H11.B89.base_action.p{PRIME}.g{root}.solution.bin"
+        action_log = EVIDENCE / f"H11.B89.base_action.p{PRIME}.g{root}.solve.log"
+        exporter.write_rhs(
+            rhs_path,
+            PRIME,
+            AMBIENT,
+            rhs.indptr.astype(np.uint64).tolist(),
+            rhs.indices.astype(np.uint32).tolist(),
+            rhs.data.astype(np.uint32).tolist(),
+        )
+        rhs_hash = sha256(rhs_path)
+        action_stdout = run_solver(
+            solver, mld, base_chart_path, rhs_path, solution_path, action_log
+        )
+        solution_payload = arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+        solution = as_scipy(solution_payload)
+        require(solution.shape == (AMBIENT, RANK), "base-action solution shape")
+        p = solution[QUOTIENT:, :].toarray().astype(np.uint16, copy=False)
+        p_values[root_index] = p
+
+        base_complement = base_chart[complement_rows, QUOTIENT:].astype(np.int64)
+        residual = np.asarray(base_complement @ p.astype(np.int64), dtype=np.int64)
+        residual -= u.toarray().astype(np.int64)
+        residual %= PRIME
+        action_residual_nonzeros = int(np.count_nonzero(residual))
+        require(action_residual_nonzeros == 0, "A0 P equals U")
+
+        q = np.asarray(w.astype(np.int64) @ p.astype(np.int64), dtype=np.int64)
+        q %= PRIME
+        q_values[root_index] = q.astype(np.uint16)
+        reduced_kernel = normalize(s.astype(np.int64) + sparse.csc_matrix(q))
+
+        s_chart = EVIDENCE / f"H11.path_S.p{PRIME}.g{root}.chart.bin"
+        s_log = EVIDENCE / f"H11.path_S.p{PRIME}.g{root}.determinant.log"
+        s_det, s_chart_hash, s_stdout = determinant(
+            exporter, solver, mld, s_chart, s_log, normalize(s)
+        )
+        kernel_chart = EVIDENCE / f"H11.path_kernel.p{PRIME}.g{root}.chart.bin"
+        kernel_log = EVIDENCE / f"H11.path_kernel.p{PRIME}.g{root}.determinant.log"
+        kernel_det, kernel_chart_hash, kernel_stdout = determinant(
+            exporter, solver, mld, kernel_chart, kernel_log, reduced_kernel
+        )
+
+        delta_coo = delta.tocoo()
+        endpoint_update = sparse.csc_matrix(
+            (
+                delta_coo.data.astype(np.uint32),
+                (complement_rows[delta_coo.row], QUOTIENT + delta_coo.col),
+            ),
+            shape=(AMBIENT, AMBIENT),
+            dtype=np.uint32,
+        )
+        endpoint_chart = normalize(base_chart.astype(np.int64) + endpoint_update.astype(np.int64))
+        endpoint_path = EVIDENCE / f"H11.G3BI.endpoint.p{PRIME}.g{root}.chart.bin"
+        endpoint_log = EVIDENCE / f"H11.G3BI.endpoint.p{PRIME}.g{root}.determinant.log"
+        endpoint_det, endpoint_chart_hash, endpoint_stdout = determinant(
+            exporter,
+            solver,
+            mld,
+            endpoint_path,
+            endpoint_log,
+            endpoint_chart,
+            QUOTIENT,
+        )
+        base_det = int(initializer.parse_log(base_log_path)["CHART_DETERMINANT"])
+        determinant_residual = (endpoint_det * s_det - base_det * kernel_det) % PRIME
+        require(determinant_residual == 0, "fraction-free determinant lemma")
+
+        rhs_path.unlink()
+        solution_path.unlink()
+        root_summaries.append(
+            {
+                "gamma_root": root,
+                "base_chart": external_record(base_chart_path, mld),
+                "base_solver_log": external_record(base_log_path, mld),
+                "base_determinant_mod21817": base_det,
+                "U_nonzero_entries": int(u.nnz),
+                "base_action_RHS_SHA256": rhs_hash,
+                "base_action_image_SHA256": dense_hash(p),
+                "base_action_residual_nonzeros": action_residual_nonzeros,
+                "base_action_solver_log": record(action_log),
+                "base_action_solver_stdout": action_stdout,
+                "Q_equals_WP_SHA256": dense_hash(q.astype(np.uint16)),
+                "S_determinant_mod21817": s_det,
+                "reduced_kernel_determinant_mod21817": kernel_det,
+                "endpoint_determinant_mod21817": endpoint_det,
+                "determinant_lemma_residual_mod21817": determinant_residual,
+                "S_chart_SHA256": s_chart_hash,
+                "reduced_kernel_chart_SHA256": kernel_chart_hash,
+                "endpoint_chart_SHA256": endpoint_chart_hash,
+                "S_determinant_log": record(s_log),
+                "reduced_kernel_determinant_log": record(kernel_log),
+                "endpoint_determinant_log": record(endpoint_log),
+                "determinant_solver_stdout": {
+                    "S": s_stdout,
+                    "reduced_kernel": kernel_stdout,
+                    "endpoint": endpoint_stdout,
+                },
+            }
+        )
+        print(
+            f"ROOT g={root} action_residual=0 detA0={base_det} "
+            f"detS={s_det} detK={kernel_det} detA1={endpoint_det}",
+            flush=True,
+        )
+
+    p_coefficients = interpolate_dense(arithmetic, p_values)
+    q_coefficients = interpolate_dense(arithmetic, q_values)
+    interpolation_mismatches = 0
+    for root_index, root in enumerate(ROOTS):
+        interpolation_mismatches += int(
+            np.count_nonzero(evaluate_dense(p_coefficients, root) != p_values[root_index])
+        )
+        interpolation_mismatches += int(
+            np.count_nonzero(evaluate_dense(q_coefficients, root) != q_values[root_index])
+        )
+    require(interpolation_mismatches == 0, "split-root interpolation replay")
+
+    action_path = EVIDENCE / "H11.B89.A0_inverse_U.p21817.power_basis.u16.npz"
+    kernel_path = EVIDENCE / "H11.path.W_A0_inverse_U.p21817.power_basis.u16.npz"
+    np.savez_compressed(action_path, coefficients=p_coefficients)
+    np.savez_compressed(kernel_path, coefficients=q_coefficients)
+    checks = {
+        "G3CU_and_G3CV_are_hash_bound_and_passing": True,
+        "all_six_selected_roots_are_used_at_the_completely_split_prime21817": True,
+        "all_six_B89_charts_are_hash_certified_characteristic_zero_specializations": True,
+        "A0_times_P_equals_U_on_all_six_split_roots_with_zero_residual": all(
+            int(item["base_action_residual_nonzeros"]) == 0 for item in root_summaries
+        ),
+        "the_full4426_by988_base_action_is_interpolated_in_the_gamma_power_basis": interpolation_mismatches
+        == 0,
+        "Q_equals_W_times_P_is_emitted_as_a988_square_power_basis_residue": True,
+        "the_fraction_free_determinant_lemma_matches_independent_endpoint_determinants_at_all_six_roots": all(
+            int(item["determinant_lemma_residual_mod21817"]) == 0
+            for item in root_summaries
+        ),
+        "no_observed_value_floating_point_or_fitted_parameter_is_used": True,
+        "no_characteristic_zero_or_Archimedean_action_is_inferred_from_one_prime": True,
+    }
+    require(all(checks.values()), "G3CW checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cw-h11-split-place-base-action.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CW",
+        "status": "CLOSED_EXACT_SELECTED_H11_B89_BASE_ACTION_AND_REDUCED_KERNEL_AT_ONE_COMPLETELY_SPLIT_PRIME",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "field": {
+            "prime": PRIME,
+            "gamma_roots": list(ROOTS),
+            "residue_algebra": "F_21817[gamma]/(gamma^6+24gamma^5+89gamma^4+44gamma^3+33gamma^2+16gamma+64)",
+        },
+        "inputs": {
+            "G3CU": record(G3CU),
+            "G3CV": record(G3CV),
+            "split_prime_H11_residue": external_record(residue_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+            "implementation": record(Path(__file__).resolve()),
+        },
+        "base_action": {
+            "equation": "A_H11,B89(gamma) P(gamma)=U(gamma)",
+            "shape": [COMPLEMENT, RANK],
+            "power_basis_degree": 6,
+            "coefficient_dtype": "uint16",
+            "coefficient_nonzeros": int(np.count_nonzero(p_coefficients)),
+            "coefficient_archive": record(action_path),
+        },
+        "reduced_kernel_action": {
+            "equation": "Q(gamma)=W(gamma) P(gamma)",
+            "shape": [RANK, RANK],
+            "path_kernel": "S(gamma)+a Q(gamma)",
+            "power_basis_degree": 6,
+            "coefficient_dtype": "uint16",
+            "coefficient_nonzeros": int(np.count_nonzero(q_coefficients)),
+            "coefficient_archive": record(kernel_path),
+        },
+        "root_replays": root_summaries,
+        "verification": {
+            "base_action_residual_nonzeros": sum(
+                int(item["base_action_residual_nonzeros"]) for item in root_summaries
+            ),
+            "interpolation_evaluation_mismatches": interpolation_mismatches,
+            "determinant_lemma_residual_sum_mod21817": sum(
+                int(item["determinant_lemma_residual_mod21817"])
+                for item in root_summaries
+            ),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_residue_is_the_characteristic_zero_rational_action": False,
+            "claims_an_Archimedean_Arb_enclosure": False,
+            "claims_the_evolving_source_action_x0": False,
+            "claims_path_integration_integral_marking_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3cwSelectedH11SplitPlaceBaseAction",
+            "tier": "CLOSED_EXACT_ONE_SPLIT_PRIME_BASE_ACTION_EXECUTION",
+            "statement": "At the completely split prime 21817, the unchanged B89 H11 chart is applied to every one of the 988 selected G3CV update columns at all six roots of the selected sextic. The emitted power-basis residues P and Q satisfy A0 P=U and Q=W P with zero residual. Independent determinants of S, S+Q and the full corrected endpoint chart satisfy the fraction-free determinant lemma at every root.",
+        },
+        "frontier_delta": {
+            "before": "G3CV emitted U, S and W, but no base inverse action or executable reduced kernel had been evaluated.",
+            "after": "The complete selected B89 base action and 988-square reduced kernel are now executed exactly at one completely split proof prime, with six-root interpolation and independent endpoint determinant checks. Characteristic-zero or Arb promotion remains.",
+        },
+        "next_required_object": "Lift the emitted P and Q actions from the one-prime residue to certified directed-rounding balls on all six Archimedean embeddings, then supply the current source action x0=A0^-1 b and solve S+aQ along G3BJ.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CW selected H11 split-place base action: PASS")
+    print(
+        f"P={COMPLEMENT}x{RANK} Q={RANK}x{RANK} roots=6 "
+        f"action_residuals=0 interpolation_mismatches={interpolation_mismatches}",
+        flush=True,
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

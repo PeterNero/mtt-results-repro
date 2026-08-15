@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""Construct the compact Hilbert--Burch source behind component 20."""
+
+from __future__ import annotations
+
+import hashlib
+import itertools
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3fn"
+ARRAYS = EVIDENCE / "H02.component20.hilbert_burch_source.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.hilbert_burch_source.json"
+
+EXPECTED_SYZYGY_NULLITIES = (0, 1, 4, 9, 16, 25, 36, 49, 65)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def inverse_mod(matrix: np.ndarray, prime: int) -> np.ndarray:
+    size = matrix.shape[0]
+    require(matrix.shape == (size, size), "square inverse input")
+    work = np.concatenate(
+        (matrix.astype(np.int64) % prime, np.eye(size, dtype=np.int64)), axis=1
+    )
+    for column in range(size):
+        choices = np.flatnonzero(work[column:, column])
+        require(choices.size > 0, "invertible pivot")
+        selected = column + int(choices[0])
+        if selected != column:
+            work[[column, selected]] = work[[selected, column]]
+        work[column] = (
+            work[column] * pow(int(work[column, column]), -1, prime)
+        ) % prime
+        for row in range(size):
+            if row != column and work[row, column]:
+                work[row] = (
+                    work[row] - int(work[row, column]) * work[column]
+                ) % prime
+    return work[:, size:]
+
+
+def lift_syzygy(
+    syzygy: np.ndarray,
+    coefficient_degree: int,
+    target_degree: int,
+    prime: int,
+) -> np.ndarray:
+    source_basis = graded.homogeneous_exponents(coefficient_degree)
+    target_basis = graded.homogeneous_exponents(target_degree)
+    target_lookup = {exponent: row for row, exponent in enumerate(target_basis)}
+    multipliers = graded.homogeneous_exponents(target_degree - coefficient_degree)
+    result = np.zeros((4 * len(target_basis), len(multipliers)), dtype=np.int64)
+    for local, multiplier in enumerate(multipliers):
+        for generator in range(4):
+            for row, exponent in enumerate(source_basis):
+                shifted = tuple(exponent[index] + multiplier[index] for index in range(3))
+                result[
+                    generator * len(target_basis) + target_lookup[shifted], local
+                ] = syzygy[generator * len(source_basis) + row]
+    return result % prime
+
+
+def canonical_degree8_syzygy(
+    generators11: np.ndarray,
+    syzygy1: np.ndarray,
+    syzygy2: np.ndarray,
+    prime: int,
+) -> tuple[np.ndarray, tuple[int, ...], int, tuple[int, ...]]:
+    map19 = graded.multiply_space(generators11, 11, 19, prime)
+    rank19, _, syzygies8 = graded.rref(map19, prime, emit_nullspace=True)
+    require(rank19 == 115 and syzygies8 is not None, "degree19 syzygy space")
+    require(syzygies8.shape == (180, 65), "degree8 coefficient syzygies")
+
+    inherited = np.concatenate(
+        (
+            lift_syzygy(syzygy1, 1, 8, prime),
+            lift_syzygy(syzygy2, 2, 8, prime),
+        ),
+        axis=1,
+    )
+    inherited_rank, _, _ = graded.rref(inherited, prime)
+    require(inherited.shape == (180, 64) and inherited_rank == 64, "64 inherited syzygies")
+    new, selected, combined_rank = graded.complement_columns(
+        inherited, syzygies8, prime
+    )
+    require(new.shape == (180, 1) and combined_rank == 65, "one new degree8 syzygy")
+
+    pivot_rank, pivot_rows, _ = graded.rref(inherited.T, prime)
+    require(pivot_rank == 64 and len(pivot_rows) == 64, "inherited pivot rows")
+    pivot = np.asarray(pivot_rows, dtype=np.int64)
+    coefficients = inverse_mod(inherited[pivot, :], prime) @ new[pivot, 0] % prime
+    canonical = (new[:, 0] - inherited @ coefficients) % prime
+    require(np.count_nonzero(canonical[pivot]) == 0, "quotient representative pivot zeros")
+    support = np.flatnonzero(canonical)
+    require(support.size > 0, "nonzero quotient representative")
+    normalization_coordinate = int(support[0])
+    canonical = (
+        canonical * pow(int(canonical[normalization_coordinate]), -1, prime)
+    ) % prime
+    require(canonical[normalization_coordinate] == 1, "degree8 normalization")
+    require(np.count_nonzero(map19 @ canonical % prime) == 0, "degree8 syzygy replay")
+    return canonical, tuple(int(value) for value in pivot_rows), normalization_coordinate, selected
+
+
+def multiply_polynomials(
+    left: np.ndarray,
+    left_degree: int,
+    right: np.ndarray,
+    right_degree: int,
+    prime: int,
+) -> np.ndarray:
+    left_basis = graded.homogeneous_exponents(left_degree)
+    right_basis = graded.homogeneous_exponents(right_degree)
+    target_basis = graded.homogeneous_exponents(left_degree + right_degree)
+    lookup = {exponent: row for row, exponent in enumerate(target_basis)}
+    result = np.zeros(len(target_basis), dtype=np.int64)
+    for i, left_exponent in enumerate(left_basis):
+        if not left[i]:
+            continue
+        for j, right_exponent in enumerate(right_basis):
+            if not right[j]:
+                continue
+            exponent = tuple(
+                left_exponent[index] + right_exponent[index] for index in range(3)
+            )
+            result[lookup[exponent]] += int(left[i]) * int(right[j])
+    return result % prime
+
+
+def determinant3(columns: list[list[np.ndarray]], prime: int) -> np.ndarray:
+    result = np.zeros(len(graded.homogeneous_exponents(11)), dtype=np.int64)
+    for permutation in itertools.permutations(range(3)):
+        inversions = sum(
+            permutation[i] > permutation[j]
+            for i in range(3)
+            for j in range(i + 1, 3)
+        )
+        first = multiply_polynomials(
+            columns[0][permutation[0]], (1, 2, 8)[permutation[0]],
+            columns[1][permutation[1]], (1, 2, 8)[permutation[1]], prime,
+        )
+        product = multiply_polynomials(
+            first, (1, 2, 8)[permutation[0]] + (1, 2, 8)[permutation[1]],
+            columns[2][permutation[2]], (1, 2, 8)[permutation[2]], prime,
+        )
+        result = (result + (-1 if inversions % 2 else 1) * product) % prime
+    return result
+
+
+def signed_maximal_minors(
+    syzygy1: np.ndarray,
+    syzygy2: np.ndarray,
+    syzygy8: np.ndarray,
+    prime: int,
+) -> np.ndarray:
+    sizes = (3, 6, 45)
+    vectors = (syzygy1, syzygy2, syzygy8)
+    matrix = [
+        [
+            vectors[column][row * sizes[column] : (row + 1) * sizes[column]]
+            for column in range(3)
+        ]
+        for row in range(4)
+    ]
+    minors: list[np.ndarray] = []
+    for omitted in range(4):
+        rows = [matrix[row] for row in range(4) if row != omitted]
+        determinant = determinant3(rows, prime)
+        minors.append(((-1) ** omitted * determinant) % prime)
+    return np.stack(minors, axis=1) % prime
+
+
+def common_scalar(left: np.ndarray, right: np.ndarray, prime: int) -> int:
+    support = np.argwhere(right % prime)
+    require(support.size > 0, "comparison support")
+    row, column = (int(value) for value in support[0])
+    scalar = int(left[row, column]) * pow(int(right[row, column]), -1, prime) % prime
+    require(np.array_equal(left % prime, scalar * right % prime), "common scalar equality")
+    return scalar
+
+
+def projective_line_restriction(polynomial: np.ndarray, prime: int) -> np.ndarray:
+    """Restrict a degree-11 form to [x:y:z]=[s:t:s+2t], then set s=1."""
+    result = np.zeros(12, dtype=np.int64)
+    for coefficient, (a, b, c) in zip(
+        polynomial, graded.homogeneous_exponents(11), strict=True
+    ):
+        for power in range(c + 1):
+            result[b + power] += (
+                int(coefficient) * math.comb(c, power) * 2**power
+            )
+    return result % prime
+
+
+def polynomial_gcd(left: np.ndarray, right: np.ndarray, prime: int) -> np.ndarray:
+    def trim(value: np.ndarray) -> np.ndarray:
+        nonzero = np.flatnonzero(value % prime)
+        return np.zeros(1, dtype=np.int64) if nonzero.size == 0 else value[: int(nonzero[-1]) + 1] % prime
+
+    a = trim(left)
+    b = trim(right)
+    while np.any(b):
+        remainder = a.copy()
+        inverse = pow(int(b[-1]), -1, prime)
+        while remainder.size >= b.size and np.any(remainder):
+            shift = remainder.size - b.size
+            coefficient = int(remainder[-1]) * inverse % prime
+            remainder[shift : shift + b.size] = (
+                remainder[shift : shift + b.size] - coefficient * b
+            ) % prime
+            remainder = trim(remainder)
+        a, b = b, remainder
+    require(np.any(a), "nonzero polynomial gcd")
+    return a * pow(int(a[-1]), -1, prime) % prime
+
+
+def main() -> None:
+    packets = [conic.load(path) for path in conic.SPLIT_PACKETS]
+    primes = tuple(int(packet["field"]["prime"]) for packet in packets)
+    require(primes == conic.EXPECTED_PRIMES, "split-prime order")
+
+    degree8_values = np.zeros((8, 6, 180), dtype=np.uint32)
+    maximal_minor_scalars = np.zeros((8, 6), dtype=np.uint32)
+    normalization_profiles: list[tuple[tuple[int, ...], int]] = []
+    fiber_rows: list[dict[str, object]] = []
+    residues: list[np.ndarray] = []
+
+    for prime_index, (packet_path, packet, prime) in enumerate(
+        zip(conic.SPLIT_PACKETS, packets, primes, strict=True)
+    ):
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        local_values: list[np.ndarray] = []
+        local_profiles: list[tuple[tuple[int, ...], int]] = []
+        for root_index, root in enumerate(roots):
+            generators, syzygy_block, _ = g3fe.extract_fiber(
+                ROOT / rows[root]["kernel"]["path"], prime
+            )
+            generators11 = generators[11]
+            syzygy1 = syzygy_block[:12]
+            syzygy2 = syzygy_block[12:]
+
+            nullities: list[int] = []
+            for coefficient_degree in range(9):
+                multiplication = graded.multiply_space(
+                    generators11, 11, 11 + coefficient_degree, prime
+                )
+                rank, _, _ = graded.rref(multiplication, prime)
+                nullities.append(multiplication.shape[1] - rank)
+            require(tuple(nullities) == EXPECTED_SYZYGY_NULLITIES, "syzygy Hilbert profile")
+
+            syzygy8, pivot_rows, normalization_coordinate, _selected = (
+                canonical_degree8_syzygy(
+                    generators11, syzygy1, syzygy2, prime
+                )
+            )
+            minors = signed_maximal_minors(syzygy1, syzygy2, syzygy8, prime)
+            scalar = common_scalar(minors, generators11, prime)
+            require(graded.rref(minors, prime)[0] == 4, "four maximal minors")
+            restrictions = [
+                projective_line_restriction(generators11[:, column], prime)
+                for column in range(4)
+            ]
+            require(
+                any(int(restriction[11]) % prime for restriction in restrictions),
+                "restricted forms have no common projective s factor",
+            )
+            gcd = restrictions[0]
+            for restriction in restrictions[1:]:
+                gcd = polynomial_gcd(gcd, restriction, prime)
+            require(gcd.size == 1, "degree11 generators have no common factor")
+
+            degree8_values[prime_index, root_index] = syzygy8.astype(np.uint32)
+            maximal_minor_scalars[prime_index, root_index] = scalar
+            local_values.append(syzygy8)
+            local_profiles.append((pivot_rows, normalization_coordinate))
+            normalization_profiles.append((pivot_rows, normalization_coordinate))
+            print(
+                f"G3FN p={prime} gamma={root}: syzygies=1,1,1 "
+                f"HB_minors=4 scalar={scalar}",
+                flush=True,
+            )
+
+        require(len(set(local_profiles)) == 1, f"common degree8 chart p={prime}")
+        coefficients = g3fe.interpolate(np.stack(local_values), roots, prime)
+        residues.append(coefficients.ravel().astype(np.uint32))
+        fiber_rows.append(
+            {
+                "prime": prime,
+                "roots": list(roots),
+                "degree8_syzygy_power_basis_slots": int(coefficients.size),
+                "normalization_coordinate_zero_based": local_profiles[0][1],
+                "inherited_pivot_rows_sha256": hashlib.sha256(
+                    np.asarray(local_profiles[0][0], dtype="<i2").tobytes()
+                ).hexdigest(),
+                "source_packet": record(packet_path),
+            }
+        )
+
+    require(len(set(normalization_profiles)) == 1, "common degree8 chart across48 fibers")
+    residue_matrix = np.stack(residues)
+    require(residue_matrix.shape == (8, 1080), "degree8 power-basis residue shape")
+    reconstruction = g3fe.reconstruction_audit(residue_matrix, primes)
+    valid_mask = reconstruction.pop("valid_mask")
+    pass_mask = reconstruction.pop("pass_mask")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ARRAYS,
+        primes=np.asarray(primes, dtype=np.uint32),
+        roots=np.asarray([packet["field"]["roots"] for packet in packets], dtype=np.uint32),
+        degree8_syzygy_values=degree8_values,
+        degree8_syzygy_power_basis_residues=residue_matrix,
+        maximal_minor_scalars=maximal_minor_scalars,
+        reconstruction_valid=np.packbits(valid_mask),
+        reconstruction_pass=np.packbits(pass_mask),
+    )
+
+    packet = {
+        "schema": "ust.g3fn.h02.component20.hilbert-burch-source.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FN",
+        "status": "CLOSED_EXACT_48_FIBER_HILBERT_BURCH_SOURCE_QGAMMA_IDENTIFICATION_OPEN",
+        "inputs": {
+            "G3FE": record(ROOT / "evidence/ust_g3fe/H02.component20.eight_prime_graded_promotion_audit.json"),
+            "G3FK": record(ROOT / "evidence/ust_g3fk/selected_four_normal_cayley_source.json"),
+            "split_prime_packets": [record(path) for path in conic.SPLIT_PACKETS],
+        },
+        "four_generator_syzygy_theorem": {
+            "generator_degree": 11,
+            "generators": 4,
+            "coefficient_degree0_through8_syzygy_dimensions": list(EXPECTED_SYZYGY_NULLITIES),
+            "minimal_syzygy_coefficient_degrees": [1, 2, 8],
+            "total_syzygy_degrees": [12, 13, 19],
+            "degree_identity": "1+2+8=11",
+            "presentation_matrix": "S=[L1,Q2,O8], shape4x3",
+            "maximal_minor_identity": "((-1)^i det S_without_row_i)_i = unit*(g_0,g_1,g_2,g_3) at every fiber",
+            "grade_two_certificate": (
+                "On the fixed projective line [x:y:z]=[s:t:s+2t], the four "
+                "restricted binary forms have gcd1 at every fiber. Hence the "
+                "four homogeneous forms have no common factor; their maximal-"
+                "minor ideal has grade2, so Hilbert--Burch applies."
+            ),
+            "exact_subideal_resolution": "0 -> R(-12)+R(-13)+R(-19) -> R(-11)^4 -> J -> 0",
+            "interpretation": (
+                "The four degree11 source generators are emitted by one compact "
+                "four-row/three-column determinantal source, not thirty unrelated "
+                "finite generators. Its 4-versus-3 shape matches the G3FK four "
+                "normals versus three selected equations, but equality with the "
+                "G3FK coefficient matrix is not yet claimed."
+            ),
+        },
+        "campaign": {
+            "fibers": 48,
+            "common_normalization_chart": True,
+            "rows": fiber_rows,
+            "artifact": record(ARRAYS),
+        },
+        "numeric_promotion_audit": reconstruction,
+        "checks": {
+            "all48_fibers_have_syzygy_profile0_1_4_9_16_25_36_49_65": True,
+            "the_degree1_and_degree2_syzygies_generate64_of65_degree8_syzygies": True,
+            "exactly_one_new_minimal_degree8_syzygy_occurs_at_every_fiber": True,
+            "the_same_degree8_normalization_chart_works_at_all48_fibers": True,
+            "the_signed_maximal_minors_reproduce_all_four_degree11_generators_at_every_fiber": True,
+            "the_four_maximal_minors_have_grade_two_at_every_fiber": True,
+            "the_compact_degree8_payload_has1080_power_basis_slots_per_prime": residue_matrix.shape[1] == 1080,
+        },
+        "guardrails": {
+            "claims_the_Hilbert_Burch_matrix_is_already_lifted_to_Qgamma": False,
+            "claims_the_Hilbert_Burch_matrix_equals_the_G3FK_common_source_matrix": False,
+            "claims_the_remaining_degree14_and_degree15_generators_are_reconstructed": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fnComponent20HilbertBurchSource",
+            "tier": "CLOSED_EXACT_48_FIBER_DETERMINANTAL_SOURCE",
+            "statement": (
+                "At every one of the48 archived split fibers, the four minimal "
+                "degree11 component-20 kernel generators have exactly three "
+                "minimal first syzygies of coefficient degrees1,2,8. The signed "
+                "maximal minors of the resulting4x3 matrix reproduce the four "
+                "generators up to one nonzero field unit. This compresses the "
+                "first nontrivial kernel source to a determinantal object with "
+                "the same four-normal/three-equation shape as G3FK."
+            ),
+        },
+        "next_required_object": (
+            "Derive L1,Q2,O8 directly from the selected G3FK normal/equation "
+            "matrix over Q(gamma), including the Cox-degree shifts, and replay "
+            "its four minors in the exact G3EX presentation. Then determine "
+            "whether the degree14 and degree15 generators are mapping-cone "
+            "corrections generated by that same source."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FN component20 Hilbert-Burch source: PASS "
+        f"fibers=48 payload=1080 holdout={reconstruction['holdout_passes']}/1080",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

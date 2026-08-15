@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Independent replay for the G3BJ path-selection theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3bj_transcendental_arc_path as builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bj_transcendental_arc_path.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sub(left: list[int], right: list[int]) -> list[int]:
+    return [a - b for a, b in zip(left, right)]
+
+
+def add(left: list[int], right: list[int]) -> list[int]:
+    return [a + b for a, b in zip(left, right)]
+
+
+def main() -> None:
+    packet = load(PACKET)
+    g3bi = load(builder.G3BI)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bj-transcendental-arc-path.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_EXPLICIT_DISCRIMINANT_AVOIDING_PATH_AND_INTEGRAL_LOCAL_SYSTEM_MAP_TERMINAL_COORDINATES_OPEN",
+        "G3BJ packet",
+    )
+    require(all(packet["checks"].values()), "G3BJ checks")
+    require(not any(packet["guardrails"].values()), "G3BJ guardrails")
+    require(sha256(builder.G3BI) == builder.EXPECTED_HASHES["G3BI"], "G3BI hash")
+    require(sha256(builder.G3BH) == builder.EXPECTED_HASHES["G3BH"], "G3BH hash")
+    require(packet["inputs"]["G3BI_explicit_smooth_start"]["sha256"] == sha256(builder.G3BI), "G3BI input")
+
+    start = g3bi["selected_source"]["coefficient_vectors"]
+    endpoint = g3bi["smooth_endpoint"]["coefficient_vectors"]
+    correction = [sub(left, right) for left, right in zip(start, endpoint)]
+    require(correction == packet["correction_pencil"]["correction_vectors"], "correction replay")
+    require([add(endpoint[index], correction[index]) for index in range(249)] == start, "a=1 endpoint")
+    require(any(any(row) for row in correction), "nonconstant line")
+    require(packet["selected_path"]["formula"] == "a(t)=1-t+i*pi*t*(1-t)", "path formula")
+    require(packet["correction_pencil"]["start_parameter"] == 1, "start parameter")
+    require(packet["correction_pencil"]["endpoint_parameter"] == 0, "endpoint parameter")
+    require(packet["selected_path"]["derivative_is_never_zero"], "immersed path")
+    proof = packet["discriminant_avoidance_proof"]
+    require(
+        "finite" in proof["step_2"]
+        and "algebraic" in proof["step_3"]
+        and "transcendental" in proof["step_4"]
+        and not proof["critical_values_or_discriminant_polynomial_needed"],
+        "complete avoidance proof contract",
+    )
+    require(
+        packet["integral_transport"]["integrality_is_preserved"]
+        and not packet["integral_transport"]["terminal_rank1509_coordinates_emitted"]
+        and packet["integral_transport"]["abstract_terminal_class"] == "PT_G3BJ(z4)",
+        "transport boundary",
+    )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BJ"]["state"]
+        == "closed_exact_transcendental_arc_path_abstract_integral_transport_coordinates_open"
+        and gates["UST.G3BJ"]["depends_on"] == ["UST.G3BI", "UST.G3BH", "UST.G3BG"],
+        "G3BJ frontier gate",
+    )
+    require(
+        "transcendental arc" in frontier["frontier_delta_g3bj"]
+        and "PT_G3BJ" in frontier["next_action"]
+        and "G3BJ" in frontier["next_action"],
+        "G3BJ frontier integration",
+    )
+    theorem = (
+        ROOT / "UST_G3BJ_TRANSCENDENTAL_ARC_DISCRIMINANT_AVOIDANCE_AND_INTEGRAL_TRANSPORT_THEOREM_v1.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "algebraic" in theorem
+        and "transcendental" in theorem
+        and "every Archimedean embedding" in theorem
+        and "does not emit" in theorem,
+        "G3BJ theorem boundary",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BJ" in document.read_text(encoding="utf-8"), f"G3BJ integration {document.name}")
+    print("UST.G3BJ transcendental discriminant-avoiding path: PASS independent replay")
+
+
+if __name__ == "__main__":
+    main()

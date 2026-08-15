@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""Build a canonical first-order eta9 coefficient repair for the second H graph."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ad_fixed_fq_second_h_graph_obstruction as g3ad
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "state" / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json"
+OUT = ROOT / "state" / "ust_g3ae_second_h_joint_coefficient_lift.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def monomials(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree, -1, -1)
+        for y_power in range(degree - x_power, -1, -1)
+    ]
+
+
+def coefficient_basis() -> list[dict[str, object]]:
+    rows = []
+    for coordinate in range(3):
+        for kind, degree in (
+            ("base_degree9", 9),
+            ("K3_sheet_times_degree6", 6),
+        ):
+            for powers in monomials(degree):
+                rows.append(
+                    {
+                        "target_coordinate": coordinate,
+                        "basis_kind": kind,
+                        "powers_xyz": list(powers),
+                    }
+                )
+    require(len(rows) == 249, "eta9 coefficient dimension")
+    return rows
+
+
+def graph_data(packet: dict, ring: g3ad.QuotientRing) -> dict[str, object]:
+    embedded = packet["selected_second_H_graph"]["embedded_mod1012_data"]
+    source = {
+        name: ring.element(value)
+        for name, value in embedded["source_coordinates_mod1012_in_gamma_basis"].items()
+    }
+    return {
+        "source": source,
+        "P": [ring.element(value) for value in embedded["P_mod1012_in_gamma_basis"]],
+        "Q": [ring.element(value) for value in embedded["Q_mod1012_in_gamma_basis"]],
+        "S": [ring.element(value) for value in embedded["S_mod1012_in_gamma_basis"]],
+        "k": ring.element(embedded["Fermat_k_mod1012_in_gamma_basis"]),
+        "h": [
+            ring.element(value)
+            for value in packet["selected_second_H_graph"]["line_sextic_mod1012_in_gamma_basis"]
+        ],
+    }
+
+
+def target_coordinates(data: dict, ring: g3ad.QuotientRing):
+    q_squared = g3ad.p_power(data["Q"], 2, ring)
+    even = g3ad.p_scale(q_squared, ring.constant(12), ring)
+    odd = g3ad.p_scale(data["S"], data["k"], ring)
+    third = g3ad.p_scale(
+        g3ad.p_mul(data["P"], data["Q"], ring), ring.constant(6), ring
+    )
+    return [
+        (even, g3ad.p_neg(odd, ring)),
+        (even, odd),
+        (third, [ring.zero]),
+    ]
+
+
+def column_for_basis(
+    basis: dict[str, object],
+    data: dict,
+    targets,
+    ring: g3ad.QuotientRing,
+) -> list[g3ad.Element]:
+    source = data["source"]
+    monomial = g3ad.restrict_base_monomial(
+        basis["powers_xyz"], source["r"], source["w"], ring
+    )
+    if basis["basis_kind"] == "base_degree9":
+        component = (monomial, [ring.zero])
+    else:
+        require(
+            basis["basis_kind"] == "K3_sheet_times_degree6",
+            "coefficient basis kind",
+        )
+        component = ([ring.zero], monomial)
+    even, odd = g3ad.multiply_sheet_pairs(
+        component,
+        targets[int(basis["target_coordinate"])],
+        data["h"],
+        ring,
+    )
+    return g3ad.p_pad(even, 16, ring) + g3ad.p_pad(odd, 16, ring)
+
+
+def rref_solve(
+    matrix: list[list[g3ad.Element]],
+    rhs: list[g3ad.Element],
+    ring: g3ad.QuotientRing,
+) -> tuple[list[g3ad.Element], list[int]]:
+    rows = [list(row) + [value] for row, value in zip(matrix, rhs)]
+    row_count = len(rows)
+    column_count = len(matrix[0])
+    pivot_columns = []
+    pivot_row = 0
+    for column in range(column_count):
+        selected = next(
+            (row for row in range(pivot_row, row_count) if rows[row][column] != ring.zero),
+            None,
+        )
+        if selected is None:
+            continue
+        rows[pivot_row], rows[selected] = rows[selected], rows[pivot_row]
+        inverse = ring.inverse_field(rows[pivot_row][column])
+        rows[pivot_row] = [ring.mul(value, inverse) for value in rows[pivot_row]]
+        for row in range(row_count):
+            if row == pivot_row or rows[row][column] == ring.zero:
+                continue
+            factor = rows[row][column]
+            rows[row] = [
+                ring.sub(value, ring.mul(factor, pivot_value))
+                for value, pivot_value in zip(rows[row], rows[pivot_row])
+            ]
+        pivot_columns.append(column)
+        pivot_row += 1
+        if pivot_row == row_count:
+            break
+
+    for row in rows:
+        if all(value == ring.zero for value in row[:column_count]):
+            require(row[-1] == ring.zero, "consistent restriction system")
+    solution = [ring.zero] * column_count
+    for row, column in enumerate(pivot_columns):
+        solution[column] = rows[row][-1]
+    return solution, pivot_columns
+
+
+def matrix_vector(
+    matrix: list[list[g3ad.Element]],
+    vector: list[g3ad.Element],
+    ring: g3ad.QuotientRing,
+) -> list[g3ad.Element]:
+    return [
+        sum_field(
+            (ring.mul(entry, coefficient) for entry, coefficient in zip(row, vector)),
+            ring,
+        )
+        for row in matrix
+    ]
+
+
+def sum_field(values, ring: g3ad.QuotientRing) -> g3ad.Element:
+    result = ring.zero
+    for value in values:
+        result = ring.add(result, value)
+    return result
+
+
+def corrected_components(
+    packet: dict,
+    basis: list[dict[str, object]],
+    correction: list[g3ad.Element],
+    ring_p: g3ad.QuotientRing,
+    ring_p2: g3ad.QuotientRing,
+):
+    by_key = {
+        (
+            row["target_coordinate"],
+            row["basis_kind"],
+            tuple(row["powers_xyz"]),
+        ): ring_p2.element(row["gamma_coefficients_ascending"])
+        for row in packet["fixed_FQ"]["nonzero_gamma_rows"]
+    }
+    components = [([ring_p2.zero], [ring_p2.zero]) for _ in range(3)]
+    for basis_row, delta in zip(basis, correction):
+        key = (
+            basis_row["target_coordinate"],
+            basis_row["basis_kind"],
+            tuple(basis_row["powers_xyz"]),
+        )
+        coefficient = by_key.get(key, ring_p2.zero)
+        lifted_delta = ring_p2.scale(ring_p2.element(delta), g3ad.P)
+        coefficient = ring_p2.add(coefficient, lifted_delta)
+        if coefficient == ring_p2.zero:
+            continue
+        data_p2 = graph_data(packet, ring_p2)
+        monomial = g3ad.restrict_base_monomial(
+            basis_row["powers_xyz"],
+            data_p2["source"]["r"],
+            data_p2["source"]["w"],
+            ring_p2,
+        )
+        restricted = g3ad.p_scale(monomial, coefficient, ring_p2)
+        coordinate = int(basis_row["target_coordinate"])
+        even, odd = components[coordinate]
+        if basis_row["basis_kind"] == "base_degree9":
+            even = g3ad.p_add(even, restricted, ring_p2)
+        else:
+            odd = g3ad.p_add(odd, restricted, ring_p2)
+        components[coordinate] = (even, odd)
+    return components
+
+
+def main() -> None:
+    packet = json.loads(SOURCE.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AD", "G3AD source")
+    relation = packet["completion_ring"]["gamma_relation_coefficients_ascending"]
+    ring_p = g3ad.QuotientRing(g3ad.P, relation)
+    ring_p2 = g3ad.QuotientRing(g3ad.MODULUS, relation)
+    basis = coefficient_basis()
+
+    data_p = graph_data(packet, ring_p)
+    targets_p = target_coordinates(data_p, ring_p)
+    columns = [column_for_basis(row, data_p, targets_p, ring_p) for row in basis]
+    matrix = [
+        [columns[column][row] for column in range(len(columns))]
+        for row in range(32)
+    ]
+    obstruction = [
+        ring_p.element(row["gamma_coefficients_mod101"])
+        for row in packet["restriction_test"]["first_order_rows"]
+    ]
+    rhs = [ring_p.neg(value) for value in obstruction]
+    correction, pivots = rref_solve(matrix, rhs, ring_p)
+    require(matrix_vector(matrix, correction, ring_p) == rhs, "correction solves system")
+
+    data_p2 = graph_data(packet, ring_p2)
+    targets_p2 = target_coordinates(data_p2, ring_p2)
+    components = corrected_components(packet, basis, correction, ring_p, ring_p2)
+    restriction = ([ring_p2.zero], [ring_p2.zero])
+    for component, target in zip(components, targets_p2):
+        contribution = g3ad.multiply_sheet_pairs(
+            component, target, data_p2["h"], ring_p2
+        )
+        restriction = (
+            g3ad.p_add(restriction[0], contribution[0], ring_p2),
+            g3ad.p_add(restriction[1], contribution[1], ring_p2),
+        )
+    dense_restriction = (
+        g3ad.p_pad(restriction[0], 16, ring_p2)
+        + g3ad.p_pad(restriction[1], 16, ring_p2)
+    )
+    require(all(value == ring_p2.zero for value in dense_restriction), "corrected restriction mod p2")
+
+    sparse_correction = [
+        {
+            "coefficient_index": index,
+            **basis[index],
+            "gamma_coefficients_mod101": list(value),
+        }
+        for index, value in enumerate(correction)
+        if value != ring_p.zero
+    ]
+    matrix_rows = [[list(value) for value in row] for row in matrix]
+    packet_out = {
+        "schema": "mtt.unified-source.g3ae-second-h-joint-coefficient-lift.v1",
+        "theorem_id": "UST.G3AE",
+        "status": "CLOSED_EXACT_SECOND_H_FIRST_ORDER_JOINT_GRAPH_COEFFICIENT_LIFT",
+        "inputs": {
+            "local_G3AD_packet": {
+                "path": "state/ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json",
+                "sha256": sha256(SOURCE),
+            }
+        },
+        "linear_system": {
+            "field": "F_101[gamma]/(M)",
+            "shape": [32, 249],
+            "row_order": "even x^0..x^15, then odd x^0..x^15",
+            "column_basis": basis,
+            "matrix_sha256": canonical_hash(matrix_rows),
+            "rhs_sha256": canonical_hash([list(value) for value in rhs]),
+            "rank": len(pivots),
+            "pivot_columns": pivots,
+            "nullity": len(basis) - len(pivots),
+            "canonical_rule": "RREF in displayed column order with every free variable set to zero",
+            "consistent": True,
+        },
+        "canonical_correction": {
+            "sparse_rows": sparse_correction,
+            "nonzero_coefficient_count": len(sparse_correction),
+            "full_solution_sha256": canonical_hash([list(value) for value in correction]),
+            "matrix_times_correction_equals_negative_G3AD_obstruction": True,
+        },
+        "joint_lift_result": {
+            "coefficient_formula": "F_joint=F_Q+101*delta_F mod 101^2",
+            "selected_second_H_graph_unchanged_from_G3AD": True,
+            "restriction_zero_mod1012": True,
+            "all_32_restriction_rows_zero_mod1012": True,
+        },
+        "theorem": {
+            "name": "SecondHFirstOrderJointGraphCoefficientLiftTheorem",
+            "statement": (
+                "The 32 by 249 restriction derivative on the selected second-H graph has the displayed rank, "
+                "and the negative G3AD first-order defect lies in its image. The canonical RREF correction "
+                "therefore produces F_joint=F_Q+101 delta_F whose restriction to the unchanged selected graph "
+                "vanishes modulo 101^2. Thus G3AD obstructs only the independently chosen fixed coefficient "
+                "lift, not first-order joint graph/coefficient deformation."
+            ),
+            "tier": "CLOSED_EXACT_FINITE_RING_FIRST_ORDER_CONSTRUCTIVE_LIFT",
+        },
+        "frontier_delta": {
+            "fixed_FQ_route_remains_retired": True,
+            "second_H_joint_graph_coefficient_lift_exists_mod1012": True,
+            "all_three_graph_joint_lift_constructed": False,
+            "characteristic_zero_graph_preserving_member_selected": False,
+            "beta_C_computed": False,
+            "next_required_object": (
+                "Add compatible first-H and 4H graph lifts, solve the simultaneous union restriction system, "
+                "and iterate the joint lift before applying the beta_C normal functional."
+            ),
+        },
+        "scope": {
+            "canonical_relative_to_displayed_basis_not_intrinsic_MTT_selection": True,
+            "proves_smoothness_of_corrected_eta9_member": False,
+            "proves_convergence_to_characteristic_zero": False,
+            "preserves_first_H_or_4H_graphs": False,
+            "computes_beta_C": False,
+            "constructs_visible_V3_HYM": False,
+            "closes_B_ETA9_01": False,
+            "closes_B_ETA9_02": False,
+            "closes_B_HS_01": False,
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_physics_inputs": 0,
+            "free_linear_variables_fixed_by_algorithmic_rule": len(basis) - len(pivots),
+        },
+        "guardrails": {
+            "claims_the_RREF_rule_is_MTT_selected": False,
+            "claims_all_three_graphs_are_lifted": False,
+            "claims_a_characteristic_zero_member_is_emitted": False,
+            "claims_beta_C_is_decided": False,
+            "claims_visible_V3_or_HYM": False,
+            "uses_observed_physics_values": False,
+            "adds_fitted_parameter": False,
+        },
+    }
+    OUT.write_text(json.dumps(packet_out, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AE second-H joint coefficient lift: BUILT")
+    print(f"restriction derivative rank: {len(pivots)}/32; nullity: {len(basis)-len(pivots)}")
+    print(f"canonical nonzero correction coefficients: {len(sparse_correction)}")
+    print("corrected restriction modulo 101^2: ZERO")
+
+
+if __name__ == "__main__":
+    main()

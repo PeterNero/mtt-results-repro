@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Promote the exact H11 GF(11) endpoint initializer obstruction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bk_correction_pencil_operator_compiler as compiler
+import probe_ust_g3bl_endpoint_chart_unit as probe
+
+
+ROOT = Path(__file__).resolve().parent
+PROBE = ROOT / "evidence" / "ust_g3bl" / "g3bk_H11_endpoint_chart.probe.json"
+OUT = ROOT / "state" / "ust_g3bl_h11_proof_prime_initializer_nogo.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def main() -> None:
+    mld = probe.resolve_mld()
+    probe_packet = load(PROBE)
+    require(probe_packet["target"] == "H11" and probe_packet["prime"] == PRIME, "probe target")
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bk_path = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+    g3bi = load(g3bi_path)
+    g3bk = load(g3bk_path)
+    require(all(g3bi["checks"].values()) and all(g3bk["checks"].values()), "G3BI/G3BK checks")
+
+    update_record = g3bk["good_reduction_family_updates"]["H11"]["matrix"]
+    update_path = ROOT / update_record["path"]
+    update = sparse.load_npz(update_path).tocsc()
+    active_columns = np.flatnonzero(np.diff(update.indptr)).astype(np.int32)
+    require(active_columns.size == 1186, "active H11 correction columns")
+
+    coordinates_path = ROOT / probe_packet["coordinates_path"]
+    coordinates, quotient_units, image_rank = probe.read_coordinates(coordinates_path)
+    require(coordinates.shape == (update.shape[0], active_columns.size), "active coordinate shape")
+    require(image_rank == update.shape[1], "active image rank")
+    selected_rows = quotient_units + active_columns
+    lemma = coordinates[selected_rows, :].toarray().astype(np.int16)
+    lemma[np.arange(active_columns.size), np.arange(active_columns.size)] += 1
+    lemma %= PRIME
+    rank, determinant = probe.determinant_and_rank_mod11(lemma)
+    require(rank == active_columns.size - 1 and determinant == 0, "corank-one determinant lemma")
+    left_null = probe.null_vector_mod11(lemma.T)
+    right_null = probe.null_vector_mod11(lemma)
+    full_right_null = np.asarray(coordinates.astype(np.int64) @ right_null, dtype=np.int64).ravel() % PRIME
+    require(np.count_nonzero(full_right_null) == 4520, "full chart right null support")
+
+    factor_packet_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H11.packet.json"
+    csc_packet_path = mld / "q79_eta9_original_jacobian_macaulay_H11_csc.packet.json"
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json"
+    factor_packet = load(factor_packet_path)
+    csc_packet = load(csc_packet_path)
+    macaulay = load(macaulay_path)
+    require(all(factor_packet["checks"].values()), "factorization checks")
+    require(all(csc_packet["checks"].values()), "CSC checks")
+    require(all(macaulay["checks"].values()), "Macaulay checks")
+    selected_original = np.asarray(
+        factor_packet["exact_coordinate_identity"]["selected_original_Jacobian_columns"],
+        dtype=np.int32,
+    )
+    require(selected_original.size == update.shape[1], "selected update-column count")
+    correction = compiler.correction_terms(g3bi)
+    derivatives = compiler.derivative_generators(correction)
+    all_columns_factor = {
+        "exact_coordinate_identity": {
+            "selected_original_Jacobian_columns": list(range(int(macaulay["matrix"]["shape"][1])))
+        }
+    }
+    full_update = compiler.build_update(macaulay, all_columns_factor, derivatives)
+    base_matrix_path = Path(csc_packet["inputs"]["Macaulay_matrix"]["path"])
+    base_matrix = sparse.load_npz(base_matrix_path).tocsc()
+    require(base_matrix.shape == full_update.shape, "full update shape")
+    require(base_matrix.shape[0] == update.shape[0], "common H11 row space")
+    extras = np.setdiff1d(
+        np.arange(base_matrix.shape[1], dtype=np.int32), selected_original, assume_unique=True
+    )
+    require(extras.size == 1071, "all unused original-Jacobian columns")
+
+    extra_coordinates_path = ROOT / probe_packet["one_column_repair"]["extra_coordinates_path"]
+    extra_coordinates, extra_quotient, extra_image = probe.read_coordinates(extra_coordinates_path)
+    require(extra_quotient == quotient_units and extra_image == image_rank, "extra coordinate typing")
+    require(extra_coordinates.shape == (update.shape[0], extras.size), "extra coordinate shape")
+    left_evaluations = np.asarray(
+        left_null.astype(np.int64) @ extra_coordinates[selected_rows, :].astype(np.int64),
+        dtype=np.int64,
+    ).ravel() % PRIME
+    require(np.count_nonzero(left_evaluations) == 0, "no unused column repairs the endpoint")
+    require(np.count_nonzero(left_null) == 580, "left null support")
+    require(np.count_nonzero(right_null) == 1064, "determinant-lemma right null support")
+
+    checks = {
+        "the_B89_H11_initializer_chart_is_invertible_before_the_correction": True,
+        "the_endpoint_update_has1186_active_columns": True,
+        "the1186_by1186_determinant_lemma_core_has_exact_rank1185_mod11": True,
+        "the_frozen5439_column_endpoint_chart_has_exact_corank_one_mod11": True,
+        "all1071_unused_original_Jacobian_columns_are_tested": True,
+        "every_unused_column_is_annihilated_by_the_endpoint_left_null_functional": True,
+        "the_full6510_column_augmented_endpoint_presentation_still_has_rank5438_mod11": True,
+        "GF11_gamma3_is_rejected_only_as_the_H11_endpoint_initializer_place": True,
+    }
+    require(all(checks.values()), "G3BL promotion checks")
+    packet = {
+        "schema": "mtt.unified-source.g3bl-h11-proof-prime-initializer-nogo.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_GF11_H11_ENDPOINT_FULL_PRESENTATION_CORANK_ONE_ALTERNATE_INITIALIZER_PLACE_REQUIRED",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "fiber": {"prime": PRIME, "gamma": 3, "pencil_parameter": 1, "target": "H11"},
+        "inputs": {
+            "probe": record(PROBE),
+            "G3BI": record(g3bi_path),
+            "G3BK": record(g3bk_path),
+            "H11_update": record(update_path),
+            "active_rhs": record(ROOT / probe_packet["rhs_path"]),
+            "active_coordinates": record(coordinates_path),
+            "active_solver_log": record(ROOT / probe_packet["solver_log"]),
+            "unused_rhs": record(ROOT / probe_packet["one_column_repair"]["extra_rhs_path"]),
+            "unused_coordinates": record(extra_coordinates_path),
+            "unused_solver_log": record(ROOT / probe_packet["one_column_repair"]["extra_solver_log"]),
+            "H11_factorization": external_record(factor_packet_path, mld),
+            "H11_CSC": external_record(csc_packet_path, mld),
+            "H11_Macaulay": external_record(macaulay_path, mld),
+            "H11_base_matrix": external_record(base_matrix_path, mld),
+        },
+        "determinant_lemma": {
+            "shape": [1186, 1186],
+            "rank_mod11": rank,
+            "determinant_mod11": determinant,
+            "left_null_support": int(np.count_nonzero(left_null)),
+            "right_null_support": int(np.count_nonzero(right_null)),
+        },
+        "full_endpoint_presentation": {
+            "ambient_rows": int(update.shape[0]),
+            "selected_chart_columns": int(update.shape[0]),
+            "unused_original_Jacobian_columns": int(extras.size),
+            "all_augmented_columns": int(update.shape[0] + extras.size),
+            "rank_mod11": int(update.shape[0] - 1),
+            "corank": 1,
+            "right_null_support_in_selected_chart": int(np.count_nonzero(full_right_null)),
+            "unused_column_left_null_evaluations_nonzero": int(np.count_nonzero(left_evaluations)),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_characteristic_zero_H11_endpoint_is_singular": False,
+            "claims_the_G3BI_geometric_endpoint_is_singular": False,
+            "claims_no_alternate_good_prime_or_characteristic_zero_initializer_exists": False,
+            "claims_H02_has_the_same_endpoint_obstruction": False,
+        },
+        "theorem": {
+            "name": "ustG3blH11ProofPrimeInitializerNogo",
+            "tier": "CLOSED_EXACT_GOOD_REDUCTION_PRESENTATION_NOGO",
+            "statement": (
+                "At GF(11), gamma=3 and a=1, the H11 endpoint determinant-lemma core has "
+                "rank 1185 of 1186. Restoring every one of the 1071 unused original-Jacobian "
+                "columns does not increase rank, so the full 5439 by 6510 augmented endpoint "
+                "presentation has rank 5438. Therefore this proof place cannot initialize H11 "
+                "transport at the G3BI endpoint; an alternate good place or a characteristic-zero "
+                "initializer is required."
+            ),
+        },
+        "next_required_object": (
+            "Construct an H11 endpoint initializer at an alternate split good prime or directly "
+            "over characteristic zero, then test the H02 endpoint presentation independently."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BL H11 proof-prime initializer no-go: PASS")
+    print(
+        f"lemma_rank={rank}/1186 augmented_rank={update.shape[0] - 1}/{update.shape[0]} "
+        f"unused_columns={extras.size} repairs={np.count_nonzero(left_evaluations)}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

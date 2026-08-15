@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""Independently verify the G3FJ K3 normal matrix factorization."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import runtime
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fj/H02.component20.k3_normal_matrix_factorization.json"
+EXPECTED_STATUS = (
+    "CLOSED_EXACT_K3_ROOT_NORMAL_MATRIX_FACTORIZATION_SELECTED_CONTRACTION_OPEN"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def local_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"local input exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"local size: {path.name}")
+    require(sha256(path) == row["sha256"], f"local hash: {path.name}")
+    return path
+
+
+def external_path(row: dict[str, object]) -> Path:
+    mld = runtime.resolve_mld()
+    repository = mld if mld.name == row["repository"] else mld.parent / str(row["repository"])
+    path = repository / str(row["repository_relative_path"])
+    require(path.is_file(), f"external input exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"external size: {path.name}")
+    require(sha256(path) == row["sha256"], f"external hash: {path.name}")
+    return path
+
+
+def source_monomials(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (a, b, degree - a - b)
+        for a in reversed(range(degree + 1))
+        for b in reversed(range(degree - a + 1))
+    ]
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (a, b, degree - a - b)
+        for a in range(degree + 1)
+        for b in range(degree - a + 1)
+    ]
+
+
+def source(
+    coefficients: list[list[int]], theta: int, coordinate: int
+) -> sp.Poly:
+    x, y, z, w = sp.symbols("x y z w")
+    offset = 83 * theta
+    expression = sum(
+        int(coefficients[offset + local][coordinate])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(source_monomials(9))
+    )
+    expression += w * sum(
+        int(coefficients[offset + 55 + local][coordinate])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(source_monomials(6))
+    )
+    return sp.Poly(expression, x, y, z, w, domain=sp.ZZ)
+
+
+def main() -> None:
+    packet = load(CERTIFICATE)
+    require(packet["status"] == EXPECTED_STATUS, "status")
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    g3bi_path = local_path(packet["inputs"]["G3BI"])
+    local_path(packet["inputs"]["G3FI"])
+    base_path = external_path(packet["inputs"]["q79_K3_base"])
+    external_path(packet["inputs"]["characteristic_zero_oracle"])
+    artifact = local_path(packet["matrix_factorization"]["artifact"])
+
+    g3bi = load(g3bi_path)
+    base = load(base_path)
+    data = np.load(artifact, allow_pickle=False)
+    h4_rows = data["H4_coefficients"].astype(np.int64)
+    b6_rows = data["B6_gamma_coordinates"].astype(np.int64)
+    d7_rows = data["D7_gamma_coordinates"].astype(np.int64)
+    require(h4_rows.shape == (15,), "H4 shape")
+    require(b6_rows.shape == (28, 6), "B6 shape")
+    require(d7_rows.shape == (36, 6), "D7 shape")
+    require(
+        np.array_equal(
+            data["degree4_exponents"], np.asarray(homogeneous_exponents(4))
+        ),
+        "degree4 order",
+    )
+
+    x, y, z, w = sp.symbols("x y z w")
+    locals_ = {"x": x, "y": y, "z": z, "w": w}
+    explicit = base["explicit_K3"]
+    q = sp.sympify(explicit["Q2"], locals=locals_)
+    g3 = sp.sympify(explicit["G3"], locals=locals_)
+    f6 = sp.sympify(explicit["F6_equals_G3_squared_plus_Q2_H4"], locals=locals_)
+    k3 = sp.Poly(w**2 - f6, x, y, z, w, domain=sp.ZZ)
+    h4 = sum(
+        int(h4_rows[local])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(homogeneous_exponents(4))
+    )
+    require(
+        sp.expand((w + g3) * (w - g3) + q * h4 - k3.as_expr()) == 0,
+        "K3 root-normal identity",
+    )
+    require(
+        sp.expand(h4 + sp.sympify(explicit["H4"], locals=locals_)) == 0,
+        "H4 sign relative to base convention",
+    )
+    require(sp.gcd(sp.Poly(q, x, y, z), sp.Poly(h4, x, y, z)).as_expr() == 1, "q-H4 gcd")
+
+    r = w + g3
+    rbar = w - g3
+    m = sp.Matrix([[r, q], [-h4, rbar]])
+    n = sp.Matrix([[rbar, -q], [h4, r]])
+    target = sp.eye(2) * k3.as_expr()
+    require(all(sp.expand(v) == 0 for v in m * n - target), "M*N")
+    require(all(sp.expand(v) == 0 for v in n * m - target), "N*M")
+
+    coefficients = g3bi["selected_source"]["coefficient_vectors"]
+    for coordinate in range(6):
+        b6 = sum(
+            int(b6_rows[local, coordinate])
+            * x ** exponent[0]
+            * y ** exponent[1]
+            * z ** exponent[2]
+            for local, exponent in enumerate(homogeneous_exponents(6))
+        )
+        d7 = sum(
+            int(d7_rows[local, coordinate])
+            * x ** exponent[0]
+            * y ** exponent[1]
+            * z ** exponent[2]
+            for local, exponent in enumerate(homogeneous_exponents(7))
+        )
+        require(
+            sp.Poly(r * b6 + q * d7, x, y, z, w, domain=sp.ZZ)
+            == source(coefficients, 0, coordinate)
+            - source(coefficients, 1, coordinate),
+            f"source binding coordinate {coordinate}",
+        )
+
+    require(sp.gcd(sp.Poly(q, x, y, z), sp.Poly(g3, x, y, z)).as_expr() == 1, "q-G3 gcd")
+    require(sp.Poly(g3, x, y, z).total_degree() == 3, "rbar nonunit boundary")
+    print(
+        "UST.G3FJ independent verification: PASS "
+        "M*N=N*M=K3*I2 source_coordinates=6 no_global_rbar_inverse"
+    )
+
+
+if __name__ == "__main__":
+    main()

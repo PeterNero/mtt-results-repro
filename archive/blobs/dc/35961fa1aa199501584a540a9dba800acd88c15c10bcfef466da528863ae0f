@@ -1,0 +1,983 @@
+#!/usr/bin/env python3
+"""Execute the selected G3GJ toric return at (p, gamma) = (21817, 5).
+
+The calculation is deliberately split into an expensive, reusable endpoint
+Jacobian-basis phase and a source-specific return phase.  The Cayley Jacobian
+has the expected four-dimensional multiplier-zero component; the calculation
+uses its exact graded normal forms and does not require an Artinian quotient.
+A completed basis is hash checked before reuse.  A fully written checkpoint
+may be recovered only when its script and complete marker log validate.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3gk"
+OUT = ROOT / "state" / "ust_g3gk_same_field_endpoint_griffiths_dwork.packet.json"
+PROGRESS = EVIDENCE / "progress.json"
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3BT = ROOT / "state" / "ust_g3bt_h02_endpoint_action_one_split_prime.packet.json"
+G3GJ = ROOT / "state" / "ust_g3gj_k6_h02_source_injection.packet.json"
+G3GJ_QUOTIENT = (
+    ROOT / "evidence" / "ust_g3gj" / "H02.p21817.g5.K6_C_section_source.quotient.npy"
+)
+
+PRIME = 21817
+ROOT_VALUE = 5
+SOURCE_DIMENSION = 18
+AMBIENT_DIMENSION = 42706
+QUOTIENT_DIMENSION = 248
+WEIGHTS = (1, 1, 1, 3, 1, 1, 1, 6, 9, 2)
+VARIABLES = ("x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s")
+
+BASIS_SCRIPT = EVIDENCE / "endpoint_basis.sing"
+BASIS_RAW = EVIDENCE / "endpoint_basis.singular.out"
+BASIS_CACHE = EVIDENCE / "endpoint_basis.ssi"
+BASIS_PARTIAL = EVIDENCE / "endpoint_basis.partial.ssi"
+BASIS_RESULT = EVIDENCE / "endpoint_basis.result.json"
+BASIS_SMOKE_SCRIPT = EVIDENCE / "endpoint_header_smoke.sing"
+BASIS_SMOKE_RAW = EVIDENCE / "endpoint_header_smoke.singular.out"
+RETURN_SMOKE_SCRIPT = EVIDENCE / "K6_source_parse_smoke.sing"
+RETURN_SMOKE_RAW = EVIDENCE / "K6_source_parse_smoke.singular.out"
+
+RETURN_SCRIPT = EVIDENCE / "K6_same_field_return.sing"
+RETURN_RAW = EVIDENCE / "K6_same_field_return.singular.out"
+RETURN_COEFFICIENTS = EVIDENCE / "K6_same_field_return_coefficients.ssi"
+RETURN_COEFFICIENTS_PARTIAL = EVIDENCE / "K6_same_field_return_coefficients.partial.ssi"
+RETURN_ROWS = EVIDENCE / "K6_same_field_return_rows.ssi"
+RETURN_ROWS_PARTIAL = EVIDENCE / "K6_same_field_return_rows.partial.ssi"
+POLE_RESIDUAL = EVIDENCE / "K6_same_field_pole_residual.ssi"
+POLE_RESIDUAL_PARTIAL = EVIDENCE / "K6_same_field_pole_residual.partial.ssi"
+
+AMBIENT_MATRIX = EVIDENCE / "K6_same_field_return_ambient.npz"
+AMBIENT_RHS = EVIDENCE / "K6_same_field_return_ambient.rhs.bin"
+CHART_SOLUTION = EVIDENCE / "K6_same_field_return_chart.solution.bin"
+CHART_LOG = EVIDENCE / "K6_same_field_return_chart.solve.log"
+QUOTIENT_MATRIX = EVIDENCE / "K6_same_field_return_H02_quotient.npy"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path, *, repository: Path = ROOT) -> dict[str, Any]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    require(path.is_file(), f"external artifact exists: {path}")
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+    os.replace(temporary, path)
+
+
+def update_progress(phase: str, **extra: Any) -> None:
+    payload = {
+        "schema": "mtt.unified-source.g3gk-progress.v1",
+        "phase": phase,
+        **extra,
+    }
+    atomic_json(PROGRESS, payload)
+    print(f"G3GK progress phase={phase}", flush=True)
+
+
+def git_head() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return completed.stdout.strip()
+
+
+def evaluate_gamma(coordinates: list[int] | tuple[int, ...]) -> int:
+    value = 0
+    for coordinate in reversed(coordinates):
+        value = (value * ROOT_VALUE + int(coordinate)) % PRIME
+    return value
+
+
+def monomial_xyz(exponent: tuple[int, int, int], *, sheet: bool = False) -> str:
+    pieces = []
+    for variable, power in zip(("x", "y", "z"), exponent, strict=True):
+        if power == 1:
+            pieces.append(variable)
+        elif power > 1:
+            pieces.append(f"{variable}^{power}")
+    if sheet:
+        pieces.append("w")
+    return "*".join(pieces) if pieces else "1"
+
+
+def scaled_term(coefficient: int, monomial: str) -> str:
+    coefficient %= PRIME
+    if coefficient == 0:
+        return ""
+    if monomial == "1":
+        return str(coefficient)
+    if coefficient == 1:
+        return monomial
+    return f"{coefficient}*{monomial}"
+
+
+def endpoint_coefficient_rows(g3bi: dict[str, Any], cayley: Any) -> list[str]:
+    vectors = g3bi["selected_source"]["coefficient_vectors"]
+    require(len(vectors) == 249, "249 selected endpoint coefficient vectors")
+    degree9 = [tuple(int(value) for value in row) for row in cayley.monomials(9)]
+    degree6 = [tuple(int(value) for value in row) for row in cayley.monomials(6)]
+    require(len(degree9) == 55 and len(degree6) == 28, "55+28 spectral basis")
+    result = []
+    for theta in range(3):
+        terms = []
+        offset = theta * 83
+        for local, exponent in enumerate(degree9):
+            term = scaled_term(evaluate_gamma(vectors[offset + local]), monomial_xyz(exponent))
+            if term:
+                terms.append(term)
+        for local, exponent in enumerate(degree6):
+            term = scaled_term(
+                evaluate_gamma(vectors[offset + 55 + local]),
+                monomial_xyz(exponent, sheet=True),
+            )
+            if term:
+                terms.append(term)
+        require(terms, f"nonzero endpoint A{theta}")
+        result.append("+".join(terms))
+    return result
+
+
+def correction_row(g3bi: dict[str, Any]) -> str:
+    terms = []
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        coefficient = evaluate_gamma(row["correction_gamma_coordinates"])
+        monomial = monomial_xyz(tuple(int(value) for value in row["source_monomial"]))
+        term = scaled_term(coefficient, monomial)
+        if term:
+            terms.append(term)
+    require(terms, "nonzero selected correction row")
+    return "+".join(terms)
+
+
+def source_rows(
+    quotient: np.ndarray, h02: dict[str, Any], ordinary: Any
+) -> list[str]:
+    require(quotient.shape == (QUOTIENT_DIMENSION, SOURCE_DIMENSION), "G3GJ quotient shape")
+    exponents = [
+        tuple(int(value) for value in row) for row in h02["basis_exponent_vectors"]
+    ]
+    require(len(exponents) == QUOTIENT_DIMENSION, "248 H02 basis exponents")
+    result = []
+    for column in range(SOURCE_DIMENSION):
+        terms = []
+        for row in np.flatnonzero(quotient[:, column] % PRIME):
+            term = scaled_term(
+                int(quotient[row, column]), ordinary.monomial_text(exponents[int(row)])
+            )
+            if term:
+                terms.append(term)
+        require(terms, f"nonzero G3GJ quotient source column {column}")
+        result.append("+".join(terms))
+    return result
+
+
+def model_header(base: dict[str, Any], endpoint_rows: list[str]) -> str:
+    ordering = "wp(" + ",".join(str(value) for value in WEIGHTS) + ")"
+    f6 = base["explicit_K3"]["F6_equals_G3_squared_plus_Q2_H4"].replace("**", "^")
+    return "\n".join(
+        [
+            "option(redSB);",
+            f"ring r={PRIME},({','.join(VARIABLES)}),{ordering};",
+            f"number gamma={ROOT_VALUE};",
+            "number gammaRelation=0;",
+            f"poly F6={f6};",
+            "poly K=w^2-F6;",
+            "poly E=t0^3+t1^3+t2^3;",
+            f"poly A0={endpoint_rows[0]};",
+            f"poly A1={endpoint_rows[1]};",
+            f"poly A2={endpoint_rows[2]};",
+            "poly C=A0*t0+A1*t1+A2*t2;",
+            "poly Phi=u*K+v*E+s*C;",
+            "ideal J=jacob(Phi);",
+        ]
+    )
+
+
+def degree_check_procedure() -> str:
+    return r'''
+proc coxDegreeCheck(poly inputPoly, int targetH, int targetL, int targetXi)
+{
+  poly remaining=inputPoly;
+  intvec exponent;
+  int degreeH; int degreeL; int degreeXi;
+  while (remaining!=0)
+  {
+    exponent=leadexp(remaining);
+    degreeH=exponent[1]+exponent[2]+exponent[3]+3*exponent[4]-6*exponent[8]-9*exponent[10];
+    degreeL=exponent[5]+exponent[6]+exponent[7]-3*exponent[9]-exponent[10];
+    degreeXi=exponent[8]+exponent[9]+exponent[10];
+    if ((degreeH!=targetH) || (degreeL!=targetL) || (degreeXi!=targetXi)) { return(0); }
+    remaining=remaining-lead(remaining);
+  }
+  return(1);
+}
+'''
+
+
+def basis_script(header: str) -> str:
+    return header + f'''
+// UST.G3GK selected split-place endpoint basis checkpoint.
+ideal G=std(J);
+int originalResidualZero=1;
+int ji;
+for (ji=1;ji<=size(J);ji++) {{ if (reduce(J[ji],G)!=0) {{ originalResidualZero=0; }} }}
+int quotientDimension=vdim(G);
+write("ssi:w {runtime.wsl_path(BASIS_PARTIAL)}",G);
+print("G3GK_BASIS_PRIME={PRIME}");
+print("G3GK_BASIS_GAMMA={ROOT_VALUE}");
+print("G3GK_BASIS_J_GENERATORS="+string(size(J)));
+print("G3GK_BASIS_GB_SIZE="+string(size(G)));
+print("G3GK_BASIS_AFFINE_DIMENSION="+string(dim(G)));
+print("G3GK_BASIS_QUOTIENT_DIMENSION="+string(quotientDimension));
+print("G3GK_BASIS_ORIGINAL_RESIDUAL_ZERO="+string(originalResidualZero));
+print("G3GK_ENDPOINT_BASIS_PASS");
+quit;
+'''
+
+
+def return_script(
+    header: str,
+    correction: str,
+    sources: list[str],
+    lift_bound: int,
+) -> str:
+    coefficient_degrees = [
+        (10, 1, 2),
+        (10, 1, 2),
+        (10, 1, 2),
+        (12, 1, 2),
+        (9, 2, 2),
+        (9, 2, 2),
+        (9, 2, 2),
+        (3, 1, 3),
+        (9, -2, 3),
+        (0, 0, 3),
+    ]
+    degree_checks = "\n".join(
+        f"    if (coxDegreeCheck(returnCoefficients[{index + 1},ri],{degree[0]},{degree[1]},{degree[2]})==0) {{ coefficientDegreesOK=0; }}"
+        for index, degree in enumerate(coefficient_degrees)
+    )
+    divergence = "+".join(
+        f"diff(returnCoefficients[{index + 1},ri],{variable})"
+        for index, variable in enumerate(VARIABLES)
+    )
+    return header + degree_check_procedure() + f'''
+// UST.G3GK same-field selected K6 Griffiths-Dwork return.
+def cachedBasis=read("ssi:r {runtime.wsl_path(BASIS_CACHE)}");
+ideal G=cachedBasis;
+attrib(G,"isSB",1);
+poly B0={correction};
+poly F1=B0*t0;
+list sourceRows={','.join(sources)};
+ideal poleSixRows;
+int ri; int gi; int si; int active;
+for (ri=1;ri<=size(sourceRows);ri++) {{ poleSixRows[ri]=sourceRows[ri]*s*F1; }}
+list poleSixDivision=division(poleSixRows,G);
+matrix L=poleSixDivision[1];
+matrix poleSixResidual=matrix(poleSixRows)-matrix(G)*L;
+int poleSixResidualZero=1; int poleResidualTerms=0;
+for (ri=1;ri<=size(sourceRows);ri++)
+{{
+  if (poleSixResidual[1,ri]!=0) {{ poleSixResidualZero=0; poleResidualTerms=poleResidualTerms+size(poleSixResidual[1,ri]); }}
+}}
+write("ssi:w {runtime.wsl_path(POLE_RESIDUAL_PARTIAL)}",ideal(poleSixResidual));
+print("G3GK_POLE6_RESIDUAL_ZERO="+string(poleSixResidualZero));
+print("G3GK_POLE6_RESIDUAL_TERMS="+string(poleResidualTerms));
+if (poleSixResidualZero==0)
+{{
+  for (ri=1;ri<=size(sourceRows);ri++) {{ print("G3GK_POLE_RESIDUAL_"+string(ri-1)+"="+string(poleSixResidual[1,ri])); }}
+  print("G3GK_RETURN_NOGO_NONZERO_POLE_RESIDUAL");
+  quit;
+}}
+ideal selectedG;
+intvec selectedIndices;
+int used=0;
+for (gi=1;gi<=size(G);gi++)
+{{
+  active=0;
+  for (ri=1;ri<=size(sourceRows);ri++) {{ if (L[gi,ri]!=0) {{ active=1; }} }}
+  if (active==1) {{ used++; selectedG[used]=G[gi]; selectedIndices[used]=gi; }}
+}}
+matrix LS[used][{SOURCE_DIMENSION}];
+for (si=1;si<=used;si++)
+{{
+  for (ri=1;ri<=size(sourceRows);ri++) {{ LS[si,ri]=L[selectedIndices[si],ri]; }}
+}}
+degBound={lift_bound};
+matrix U;
+matrix T=lift(J,selectedG,U,"std");
+degBound=0;
+matrix transformResidual=matrix(selectedG)*U-matrix(J)*T;
+int transformResidualZero=1; int unitMatrix=1;
+for (si=1;si<=ncols(transformResidual);si++) {{ if (transformResidual[1,si]!=0) {{ transformResidualZero=0; }} }}
+for (ri=1;ri<=nrows(U);ri++)
+{{
+  for (si=1;si<=ncols(U);si++)
+  {{
+    if ((ri==si) && (U[ri,si]!=1)) {{ unitMatrix=0; }}
+    if ((ri!=si) && (U[ri,si]!=0)) {{ unitMatrix=0; }}
+  }}
+}}
+matrix returnCoefficients=T*LS;
+matrix reconstructed=matrix(J)*returnCoefficients;
+matrix sourceMatrix=matrix(poleSixRows);
+int originalIdentity=1; int coefficientDegreesOK=1; int returnDegreesOK=1;
+for (ri=1;ri<=size(sourceRows);ri++)
+{{
+  if (sourceMatrix[1,ri]-reconstructed[1,ri]!=0) {{ originalIdentity=0; }}
+{degree_checks}
+}}
+ideal returnRows;
+int ambientTerms=0;
+for (ri=1;ri<=size(sourceRows);ri++)
+{{
+  returnRows[ri]=-({divergence});
+  ambientTerms=ambientTerms+size(returnRows[ri]);
+  if (coxDegreeCheck(returnRows[ri],9,1,2)==0) {{ returnDegreesOK=0; }}
+}}
+write("ssi:w {runtime.wsl_path(RETURN_COEFFICIENTS_PARTIAL)}",returnCoefficients);
+write("ssi:w {runtime.wsl_path(RETURN_ROWS_PARTIAL)}",returnRows);
+for (ri=1;ri<=size(sourceRows);ri++) {{ print("G3GK_AMBIENT_"+string(ri-1)+"="+string(returnRows[ri])); }}
+print("G3GK_RETURN_PRIME={PRIME}");
+print("G3GK_RETURN_GAMMA={ROOT_VALUE}");
+print("G3GK_RETURN_SOURCE_ROWS="+string(size(sourceRows)));
+print("G3GK_RETURN_GB_SIZE="+string(size(G)));
+print("G3GK_RETURN_USED_GB="+string(used));
+print("G3GK_RETURN_LIFT_BOUND={lift_bound}");
+print("G3GK_RETURN_TRANSFORM_ROWS="+string(nrows(T)));
+print("G3GK_RETURN_TRANSFORM_COLUMNS="+string(ncols(T)));
+print("G3GK_RETURN_U_IDENTITY="+string(unitMatrix));
+print("G3GK_RETURN_TRANSFORM_RESIDUAL_ZERO="+string(transformResidualZero));
+print("G3GK_RETURN_ORIGINAL_IDENTITY="+string(originalIdentity));
+print("G3GK_RETURN_COEFFICIENT_DEGREES_OK="+string(coefficientDegreesOK));
+print("G3GK_RETURN_DEGREES_OK="+string(returnDegreesOK));
+print("G3GK_RETURN_AMBIENT_TERMS="+string(ambientTerms));
+print("G3GK_SAME_FIELD_RETURN_PASS");
+quit;
+'''
+
+
+def marker(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, flags=re.MULTILINE)
+    require(match is not None, f"missing marker {label}")
+    return int(match.group(1))
+
+
+def parse_field_number(text: str) -> int:
+    text = text.strip().strip("()")
+    if "/" in text:
+        numerator_text, denominator_text = text.split("/", 1)
+        numerator = int(numerator_text) % PRIME
+        denominator = int(denominator_text) % PRIME
+        require(denominator != 0, "nonzero finite-field denominator")
+        return numerator * pow(denominator, -1, PRIME) % PRIME
+    return int(text) % PRIME
+
+
+def parse_polynomial(text: str) -> dict[tuple[int, ...], int]:
+    compact = text.replace(" ", "")
+    if compact == "0":
+        return {}
+    require("gamma" not in compact, "split-fiber polynomial has scalar coefficients")
+    variable_index = {name: index for index, name in enumerate(VARIABLES)}
+    terms: dict[tuple[int, ...], int] = {}
+    for signed_term in re.findall(r"[+-]?[^+-]+", compact):
+        sign = 1
+        if signed_term.startswith("-"):
+            sign = -1
+            signed_term = signed_term[1:]
+        elif signed_term.startswith("+"):
+            signed_term = signed_term[1:]
+        require(bool(signed_term), "nonempty polynomial term")
+        coefficient = sign
+        exponent = [0] * len(VARIABLES)
+        for factor in signed_term.split("*"):
+            variable_match = re.fullmatch(
+                r"(t0|t1|t2|x|y|z|w|u|v|s)(?:\^(\d+))?", factor
+            )
+            if variable_match:
+                exponent[variable_index[variable_match.group(1)]] += int(
+                    variable_match.group(2) or 1
+                )
+            else:
+                coefficient *= parse_field_number(factor)
+        key = tuple(exponent)
+        terms[key] = (terms.get(key, 0) + coefficient) % PRIME
+    return {key: value for key, value in terms.items() if value}
+
+
+def run_singular(script: Path, raw: Path, timeout: float, residue: Any) -> tuple[str, str, float]:
+    output, engine, timed_out, elapsed = residue.run_singular(script, timeout)
+    raw.write_text(output, encoding="utf-8")
+    require(not timed_out, f"Singular timeout after {elapsed:.1f}s in {script.name}")
+    return output, engine, elapsed
+
+
+def validated_basis_reusable(script_hash: str) -> bool:
+    if not BASIS_RESULT.is_file() or not BASIS_CACHE.is_file():
+        return False
+    result = load(BASIS_RESULT)
+    return bool(
+        result.get("passed")
+        and result.get("schema")
+        == "mtt.unified-source.g3gk-endpoint-graded-basis-result.v2"
+        and result.get("script_sha256") == script_hash
+        and result.get("cache_sha256") == sha256(BASIS_CACHE)
+        and result.get("affine_dimension") == 4
+        and result.get("quotient_dimension") == -1
+    )
+
+
+def completed_partial_basis_recoverable(script_hash: str) -> tuple[bool, str]:
+    if not BASIS_PARTIAL.is_file() or not BASIS_RAW.is_file() or not BASIS_SCRIPT.is_file():
+        return False, ""
+    if sha256(BASIS_SCRIPT) != script_hash:
+        return False, ""
+    output = BASIS_RAW.read_text(encoding="utf-8")
+    try:
+        valid = bool(
+            "G3GK_ENDPOINT_BASIS_PASS" in output
+            and marker(output, "G3GK_BASIS_PRIME") == PRIME
+            and marker(output, "G3GK_BASIS_GAMMA") == ROOT_VALUE
+            and marker(output, "G3GK_BASIS_J_GENERATORS") == 10
+            and marker(output, "G3GK_BASIS_GB_SIZE") > 0
+            and marker(output, "G3GK_BASIS_AFFINE_DIMENSION") == 4
+            and marker(output, "G3GK_BASIS_QUOTIENT_DIMENSION") == -1
+            and marker(output, "G3GK_BASIS_ORIGINAL_RESIDUAL_ZERO") == 1
+        )
+    except AssertionError:
+        return False, ""
+    return valid, output
+
+
+def accept_basis_checkpoint(
+    output: str,
+    script_hash: str,
+    engine: str,
+    elapsed: float | None,
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    require("G3GK_ENDPOINT_BASIS_PASS" in output, output[-4000:])
+    require(marker(output, "G3GK_BASIS_PRIME") == PRIME, "basis prime")
+    require(marker(output, "G3GK_BASIS_GAMMA") == ROOT_VALUE, "basis root")
+    require(marker(output, "G3GK_BASIS_J_GENERATORS") == 10, "ten Jacobian generators")
+    require(
+        marker(output, "G3GK_BASIS_AFFINE_DIMENSION") == 4,
+        "expected four-dimensional multiplier-zero Cayley component",
+    )
+    require(
+        marker(output, "G3GK_BASIS_QUOTIENT_DIMENSION") == -1,
+        "positive-dimensional Jacobian quotient",
+    )
+    require(marker(output, "G3GK_BASIS_ORIGINAL_RESIDUAL_ZERO") == 1, "basis contains J")
+    require(BASIS_PARTIAL.is_file(), "basis partial emitted")
+    os.replace(BASIS_PARTIAL, BASIS_CACHE)
+    result = {
+        "schema": "mtt.unified-source.g3gk-endpoint-graded-basis-result.v2",
+        "passed": True,
+        "script_sha256": script_hash,
+        "raw_sha256": sha256(BASIS_RAW),
+        "cache_sha256": sha256(BASIS_CACHE),
+        "cache_bytes": BASIS_CACHE.stat().st_size,
+        "Groebner_basis_size": marker(output, "G3GK_BASIS_GB_SIZE"),
+        "affine_dimension": marker(output, "G3GK_BASIS_AFFINE_DIMENSION"),
+        "quotient_dimension": marker(output, "G3GK_BASIS_QUOTIENT_DIMENSION"),
+        "graded_reduction_contract": (
+            "The multiplier-zero component has affine dimension four. Exact "
+            "membership and normal forms are used only in fixed positive weighted degrees."
+        ),
+        "engine": engine,
+        "elapsed_seconds": elapsed,
+        "provenance": provenance,
+    }
+    atomic_json(BASIS_RESULT, result)
+    update_progress("basis_complete", basis=result)
+    return result
+
+
+def build_basis(
+    script_text: str,
+    timeout: float,
+    residue: Any,
+    force: bool,
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    BASIS_SCRIPT.write_text(script_text, encoding="ascii")
+    script_hash = sha256(BASIS_SCRIPT)
+    if not force and validated_basis_reusable(script_hash):
+        result = load(BASIS_RESULT)
+        print(f"G3GK reused endpoint basis sha256={result['cache_sha256']}", flush=True)
+        return result
+    recoverable, recovered_output = completed_partial_basis_recoverable(script_hash)
+    if not force and recoverable:
+        result = accept_basis_checkpoint(
+            recovered_output,
+            script_hash,
+            "Singular recovered from complete marker log",
+            None,
+            provenance,
+        )
+        print(
+            f"G3GK recovered completed endpoint basis sha256={result['cache_sha256']}",
+            flush=True,
+        )
+        return result
+    BASIS_PARTIAL.unlink(missing_ok=True)
+    update_progress("basis_running", script_sha256=script_hash, provenance=provenance)
+    output, engine, elapsed = run_singular(BASIS_SCRIPT, BASIS_RAW, timeout, residue)
+    return accept_basis_checkpoint(
+        output, script_hash, engine, elapsed, provenance
+    )
+
+
+def ambient_matrix_from_output(
+    output: str, target_lookup: dict[tuple[int, ...], int]
+) -> sparse.csc_matrix:
+    entries: dict[tuple[int, int], int] = {}
+    for column in range(SOURCE_DIMENSION):
+        match = re.search(rf"^G3GK_AMBIENT_{column}=(.*)$", output, flags=re.MULTILINE)
+        require(match is not None, f"ambient row {column}")
+        polynomial = parse_polynomial(match.group(1).strip())
+        for exponent, coefficient in polynomial.items():
+            row = target_lookup.get(exponent)
+            require(row is not None, f"ambient exponent lies in H02 target: {exponent}")
+            entries[(row, column)] = coefficient
+    keys = sorted(entries)
+    result = sparse.csc_matrix(
+        (
+            np.asarray([entries[key] for key in keys], dtype=np.uint32),
+            (
+                np.asarray([key[0] for key in keys], dtype=np.int32),
+                np.asarray([key[1] for key in keys], dtype=np.int32),
+            ),
+        ),
+        shape=(AMBIENT_DIMENSION, SOURCE_DIMENSION),
+        dtype=np.uint32,
+    )
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def chart_project(
+    ambient: sparse.csc_matrix,
+    mld: Path,
+    g3bt: dict[str, Any],
+) -> tuple[np.ndarray, int, int]:
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    root_record = next(
+        row for row in g3bt["root_solves"] if int(row["gamma_root"]) == ROOT_VALUE
+    )
+    chart_path = ROOT / root_record["endpoint_chart"]["path"]
+    require(chart_path.is_file(), "root-five endpoint chart")
+    require(sha256(chart_path) == root_record["endpoint_chart"]["sha256"], "endpoint chart hash")
+    exporter.write_rhs(
+        AMBIENT_RHS,
+        PRIME,
+        AMBIENT_DIMENSION,
+        ambient.indptr.astype(np.uint64).tolist(),
+        ambient.indices.astype(np.uint32).tolist(),
+        ambient.data.astype(np.uint32).tolist(),
+    )
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    command = [
+        "wsl",
+        runtime.wsl_path(solver),
+        "--chart",
+        runtime.wsl_path(chart_path),
+        "--rhs",
+        runtime.wsl_path(AMBIENT_RHS),
+        "--output",
+        runtime.wsl_path(CHART_SOLUTION),
+        "--log",
+        runtime.wsl_path(CHART_LOG),
+    ]
+    completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    chart = split_io.as_scipy(arithmetic.read_csc(chart_path, b"MTTSPC1\0", 6))
+    stored_rhs = split_io.as_scipy(arithmetic.read_csc(AMBIENT_RHS, b"MTTSRH1\0", 4))
+    solution = split_io.as_scipy(
+        arithmetic.read_csc(CHART_SOLUTION, b"MTTSCO1\0", 6)
+    )
+    residual = split_io.residual_nonzeros(chart, solution, stored_rhs, PRIME)
+    require(residual == 0, "endpoint chart projection residual")
+    fields = initializer.parse_log(CHART_LOG)
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(determinant == int(root_record["endpoint_determinant_mod21817"]), "chart determinant")
+    quotient = solution[:QUOTIENT_DIMENSION, :].toarray().astype(np.int64) % PRIME
+    return quotient, residual, determinant
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--basis-only", action="store_true")
+    parser.add_argument("--smoke-only", action="store_true")
+    parser.add_argument("--force-basis", action="store_true")
+    parser.add_argument("--basis-timeout", type=float, default=86400.0)
+    parser.add_argument("--return-timeout", type=float, default=43200.0)
+    parser.add_argument("--lift-bound", type=int, default=46)
+    parser.add_argument(
+        "--kernel-model-sha256",
+        default=os.environ.get("MTT_KERNEL_MODEL_SHA256", "UNRECORDED"),
+    )
+    args = parser.parse_args()
+    require(args.lift_bound > 0, "positive targeted lift bound")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_cayley_ordinary_top_dimension as ordinary
+    import build_q79_eta9_graph_cayley_block_compiler as cayley
+    import build_q79_eta9_smooth_graph_slice_witness as residue
+    import build_q79_eta9_toric_return_stage1_chunk as stage
+
+    g3bi = load(G3BI)
+    g3bt = load(G3BT)
+    g3gj = load(G3GJ)
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3bt["checks"].values()), "G3BT checks")
+    require(all(g3gj["checks"].values()), "G3GJ checks")
+    require(sha256(G3GJ_QUOTIENT) == g3gj["anchor_execution"]["quotient_coordinates"]["sha256"], "G3GJ quotient hash")
+    reconstructed_endpoint = [
+        [int(value) for value in row]
+        for row in g3bi["smooth_endpoint"]["coefficient_vectors"]
+    ]
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        index = int(row["source_index"])
+        reconstructed_endpoint[index] = [
+            left + int(right)
+            for left, right in zip(
+                reconstructed_endpoint[index],
+                row["correction_gamma_coordinates"],
+                strict=True,
+            )
+        ]
+    require(
+        reconstructed_endpoint == g3bi["selected_source"]["coefficient_vectors"],
+        "G3BI endpoint equals B89 plus the selected correction",
+    )
+
+    base = load(residue.BASE)
+    b103 = load(stage.B103)
+    h02 = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    macaulay = load(macaulay_path)
+    require(all(macaulay["checks"].values()), "H02 Macaulay checks")
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    require(len(target_lookup) == AMBIENT_DIMENSION, "H02 target lookup")
+
+    quotient = np.load(G3GJ_QUOTIENT, allow_pickle=False).astype(np.int64) % PRIME
+    endpoint_rows = endpoint_coefficient_rows(g3bi, cayley)
+    correction = correction_row(g3bi)
+    sources = source_rows(quotient, h02, ordinary)
+    header = model_header(base, endpoint_rows)
+    basis_text = basis_script(header)
+    return_text = return_script(header, correction, sources, args.lift_bound)
+    BASIS_SCRIPT.write_text(basis_text, encoding="ascii")
+    RETURN_SCRIPT.write_text(return_text, encoding="ascii")
+
+    provenance = {
+        "git_head": git_head(),
+        "kernel_model_sha256": args.kernel_model_sha256,
+        "prime": PRIME,
+        "gamma_root": ROOT_VALUE,
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3BT": record(G3BT),
+            "G3GJ": record(G3GJ),
+            "G3GJ_quotient": record(G3GJ_QUOTIENT),
+            "q79_K3_base": external_record(residue.BASE, residue.BASE.parent.parent),
+            "B103": external_record(stage.B103, mld),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+        },
+    }
+    update_progress(
+        "prepared",
+        provenance=provenance,
+        basis_script_sha256=sha256(BASIS_SCRIPT),
+        return_script_sha256=sha256(RETURN_SCRIPT),
+        source_rows=SOURCE_DIMENSION,
+    )
+    print(
+        "G3GK prepared exact endpoint scripts "
+        f"basis_bytes={BASIS_SCRIPT.stat().st_size} return_bytes={RETURN_SCRIPT.stat().st_size}",
+        flush=True,
+    )
+    if args.smoke_only:
+        smoke_text = basis_text.replace(
+            "ideal G=std(J);",
+            'print("G3GK_ENDPOINT_HEADER_SMOKE_PASS"); quit;',
+            1,
+        )
+        BASIS_SMOKE_SCRIPT.write_text(smoke_text, encoding="ascii")
+        smoke_output, _, _ = run_singular(
+            BASIS_SMOKE_SCRIPT, BASIS_SMOKE_RAW, 120.0, residue
+        )
+        require(
+            "G3GK_ENDPOINT_HEADER_SMOKE_PASS" in smoke_output,
+            smoke_output[-4000:],
+        )
+        cache_start = return_text.index("def cachedBasis=read(")
+        source_start = return_text.index("poly B0=", cache_start)
+        return_smoke_text = (
+            return_text[:cache_start]
+            + "ideal G=J;\n"
+            + return_text[source_start:]
+        ).replace(
+            "ideal poleSixRows;",
+            'print("G3GK_SOURCE_PARSE_ROWS="+string(size(sourceRows))); '
+            'print("G3GK_SOURCE_PARSE_SMOKE_PASS"); quit;\nideal poleSixRows;',
+            1,
+        )
+        RETURN_SMOKE_SCRIPT.write_text(return_smoke_text, encoding="ascii")
+        source_output, _, _ = run_singular(
+            RETURN_SMOKE_SCRIPT, RETURN_SMOKE_RAW, 120.0, residue
+        )
+        require("G3GK_SOURCE_PARSE_SMOKE_PASS" in source_output, source_output[-4000:])
+        require(
+            marker(source_output, "G3GK_SOURCE_PARSE_ROWS") == SOURCE_DIMENSION,
+            "18 parsed G3GJ source rows",
+        )
+        print("G3GK endpoint header and 18-row source parse smoke: PASS")
+        return
+    if args.prepare_only:
+        return
+
+    basis = build_basis(
+        basis_text,
+        args.basis_timeout,
+        residue,
+        args.force_basis,
+        provenance,
+    )
+    if args.basis_only:
+        print(
+            "G3GK graded endpoint basis accepted "
+            f"dimension={basis['affine_dimension']} size={basis['Groebner_basis_size']}"
+        )
+        return
+    RETURN_COEFFICIENTS_PARTIAL.unlink(missing_ok=True)
+    RETURN_ROWS_PARTIAL.unlink(missing_ok=True)
+    POLE_RESIDUAL_PARTIAL.unlink(missing_ok=True)
+    update_progress("return_running", basis=basis, provenance=provenance)
+    output, engine, elapsed = run_singular(
+        RETURN_SCRIPT, RETURN_RAW, args.return_timeout, residue
+    )
+    require(marker(output, "G3GK_POLE6_RESIDUAL_ZERO") in (0, 1), "pole residual marker")
+    require(POLE_RESIDUAL_PARTIAL.is_file(), "pole residual checkpoint")
+    os.replace(POLE_RESIDUAL_PARTIAL, POLE_RESIDUAL)
+
+    if "G3GK_RETURN_NOGO_NONZERO_POLE_RESIDUAL" in output:
+        require(marker(output, "G3GK_POLE6_RESIDUAL_ZERO") == 0, "nonzero pole residual")
+        packet = {
+            "schema": "mtt.unified-source.g3gk-same-field-endpoint-griffiths-dwork.v1",
+            "date": "2026-08-15",
+            "theorem_id": "UST.G3GK",
+            "status": "CLOSED_EXACT_ANCHOR_K6_POLE_SIX_RESIDUAL_NOGO",
+            "provenance": provenance,
+            "basis": basis,
+            "execution": {
+                "engine": engine,
+                "elapsed_seconds": elapsed,
+                "pole_six_residual_terms": marker(output, "G3GK_POLE6_RESIDUAL_TERMS"),
+                "script": record(RETURN_SCRIPT),
+                "raw_output": record(RETURN_RAW),
+                "pole_residual": record(POLE_RESIDUAL),
+            },
+            "checks": {
+                "the_same_field_endpoint_basis_is_hash_bound": True,
+                "all18_G3GJ_source_rows_are_executed": True,
+                "the_pole_six_residual_is_exactly_nonzero": True,
+                "no_G3FR_image_equality_or_characteristic_zero_promotion_is_claimed": True,
+            },
+            "next_required_object": (
+                "The selected G3GJ plane is not in the normalized pole-six return domain at the "
+                "anchor. Re-type the connection source or include the omitted higher-Hodge residual; "
+                "do not promote the previous 136x18 target recipe."
+            ),
+        }
+        atomic_json(OUT, packet)
+        update_progress("accepted_exact_nogo", packet_sha256=sha256(OUT))
+        print("UST.G3GK exact nonzero pole-six residual: PASS (no-go)")
+        return
+
+    require("G3GK_SAME_FIELD_RETURN_PASS" in output, output[-4000:])
+    expected_markers = {
+        "G3GK_POLE6_RESIDUAL_ZERO": 1,
+        "G3GK_RETURN_PRIME": PRIME,
+        "G3GK_RETURN_GAMMA": ROOT_VALUE,
+        "G3GK_RETURN_SOURCE_ROWS": SOURCE_DIMENSION,
+        "G3GK_RETURN_TRANSFORM_ROWS": 10,
+        "G3GK_RETURN_U_IDENTITY": 1,
+        "G3GK_RETURN_TRANSFORM_RESIDUAL_ZERO": 1,
+        "G3GK_RETURN_ORIGINAL_IDENTITY": 1,
+        "G3GK_RETURN_COEFFICIENT_DEGREES_OK": 1,
+        "G3GK_RETURN_DEGREES_OK": 1,
+    }
+    for label, expected in expected_markers.items():
+        require(marker(output, label) == expected, label)
+    require(RETURN_COEFFICIENTS_PARTIAL.is_file(), "return coefficients checkpoint")
+    require(RETURN_ROWS_PARTIAL.is_file(), "return rows checkpoint")
+    os.replace(RETURN_COEFFICIENTS_PARTIAL, RETURN_COEFFICIENTS)
+    os.replace(RETURN_ROWS_PARTIAL, RETURN_ROWS)
+
+    ambient = ambient_matrix_from_output(output, target_lookup)
+    require(ambient.nnz == marker(output, "G3GK_RETURN_AMBIENT_TERMS"), "ambient term count")
+    sparse.save_npz(AMBIENT_MATRIX, ambient, compressed=True)
+    quotient_return, chart_residual, determinant = chart_project(ambient, mld, g3bt)
+    np.save(QUOTIENT_MATRIX, quotient_return.astype(np.uint32), allow_pickle=False)
+    quotient_rank = graded.rref(quotient_return, PRIME)[0]
+    checks = {
+        "the_same_field_endpoint_basis_is_hash_bound": True,
+        "all18_G3GJ_quotient_sources_are_multiplied_by_the_selected_correction": True,
+        "all18_pole_six_rows_lie_exactly_in_the_endpoint_Jacobian_ideal": True,
+        "the_used_Groebner_generators_lift_to_the_ten_original_partials_with_zero_residual": True,
+        "the_original_partial_reconstruction_is_exact": True,
+        "the_minus_divergence_rows_have_H02_Cox_degree": True,
+        "the_independent_endpoint_chart_projection_has_zero_residual": chart_residual == 0,
+        "the_248_by18_same_field_return_is_emitted": quotient_return.shape
+        == (QUOTIENT_DIMENSION, SOURCE_DIMENSION),
+        "no_136_row_projection_G3FR_equality_or_characteristic_zero_promotion_is_inferred": True,
+    }
+    require(all(checks.values()), "G3GK checks")
+    packet = {
+        "schema": "mtt.unified-source.g3gk-same-field-endpoint-griffiths-dwork.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GK",
+        "status": "CLOSED_EXACT_ANCHOR_SAME_FIELD_K6_TORIC_RETURN_136_PROJECTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.HS.01"],
+        "provenance": provenance,
+        "basis": {
+            **basis,
+            "script": record(BASIS_SCRIPT),
+            "raw_output": record(BASIS_RAW),
+            "cache": record(BASIS_CACHE),
+        },
+        "same_field_return": {
+            "field": {"prime": PRIME, "gamma_root": ROOT_VALUE},
+            "source_formula": "q_G3GJ,j * s * (C0*t0), j=1,...,18",
+            "source_rows": SOURCE_DIMENSION,
+            "used_Groebner_generators": marker(output, "G3GK_RETURN_USED_GB"),
+            "targeted_lift_bound": marker(output, "G3GK_RETURN_LIFT_BOUND"),
+            "ambient_shape": [AMBIENT_DIMENSION, SOURCE_DIMENSION],
+            "ambient_nonzero_entries": int(ambient.nnz),
+            "quotient_shape": [QUOTIENT_DIMENSION, SOURCE_DIMENSION],
+            "quotient_nonzero_entries": int(np.count_nonzero(quotient_return)),
+            "quotient_rank": quotient_rank,
+            "endpoint_chart_determinant_mod21817": determinant,
+            "endpoint_chart_residual_nonzeros": chart_residual,
+        },
+        "artifacts": {
+            "return_script": record(RETURN_SCRIPT),
+            "return_raw": record(RETURN_RAW),
+            "return_coefficients": record(RETURN_COEFFICIENTS),
+            "return_rows": record(RETURN_ROWS),
+            "ambient_matrix": record(AMBIENT_MATRIX),
+            "ambient_rhs": record(AMBIENT_RHS),
+            "chart_solution": record(CHART_SOLUTION),
+            "chart_log": record(CHART_LOG),
+            "quotient_matrix": record(QUOTIENT_MATRIX),
+        },
+        "execution": {"engine": engine, "elapsed_seconds": elapsed},
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_248_row_return_is_already_the_136_row_component_map": False,
+            "claims_the_image_equals_the_G3FR_primitive15_plane": False,
+            "claims_the_anchor_result_holds_at_the47_other_fibers": False,
+            "claims_Qgamma_or_characteristic_zero_promotion": False,
+            "claims_component20_rank36_or_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Derive the canonical fixed-carrier H02-to-Sym15 component-20 projection, "
+            "apply it to this exact 248x18 same-field return, and compare its image "
+            "with the G3FR primitive15 plane before any holdout or Q(gamma) promotion."
+        ),
+    }
+    atomic_json(OUT, packet)
+    update_progress("accepted", packet_sha256=sha256(OUT), quotient_rank=quotient_rank)
+    print(
+        "UST.G3GK same-field endpoint Griffiths-Dwork: PASS "
+        f"used_G={packet['same_field_return']['used_Groebner_generators']} "
+        f"ambient_nnz={ambient.nnz} quotient_rank={quotient_rank}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

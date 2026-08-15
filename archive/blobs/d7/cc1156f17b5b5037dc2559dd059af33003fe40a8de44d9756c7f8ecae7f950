@@ -1,0 +1,371 @@
+#!/usr/bin/env python3
+"""Correct the fresh-prime H02 campaign's inherited-modulus defect."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+import build_ust_g3dj_h02_second_prime_kernel_relations as legacy_arithmetic
+import build_ust_g3ga_component20_second_jet_qgamma_promotion as campaign
+import build_ust_g3gg_component20_second_jet_fixed_minor_source as fixed_minor
+import probe_ust_g3bl_endpoint_chart_unit as codex_runtime
+import probe_ust_g3ga_extra_split_prime_full_rank as border_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3gm"
+SCRATCH = ROOT / "state/ust_g3gm_corrected_prime_probe"
+ARRAYS = EVIDENCE / "H02.prime_arithmetic_compatibility_correction.npz"
+CERTIFICATE = ROOT / "state/ust_g3gm_prime_arithmetic_compatibility_correction.packet.json"
+OLD_BORDER = ROOT / "evidence/ust_g3dh/H02.B89.bordered_Q.p21817.g5.chart.bin"
+OLD_KERNEL = ROOT / "evidence/ust_g3di/H02.Q_kernel.p21817.g5.bin"
+OLD_PRIME = 21817
+OLD_GAMMA = 5
+FRESH_PRIME = 79903
+FRESH_GAMMA = 12863
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def legacy_border(
+    prime: int, gamma: int, context: dict[str, object]
+) -> sparse.csc_matrix:
+    """Replay the superseded builder, including its inherited modulus 33863."""
+    endpoint, _ = campaign.endpoint_action.endpoint_chart(
+        prime,
+        gamma,
+        context["g3bi"],
+        context["macaulay"],
+        context["factor"],
+        context["quotient_rows"],
+        context["descriptors"],
+        context["generators0"],
+        context["target_lookup"],
+        context["oracle"],
+        context["exporter"],
+    )
+    dm = context["dm"]
+    core_rows = context["core_rows"]
+    core_columns = context["core_columns"]
+    delta = legacy_arithmetic.evaluate(context["delta_records"], gamma)
+    u = legacy_arithmetic.evaluate(context["u_records"], gamma)
+    w = legacy_arithmetic.evaluate(context["w_records"], gamma)
+    base = legacy_arithmetic.normalize(
+        endpoint[dm["complement_rows"], :][:, 248:] - delta
+    )
+    a_core = legacy_arithmetic.normalize(base[core_rows, :][:, core_columns])
+    u_core = legacy_arithmetic.normalize(u[core_rows, :])
+    w_core = legacy_arithmetic.normalize(w[:, core_columns])
+    return legacy_arithmetic.normalize(
+        sparse.bmat(
+            [
+                [a_core, u_core],
+                [
+                    w_core,
+                    sparse.csc_matrix(
+                        (campaign.UPDATE_DIMENSION, campaign.UPDATE_DIMENSION),
+                        dtype=np.uint32,
+                    ),
+                ],
+            ],
+            format="csc",
+        )
+    )
+
+
+def run_fresh_probe(
+    context: dict[str, object], chart: Path, kernel: Path, log: Path
+) -> None:
+    border = border_runtime.border_matrix(FRESH_PRIME, FRESH_GAMMA, context)
+    context["exporter"].write_chart(
+        chart,
+        FRESH_PRIME,
+        border.shape[0],
+        0,
+        border.shape[0],
+        border.indptr.astype(np.uint64).tolist(),
+        border.indices.astype(np.uint32).tolist(),
+        border.data.astype(np.uint32).tolist(),
+    )
+    completed = subprocess.run(
+        [
+            "wsl",
+            codex_runtime.wsl_path(context["executable"]),
+            "--chart",
+            codex_runtime.wsl_path(chart),
+            "--kernel",
+            codex_runtime.wsl_path(kernel),
+            "--log",
+            codex_runtime.wsl_path(log),
+            "--update-start",
+            str(campaign.UPDATE_START),
+            "--progress-seconds",
+            "20",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+
+
+def corrected_source(
+    kernel: Path, source_path: Path, g3bi: dict[str, object]
+) -> tuple[tuple[int, ...], int, bool]:
+    g3fx = np.load(campaign.second_jet.G3FX, allow_pickle=False)
+    generators, syzygy_block, _ = campaign.interpolation.extract_fiber(
+        kernel, FRESH_PRIME
+    )
+    o8, _, _, _ = campaign.hilbert_burch.canonical_degree8_syzygy(
+        generators[11], syzygy_block[:12], syzygy_block[12:], FRESH_PRIME
+    )
+    forms9 = tuple(
+        campaign.source_runtime.evaluate_selected_form(
+            g3bi["selected_source"]["coefficient_vectors"],
+            theta,
+            FRESH_GAMMA,
+            FRESH_PRIME,
+        )
+        for theta in range(3)
+    )
+    _, source, profile, _ = campaign.second_jet.fiber_source(
+        generators[11],
+        syzygy_block,
+        campaign.second_jet.evaluate_coordinates(
+            g3fx["D7_gamma_coordinates"], FRESH_GAMMA, FRESH_PRIME
+        ),
+        campaign.second_jet.evaluate_coordinates(
+            g3fx["B6_gamma_coordinates"], FRESH_GAMMA, FRESH_PRIME
+        ),
+        forms9,
+        o8,
+        FRESH_PRIME,
+    )
+    np.savez_compressed(
+        source_path,
+        prime=np.asarray([FRESH_PRIME], dtype=np.uint32),
+        gamma=np.asarray([FRESH_GAMMA], dtype=np.uint32),
+        source_coefficient=source.astype(np.uint32),
+    )
+    operator = fixed_minor.source_operator(
+        generators[11],
+        campaign.second_jet.evaluate_coordinates(
+            g3fx["D7_gamma_coordinates"], FRESH_GAMMA, FRESH_PRIME
+        ),
+        campaign.second_jet.evaluate_coordinates(
+            g3fx["B6_gamma_coordinates"], FRESH_GAMMA, FRESH_PRIME
+        ),
+        forms9,
+        FRESH_PRIME,
+    )
+    rank, rows, _ = fixed_minor.graded.rref(operator.T, FRESH_PRIME)
+    square = fixed_minor.chart_matrix(operator, FRESH_PRIME)
+    determinant = fixed_minor.determinant_mod(square, FRESH_PRIME)
+    rhs = np.zeros(132, dtype=np.int64)
+    rhs[-1] = 1
+    replay = (
+        rank == 115
+        and tuple(rows) == fixed_minor.OPERATOR_ROWS
+        and determinant != 0
+        and np.array_equal(square @ source % FRESH_PRIME, rhs)
+    )
+    return tuple(int(value) for value in profile), determinant, replay
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    g3bi = campaign.load(campaign.second_jet.G3BI)
+    context = campaign.full_kernel_context(g3bi)
+
+    archived_border, archived_prime, _, _ = initializer.read_chart(OLD_BORDER)
+    require(archived_prime == OLD_PRIME, "archived border prime")
+    archived_border = archived_border.astype(np.uint32)
+    corrected_old = border_runtime.border_matrix(OLD_PRIME, OLD_GAMMA, context)
+    corrected_difference = campaign.normalize_at_prime(
+        corrected_old - archived_border, OLD_PRIME
+    )
+    inherited_old = legacy_border(OLD_PRIME, OLD_GAMMA, context)
+    inherited_difference = campaign.normalize_at_prime(
+        inherited_old - archived_border, OLD_PRIME
+    )
+    require(corrected_difference.nnz == 0, "corrected compiler compatibility")
+    require(inherited_difference.nnz > 0, "inherited modulus mismatch witnessed")
+    require(legacy_arithmetic.PRIME == 33863, "inherited modulus diagnosis")
+
+    scratch_chart = SCRATCH / "H02.p79903.g12863.corrected.border.bin"
+    scratch_kernel = SCRATCH / "H02.p79903.g12863.corrected.kernel.bin"
+    scratch_log = SCRATCH / "H02.p79903.g12863.corrected.kernel.log"
+    prior = (
+        initializer.parse_log(scratch_log)
+        if scratch_chart.is_file() and scratch_kernel.is_file() and scratch_log.is_file()
+        else {}
+    )
+    if prior.get("STATUS") != "SUCCESS":
+        run_fresh_probe(context, scratch_chart, scratch_kernel, scratch_log)
+    fields = initializer.parse_log(scratch_log)
+    require(fields.get("STATUS") == "SUCCESS", "fresh probe status")
+    require(int(fields["PRIME"]) == FRESH_PRIME, "fresh probe prime")
+    require(int(fields["SELECTED_UPDATE_COLUMNS"]) == 4748, "fresh rank")
+    require(int(fields["DEPENDENT_UPDATE_COLUMNS"]) == 1274, "fresh nullity")
+
+    chart = EVIDENCE / "H02.p79903.g12863.prime_parameterized.border.bin"
+    kernel = EVIDENCE / "H02.p79903.g12863.prime_parameterized.kernel.bin"
+    log = EVIDENCE / "H02.p79903.g12863.prime_parameterized.kernel.log"
+    for source, target in (
+        (scratch_chart, chart),
+        (scratch_kernel, kernel),
+        (scratch_log, log),
+    ):
+        if not target.is_file() or sha256(target) != sha256(source):
+            shutil.copyfile(source, target)
+
+    old_kernel = kernel_io.read_kernel(OLD_KERNEL)
+    fresh_kernel = kernel_io.read_kernel(kernel)
+    require(np.array_equal(old_kernel["selected"], fresh_kernel["selected"]), "selected chart")
+    require(np.array_equal(old_kernel["dependent"], fresh_kernel["dependent"]), "dependent chart")
+
+    source_path = EVIDENCE / "H02.p79903.g12863.prime_parameterized.second_jet_source.npz"
+    profile, determinant, fixed_replay = corrected_source(kernel, source_path, g3bi)
+    require(profile == (15, 5, 0, 33, 17, 1), "second-jet profile")
+    require(fixed_replay, "fixed-minor replay")
+
+    np.savez_compressed(
+        ARRAYS,
+        old_selected=old_kernel["selected"].astype(np.uint16),
+        old_dependent=old_kernel["dependent"].astype(np.uint16),
+        fresh_selected=fresh_kernel["selected"].astype(np.uint16),
+        fresh_dependent=fresh_kernel["dependent"].astype(np.uint16),
+        legacy_old_border_mismatch_entries=np.asarray(
+            [inherited_difference.nnz], dtype=np.uint32
+        ),
+        corrected_old_border_mismatch_entries=np.asarray(
+            [corrected_difference.nnz], dtype=np.uint32
+        ),
+        corrected_fresh_profile=np.asarray([4748, 1274], dtype=np.uint16),
+        corrected_fixed_minor_determinant=np.asarray([determinant], dtype=np.uint32),
+    )
+
+    packet = {
+        "schema": "mtt.unified-source.g3gm-prime-arithmetic-compatibility-correction.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GM",
+        "status": "CLOSED_EXACT_INHERITED_MODULUS_DEFECT_CORRECTED_FALSE_RANK_JUMP_RETRACTED",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3DH": record(ROOT / "state/ust_g3dh_h02_all_split_roots_coupling_rank.packet.json"),
+            "G3EJ": record(ROOT / "state/ust_g3ej_h02_component12_exact_kernel_promotion.packet.json"),
+            "superseded_G3GA": record(ROOT / "evidence/ust_g3ga/H02.component20.second_jet_qgamma_promotion.json"),
+            "superseded_G3GF": record(ROOT / "evidence/ust_g3gf/H02.global_rank_profile_correction.json"),
+            "superseded_G3GH": record(ROOT / "evidence/ust_g3gh/H02.rank_jump_component_localization.json"),
+            "archived_border": record(OLD_BORDER),
+            "archived_kernel": record(OLD_KERNEL),
+            "corrected_builder": record(ROOT / "build_ust_g3ga_component20_second_jet_qgamma_promotion.py"),
+            "corrected_border_runtime": record(ROOT / "probe_ust_g3ga_extra_split_prime_full_rank.py"),
+            "legacy_second_prime_runtime": record(ROOT / "build_ust_g3dj_h02_second_prime_kernel_relations.py"),
+        },
+        "diagnosis": {
+            "requested_fresh_primes": [79903, 81359, 82963],
+            "inherited_modulus": legacy_arithmetic.PRIME,
+            "defect": "fresh-prime U/W/Delta evaluation and sparse normalization inherited the G3DJ modulus 33863",
+            "legacy_replay_at_p21817_gamma5_mismatch_entries": inherited_difference.nnz,
+            "corrected_replay_at_p21817_gamma5_mismatch_entries": corrected_difference.nnz,
+        },
+        "corrected_fresh_anchor": {
+            "prime": FRESH_PRIME,
+            "gamma": FRESH_GAMMA,
+            "coupling_rank": 4748,
+            "kernel_dimension": 1274,
+            "selected_chart_equals_archived": True,
+            "dependent_chart_equals_archived": True,
+            "component20_second_jet_profile": list(profile),
+            "fixed_minor_determinant": determinant,
+            "fixed_minor_source_replay": fixed_replay,
+            "border": record(chart),
+            "kernel": record(kernel),
+            "kernel_log": record(log),
+            "source": record(source_path),
+        },
+        "corrected_frontier": {
+            "global_rank_lower_bound": 4748,
+            "global_rank_upper_bound": 5102,
+            "global_kernel_dimension_upper_bound": 1274,
+            "rank4752_lower_bound_retracted": True,
+            "components23_24_rank_jump_retracted": True,
+            "G3GA_through_G3GE_fresh_prime_height_outputs_require_rebuild": True,
+            "G3GG_48_archived_fiber_fixed_minor_formula_survives": True,
+            "G3GG_corrected_independent_anchor_replay_survives": True,
+        },
+        "artifact": record(ARRAYS),
+        "checks": {
+            "the_corrected_compiler_reproduces_the_archived_p21817_border_entrywise": True,
+            "the_superseded_compiler_does_not_reproduce_that_border": True,
+            "the_defect_is_the_inherited_33863_modulus": True,
+            "the_corrected_p79903_anchor_has_profile4748_1274": True,
+            "the_corrected_fresh_anchor_uses_the_identical_selected_and_dependent_chart": True,
+            "the_component20_second_jet_and_fixed_minor_replay_survive_the_correction": True,
+        },
+        "guardrails": {
+            "claims_global_rank4748_equality": False,
+            "claims_the_superseded_fresh_prime_height_reconstruction_is_valid": False,
+            "claims_components23_24_are_a_characteristic_zero_rank_jump": False,
+            "claims_component20_Qgamma_promotion": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3gmPrimeArithmeticCompatibilityCorrection",
+            "tier": "CLOSED_EXACT_CALCULATION_CORRECTION",
+            "statement": "The fresh-prime 4752/1270 profile was produced by an inherited-modulus implementation defect, not by the selected integral H02 family. Prime-parameterized arithmetic reproduces the archived p=21817 border entrywise and gives 4748/1274 at the independent p=79903 anchor with the identical kernel chart. The 4752 lower bound and components23/24 rank-jump claims are retracted. The component20 second-jet profile and fixed-minor source formula survive on the corrected anchor.",
+        },
+        "next_required_object": "Rebuild every G3GA-G3GE fresh-prime cache under arithmetic_schema=prime_parameterized_v2, then rerun the height audit. Continue G3GK/G3GL independently; those same-field anchor computations do not use the defective runtime.",
+    }
+    require(all(packet["checks"].values()), "G3GM checks")
+    require(not any(packet["guardrails"].values()), "G3GM guardrails")
+    CERTIFICATE.write_text(
+        json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+    print("UST.G3GM prime arithmetic compatibility correction: PASS")
+    print(
+        f"legacy_mismatch={inherited_difference.nnz} corrected_mismatch=0 "
+        f"fresh_profile=4748/1274 fixed_minor={determinant}"
+    )
+    print(f"packet_sha256={sha256(CERTIFICATE)}")
+
+
+if __name__ == "__main__":
+    main()

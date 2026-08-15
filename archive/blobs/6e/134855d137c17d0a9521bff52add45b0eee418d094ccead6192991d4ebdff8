@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Select a certified independent component-16 subsystem for exact FLINT."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "evidence/ust_g3el/H02.component16.unit_pivot_reduced.number_field.sms"
+OUTPUT = ROOT / "evidence/ust_g3eq/H02.component16.independent_rows.number_field.sms"
+CERTIFICATE = ROOT / "evidence/ust_g3eq/H02.component16.independent_rows.json"
+ROWS = 1238
+COLUMNS = 1221
+DEGREE = 6
+MINIMAL = (64, 16, 33, 44, 89, 24, 1)
+PRIME = 21817
+GAMMA = 5
+FREE_COLUMNS = tuple(range(986, 1007))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def evaluate(coefficients: tuple[int, ...]) -> int:
+    value = 0
+    for coefficient in reversed(coefficients):
+        value = (value * GAMMA + coefficient) % PRIME
+    return value
+
+
+def load_rows() -> tuple[list[list[tuple[int, tuple[int, ...]]]], int]:
+    with SOURCE.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require(
+            (rows, columns, degree, minimal) == (ROWS, COLUMNS, DEGREE, MINIMAL),
+            "source header",
+        )
+        result: list[list[tuple[int, tuple[int, ...]]]] = [
+            [] for _ in range(ROWS)
+        ]
+        count = 0
+        for line in handle:
+            values = list(map(int, line.split()))
+            require(len(values) == 2 + DEGREE, "entry width")
+            result[values[0] - 1].append(
+                (values[1] - 1, tuple(values[2:]))
+            )
+            count += 1
+    require(count == declared, "declared entry count")
+    return result, count
+
+
+def select_independent_rows(
+    exact_rows: list[list[tuple[int, tuple[int, ...]]]],
+) -> tuple[list[int], list[int], list[int]]:
+    pivot_columns = [
+        column for column in range(COLUMNS) if column not in FREE_COLUMNS
+    ]
+    pivot_lookup = {column: index for index, column in enumerate(pivot_columns)}
+    free_lookup = {column: index for index, column in enumerate(FREE_COLUMNS)}
+    pivots: dict[int, tuple[dict[int, int], list[int]]] = {}
+    pivot_rows: list[int] = []
+    dependent_rows: list[int] = []
+    for row_index, exact_row in enumerate(exact_rows):
+        row: dict[int, int] = {}
+        rhs = [0] * len(FREE_COLUMNS)
+        for column, coefficients in exact_row:
+            value = evaluate(coefficients)
+            if not value:
+                continue
+            free = free_lookup.get(column)
+            if free is None:
+                row[pivot_lookup[column]] = value
+            else:
+                rhs[free] = value
+        while row:
+            column = min(row)
+            value = row[column]
+            prior = pivots.get(column)
+            if prior is None:
+                inverse = pow(value, -1, PRIME)
+                row = {
+                    key: item * inverse % PRIME
+                    for key, item in row.items()
+                    if item
+                }
+                rhs = [item * inverse % PRIME for item in rhs]
+                pivots[column] = (row, rhs)
+                pivot_rows.append(row_index)
+                break
+            prior_row, prior_rhs = prior
+            for key, item in prior_row.items():
+                reduced = (row.get(key, 0) - value * item) % PRIME
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+            rhs = [
+                (current - value * prior_value) % PRIME
+                for current, prior_value in zip(rhs, prior_rhs, strict=True)
+            ]
+        else:
+            require(not any(rhs), "dependent-row consistency")
+            dependent_rows.append(row_index)
+    require(len(pivots) == COLUMNS - len(FREE_COLUMNS), "finite pivot count")
+    require(sorted(pivots) == list(range(COLUMNS - len(FREE_COLUMNS))), "pivot set")
+    require(len(pivot_rows) == 1200, "independent row count")
+    require(len(dependent_rows) == 38, "dependent row count")
+    return pivot_rows, dependent_rows, pivot_columns
+
+
+def write_matrix(
+    exact_rows: list[list[tuple[int, tuple[int, ...]]]],
+    selected_rows: list[int],
+) -> int:
+    entries = sum(len(exact_rows[row]) for row in selected_rows)
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    temporary = OUTPUT.with_suffix(OUTPUT.suffix + ".tmp")
+    with temporary.open("w", encoding="ascii", newline="\n") as handle:
+        handle.write(f"{len(selected_rows)} {COLUMNS} {DEGREE} {entries}\n")
+        handle.write(" ".join(map(str, MINIMAL)) + "\n")
+        for new_row, old_row in enumerate(selected_rows, start=1):
+            for column, coefficients in exact_rows[old_row]:
+                payload = " ".join(map(str, coefficients))
+                handle.write(f"{new_row} {column + 1} {payload}\n")
+    temporary.replace(OUTPUT)
+    return entries
+
+
+def main() -> None:
+    exact_rows, source_entries = load_rows()
+    selected_rows, dependent_rows, pivot_columns = select_independent_rows(
+        exact_rows
+    )
+    output_entries = write_matrix(exact_rows, selected_rows)
+    payload = {
+        "schema": "ust.g3eq.h02.component16.independent-rows.v1",
+        "date": "2026-08-14",
+        "source": SOURCE.relative_to(ROOT).as_posix(),
+        "source_sha256": sha256(SOURCE),
+        "source_shape": [ROWS, COLUMNS],
+        "source_entries": source_entries,
+        "specialization": {
+            "prime": PRIME,
+            "gamma": GAMMA,
+            "minimal_polynomial_residual": sum(
+                coefficient * pow(GAMMA, degree, PRIME)
+                for degree, coefficient in enumerate(MINIMAL)
+            )
+            % PRIME,
+            "rank": len(selected_rows),
+            "nullity": len(FREE_COLUMNS),
+            "free_columns_zero_based": list(FREE_COLUMNS),
+            "pivot_columns_zero_based": pivot_columns,
+            "selected_source_rows_zero_based": selected_rows,
+            "dependent_source_rows_zero_based": dependent_rows,
+        },
+        "output": {
+            "matrix": OUTPUT.relative_to(ROOT).as_posix(),
+            "sha256": sha256(OUTPUT),
+            "shape": [len(selected_rows), COLUMNS],
+            "entries": output_entries,
+        },
+        "theorem_status": {
+            "exact_lower_rank": len(selected_rows),
+            "reason": (
+                "The selected 1200x1200 pivot minor is nonzero after reduction "
+                "at p=21817, gamma=5, so it is nonzero over Q(gamma)."
+            ),
+            "exact_kernel_pending": True,
+        },
+        "claim_boundary": (
+            "This certificate proves exact rank at least 1200 and selects an exact "
+            "independent subsystem. Exact nullity 21 still requires a characteristic-"
+            "zero kernel and literal replay against all 1238 source rows."
+        ),
+    }
+    temporary = CERTIFICATE.with_suffix(CERTIFICATE.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+    temporary.replace(CERTIFICATE)
+    print(
+        "G3EQ component16 independent subsystem: PASS "
+        f"rank_lower={len(selected_rows)} dependent={len(dependent_rows)} "
+        f"entries={output_entries} output={OUTPUT.relative_to(ROOT).as_posix()}"
+    )
+
+
+if __name__ == "__main__":
+    main()

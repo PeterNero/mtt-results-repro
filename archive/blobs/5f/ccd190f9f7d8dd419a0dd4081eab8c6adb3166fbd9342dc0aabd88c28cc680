@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Run the exact degree-44 G3AP campaign without standard-basis tail reduction."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import build_ust_g3ap_selected_cayley_bounded_top_dimension as bounded
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SCRIPT = STATE / "ust_g3ap_selected_cayley_bounded_top_noredtail.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_bounded_top_noredtail.singular.out"
+PACKET = STATE / "ust_g3ap_selected_cayley_bounded_top_noredtail.packet.json"
+CACHE = STATE / "ust_g3ap_selected_cayley_bounded_top_degree44_noredtail.ssi"
+
+
+def main() -> None:
+    original_script_builder = bounded.bounded_script
+
+    def noredtail_script(source: str) -> str:
+        return original_script_builder(source).replace(
+            "degBound=44;", "option(noredTail);\ndegBound=44;", 1
+        ).replace(
+            "state/ust_g3ap_selected_cayley_bounded_top_degree44.ssi",
+            "state/ust_g3ap_selected_cayley_bounded_top_degree44_noredtail.ssi",
+        )
+
+    bounded.SCRIPT = SCRIPT
+    bounded.OUTPUT = OUTPUT
+    bounded.PACKET = PACKET
+    bounded.CACHE = CACHE
+    bounded.bounded_script = noredtail_script
+    bounded.main()
+
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    packet["execution"]["standard_basis_options"] = ["noredTail"]
+    packet["execution"]["tail_reduction_during_basis_computation"] = False
+    packet["checks"]["tail_reduction_is_not_required_for_the_bounded_standard_basis_property"] = True
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AP.BOUNDED noredTail hedge packet finalized")
+
+
+if __name__ == "__main__":
+    main()

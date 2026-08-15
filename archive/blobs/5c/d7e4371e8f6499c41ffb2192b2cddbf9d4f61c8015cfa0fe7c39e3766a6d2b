@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Run and resume the complete 248-row G3BM first-return campaign."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+BUILDER = ROOT / "build_ust_g3bm_correction_toric_return_chunk.py"
+ASSEMBLER = ROOT / "assemble_ust_g3bm_correction_toric_return.py"
+VERIFIER = ROOT / "verify_ust_g3bm_correction_toric_return.py"
+CHUNK_DIR = ROOT / "evidence" / "ust_g3bm"
+ROWS = 248
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_path(record: dict) -> Path:
+    return ROOT / record["path"]
+
+
+def valid_checkpoint(path: Path, start: int, stop: int) -> bool:
+    try:
+        packet = json.loads(path.read_text(encoding="utf-8"))
+        if not (
+            packet["schema"] == "mtt.unified-source.g3bm-correction-toric-return-chunk.v1"
+            and packet["row_start"] == start
+            and packet["row_stop"] == stop
+            and packet["row_count"] == stop - start
+            and len(packet["sparse_rows"]) == stop - start
+            and [int(row["source_index"]) for row in packet["sparse_rows"]]
+            == list(range(start, stop))
+            and all(packet["checks"].values())
+        ):
+            return False
+        for section in ("execution", "serialized_exact_objects", "coordinate_objects"):
+            for record in packet[section].values():
+                if not isinstance(record, dict) or "path" not in record:
+                    continue
+                object_path = local_path(record)
+                if not object_path.is_file() or sha256(object_path) != record["sha256"]:
+                    return False
+        return True
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
+def execute(command: list[str]) -> None:
+    completed = subprocess.run(command, cwd=ROOT, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"command failed with exit code {completed.returncode}: {command}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--chunk-size", type=int, default=8)
+    parser.add_argument("--timeout-per-chunk", type=float, default=7200.0)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--max-chunks", type=int)
+    args = parser.parse_args()
+    require(args.chunk_size > 0, "positive chunk size")
+    require(args.max_chunks is None or args.max_chunks > 0, "positive max chunks")
+    CHUNK_DIR.mkdir(parents=True, exist_ok=True)
+
+    total_chunks = (ROWS + args.chunk_size - 1) // args.chunk_size
+    completed_chunks = 0
+    for ordinal, start in enumerate(range(0, ROWS, args.chunk_size), start=1):
+        stop = min(start + args.chunk_size, ROWS)
+        packet_path = CHUNK_DIR / f"rows_{start:04d}_{stop - 1:04d}.packet.json"
+        if args.resume and packet_path.is_file() and valid_checkpoint(packet_path, start, stop):
+            print(f"CHECKPOINT {ordinal}/{total_chunks} rows={start}:{stop} verified", flush=True)
+        else:
+            print(f"PROGRESS {ordinal - 1}/{total_chunks} rows={start}:{stop} starting", flush=True)
+            execute(
+                [
+                    sys.executable,
+                    str(BUILDER),
+                    "--row-start",
+                    str(start),
+                    "--row-count",
+                    str(stop - start),
+                    "--timeout",
+                    str(args.timeout_per_chunk),
+                ]
+            )
+            print(f"CHECKPOINT {ordinal}/{total_chunks} rows={start}:{stop} complete", flush=True)
+        completed_chunks += 1
+        if args.max_chunks is not None and completed_chunks >= args.max_chunks:
+            print(f"STOPPED_AFTER {completed_chunks}/{total_chunks} chunks; assembly deferred", flush=True)
+            return
+
+    execute([sys.executable, str(ASSEMBLER), "--chunk-size", str(args.chunk_size)])
+    execute([sys.executable, str(VERIFIER)])
+    print("UST_G3BM_CORRECTION_TORIC_RETURN_RUN_PASS", flush=True)
+
+
+if __name__ == "__main__":
+    main()

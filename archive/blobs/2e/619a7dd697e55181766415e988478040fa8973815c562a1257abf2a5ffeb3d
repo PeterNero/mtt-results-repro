@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mtt.unified-source.q79-normal-yoneda-block.v1",
+  "title": "UST.G3L q79 normal Yoneda block certificate",
+  "type": "object",
+  "required": [
+    "schema",
+    "candidate_id",
+    "source_hash",
+    "domain_dimension",
+    "domain_basis_artifact",
+    "normal_block_artifact",
+    "rank",
+    "kernel_dimension",
+    "kernel_basis_artifact",
+    "shift_compatible_nonzero_orbit",
+    "empirical_inputs",
+    "physical_promotion_requested"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mtt.unified-source.q79-normal-yoneda-block.v1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "domain_dimension": {
+      "const": 5
+    },
+    "domain_basis_artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "normal_block_artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "rank": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "kernel_dimension": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "kernel_basis_artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "shift_compatible_nonzero_orbit": {
+      "type": "boolean"
+    },
+    "empirical_inputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "physical_promotion_requested": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

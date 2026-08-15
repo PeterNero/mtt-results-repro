@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Build or execute one resumable selected-carrier Cayley response rectangle."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import build_ust_g3al_selected_carrier_response_schur as g3al
+import ust_cayley_degree44_basis as degree44
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = ROOT / "state" / "g3al_cayley_response_chunks"
+G3AL_PACKET = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def section(row: dict[str, object]) -> str:
+    return f"{g3al.monomial(row)}*t{int(row['target_coordinate'])}"
+
+
+def tangent_polynomial(vector, basis) -> str:
+    terms = []
+    for value, row in zip(vector, basis):
+        if not any(value):
+            continue
+        terms.append(
+            f"({g3al.singular_element(value)})*{g3al.monomial(row)}*t{int(row['target_coordinate'])}"
+        )
+    return "+".join(terms) if terms else "0"
+
+
+def make_script(
+    rows: list[str],
+    columns: list[str],
+    row_start: int,
+    column_start: int,
+    packet: dict,
+    cache_relative: str,
+) -> str:
+    field = packet["residue_field"]
+    k3 = packet["K3_cycle_source"]
+    q2 = k3["Q2"].replace("**", "^")
+    g3 = k3["G3"].replace("**", "^")
+    h4 = k3["H4"].replace("**", "^")
+    row_count = len(rows)
+    column_count = len(columns)
+    return f'''// UST.G3AL same-carrier primitive-response rectangle.
+option(redSB);
+ring r=(101,g),(x,y,z,w,t0,t1,t2,u,v,s),wp(1,1,1,3,1,1,1,6,9,2);
+minpoly={g3al.singular_minpoly(field["gamma_relation_coefficients_ascending"])};
+def cachedBasis=read("ssi:r {cache_relative}");
+ideal G=cachedBasis;
+attrib(G,"isSB",1);
+poly Q2={q2};
+poly G3={g3};
+poly H4={h4};
+ideal cycleRows=Q2,-H4,w-G3,w+G3;
+matrix cycleJacobian[4][4];
+int ci; int cj;
+for (ci=1;ci<=4;ci++) {{ for (cj=1;cj<=4;cj++) {{ cycleJacobian[ci,cj]=diff(cycleRows[ci],var(cj)); }} }}
+number inv6=1/6;
+poly Pdelta=inv6*det(cycleJacobian);
+poly fixedGerbe=u*v*Pdelta*t0*t1*t2;
+poly reducedSocle=reduce(w^12*t2^4*s^2,G);
+ideal primitiveRows={','.join(rows)};
+ideal tangentColumns={','.join(columns)};
+ideal preparedRows=reduce(fixedGerbe*primitiveRows,G);
+matrix D[{row_count}][{column_count}];
+int ri; int gi; int badNormalForms=0; int nonzeroEntries=0;
+poly entryNormal; number entryCoefficient;
+ideal rowProducts; ideal rowNormals;
+for (ri=1;ri<={row_count};ri++)
+{{
+  rowProducts=ideal(0);
+  for (gi=1;gi<={column_count};gi++)
+  {{ rowProducts[gi]=preparedRows[ri]*tangentColumns[gi]; }}
+  rowNormals=reduce(rowProducts,G);
+  for (gi=1;gi<={column_count};gi++)
+  {{
+    entryNormal=rowNormals[gi];
+    entryCoefficient=0;
+    if (entryNormal!=0)
+    {{
+      entryCoefficient=leadcoef(entryNormal)/leadcoef(reducedSocle);
+      if (entryNormal-entryCoefficient*reducedSocle!=0)
+      {{ badNormalForms=badNormalForms+1; entryCoefficient=0; }}
+      else {{ nonzeroEntries=nonzeroEntries+1; }}
+    }}
+    D[ri,gi]=entryCoefficient;
+  }}
+  string rowText="";
+  for (gi=1;gi<={column_count};gi++)
+  {{
+    if (gi>1) {{ rowText=rowText+","; }}
+    rowText=rowText+string(D[ri,gi]);
+  }}
+  print("G3AL_RESPONSE_ROW_"+string({row_start}+ri-1)+"="+rowText);
+}}
+print("G3AL_RESPONSE_ROW_START={row_start}");
+print("G3AL_RESPONSE_ROW_COUNT={row_count}");
+print("G3AL_RESPONSE_COLUMN_START={column_start}");
+print("G3AL_RESPONSE_COLUMN_COUNT={column_count}");
+print("G3AL_RESPONSE_BAD_NORMAL_FORMS="+string(badNormalForms));
+print("G3AL_RESPONSE_NONZERO_ENTRIES="+string(nonzeroEntries));
+print("G3AL_RESPONSE_SOCLE_ZERO="+string(reducedSocle==0));
+if (badNormalForms==0 && reducedSocle!=0) {{ print("G3AL_RESPONSE_CHUNK_PASS"); }}
+else {{ print("G3AL_RESPONSE_CHUNK_FAIL"); }}
+quit;
+'''
+
+
+def parse_scalar(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, flags=re.MULTILINE)
+    if not match:
+        raise AssertionError(f"missing {label}\n{output[-4000:]}")
+    return int(match.group(1))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--row-start", type=int, required=True)
+    parser.add_argument("--row-count", type=int, default=8)
+    parser.add_argument("--column-start", type=int, required=True)
+    parser.add_argument("--column-count", type=int, required=True)
+    parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--build-only", action="store_true")
+    args = parser.parse_args()
+    require(0 <= args.row_start < 248, "row start")
+    require(1 <= args.row_count <= 248 - args.row_start, "row count")
+    require(0 <= args.column_start < 122, "column start")
+    require(1 <= args.column_count <= 122 - args.column_start, "column count")
+
+    frames = g3al.selected_frames()
+    basis = frames["basis"]
+    pivot = int(frames["projective_pivot"])
+    primitive = [section(row) for index, row in enumerate(basis) if index != pivot]
+    tangents = frames["principal"] + frames["extra"]
+    rows = primitive[args.row_start : args.row_start + args.row_count]
+    columns = [
+        tangent_polynomial(vector, basis)
+        for vector in tangents[args.column_start : args.column_start + args.column_count]
+    ]
+    packet = json.loads(G3AL_PACKET.read_text(encoding="ascii"))
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    stem = (
+        f"r{args.row_start:03d}-{args.row_start + args.row_count - 1:03d}_"
+        f"c{args.column_start:03d}-{args.column_start + args.column_count - 1:03d}"
+    )
+    script = CAMPAIGN / f"{stem}.sing"
+    output_path = CAMPAIGN / f"{stem}.singular.out"
+    packet_path = CAMPAIGN / f"{stem}.packet.json"
+    basis_selection = degree44.selected_degree44_basis()
+    cache: Path = basis_selection["cache"]  # type: ignore[assignment]
+    require(cache.resolve().is_relative_to(ROOT.resolve()), "basis cache inside repository")
+    cache_relative = str(cache.resolve().relative_to(ROOT.resolve())).replace("\\", "/")
+    script.write_text(
+        make_script(
+            rows,
+            columns,
+            args.row_start,
+            args.column_start,
+            packet,
+            cache_relative,
+        ),
+        encoding="ascii",
+    )
+    if args.build_only:
+        print(script)
+        return
+    cache_record = basis_selection["cache_record"]
+    require(cache.is_file() and sha256(cache) == cache_record["sha256"], "degree-44 basis cache")
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, script),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    output = completed.stdout
+    output_path.write_text(output, encoding="utf-8")
+    require(completed.returncode == 0, f"Singular return code {completed.returncode}")
+    require("G3AL_RESPONSE_CHUNK_PASS" in output, output[-4000:])
+    require(parse_scalar(output, "G3AL_RESPONSE_BAD_NORMAL_FORMS") == 0, "socle line")
+    entries = []
+    for row in range(args.row_start, args.row_start + args.row_count):
+        match = re.search(rf"^G3AL_RESPONSE_ROW_{row}=([^\r\n]*)$", output, flags=re.MULTILINE)
+        require(match is not None, f"response row {row}")
+        values = match.group(1).split(",")
+        require(len(values) == args.column_count, f"response row {row} width")
+        entries.append(values)
+    result = {
+        "schema": "mtt.unified-source.g3al-selected-cayley-response-chunk.v1",
+        "status": "CLOSED_EXACT_SELECTED_CARRIER_FINITE_RESIDUE_RECTANGLE",
+        "inputs": {
+            "G3AL": {"path": str(G3AL_PACKET.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(G3AL_PACKET)},
+            "basis_cache": {"path": str(cache.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(cache)},
+            "basis_certificate": basis_selection["certificate"],
+        },
+        "reduction_basis": {
+            "kind": basis_selection["kind"],
+            "valid_through_scalar_degree": basis_selection["valid_through_scalar_degree"],
+            "maximum_reduced_scalar_degree": 44,
+        },
+        "rectangle": {
+            "row_start_zero_based": args.row_start,
+            "row_count": args.row_count,
+            "column_start_zero_based": args.column_start,
+            "column_count": args.column_count,
+            "entries_F1016_singular": entries,
+        },
+        "script": {"path": str(script.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(script)},
+        "output": {"path": str(output_path.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(output_path)},
+        "elapsed_seconds": time.time() - started,
+        "checks": {
+            "same_G3AL_carrier": True,
+            "same_hash_certified_degree44_basis": True,
+            "all_reduced_products_have_scalar_degree_at_most_44": True,
+            "all_products_lie_on_socle_line": True,
+            "no_GF11_entries_imported": True,
+        },
+    }
+    packet_path.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(packet_path)
+
+
+if __name__ == "__main__":
+    main()

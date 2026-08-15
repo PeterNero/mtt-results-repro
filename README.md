@@ -1,6 +1,6 @@
 # MTT Results Reproduction
 
-Current snapshot: 2026-08-05
+Current snapshot: 2026-08-15
 
 This repository is a self-contained numerical-results capsule for Modal Triplet
 Theory (MTT). It collects the matrices, spectra, scalar values, covariance
@@ -18,7 +18,7 @@ The repository has three deliberately separate layers:
    Original source paths remain in the inventory and blob map. Open, no-go,
    superseded, and retired routes remain discoverable at their declared tier.
 3. `release/` is curated and versioned. It preserves the 2026-07-12 A01-A62
-   Standard-Model baseline and adds a 2026-08-05 promoted-results layer, with
+   Standard-Model baseline and adds a 2026-08-15 promoted-results layer, with
    explicit claim tiers, stable short paths, provenance hashes, and paper-corpus
    identity data.
 
@@ -50,12 +50,12 @@ mirrored artifact and every hash-only index row. See `STATUS.md` for the scienti
 ## Snapshot Contents
 
 - 22 configured source trees/documents;
-- 28,069 SHA-256-indexed artifacts;
-- 20,959 byte-mirrored artifacts and 7,110 hash-only bulk diagnostics;
-- 57,645 detected numerical objects;
+- 28,833 SHA-256-indexed artifacts;
+- 21,717 byte-mirrored artifacts and 7,116 hash-only bulk diagnostics;
+- 57,704 detected numerical objects;
 - all 99 configured authority entries indexed;
 - 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
-- 28 baseline short-path results plus 50 current promoted results;
+- 28 baseline short-path results plus 74 current promoted results;
 - a lock to 139 canonical papers and all 138 latest Zenodo records;
 - zero commercial-book artifacts in the public result archive.
 
@@ -92,10 +92,17 @@ translation rather than a nonuniversal gauge-coupling prediction.
 The August layer adds exact or explicitly conditional results in operational
 QM, free/formal QFT, projective HYM geometry, cohesive-superconnection language,
 Eta9 reductions, the A63-A99 SM authority extension, and the unified-source
-dependency chain. It does not promote
-the physical V3/W9 endpoint, the detecting meridian and period computation, the
+dependency chain through the committed G3FR frontier. The hidden branch now includes a locally free
+holomorphic projective rank-nine object and an existential projective HYM
+connection at their declared tiers. It does not promote the common visible-hidden
+physical endpoint, the detecting meridian and period computation, the
 interacting nonperturbative QFT construction, or the unified-source hypothesis
-to closed physical theorems. See `release/current_snapshot.json` and `STATUS.md`.
+to closed physical theorems. G3FR also gives an exact finite component-20
+inverse-system description, but its same-source characteristic-zero promotion
+is the strict G3FS exit and remains open. The source verifier currently reports
+two stale G3DI artifact locks, so G3FR is retained as the current committed
+frontier rather than promoted as a portable verified proof package. See
+`release/current_snapshot.json` and `STATUS.md`.
 
 The public paper corpus is pinned by `release/paper_corpus_lock.json` to the
 `mtt-papers` commit whose 138 released PDFs exactly match the latest Zenodo

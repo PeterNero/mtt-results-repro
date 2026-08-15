@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Verify the UST.G3AR same-member beta_C ingestion and decision contract."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+
+
+ROOT = Path(__file__).resolve().parent
+SCHEMA = ROOT / "state" / "ust_g3ar_same_member_beta_c_source.schema.json"
+TEMPLATE = ROOT / "state" / "ust_g3ar_candidate.template.json"
+LOCK = ROOT / "state" / "upstream-lock.json"
+BETA_SCHEMA = ROOT / "state" / "ust_g3ar_beta_c_vector.schema.json"
+RESIDUAL_SCHEMA = ROOT / "state" / "ust_g3ar_normal_residual.schema.json"
+ZERO_SCHEMA = ROOT / "state" / "ust_g3ar_zero_certificate.schema.json"
+NONZERO_SCHEMA = ROOT / "state" / "ust_g3ar_nonzero_certificate.schema.json"
+
+SCHEMA_ID = "mtt.unified-source.g3ar-same-member-beta-c-source.schema.v1"
+PACKET_SCHEMA = "mtt.unified-source.g3ar-same-member-beta-c-candidate.v1"
+SOURCE_KEYS = {
+    "selected_graph_prym_member",
+    "B89_meridian_word",
+    "integral_rank1509_representative",
+    "common_B103_transport",
+    "period_residue_image_248",
+    "normalized_delta_source",
+    "B103_to_G3AL_frame_transform",
+}
+RESPONSE_KEYS = {"G3AQ_characteristic_zero_response", "Nfull_factorization"}
+NFULL_TIER = "same_source_characteristic_zero_or_certified_root_operator"
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def validate_binding(
+    binding: dict,
+    source_orbit_id: str,
+    label: str,
+    check_artifacts: bool,
+) -> bool:
+    require(set(binding) == {"state", "source_orbit_id", "artifact", "sha256", "role"}, f"binding keys {label}")
+    require(binding["state"] in {"BOUND", "MISSING"}, f"binding state {label}")
+    require(bool(binding["role"]), f"binding role {label}")
+    if binding["state"] == "MISSING":
+        require(
+            binding["source_orbit_id"] == ""
+            and binding["artifact"] == ""
+            and binding["sha256"] == "",
+            f"missing binding empty {label}",
+        )
+        return False
+    require(binding["source_orbit_id"] == source_orbit_id, f"same source {label}")
+    require(bool(binding["artifact"]), f"artifact path {label}")
+    require(HEX64.fullmatch(binding["sha256"]) is not None, f"artifact hash {label}")
+    if check_artifacts:
+        path = (ROOT / binding["artifact"]).resolve()
+        require(path.is_relative_to(ROOT.resolve()), f"repository-local artifact {label}")
+        require(path.is_file() and sha256(path) == binding["sha256"], f"artifact bytes {label}")
+    return True
+
+
+def promotion_truth(source: list[bool], beta: bool, response: list[bool], decision: str, residual: bool, zero: bool) -> bool:
+    return all(source) and beta and all(response) and decision == "ZERO_CERTIFIED" and residual and zero
+
+
+def bound_path(binding: dict, label: str) -> Path:
+    path = (ROOT / binding["artifact"]).resolve()
+    require(path.is_relative_to(ROOT.resolve()), f"repository-local artifact {label}")
+    require(path.is_file() and sha256(path) == binding["sha256"], f"artifact bytes {label}")
+    return path
+
+
+def validate_vector_artifacts(packet: dict) -> None:
+    source_orbit_id = packet["source_orbit_id"]
+    beta_binding = packet["beta_vector"]["binding"]
+    if beta_binding["state"] == "BOUND":
+        beta = load(bound_path(beta_binding, "beta_C"))
+        require(beta["schema"] == "mtt.unified-source.g3ar-beta-c-vector.v1", "beta artifact schema")
+        require(beta["source_orbit_id"] == source_orbit_id, "beta artifact source")
+        require(beta["coordinate_frame"] == "G3AL_selected_primitive_rows_248", "beta artifact frame")
+        require(beta["coordinate_count"] == len(beta["values"]) == 248, "beta artifact values")
+        require(beta["normalization"] == packet["beta_vector"]["normalization"], "beta normalization binding")
+        require(beta["observed_values_used"] == 0, "beta artifact zero observed inputs")
+
+    decision = packet["normal_decision"]
+    residual_binding = decision["normal_residual"]
+    if residual_binding["state"] != "BOUND":
+        return
+    residual = load(bound_path(residual_binding, "normal residual"))
+    nfull_binding = packet["response_bindings"]["Nfull_factorization"]
+    require(residual["schema"] == "mtt.unified-source.g3ar-normal-residual.v1", "residual artifact schema")
+    require(residual["source_orbit_id"] == source_orbit_id, "residual artifact source")
+    require(residual["coordinate_frame"] == "G3AQ_selected_left_normal_rows_126", "residual artifact frame")
+    require(residual["coordinate_count"] == len(residual["values"]) == 126, "residual artifact values")
+    require(residual["beta_vector_sha256"] == beta_binding["sha256"], "residual beta binding")
+    require(residual["Nfull_factorization_sha256"] == nfull_binding["sha256"], "residual Nfull binding")
+    require(residual["decision_status"] == decision["status"], "residual decision binding")
+    require(residual["observed_values_used"] == 0, "residual zero observed inputs")
+
+    if decision["status"] == "ZERO_CERTIFIED":
+        certificate = load(bound_path(decision["zero_certificate"], "zero certificate"))
+        require(certificate["schema"] == "mtt.unified-source.g3ar-zero-certificate.v1", "zero certificate schema")
+        require(certificate["source_orbit_id"] == source_orbit_id, "zero certificate source")
+        require(certificate["normal_residual_sha256"] == residual_binding["sha256"], "zero certificate residual")
+        require(certificate["all_126_coordinates_certified_zero"] is True, "zero certificate result")
+        require(
+            certificate["method"]
+            in {"exact_symbolic", "exact_algebraic", "zero_radius_interval", "certified_root_existence"},
+            "zero certificate method",
+        )
+        require(certificate["bound_source_exactly_identified"] is True, "zero certificate binds exact source")
+        require(certificate["finite_radius_interval_containment_only"] is False, "no interval-containment pseudo-proof")
+        proof_path = (ROOT / certificate["proof_artifact"]).resolve()
+        require(proof_path.is_relative_to(ROOT.resolve()), "zero proof repository local")
+        require(proof_path.is_file() and sha256(proof_path) == certificate["proof_sha256"], "zero proof bytes")
+    elif decision["status"] == "NONZERO_CERTIFIED":
+        certificate = load(bound_path(decision["nonzero_certificate"], "nonzero certificate"))
+        require(certificate["schema"] == "mtt.unified-source.g3ar-nonzero-certificate.v1", "nonzero certificate schema")
+        require(certificate["source_orbit_id"] == source_orbit_id, "nonzero certificate source")
+        require(certificate["normal_residual_sha256"] == residual_binding["sha256"], "nonzero certificate residual")
+        require(0 <= certificate["separated_coordinate_zero_based"] < 126, "nonzero coordinate")
+        require(certificate["coordinate_excludes_zero"] is True, "nonzero certificate result")
+        require(certificate["method"] in {"exact_nonzero", "certified_interval_separation"}, "nonzero method")
+        proof_path = (ROOT / certificate["proof_artifact"]).resolve()
+        require(proof_path.is_relative_to(ROOT.resolve()), "nonzero proof repository local")
+        require(proof_path.is_file() and sha256(proof_path) == certificate["proof_sha256"], "nonzero proof bytes")
+
+
+def validate_packet(packet: dict, locked_commits: set[str], check_artifacts: bool) -> bool:
+    require(packet["schema"] == PACKET_SCHEMA, "packet schema")
+    source_orbit_id = packet["source_orbit_id"]
+    require(bool(source_orbit_id), "source orbit")
+    require(HEX40.fullmatch(packet["source_commit"]) is not None, "source commit")
+
+    source_bindings = packet["source_bindings"]
+    require(set(source_bindings) == SOURCE_KEYS, "seven source bindings")
+    source_results = [
+        validate_binding(source_bindings[key], source_orbit_id, key, check_artifacts)
+        for key in sorted(SOURCE_KEYS)
+    ]
+
+    beta = packet["beta_vector"]
+    require(beta["coordinate_count"] == 248, "beta coordinate count")
+    require(beta["coordinate_frame"] == "G3AL_selected_primitive_rows_248", "beta coordinate frame")
+    require(bool(beta["normalization"]), "beta normalization")
+    beta_bound = validate_binding(beta["binding"], source_orbit_id, "beta_C", check_artifacts)
+
+    response = packet["response_bindings"]
+    require(set(response) == RESPONSE_KEYS | {"Nfull_evaluation_tier"}, "response binding keys")
+    require(response["Nfull_evaluation_tier"] == NFULL_TIER, "characteristic-zero Nfull tier")
+    response_results = [
+        validate_binding(response[key], source_orbit_id, key, check_artifacts)
+        for key in sorted(RESPONSE_KEYS)
+    ]
+
+    decision = packet["normal_decision"]
+    require(decision["status"] in {"OPEN", "ZERO_CERTIFIED", "NONZERO_CERTIFIED"}, "decision status")
+    require(decision["coordinate_count"] == 126, "normal coordinate count")
+    residual_bound = validate_binding(decision["normal_residual"], source_orbit_id, "normal residual", check_artifacts)
+    zero_bound = validate_binding(decision["zero_certificate"], source_orbit_id, "zero certificate", check_artifacts)
+    nonzero_bound = validate_binding(decision["nonzero_certificate"], source_orbit_id, "nonzero certificate", check_artifacts)
+    if decision["status"] == "OPEN":
+        require(not zero_bound and not nonzero_bound, "open decision has no terminal certificate")
+    elif decision["status"] == "ZERO_CERTIFIED":
+        require(residual_bound and zero_bound and not nonzero_bound, "zero decision evidence")
+    else:
+        require(residual_bound and nonzero_bound and not zero_bound, "nonzero decision evidence")
+
+    ledger = packet["parameter_ledger"]
+    require(
+        ledger
+        == {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+        },
+        "zero-input parameter ledger",
+    )
+    computed = promotion_truth(
+        source_results,
+        beta_bound,
+        response_results,
+        decision["status"],
+        residual_bound,
+        zero_bound,
+    )
+    require(packet["source_promotion"] is computed, "source promotion truth value")
+    require(packet["physical_endpoint_promotion"] is False, "physical endpoint remains separate")
+    if computed:
+        require(packet["source_commit"] in locked_commits, "promoted source commit is locked")
+    if check_artifacts:
+        validate_vector_artifacts(packet)
+    return computed
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--candidate", type=Path)
+    args = parser.parse_args()
+
+    schema = load(SCHEMA)
+    beta_schema = load(BETA_SCHEMA)
+    residual_schema = load(RESIDUAL_SCHEMA)
+    zero_schema = load(ZERO_SCHEMA)
+    nonzero_schema = load(NONZERO_SCHEMA)
+    template = load(TEMPLATE)
+    lock = load(LOCK)
+    locked_commits = {item["commit"] for item in lock["repositories"]}
+
+    require(schema["$id"] == SCHEMA_ID, "schema id")
+    require(beta_schema["$id"] == "mtt.unified-source.g3ar-beta-c-vector.schema.v1", "beta schema id")
+    require(residual_schema["$id"] == "mtt.unified-source.g3ar-normal-residual.schema.v1", "residual schema id")
+    require(zero_schema["$id"] == "mtt.unified-source.g3ar-zero-certificate.schema.v1", "zero schema id")
+    require(nonzero_schema["$id"] == "mtt.unified-source.g3ar-nonzero-certificate.schema.v1", "nonzero schema id")
+    require(
+        zero_schema["properties"]["bound_source_exactly_identified"]["const"] is True,
+        "zero schema exact-source binding",
+    )
+    source_properties = schema["properties"]["source_bindings"]["properties"]
+    require(set(source_properties) == SOURCE_KEYS, "schema source keys")
+    require(
+        schema["properties"]["beta_vector"]["properties"]["coordinate_count"]["const"] == 248,
+        "schema beta size",
+    )
+    require(
+        schema["properties"]["normal_decision"]["properties"]["coordinate_count"]["const"] == 126,
+        "schema normal size",
+    )
+    require(
+        schema["properties"]["response_bindings"]["properties"]["Nfull_evaluation_tier"]["const"]
+        == NFULL_TIER,
+        "schema characteristic-zero Nfull tier",
+    )
+    promoted = validate_packet(template, locked_commits, check_artifacts=False)
+    require(not promoted, "blank template is nonpromotable")
+
+    require(
+        promotion_truth([True] * 7, True, [True, True], "ZERO_CERTIFIED", True, True),
+        "contract has an accepting zero branch",
+    )
+    require(
+        not promotion_truth([True] * 7, True, [True, True], "NONZERO_CERTIFIED", True, False),
+        "nonzero obstruction is not source promotion",
+    )
+
+    if args.candidate is not None:
+        candidate_path = args.candidate.resolve()
+        require(candidate_path.is_relative_to(ROOT.resolve()), "candidate is repository local")
+        candidate = load(candidate_path)
+        promoted = validate_packet(candidate, locked_commits, check_artifacts=True)
+        print(f"G3AR candidate: PASS source_promotion={str(promoted).lower()}")
+
+    print("UST.G3AR same-member beta_C source contract: PASS")
+    print("required source bindings: 7; beta rows: 248; normal rows: 126")
+    print("current promotable candidate: false")
+
+
+if __name__ == "__main__":
+    main()

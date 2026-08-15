@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Independently verify the selected terminal B89 source dualization."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cc_selected_source_terminal_b89_dualization.packet.json"
+PRIME = 11
+GAMMA = 3
+VARIABLES = ["x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s"]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    repository = Path(record.get("repository_path", default_repository))
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_verified(record: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(verify_record(record).read_text(encoding="utf-8"))
+
+
+def fraction_mod(value: str) -> int:
+    fraction = Fraction(value)
+    return int(fraction.numerator) * pow(int(fraction.denominator) % PRIME, -1, PRIME) % PRIME
+
+
+def evaluate_gamma(coordinates: list[str]) -> int:
+    value = 0
+    for coordinate in reversed(coordinates):
+        value = (value * GAMMA + fraction_mod(coordinate)) % PRIME
+    return value
+
+
+def monomial(exponent: list[int]) -> str:
+    factors = []
+    for variable, power in zip(VARIABLES, exponent, strict=True):
+        if power == 1:
+            factors.append(variable)
+        elif power > 1:
+            factors.append(f"{variable}^{power}")
+    return "*".join(factors) if factors else "1"
+
+
+def source_polynomial(terms: list[dict[str, Any]]) -> tuple[str, int]:
+    pieces = []
+    for term in terms:
+        coefficient = evaluate_gamma(term["gamma_coordinates_ascending"])
+        if coefficient:
+            pieces.append(f"{coefficient}*{monomial(term['exponent'])}")
+    return "+".join(pieces), len(pieces)
+
+
+def parse_monomial(value: str) -> tuple[int, ...]:
+    result = {variable: 0 for variable in VARIABLES}
+    for factor in value.split("*"):
+        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*)(?:\^(\d+))?", factor)
+        require(match is not None and match.group(1) in result, "monomial parser")
+        result[match.group(1)] += int(match.group(2) or 1)
+    return tuple(result[variable] for variable in VARIABLES)
+
+
+def field_value(value: str) -> int:
+    text = value.strip()
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        return int(numerator) * pow(int(denominator) % PRIME, -1, PRIME) % PRIME
+    return int(text) % PRIME
+
+
+def parse_scalar(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, re.MULTILINE)
+    require(match is not None, f"output scalar {label}")
+    return int(match.group(1))
+
+
+def parse_trace(output: str) -> np.ndarray:
+    match = re.search(r"^G3CC_TRACE_VECTOR=([^\r\n]*)$", output, re.MULTILINE)
+    require(match is not None, "trace vector")
+    value = np.asarray([field_value(item) for item in match.group(1).split(",")], dtype=np.uint8)
+    require(value.shape == (248,), "trace shape")
+    return value
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3CC", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    inputs = packet["inputs"]
+    g3ca = load_verified(inputs["G3CA"])
+    g3cb = load_verified(inputs["G3CB"])
+    exact = load_verified(inputs["G3CA_exact_source"])
+    b69 = load_verified(inputs["B69"])
+    b72 = load_verified(inputs["B72"])
+    load_verified(inputs["B89"])
+    b103 = load_verified(inputs["B103"])
+    verify_record(inputs["B69_basis_cache"])
+    require(all(g3ca["checks"].values()) and all(g3cb["checks"].values()), "local input checks")
+    require(all(b69["checks"].values()) and all(b72["checks"].values()), "upstream checks")
+    require(
+        b72["checks"]["the_B69_socle_is_the_local_generator_and_survives_in_characteristic_zero_R1"],
+        "socle survival",
+    )
+    require(exact["formula"] == "u*v*P_delta*(t0*t1*t2)*C_section", "source formula")
+    require(exact["Cox_degree"] == [9, 1, 2] and len(exact["terms"]) == 100, "source type")
+    source, surviving = source_polynomial(exact["terms"])
+    require(surviving == packet["terminal_source"]["terms_surviving_mod11_before_reduction"] == 94, "source reduction terms")
+
+    script = verify_record(packet["execution"]["script"]).read_text(encoding="ascii")
+    require(f"poly selectedSource={source};" in script, "script source replay")
+    output = verify_record(packet["execution"]["output"]).read_text(encoding="utf-8")
+    require("UST_G3CC_TERMINAL_SOURCE_DUALIZATION_PASS" in output, "pass marker")
+    require(parse_scalar(output, "G3CC_GAMMA_REL") == 0, "field relation")
+    require(parse_scalar(output, "G3CC_GB_SIZE") == 26883, "basis size")
+    require(parse_scalar(output, "G3CC_SOCLE_ZERO") == 0, "socle")
+    require(parse_scalar(output, "G3CC_BAD_NORMAL_FORMS") == 0, "normal forms")
+
+    h02 = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    h02_exponents = [tuple(int(value) for value in row) for row in h02["basis_exponent_vectors"]]
+    h02_lookup = {row: index for index, row in enumerate(h02_exponents)}
+    require(len(h02_lookup) == 248, "H02 basis")
+    rows = re.findall(r"^G3CC_SOURCE_CLASS_TERM=([^|\r\n]+)\|([^\r\n]+)$", output, re.MULTILINE)
+    require(len(rows) == parse_scalar(output, "G3CC_SOURCE_CLASS_TERMS"), "source-class term count")
+    h02_vector = np.zeros(248, dtype=np.uint8)
+    for coefficient_text, monomial_text in rows:
+        exponent = parse_monomial(monomial_text)
+        require(exponent in h02_lookup, "H02 normal form")
+        index = h02_lookup[exponent]
+        require(h02_vector[index] == 0, "unique H02 term")
+        h02_vector[index] = field_value(coefficient_text)
+    stored_h02 = np.load(verify_record(packet["terminal_source"]["B103_H02_vector"]), allow_pickle=False)
+    require(np.array_equal(h02_vector, stored_h02), "stored H02 vector")
+    require(np.count_nonzero(h02_vector) == packet["terminal_source"]["B103_H02_nonzero_entries"] == 229, "H02 nonzeros")
+
+    trace = parse_trace(output)
+    stored_trace = np.load(verify_record(packet["terminal_source"]["spectral_trace_vector"]), allow_pickle=False)
+    require(np.array_equal(trace, stored_trace), "stored trace vector")
+    require(np.count_nonzero(trace) == parse_scalar(output, "G3CC_TRACE_NONZERO_ENTRIES") == packet["terminal_source"]["spectral_trace_nonzero_entries"] == 227, "trace nonzeros")
+
+    frame = np.load(verify_record(g3cb["frame_intertwiner"]["frame_matrix"]), allow_pickle=False).astype(np.int64)
+    inverse = np.load(verify_record(g3cb["frame_intertwiner"]["inverse_matrix"]), allow_pickle=False).astype(np.int64)
+    identity = np.eye(248, dtype=np.uint8)
+    require(np.array_equal((frame @ inverse % PRIME).astype(np.uint8), identity), "frame inverse")
+    dual = (inverse.T @ trace.astype(np.int64) % PRIME).astype(np.uint8)
+    stored_dual = np.load(verify_record(packet["terminal_source"]["B103_H20_dual_vector"]), allow_pickle=False)
+    require(np.array_equal(dual, stored_dual), "stored B103 dual")
+    require(np.count_nonzero(dual) == packet["terminal_source"]["B103_H20_dual_nonzero_entries"] == 224, "dual nonzeros")
+    require(np.array_equal((frame.T @ dual.astype(np.int64) % PRIME).astype(np.uint8), trace), "frame re-evaluation")
+
+    print("UST.G3CC selected terminal source dualization verifier: PASS")
+    print("source_terms_mod11=94 H02_nnz=229 trace_nnz=227 B103_dual_nnz=224 bad_normal_forms=0")
+
+
+if __name__ == "__main__":
+    main()

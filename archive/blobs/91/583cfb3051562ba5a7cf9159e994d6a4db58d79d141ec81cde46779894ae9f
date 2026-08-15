@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+"""Recover component-16 vectors by simultaneous common denominators."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import math
+import statistics
+import time
+from pathlib import Path
+from typing import Any
+
+from probe_ust_g3ec_component12_padic_kernel import invert_matrix_mod
+from probe_ust_g3en_component16_six_embedding_lattice import (
+    COLUMNS,
+    FIELD_DEGREE,
+    PRIME,
+    RELATIONS,
+    ROOT,
+    exact_replay,
+)
+from ust_flatter_backend import reduce_flatter
+
+
+RESIDUE = ROOT / "evidence/ust_g3em/H02.component16.reduced.padic-exp128.residue.json.gz"
+OUTPUT = ROOT / "evidence/ust_g3es/H02.component16.common_denominator_lattice.json.gz"
+FREE_COLUMNS = tuple(range(986, 1007))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def centered(value: int, modulus: int) -> int:
+    value %= modulus
+    return value - modulus if value > modulus // 2 else value
+
+
+def load_gzip(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_gzip_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.write("\n")
+    temporary.replace(path)
+
+
+def coefficient_residues(
+    kernels: list[list[list[int]]],
+    inverse_vandermonde: list[list[int]],
+    modulus: int,
+    relation: int,
+) -> list[list[int]]:
+    return [
+        [
+            sum(
+                inverse_vandermonde[degree][root]
+                * int(kernels[root][coordinate][relation])
+                for root in range(FIELD_DEGREE)
+            )
+            % modulus
+            for degree in range(FIELD_DEGREE)
+        ]
+        for coordinate in range(COLUMNS)
+    ]
+
+
+def sample_pairs(count: int, offset: int) -> list[tuple[int, int]]:
+    available = [
+        coordinate for coordinate in range(COLUMNS)
+        if coordinate not in FREE_COLUMNS
+    ]
+    require(count >= 2 and count <= len(available), "sample count")
+    coordinates = sorted({
+        available[round(index * (len(available) - 1) / (count - 1))]
+        for index in range(count)
+    })
+    require(len(coordinates) == count, "distinct sample coordinates")
+    return [
+        (coordinate, (index + offset) % FIELD_DEGREE)
+        for index, coordinate in enumerate(coordinates)
+    ]
+
+
+def build_lattice(
+    residues: list[list[int]],
+    pairs: list[tuple[int, int]],
+    modulus: int,
+    denominator_scale_bits: int,
+    tail_scale_bits: int,
+) -> tuple[list[list[int]], int, int]:
+    denominator_scale = 1 << denominator_scale_bits
+    tail_scale = 1 << tail_scale_bits
+    dimension = 1 + len(pairs)
+    lattice = [[denominator_scale] + [
+        centered(residues[coordinate][degree], modulus) * tail_scale
+        for coordinate, degree in pairs
+    ]]
+    lattice.extend(
+        [0]
+        + [
+            modulus * tail_scale if column == row else 0
+            for column in range(len(pairs))
+        ]
+        for row in range(len(pairs))
+    )
+    require(len(lattice) == dimension and len(lattice[0]) == dimension, "square lattice")
+    return lattice, denominator_scale, tail_scale
+
+
+def denominator_candidates(
+    reduced: list[list[int]],
+    denominator_scale: int,
+    modulus: int,
+) -> list[int]:
+    ranked = sorted(
+        reduced,
+        key=lambda row: sum(int(value) * int(value) for value in row),
+    )
+    candidates: set[int] = set()
+    seed_rows = ranked[: min(12, len(ranked))]
+    rows = list(seed_rows)
+    for left in range(len(seed_rows)):
+        for right in range(left + 1, len(seed_rows)):
+            rows.append([
+                int(a) + int(b)
+                for a, b in zip(seed_rows[left], seed_rows[right], strict=True)
+            ])
+            rows.append([
+                int(a) - int(b)
+                for a, b in zip(seed_rows[left], seed_rows[right], strict=True)
+            ])
+    for row in rows:
+        if row[0] % denominator_scale:
+            continue
+        denominator = row[0] // denominator_scale
+        denominator = centered(denominator, modulus)
+        if denominator < 0:
+            denominator = -denominator
+        if denominator and math.gcd(denominator, modulus) == 1:
+            candidates.add(denominator)
+    return sorted(candidates)
+
+
+def candidate_score(
+    denominator: int,
+    residues: list[list[int]],
+    modulus: int,
+    pairs: list[tuple[int, int]],
+) -> tuple[int, int, int]:
+    bits = [
+        abs(centered(denominator * residues[coordinate][degree], modulus)).bit_length()
+        for coordinate, degree in pairs
+    ]
+    return (int(statistics.median(bits)), max(bits), denominator.bit_length())
+
+
+def integer_vector(
+    denominator: int,
+    residues: list[list[int]],
+    modulus: int,
+) -> list[tuple[int, ...]]:
+    return [
+        tuple(centered(denominator * value, modulus) for value in row)
+        for row in residues
+    ]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--residue", type=Path, default=RESIDUE)
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--samples", type=int, default=24)
+    parser.add_argument("--delta", type=float, default=0.99)
+    arguments = parser.parse_args()
+    started = time.monotonic()
+
+    residue_path = arguments.residue
+    if not residue_path.is_absolute():
+        residue_path = ROOT / residue_path
+    output_path = arguments.output
+    if not output_path.is_absolute():
+        output_path = ROOT / output_path
+    residue = load_gzip(residue_path)
+    require(residue["shape"] == [FIELD_DEGREE, COLUMNS, RELATIONS], "residue shape")
+    modulus = int(residue["modulus"])
+    roots = [int(value) for value in residue["lifted_roots"]]
+    kernels = residue["kernels"]
+    inverse_vandermonde = invert_matrix_mod(
+        [
+            [pow(root, degree, modulus) for degree in range(FIELD_DEGREE)]
+            for root in roots
+        ],
+        modulus,
+    )
+    score_pairs = sample_pairs(120, 3)
+    selected_denominators: list[int] = []
+    selected_vectors: list[list[tuple[int, ...]]] = []
+    relation_records: list[dict[str, Any]] = []
+    for relation in range(RELATIONS):
+        relation_started = time.monotonic()
+        residues = coefficient_residues(
+            kernels, inverse_vandermonde, modulus, relation
+        )
+        candidates: set[int] = set()
+        reductions: list[dict[str, Any]] = []
+        for offset in range(FIELD_DEGREE):
+            pairs = sample_pairs(arguments.samples, offset)
+            lattice, denominator_scale, tail_scale = build_lattice(
+                residues, pairs, modulus, 0, 0
+            )
+            reduced = reduce_flatter(lattice, arguments.delta)
+            found = denominator_candidates(reduced, denominator_scale, modulus)
+            candidates.update(found)
+            reductions.append({
+                "offset": offset,
+                "lattice_dimension": len(lattice),
+                "denominator_scale_bits": 0,
+                "tail_scale_bits": 0,
+                "candidate_count": len(found),
+            })
+        require(candidates, f"relation {relation} denominator candidates")
+        ranked = sorted(
+            (candidate_score(value, residues, modulus, score_pairs), value)
+            for value in candidates
+        )
+        best_score, denominator = ranked[0]
+        vector = integer_vector(denominator, residues, modulus)
+        selected_denominators.append(denominator)
+        selected_vectors.append(vector)
+        relation_records.append({
+            "relation": relation,
+            "candidate_count": len(candidates),
+            "best_denominator": str(denominator),
+            "best_score": {
+                "median_coefficient_bits": best_score[0],
+                "max_coefficient_bits": best_score[1],
+                "denominator_bits": best_score[2],
+            },
+            "reductions": reductions,
+            "elapsed_seconds": time.monotonic() - relation_started,
+        })
+        print(
+            f"G3ES relation={relation + 1}/{RELATIONS} candidates={len(candidates)} "
+            f"score={best_score} elapsed={relation_records[-1]['elapsed_seconds']:.3f}",
+            flush=True,
+        )
+
+    exact_nonzeros, exact_slots = exact_replay(selected_vectors)
+    payload = {
+        "schema": "ust.g3es.h02.component16.common-denominator-lattice.v1",
+        "date": "2026-08-14",
+        "residue": residue_path.relative_to(ROOT).as_posix(),
+        "modulus_bits": modulus.bit_length(),
+        "relations": relation_records,
+        "selected_denominators": [str(value) for value in selected_denominators],
+        "exact_replay_nonzero_slots": exact_nonzeros,
+        "exact_replay_slots": exact_slots,
+        "exact_kernel_closed": exact_nonzeros == 0,
+        "elapsed_seconds": time.monotonic() - started,
+        "claim_boundary": (
+            "Common-denominator recovery is a candidate search. Only 21 nonzero "
+            "scaled vectors with literal zero Q(gamma) replay promote component16."
+        ),
+    }
+    write_gzip_atomic(output_path, payload)
+    print(
+        f"G3ES_FINAL exact_kernel_closed={exact_nonzeros == 0} "
+        f"exact_nonzeros={exact_nonzeros}/{exact_slots} "
+        f"elapsed={payload['elapsed_seconds']:.3f}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

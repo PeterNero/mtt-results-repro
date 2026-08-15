@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Run one resumable prime shard of the G3GI catalecticant campaign."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import platform
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+import numpy as np
+
+
+HERE = Path(__file__).resolve().parent
+INPUT = HERE / "input" / "g3gi_full_catalecticant_input.npz"
+MANIFEST = HERE / "input" / "g3gi_full_catalecticant_input.json"
+OUTPUTS = HERE / "outputs"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def atomic_json(path: Path, payload: dict[str, object]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def rref(
+    matrix: np.ndarray, prime: int, *, emit_nullspace: bool = False
+) -> tuple[int, tuple[int, ...], np.ndarray | None]:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    rows, columns = work.shape
+    pivot_row = 0
+    pivots: list[int] = []
+    for column in range(columns):
+        choices = np.flatnonzero(work[pivot_row:, column])
+        if choices.size == 0:
+            continue
+        selected = pivot_row + int(choices[0])
+        if selected != pivot_row:
+            work[[pivot_row, selected]] = work[[selected, pivot_row]]
+        work[pivot_row] = (
+            work[pivot_row]
+            * pow(int(work[pivot_row, column]), -1, prime)
+        ) % prime
+        for row in range(rows):
+            if row != pivot_row and work[row, column]:
+                work[row] = (
+                    work[row]
+                    - int(work[row, column]) * work[pivot_row]
+                ) % prime
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    if not emit_nullspace:
+        return pivot_row, tuple(pivots), None
+    free = [column for column in range(columns) if column not in set(pivots)]
+    nullspace = np.zeros((columns, len(free)), dtype=np.int64)
+    for local, column in enumerate(free):
+        nullspace[column, local] = 1
+        for row, pivot in enumerate(pivots):
+            nullspace[pivot, local] = (-work[row, column]) % prime
+    return pivot_row, tuple(pivots), nullspace
+
+
+def source_candidate(
+    source: tuple[int, int, int],
+    kernel: np.ndarray,
+    prime: int,
+    *,
+    ordinary: bool,
+) -> np.ndarray:
+    basis6 = homogeneous_exponents(6)
+    lookup6 = {exponent: row for row, exponent in enumerate(basis6)}
+    basis15 = homogeneous_exponents(15)
+    result = np.zeros((136, 18), dtype=np.int64)
+    factorial = [math.factorial(value) % prime for value in range(22)]
+    for output_row, beta in enumerate(basis15):
+        alpha = tuple(source[index] - beta[index] for index in range(3))
+        input_row = lookup6.get(alpha)
+        if input_row is None:
+            continue
+        coefficient = 1
+        if ordinary:
+            for index in range(3):
+                coefficient = (
+                    coefficient
+                    * factorial[source[index]]
+                    * pow(factorial[beta[index]], -1, prime)
+                ) % prime
+        result[output_row] = coefficient * kernel[input_row] % prime
+    return result
+
+
+def run_fiber(
+    kernel: np.ndarray,
+    target: np.ndarray,
+    prime: int,
+    *,
+    ordinary: bool,
+) -> dict[str, object]:
+    target_rank = rref(target, prime)[0]
+    require(target_rank == 18, "target rank")
+    _, _, annihilator = rref(target.T, prime, emit_nullspace=True)
+    require(
+        annihilator is not None and annihilator.shape == (136, 118),
+        "target annihilator",
+    )
+    basis21 = homogeneous_exponents(21)
+    candidates = [
+        source_candidate(source, kernel, prime, ordinary=ordinary)
+        for source in basis21
+    ]
+    obstruction = np.stack(
+        [
+            (annihilator.T @ candidate % prime).reshape(-1)
+            for candidate in candidates
+        ],
+        axis=1,
+    )
+    rank, _, nullspace = rref(obstruction, prime, emit_nullspace=True)
+    require(nullspace is not None, "source nullspace")
+    structural_zero = tuple(
+        index for index, candidate in enumerate(candidates) if not np.any(candidate)
+    )
+    induced_ranks = []
+    supports = []
+    for column in range(nullspace.shape[1]):
+        source_coefficients = nullspace[:, column]
+        combined = sum(
+            int(coefficient) * candidate
+            for coefficient, candidate in zip(
+                source_coefficients, candidates, strict=True
+            )
+        ) % prime
+        induced_ranks.append(rref(combined, prime)[0])
+        supports.append([int(value) for value in np.flatnonzero(source_coefficients)])
+    return {
+        "obstruction_rank": rank,
+        "nullity": int(nullspace.shape[1]),
+        "structural_zero_indices": list(structural_zero),
+        "nullspace_supports": supports,
+        "induced_map_ranks": induced_ranks,
+        "all_admissible_sources_induce_zero": all(value == 0 for value in induced_ranks),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prime-index", required=True, type=int)
+    arguments = parser.parse_args()
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    require(sha256(INPUT) == manifest["input"]["sha256"], "input hash")
+    arrays = np.load(INPUT, allow_pickle=False)
+    prime_index = arguments.prime_index
+    require(0 <= prime_index < 8, "prime index")
+    prime = int(arrays["primes"][prime_index])
+    roots = arrays["roots"][prime_index].astype(np.int64)
+    kernel = arrays["pdelta_kernels"][prime_index].astype(np.int64) % prime
+    targets = arrays["degree15_targets"][prime_index].astype(np.int64) % prime
+    require(kernel.shape == (28, 18), "kernel shape")
+    require(targets.shape == (6, 136, 18), "target shape")
+    OUTPUTS.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = OUTPUTS / f"shard_{prime_index}.checkpoint.json"
+    output_path = OUTPUTS / f"shard_{prime_index}.json"
+    checkpoint: dict[str, object] = {
+        "schema": "ust.g3gi.full-catalecticant-shard-checkpoint.v1",
+        "input_sha256": sha256(INPUT),
+        "prime_index": prime_index,
+        "prime": prime,
+        "roots": [int(value) for value in roots],
+        "python": sys.version,
+        "platform": platform.platform(),
+        "numpy": np.__version__,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed": {},
+    }
+    if checkpoint_path.is_file():
+        prior = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        if (
+            prior.get("input_sha256") == checkpoint["input_sha256"]
+            and prior.get("prime_index") == prime_index
+        ):
+            checkpoint = prior
+
+    for root_index, gamma in enumerate(roots):
+        for convention, ordinary in (("divided_power", False), ("ordinary", True)):
+            key = f"{root_index}:{convention}"
+            if key in checkpoint["completed"]:
+                print(f"G3GI p={prime} g={gamma} {convention}: resumed", flush=True)
+                continue
+            result = run_fiber(
+                kernel,
+                targets[root_index],
+                prime,
+                ordinary=ordinary,
+            )
+            checkpoint["completed"][key] = {
+                "gamma": int(gamma),
+                **result,
+            }
+            atomic_json(checkpoint_path, checkpoint)
+            print(
+                f"G3GI p={prime} g={gamma} {convention}: "
+                f"rank={result['obstruction_rank']} nullity={result['nullity']} "
+                f"zero={result['all_admissible_sources_induce_zero']}",
+                flush=True,
+            )
+
+    require(len(checkpoint["completed"]) == 12, "complete shard")
+    output = {
+        **checkpoint,
+        "schema": "ust.g3gi.full-catalecticant-shard.v1",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "accepted": False,
+    }
+    atomic_json(output_path, output)
+    print(f"G3GI shard complete: {output_path.name}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

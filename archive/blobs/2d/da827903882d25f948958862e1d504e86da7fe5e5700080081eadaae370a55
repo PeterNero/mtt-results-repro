@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Verify the exact direct SBA-warm ``qslimgb`` G3AP setup."""
+
+from __future__ import annotations
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_hedge as sba
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_warm_qslimgb_hedge as qslim
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def main() -> None:
+    label = "graph_b"
+    order = permuted.PERMUTATIONS[label]
+    source = qslim.SOURCE.read_text(encoding="ascii")
+    seed = sba.paths(label)
+    require(
+        all(seed[key].is_file() for key in ("script", "output", "module_cache")),
+        "graph_b SBA artifacts",
+    )
+    require(
+        seed["script"].read_text(encoding="ascii")
+        == sba.candidate_script(source, label, order, seed["module_cache"]),
+        "SBA script reconstruction",
+    )
+    raw = seed["output"].read_text(encoding="utf-8")
+    require(
+        f"{sba.marker(label)}_LEADER_EXPORT_PASS" in raw
+        and not any(line.lstrip().startswith("?") for line in raw.splitlines()),
+        "SBA execution",
+    )
+    seed_new = sba.parse_module(raw, label)
+    _, new_to_old = permuted.position_maps(order)
+    seed_old = [(new_to_old[component], exponent) for component, exponent in seed_new]
+    standards, sectors = fiber2.enumerate_target(seed_old)
+    require(
+        len(seed_new) == 1383
+        and len(standards) == 6853
+        and sum(sector["enumerated_monomials"] for sector in sectors.values())
+        == fiber2.EXPECTED_TOTAL,
+        "replayed graph_b diagnostic",
+    )
+
+    route = qslim.paths(label)
+    script = qslim.candidate_script(
+        source,
+        label,
+        order,
+        seed["module_cache"],
+        route["module_cache"],
+    )
+    require(qslim.warm.direct.MODULE_RING in script, "direct polynomial module")
+    require("qring q=" not in script, "no quotient-ring premise")
+    require("truncatedHilbert" not in script, "no Hilbert premise")
+    require('LIB("standard.lib");' in script, "qslimgb library")
+    require("module G=qslimgb(Warm);" in script, "qslimgb continuation")
+    require("module Warm=MT,Seed;" in script, "selected module plus SBA seed")
+    require(f"degBound={qslim.TARGET_SCALAR_DEGREE};" in script, "target bound")
+    require(script.count("*gen(") >= 204, "complete selected input")
+    print(
+        "UST.G3AP direct H-major SBA-warm/qslimgb route: PASS "
+        "selected=39 truncators=165 SBA_seed=1383 seed_upper=6853 "
+        f"target={fiber2.EXPECTED_TOTAL} proof_status=CANDIDATE_ONLY"
+    )
+
+
+if __name__ == "__main__":
+    main()

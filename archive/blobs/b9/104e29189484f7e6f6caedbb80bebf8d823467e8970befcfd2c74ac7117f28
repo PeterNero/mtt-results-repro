@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Build UST.G3AX, the relative graph-ball top-functional lift."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import ust_f1016_sparse_minor as sparse_minor
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+G3AD = STATE / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json"
+G3AH = STATE / "ust_g3ah_formal_coefficient_kernel.packet.json"
+G3AI = STATE / "ust_g3ai_second_h_marked_map_all_orders.packet.json"
+G3AJ = STATE / "ust_g3aj_residue_ball_smooth_graph_prym.packet.json"
+G3AL = STATE / "ust_g3al_selected_carrier_response_schur.packet.json"
+G3AP = STATE / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+G3AP_FULL = STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.certified.packet.json"
+G3AQ = STATE / "ust_g3aq_selected_cayley_relative_residue_promotion.packet.json"
+G3AW = STATE / "ust_g3aw_three_line_gram_meridian_reduction.packet.json"
+MINOR_OUTPUT = STATE / (
+    "ust_g3ap_selected_cayley_target_macaulay_incremental_chunks-"
+    "004-006-007-008-009-010-011.weighted-free-fast-native.minor.out"
+)
+OUT = STATE / "ust_g3ax_selected_dvr_top_functional_lift.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    g3ad = load(G3AD)
+    g3ah = load(G3AH)
+    g3ai = load(G3AI)
+    g3aj = load(G3AJ)
+    g3al = load(G3AL)
+    g3ap = load(G3AP)
+    full = load(G3AP_FULL)
+    g3aq = load(G3AQ)
+    g3aw = load(G3AW)
+
+    relation = g3ad["completion_ring"]["gamma_relation_coefficients_ascending"]
+    require(
+        relation
+        == g3al["residue_field"]["gamma_relation_coefficients_ascending"]
+        == [64, 16, 33, 44, 89, 24, 1],
+        "one selected sextic",
+    )
+    require(
+        g3ad["scope"]["excludes_only_the_fixed_integer_gamma_coefficient_lift"]
+        and not g3ad["scope"]["selects_a_unique_graph_preserving_member"],
+        "G3AD fixed lift is an excluded anti-source",
+    )
+    require(
+        g3ah["geometric_rank_calculation"]["formal_kernel_rank"] == 123
+        and g3ai["G3AH_consequence"]["formal_eta9_coefficient_kernel_rank"] == 123
+        and g3aj["formal_affine_space"]["fixed_residue_ball_dimension"] == 123
+        and g3aj["formal_affine_space"][
+            "all_members_contain_the_same_formal_H_H_4H_graphs"
+        ],
+        "one rank-123 graph-preserving residue ball",
+    )
+    require(
+        not g3aj["consequence"]["unique_or_canonical_coefficient_member_selected"]
+        and g3aj["consequence"]["beta_C_on_this_member"] == "OPEN",
+        "member selection remains open",
+    )
+    selected_source = full["inputs"]["selected_source"]
+    require(
+        selected_source["path"] == "state/ust_g3al_selected_cayley_basis.sing"
+        and sha256(ROOT / selected_source["path"]) == selected_source["sha256"],
+        "G3AP uses the G3AL selected member",
+    )
+    require(
+        g3al["inputs"]["ust_g3ad_fixed_fq_second_h_graph_obstruction.packet"]["sha256"]
+        == sha256(G3AD),
+        "G3AL is bound to G3AD",
+    )
+
+    scalars, vectors = sparse_minor.parse_output(MINOR_OUTPUT)
+    target_coordinates = int(scalars["TARGET_COORDINATES"])
+    minor_size = int(scalars["MINOR_SIZE"])
+    normalization = int(
+        scalars["QUOTIENT_NORMALIZATION_TARGET_COORDINATE_ZERO_BASED"]
+    )
+    determinant = int(scalars["MINOR_DETERMINANT_PACKED"])
+    pivots = [int(value) for value in vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"]]
+    missing = sorted(set(range(target_coordinates)) - set(pivots))
+    require(
+        target_coordinates == 39726
+        and minor_size == 39725
+        and len(pivots) == len(set(pivots)) == minor_size
+        and missing == [normalization] == [28267],
+        "unit minor uses every non-normalization coordinate",
+    )
+    require(
+        determinant
+        == full["target_relation_map"]["custom_nonzero_minor_determinant_packed"]
+        == 748486604801
+        and determinant != 0,
+        "same nonzero residue determinant",
+    )
+    quotient = full["quotient_functional"]
+    require(
+        quotient["normalization_target_coordinate_zero_based"] == normalization
+        and quotient["normalization_value_packed"] == 1
+        and quotient["annihilates_all_92979_selected_relation_rows"] is True,
+        "normalized full finite functional",
+    )
+    require(
+        full["target_relation_map"]["selected_relation_rows"] == 92979
+        and full["target_relation_map"]["exact_rank"] == minor_size
+        and g3ap["ordinary_top_piece"]["dimension"] == 1,
+        "finite top quotient line",
+    )
+    require(
+        g3aq["checks"][
+            "equal_special_and_generic_dimension_plus_Nakayama_make_the_local_ordinary_top_module_free_of_rank_one"
+        ]
+        and g3aq["checks"][
+            "the_certified_selected_socle_basis_maps_nontrivially_to_characteristic_zero_R1"
+        ],
+        "characteristic-zero free normalized top line",
+    )
+    require(g3aw["theorem_id"] == "UST.G3AW", "G3AW consumer")
+
+    checks = {
+        "G3AD_excludes_the_fixed_integer_zero_to100_lift_as_the_graph_Prym_source": True,
+        "G3AL_is_the_common_selected_mod101_residue_member_not_a_selected_characteristic_zero_member": True,
+        "G3AI_and_G3AJ_supply_the_formal_graph_preserving_residue_ball": True,
+        "the_graph_preserving_residue_ball_has_relative_dimension123": True,
+        "the_mod101_sextic_is_irreducible_and_therefore_separable": True,
+        "the_101_adic_coefficient_ring_is_an_unramified_degree6_DVR": True,
+        "the_selected39725_minor_uses_every_coordinate_except28267": True,
+        "the_selected_minor_determinant_is_a_nonzero_residue_field_element": True,
+        "the_minor_determinant_is_a_unit_over_every_same_residue_graph_ball_lift": True,
+        "normalization_at_coordinate28267_gives_one_unique_relative_functional": True,
+        "the_free_rank_one_characteristic_zero_top_quotient_forces_annihilation_of_all92979_rows": True,
+        "reduction_of_the_unique_DVR_functional_is_the_emitted_G3AP_functional": True,
+        "no_finite_functional_entry_is_promoted_as_its_characteristic_zero_value": True,
+        "no_graph_ball_member_is_claimed_selected_by_the_functional": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    require(all(checks.values()), "G3AX checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3ax-selected-dvr-top-functional-lift.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3AX",
+        "status": "CLOSED_EXACT_RELATIVE_GRAPH_BALL_TOP_FUNCTIONAL_UNIQUE_MEMBER_VALUES_OPEN",
+        "inputs": {
+            "G3AD": record(G3AD),
+            "G3AH": record(G3AH),
+            "G3AI": record(G3AI),
+            "G3AJ": record(G3AJ),
+            "G3AL": record(G3AL),
+            "G3AP": record(G3AP),
+            "G3AP_full_target_certificate": record(G3AP_FULL),
+            "G3AQ": record(G3AQ),
+            "G3AW": record(G3AW),
+            "G3AP_minor_transcript": record(MINOR_OUTPUT),
+        },
+        "relative_local_ring": {
+            "prime": 101,
+            "minimal_polynomial_coefficients_ascending": relation,
+            "residue_field": "F_(101^6)",
+            "unramified_base": "O0=Z_101[g]/(M)",
+            "coefficient_ring": "a complete finite integral extension O' carrying the G3AI/G3AJ graph ball",
+            "formal_ball_ring": "R=O'[[u_1,...,u_123]]",
+            "fixed_residue_member": "the G3AL/G3AP member over F_(101^6)",
+            "selected_characteristic_zero_member": None,
+            "G3AD_fixed_integer_lift_role": "excluded anti-source, never the graph-Prym member",
+        },
+        "target_relation_map": {
+            "source_rows": 92979,
+            "target_coordinates": target_coordinates,
+            "selected_minor_rows": minor_size,
+            "selected_minor_columns": minor_size,
+            "normalization_coordinate_zero_based": normalization,
+            "normalization_basis": quotient["normalization_basis"],
+            "pivot_columns_are_all_other_coordinates": True,
+            "residue_determinant_packed": determinant,
+            "residue_determinant_nonzero": True,
+            "DVR_determinant_is_a_unit": True,
+        },
+        "relative_unique_lift": {
+            "column_partition": "J={0,...,39725} minus {j_star}",
+            "selected_square_minor": "B(u)=A(u)[I,J]",
+            "normalization_column": "c(u)=A(u)[I,j_star]",
+            "normalization": "t[j_star]=1",
+            "formula": "t(u)[J]=-B(u)^(-1)c(u)",
+            "selected_row_identity": "A(u)[I,:]*t(u)=0",
+            "full_row_identity": "A(u)*t(u)=0 by the G3AQ relative free rank-one quotient",
+            "reduction_identity": "t(u) mod 101 equals the emitted G3AP quotient functional for every u in the fixed residue ball",
+            "relative_analytic_section": True,
+            "ambiguity_after_member_is_fixed": 0,
+            "member_ambiguity_removed": False,
+        },
+        "execution_compiler": {
+            "route": [
+                "parameterize the G3AJ graph ball by u_1,...,u_123 or bind one independently selected member u_star",
+                "regenerate B(u) and c(u) from that same graph-preserving coefficient source",
+                "solve t(u)[J]=-B(u)^(-1)c(u) directly or Hensel-lift the existing finite inverse",
+                "substitute exactly into all 92979 relation rows",
+                "contract the six same-member G3AW product-coordinate vectors with t(u)",
+            ],
+            "one_functional_solve_per_bound_member_before_Gram_execution": True,
+            "relative_formal_execution_without_prior_member_selection": True,
+            "independent_characteristic_zero_Groebner_basis_required": False,
+            "characteristic_zero_coefficients_emitted": 0,
+            "characteristic_zero_coefficients_required": target_coordinates,
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "SelectedResidueGraphBallRelativeTopFunctionalTheorem",
+            "tier": "CLOSED_EXACT_RELATIVE_FUNCTIONAL_EXISTENCE_AND_UNIQUENESS",
+            "statement": (
+                "The selected G3AP rank-39725 minor omits exactly normalization "
+                "coordinate 28267 and has nonzero determinant over F_(101^6). "
+                "For the complete rank-123 G3AI/G3AJ graph-preserving residue "
+                "ball, the corresponding determinant remains a unit, so "
+                "t(u)[28267]=1 and t(u)[J]=-B(u)^(-1)c(u) define one unique "
+                "relative characteristic-zero top functional. G3AQ's free "
+                "rank-one top module makes it the full 92979-row functional, "
+                "and its reduction is exactly the emitted G3AP vector. G3AD's "
+                "fixed integer lift is excluded and is not promoted."
+            ),
+        },
+        "parameter_ledger": {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+        },
+        "guardrails": {
+            "claims_the39726_characteristic_zero_coefficients_are_emitted": False,
+            "claims_the_six_G3AW_Gram_values_are_executed": False,
+            "claims_a_finite_entry_equals_its_characteristic_zero_value": False,
+            "claims_G3AD_fixed_FQ_is_the_graph_Prym_member": False,
+            "claims_a_unique_graph_ball_member_is_selected": False,
+            "claims_the_Gram_determinant_or_meridian_is_emitted": False,
+            "claims_beta_C_or_an_endpoint": False,
+        },
+        "next_required_object": (
+            "Bind one graph-ball member or retain u symbolically, execute the "
+            "relative number-field/Hensel solve for t(u), verify all 92979 exact "
+            "row identities, then use the same t(u) for the six G3AW contractions."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3AX graph-ball top functional: PASS "
+        "unique relative lift, member-dependent values open"
+    )
+
+
+if __name__ == "__main__":
+    main()

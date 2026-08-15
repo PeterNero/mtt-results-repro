@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Independently verify the G3CI source anchor and jet comparisons."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3ci_selected_source_family_jet as builder
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ci_selected_source_family_jet.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def local(record: dict) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record["bytes"], f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def residual(left: np.ndarray, right: np.ndarray) -> int:
+    return int(np.count_nonzero((left.astype(np.int64) - right.astype(np.int64)) % PRIME))
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_GF11_RAW_SOURCE_DOES_NOT_ANCHOR_AND_H02_GRADED_SOURCE_RICCATI_JET_REJECTED",
+        "status",
+    )
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    g3ca = load(local(packet["inputs"]["G3CA"]))
+    g3cc = load(local(packet["inputs"]["G3CC"]))
+    g3ch = load(local(packet["inputs"]["G3CH"]))
+    exact = load(local(packet["inputs"]["G3CA_exact_source"]))
+    macaulay_path = mld / packet["inputs"]["H02_Macaulay"]["repository_relative_path"]
+    require(sha256(macaulay_path) == packet["inputs"]["H02_Macaulay"]["sha256"], "Macaulay hash")
+    macaulay = load(macaulay_path)
+    expected_raw = builder.source_ambient_vector(exact, macaulay)
+    actual_raw = sparse.load_npz(local(packet["raw_polynomial_source"]["ambient_vector"])).tocsc()
+    difference = (expected_raw.astype(np.int32) - actual_raw.astype(np.int32)).tocsc()
+    difference.data %= PRIME
+    difference.eliminate_zeros()
+    require(difference.nnz == 0, "raw source reconstruction")
+
+    base_h02, q02, _ = solver_io.read_coordinates(
+        local(packet["execution"]["base_H02_coordinates"])
+    )
+    base_h11, q11, _ = solver_io.read_coordinates(
+        local(packet["execution"]["base_H11_coordinates"])
+    )
+    prime_h02, qp02, _ = solver_io.read_coordinates(
+        local(packet["execution"]["prime_H02_coordinates"])
+    )
+    prime_h11, qp11, _ = solver_io.read_coordinates(
+        local(packet["execution"]["prime_H11_coordinates"])
+    )
+    require((q02, q11, qp02, qp11) == (248, 1013, 248, 1013), "coordinate quotient sizes")
+    base = np.concatenate(
+        [base_h11[:q11, 0].toarray().ravel(), base_h02[:q02, 0].toarray().ravel()]
+    ).astype(np.uint8)
+    prime = np.concatenate(
+        [prime_h11[:qp11, 0].toarray().ravel(), prime_h02[:qp02, 0].toarray().ravel()]
+    ).astype(np.uint8)
+    require(np.array_equal(base, np.load(local(packet["terminal_anchor"]["base_lower_vector"]), allow_pickle=False)), "base vector")
+    require(np.array_equal(prime, np.load(local(packet["terminal_source_jet"]["actual_source_jet"]), allow_pickle=False)), "prime vector")
+
+    g3cc_source = np.load(
+        ROOT / g3cc["terminal_source"]["B103_H02_vector"]["path"], allow_pickle=False
+    )
+    anchor = np.concatenate([np.zeros(1013, dtype=np.uint8), g3cc_source])
+    require(residual(base[1013:], anchor[1013:]) == 0, "H02 anchor")
+    require(residual(base, anchor) == packet["terminal_anchor"]["full_lower_anchor_residual_against_G3CD"] == 920, "full anchor residual")
+
+    required = np.load(
+        ROOT / g3ch["source_jet_cutset"]["unique_required_source_jet"]["path"], allow_pickle=False
+    )
+    graded = np.load(
+        local(packet["H02_associated_graded_source"]["source_jet"]), allow_pickle=False
+    )
+    require(not np.any(graded[:1013]), "graded H11 vanishing")
+    require(
+        residual(prime, required)
+        == packet["terminal_source_jet"]["entrywise_residual_nonzeros"]
+        == 1145,
+        "raw jet residual",
+    )
+    require(
+        residual(graded, required)
+        == packet["H02_associated_graded_source"]["required_G3CH_residual_nonzeros"]
+        == 1139,
+        "graded jet residual",
+    )
+    require(packet["H02_associated_graded_source"]["terminal_anchor_residual_against_G3CD"] == 0, "graded anchor")
+    for key in (
+        "base_H02_solver_log",
+        "base_H11_solver_log",
+        "prime_H02_solver_log",
+        "prime_H11_solver_log",
+    ):
+        require("SUCCESS" in local(packet["execution"][key]).read_text(encoding="utf-8"), key)
+    require(not packet["guardrails"]["claims_no_engineered_non_graded_source_lift_can_match_G3CH"], "lift guardrail")
+    print("UST.G3CI selected source family-jet verifier: PASS")
+    print("H02_anchor=0 raw_full_anchor=920 raw_jet_residual=1145 graded_jet_residual=1139")
+
+
+if __name__ == "__main__":
+    main()

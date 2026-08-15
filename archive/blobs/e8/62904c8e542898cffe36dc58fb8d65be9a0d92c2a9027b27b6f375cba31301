@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Verify G3Y Lefschetz/Chern cutset for the transverse Fu-Yau shortcut."""
+
+from __future__ import annotations
+
+import json
+from fractions import Fraction
+from itertools import combinations
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3y_transverse_fuyau_c3_nogo.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def wedge(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, tuple[int, ...]] | None:
+    if set(left) & set(right):
+        return None
+    inversions = sum(1 for a in left for b in right if a > b)
+    return (-1 if inversions % 2 else 1), tuple(sorted(left + right))
+
+
+def rank(matrix: list[list[Fraction]]) -> int:
+    work = [row[:] for row in matrix]
+    rows = len(work)
+    cols = len(work[0]) if rows else 0
+    pivot_row = 0
+    for col in range(cols):
+        pivot = next((r for r in range(pivot_row, rows) if work[r][col]), None)
+        if pivot is None:
+            continue
+        work[pivot_row], work[pivot] = work[pivot], work[pivot_row]
+        scale = work[pivot_row][col]
+        work[pivot_row] = [entry / scale for entry in work[pivot_row]]
+        for r in range(rows):
+            if r == pivot_row or not work[r][col]:
+                continue
+            factor = work[r][col]
+            work[r] = [a - factor * b for a, b in zip(work[r], work[pivot_row])]
+        pivot_row += 1
+    return pivot_row
+
+
+def lefschetz_matrix() -> list[list[Fraction]]:
+    basis_one = [(i,) for i in range(4)]
+    basis_three = list(combinations(range(4), 3))
+    omega = [((0, 1), Fraction(1)), ((2, 3), Fraction(1))]
+    matrix = [[Fraction(0) for _ in basis_one] for _ in basis_three]
+    for column, one in enumerate(basis_one):
+        for two, coefficient in omega:
+            product = wedge(one, two)
+            if product is None:
+                continue
+            sign, term = product
+            matrix[basis_three.index(term)][column] += sign * coefficient
+    return matrix
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    upstream = packet["inputs"]["upstream_visible_physical_character"]
+    repository = next(
+        item for item in lock["repositories"] if item["id"] == upstream["repository_id"]
+    )
+    source = next(item for item in repository["sources"] if item["path"] == upstream["path"])
+    require(source["sha256"] == upstream["sha256"], "visible physical-character lock")
+
+    hypothesis = packet["transverse_fuyau_hypothesis"]
+    cutset = packet["lefschetz_cutset"]
+    chern = packet["third_chern_obstruction"]
+    decision = packet["route_decision"]
+    downstream = packet["downstream_adjudication"]
+    scope = packet["scope"]
+
+    require(hypothesis["complex_dimension_total"] == 3, "threefold dimension")
+    require(hypothesis["complex_dimension_horizontal"] == 2, "horizontal surface dimension")
+    require(hypothesis["curvature_type"] == "(1,1)", "HYM curvature type")
+    require(hypothesis["primitive_condition"] == "F wedge omega_B=0", "transverse primitive condition")
+
+    matrix = lefschetz_matrix()
+    computed_rank = rank(matrix)
+    require(len(matrix) == cutset["horizontal_Lambda3_dimension"] == 4, "Lambda3 dimension")
+    require(len(matrix[0]) == cutset["horizontal_Lambda1_dimension"] == 4, "Lambda1 dimension")
+    require(computed_rank == cutset["L_omega_from_Lambda1_to_Lambda3_rank"] == 4, "Lefschetz rank")
+    require(cutset["L_omega_is_isomorphism"] is True, "Lefschetz isomorphism")
+    require(cutset["mixed_a_forced_zero"] is True, "mixed curvature vanishes")
+    require(cutset["vertical_f_forced_zero"] is True, "vertical curvature vanishes")
+    require(cutset["curvature_forced_horizontal"] is True, "horizontal curvature only")
+
+    require(chern["horizontal_real_dimension"] == 4, "horizontal real dimension")
+    require(chern["horizontal_F_cube_zero"] is True, "horizontal sixth form vanishes")
+    require(chern["SU3_c1"] == 0, "SU3 c1")
+    require(chern["transverse_ch3"] == chern["transverse_c3"] == 0, "transverse c3 zero")
+    require(set(chern["selected_visible_c3_options"]) == {6, -6}, "selected visible c3")
+    require(all(value != 0 for value in chern["selected_visible_c3_options"]), "visible chirality nonzero")
+    require(chern["selected_visible_transverse_fuyau_compatible"] is False, "shortcut excluded")
+
+    require(decision["original_pullback_transverse_fuyau_shortcut"] == "RETIRED_FOR_SELECTED_VISIBLE_V3", "route retired")
+    require(decision["general_hull_strominger_existence_excluded"] is False, "general system not excluded")
+    require(decision["nontransverse_hym_curvature_required"] is True, "nontransverse route")
+    require(decision["G3X_ddc_potential_retained"] is True, "G3X retained")
+    require(downstream["G3Z_nontransverse_full_residual_compiler_closed"] is True, "G3Z downstream compiler")
+    require(downstream["bespoke_generalized_scalar_equation_required"] is False, "no bespoke scalar requirement")
+    require(downstream["physical_G3Z_obstruction_and_interval_bounds_emitted"] is False, "G3Z physical boundary")
+
+    require(scope["same_source_visible_V3_constructed"] is False, "visible remains open")
+    require(scope["positive_conformally_balanced_realization_closed"] is False, "positivity remains open")
+    require(scope["integral_string_class_refinement_closed"] is False, "integral refinement remains open")
+    require(scope["B_HS_01_closed"] is False, "B.HS.01 boundary")
+    require(scope["physical_promotion"] is False, "physical nonpromotion")
+    require(packet["continuous_fit_parameters"] == 0, "no fit parameters")
+    require(packet["observed_inputs"] == 0, "no observed inputs")
+
+    print("UST.G3Y transverse Fu-Yau visible-c3 cutset: PASS")
+    print(f"horizontal Lefschetz rank: {computed_rank}/4")
+    print("transverse (1,1) primitive curvature: horizontal, hence F^3=0")
+    print("selected visible c3=+/-6: transverse scalar shortcut excluded")
+    print("nontransverse compiler: closed downstream by G3Z; physical bounds open")
+
+
+if __name__ == "__main__":
+    main()

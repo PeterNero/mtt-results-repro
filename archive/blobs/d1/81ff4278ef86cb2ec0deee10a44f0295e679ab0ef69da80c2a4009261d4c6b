@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Independent replay of the UST.G3GG fixed-minor source formula."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as interpolation
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fz_component20_second_jet_o8_source as source_theorem
+import probe_ust_g3fy_selected_degree21_source_span as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3gg/H02.component20.second_jet_fixed_minor_source.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, object]) -> Path:
+    path = ROOT / str(item["path"])
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size: {path}")
+    require(sha256(path) == item["sha256"], f"record hash: {path}")
+    return path
+
+
+def operator(
+    generators: np.ndarray,
+    d7: np.ndarray,
+    b6: np.ndarray,
+    forms: tuple[np.ndarray, np.ndarray, np.ndarray],
+    prime: int,
+) -> np.ndarray:
+    first = source_theorem.canonical_columns(
+        np.concatenate(
+            (
+                graded.multiply_space(d7[:, None], 7, 8, prime),
+                graded.multiply_space(b6[:, None], 6, 8, prime),
+                np.stack(
+                    [source_theorem.derivative(forms[1], 9, variable, prime) for variable in range(3)],
+                    axis=1,
+                ),
+                np.stack(
+                    [source_theorem.derivative(forms[2], 9, variable, prime) for variable in range(3)],
+                    axis=1,
+                ),
+            ),
+            axis=1,
+        ),
+        prime,
+    )
+    second = source_theorem.canonical_columns(
+        np.concatenate(
+            (first, source_theorem.second_derivative_family(forms[0], prime)),
+            axis=1,
+        ),
+        prime,
+    )
+    multiplication = graded.multiply_space(generators, 11, 19, prime)
+    return multiplication @ source_theorem.row_lift(second) % prime
+
+
+def square_matrix(
+    source_operator: np.ndarray,
+    rows: np.ndarray,
+    zero_chart: np.ndarray,
+    normalization: int,
+    prime: int,
+) -> np.ndarray:
+    chart = np.zeros((17, 132), dtype=np.int64)
+    for row, coordinate in enumerate(
+        tuple(int(value) for value in zero_chart) + (normalization,)
+    ):
+        chart[row, coordinate] = 1
+    return np.concatenate((source_operator[rows], chart), axis=0) % prime
+
+
+def determinant_mod(matrix: np.ndarray, prime: int) -> int:
+    work = matrix.astype(np.int64).copy() % prime
+    determinant = 1
+    for column in range(work.shape[0]):
+        choices = np.flatnonzero(work[column:, column] % prime)
+        require(choices.size > 0, "nonzero determinant pivot")
+        pivot = column + int(choices[0])
+        if pivot != column:
+            work[[column, pivot]] = work[[pivot, column]]
+            determinant = -determinant
+        value = int(work[column, column])
+        determinant = determinant * value % prime
+        inverse = pow(value, -1, prime)
+        for row in range(column + 1, work.shape[0]):
+            factor = int(work[row, column]) * inverse % prime
+            if factor:
+                work[row, column:] = (
+                    work[row, column:] - factor * work[column, column:]
+                ) % prime
+    return determinant % prime
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3GG", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    input_paths: dict[str, Path | list[Path]] = {}
+    for key, item in packet["inputs"].items():
+        if isinstance(item, list):
+            input_paths[key] = [verify_record(record) for record in item]
+        else:
+            input_paths[key] = verify_record(item)
+    arrays_path = verify_record(packet["fixed_minor"]["artifact"])
+    arrays = np.load(arrays_path, allow_pickle=False)
+    rows = arrays["operator_rows"].astype(np.int64)
+    zero_chart = arrays["zero_chart"].astype(np.int64)
+    normalization = int(arrays["normalization_coordinate"][0])
+    require(rows.shape == (115,) and zero_chart.shape == (16,), "chart shapes")
+    require(normalization == 10, "normalization")
+
+    g3bi = source_theorem.load(source_theorem.G3BI)
+    g3fx = np.load(source_theorem.G3FX, allow_pickle=False)
+    g3fz = np.load(source_theorem.ARRAYS, allow_pickle=False)
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+    determinant_values = np.zeros((8, 6), dtype=np.uint32)
+    rhs = np.zeros(132, dtype=np.int64)
+    rhs[-1] = 1
+    replayed = 0
+    for prime_index, split_path in enumerate(conic.SPLIT_PACKETS):
+        split = source_theorem.load(split_path)
+        prime = int(split["field"]["prime"])
+        roots = tuple(int(value) for value in split["field"]["roots"])
+        root_rows = {int(row["gamma_root"]): row for row in split["root_kernels"]}
+        for root_index, gamma in enumerate(roots):
+            generators, _, _ = interpolation.extract_fiber(
+                ROOT / root_rows[gamma]["kernel"]["path"], prime
+            )
+            forms = tuple(
+                source_runtime.evaluate_selected_form(
+                    coefficient_vectors, theta, gamma, prime
+                )
+                for theta in range(3)
+            )
+            current = operator(
+                generators[11],
+                source_theorem.evaluate_coordinates(
+                    g3fx["D7_gamma_coordinates"], gamma, prime
+                ),
+                source_theorem.evaluate_coordinates(
+                    g3fx["B6_gamma_coordinates"], gamma, prime
+                ),
+                forms,
+                prime,
+            )
+            rank, canonical_rows, _ = graded.rref(current.T, prime)
+            require(rank == 115 and np.array_equal(canonical_rows, rows), "operator chart")
+            square = square_matrix(current, rows, zero_chart, normalization, prime)
+            determinant_values[prime_index, root_index] = determinant_mod(square, prime)
+            source = g3fz["second_jet_source_coefficients"][prime_index, root_index].astype(np.int64)
+            require(np.array_equal(square @ source % prime, rhs), "source replay")
+            replayed += 1
+    require(replayed == 48, "archived replay count")
+    require(np.array_equal(determinant_values, arrays["determinant_values"]), "determinant replay")
+
+    generic_prime = int(arrays["generic_prime"][0])
+    generic_gamma = int(arrays["generic_gamma"][0])
+    generic_generators, _, _ = interpolation.extract_fiber(
+        input_paths["generic_rank_kernel"], generic_prime
+    )
+    generic_forms = tuple(
+        source_runtime.evaluate_selected_form(
+            coefficient_vectors, theta, generic_gamma, generic_prime
+        )
+        for theta in range(3)
+    )
+    generic_operator = operator(
+        generic_generators[11],
+        source_theorem.evaluate_coordinates(
+            g3fx["D7_gamma_coordinates"], generic_gamma, generic_prime
+        ),
+        source_theorem.evaluate_coordinates(
+            g3fx["B6_gamma_coordinates"], generic_gamma, generic_prime
+        ),
+        generic_forms,
+        generic_prime,
+    )
+    generic_rank, generic_rows, _ = graded.rref(generic_operator.T, generic_prime)
+    require(generic_rank == 115 and np.array_equal(generic_rows, rows), "generic chart")
+    generic_square = square_matrix(
+        generic_operator, rows, zero_chart, normalization, generic_prime
+    )
+    require(
+        determinant_mod(generic_square, generic_prime)
+        == int(arrays["generic_determinant"][0]),
+        "generic determinant",
+    )
+    generic_source = np.load(
+        input_paths["generic_rank_source"], allow_pickle=False
+    )["source_coefficient"].astype(np.int64)
+    require(
+        np.array_equal(generic_square @ generic_source % generic_prime, rhs),
+        "generic source replay",
+    )
+    print(
+        "UST.G3GG independent verification: PASS "
+        "fibers=49 fixed_system=132x132"
+    )
+
+
+if __name__ == "__main__":
+    main()

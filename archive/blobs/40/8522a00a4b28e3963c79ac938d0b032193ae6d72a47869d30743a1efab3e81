@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Adopt completed determinantal G3AO orbit certificates."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import run_ust_g3ao_selected_cayley_toric_determinantal_retries as det
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--labels", required=True)
+    args = parser.parse_args()
+    labels = [value for value in args.labels.split(",") if value]
+    require(labels and len(labels) == len(set(labels)), "unique labels")
+    polynomials = direct.selected_polynomials()
+    source_hash = sha256(direct.SOURCE)
+    for orbit_label in labels:
+        packet_path = det.CAMPAIGN / f"{orbit_label}.packet.json"
+        require(packet_path.is_file(), f"{orbit_label} packet")
+        packet = json.loads(packet_path.read_text(encoding="ascii"))
+        require(
+            packet["schema"]
+            == "mtt.unified-source.g3ao-selected-cayley-toric-orbit-determinantal.v1",
+            f"{orbit_label} schema",
+        )
+        require(packet["label"] == orbit_label, f"{orbit_label} identity")
+        require(packet["source_sha256"] == source_hash, f"{orbit_label} source")
+        require(
+            packet["passed"] is True
+            and packet["returncode"] == 0
+            and packet["timed_out"] is False,
+            f"{orbit_label} completed pass",
+        )
+        require(all(packet["proof_scope"].values()), f"{orbit_label} proof scope")
+        supports = packet["supports"]
+        item = (
+            tuple(supports["base"]),
+            tuple(supports["elliptic"]),
+            tuple(supports["Cayley_fiber"]),
+        )
+        require(direct.label(*item) == orbit_label, f"{orbit_label} supports")
+        algorithm = packet["algorithm"].removeprefix("determinantal_")
+        require(algorithm in ("std", "slimgb"), f"{orbit_label} algorithm")
+        script = direct.CAMPAIGN / packet["script"]["path"]
+        output = direct.CAMPAIGN / packet["output"]["path"]
+        require(script.is_file() and sha256(script) == packet["script"]["sha256"], f"{orbit_label} script")
+        require(output.is_file() and sha256(output) == packet["output"]["sha256"], f"{orbit_label} output")
+        require(
+            script.read_text(encoding="ascii")
+            == det.make_script(polynomials, *item, algorithm),
+            f"{orbit_label} exact reconstruction",
+        )
+        require(
+            f"G3AO_DETERMINANTAL_TORIC_ORBIT_PASS {orbit_label}"
+            in output.read_text(encoding="utf-8"),
+            f"{orbit_label} marker",
+        )
+        canonical = dict(packet)
+        canonical["schema"] = "mtt.unified-source.g3ao-selected-cayley-toric-orbit.v1"
+        canonical_path = direct.CAMPAIGN / f"{orbit_label}.packet.json"
+        canonical_path.write_text(json.dumps(canonical, indent=2) + "\n", encoding="ascii")
+        print(f"{orbit_label}: ADOPTED EXACT DETERMINANTAL CERTIFICATE")
+
+
+if __name__ == "__main__":
+    main()

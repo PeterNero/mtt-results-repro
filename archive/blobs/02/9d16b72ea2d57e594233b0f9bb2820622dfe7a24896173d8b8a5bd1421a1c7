@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""Independently replay the UST.G3FE eight-prime graded audit."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = (
+    ROOT
+    / "evidence/ust_g3fe/H02.component20.eight_prime_graded_promotion_audit.json"
+)
+PRIMES = (21817, 33863, 37493, 38113, 68213, 69011, 72271, 73673)
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound artifact exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def eliminate(matrix: np.ndarray, prime: int) -> tuple[int, tuple[int, ...]]:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    rows, columns = work.shape
+    pivot_row = 0
+    pivots: list[int] = []
+    for column in range(columns):
+        choices = np.flatnonzero(work[pivot_row:, column])
+        if choices.size == 0:
+            continue
+        selected = pivot_row + int(choices[0])
+        work[[pivot_row, selected]] = work[[selected, pivot_row]]
+        work[pivot_row] = (
+            work[pivot_row] * pow(int(work[pivot_row, column]), -1, prime)
+        ) % prime
+        for row in range(rows):
+            if row != pivot_row and work[row, column]:
+                work[row] = (
+                    work[row] - int(work[row, column]) * work[pivot_row]
+                ) % prime
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    return pivot_row, tuple(pivots)
+
+
+def multiply(
+    vectors: np.ndarray, source_degree: int, target_degree: int, prime: int
+) -> np.ndarray:
+    source = exponents(source_degree)
+    target = exponents(target_degree)
+    lookup = {exponent: index for index, exponent in enumerate(target)}
+    columns: list[np.ndarray] = []
+    for vector in vectors.T:
+        for multiplier in exponents(target_degree - source_degree):
+            product = np.zeros(len(target), dtype=np.int64)
+            for row, exponent in enumerate(source):
+                shifted = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                product[lookup[shifted]] = vector[row]
+            columns.append(product % prime)
+    return np.stack(columns, axis=1) if columns else np.zeros((len(target), 0), dtype=np.int64)
+
+
+def evaluate(coefficients: np.ndarray, root: int, prime: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.int64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % prime
+    return value
+
+
+def linear_syzygy_multiples(syzygy: np.ndarray, prime: int) -> np.ndarray:
+    basis1 = exponents(1)
+    basis2 = exponents(2)
+    lookup2 = {exponent: index for index, exponent in enumerate(basis2)}
+    result = np.zeros((24, 3), dtype=np.int64)
+    for multiplier_index, multiplier in enumerate(basis1):
+        for generator in range(4):
+            for coefficient_index, exponent in enumerate(basis1):
+                product = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                result[
+                    generator * len(basis2) + lookup2[product], multiplier_index
+                ] = syzygy[generator * len(basis1) + coefficient_index]
+    return result % prime
+
+
+def rational_reconstruct(
+    residue: int, modulus: int, bound: int
+) -> tuple[int, int, bool]:
+    old_remainder, remainder = modulus, residue
+    old_denominator, denominator = 0, 1
+    while abs(remainder) > bound:
+        quotient = old_remainder // remainder
+        old_remainder, remainder = remainder, old_remainder - quotient * remainder
+        old_denominator, denominator = (
+            denominator,
+            old_denominator - quotient * denominator,
+        )
+    numerator = remainder
+    if denominator < 0:
+        numerator, denominator = -numerator, -denominator
+    valid = (
+        denominator > 0
+        and denominator <= bound
+        and abs(numerator) <= bound
+        and math.gcd(numerator, denominator) == 1
+    )
+    return numerator, denominator, valid
+
+
+def reconstruction_masks(
+    values: np.ndarray, primes: tuple[int, ...]
+) -> tuple[dict[str, int], np.ndarray, np.ndarray]:
+    residues = [int(value) for value in values[0]]
+    modulus = primes[0]
+    for prime, row in zip(primes[1:7], values[1:7], strict=True):
+        inverse = pow(modulus % prime, -1, prime)
+        residues = [
+            residue
+            + modulus * (((int(value) - residue % prime) * inverse) % prime)
+            for residue, value in zip(residues, row, strict=True)
+        ]
+        modulus *= prime
+    bound = math.isqrt((modulus - 1) // 2)
+    valid = np.zeros(values.shape[1], dtype=bool)
+    passed = np.zeros(values.shape[1], dtype=bool)
+    numerators = np.zeros(values.shape[1], dtype=object)
+    denominators = np.zeros(values.shape[1], dtype=object)
+    for index, (residue, target) in enumerate(
+        zip(residues, values[7], strict=True)
+    ):
+        numerator, denominator, candidate = rational_reconstruct(
+            residue, modulus, bound
+        )
+        if not candidate:
+            continue
+        valid[index] = True
+        numerators[index] = numerator
+        denominators[index] = denominator
+        passed[index] = (
+            numerator - int(target) * denominator
+        ) % primes[7] == 0
+    zeros = passed & np.asarray([value == 0 for value in numerators], dtype=bool)
+    units = (
+        passed
+        & np.asarray([abs(int(value)) == 1 for value in numerators], dtype=bool)
+        & np.asarray([int(value) == 1 for value in denominators], dtype=bool)
+    )
+    integers = passed & np.asarray(
+        [int(value) == 1 for value in denominators], dtype=bool
+    )
+    counts = {
+        "modulus": modulus,
+        "modulus_bits": modulus.bit_length(),
+        "uniqueness_bound": bound,
+        "coefficients": values.shape[1],
+        "valid_candidates": int(np.count_nonzero(valid)),
+        "holdout_passes": int(np.count_nonzero(passed)),
+        "holdout_aliases": int(np.count_nonzero(valid & ~passed)),
+        "outside_uniqueness_range": int(np.count_nonzero(~valid)),
+        "passing_zeros": int(np.count_nonzero(zeros)),
+        "passing_units": int(np.count_nonzero(units)),
+        "passing_integers": int(np.count_nonzero(integers)),
+        "passing_nontrivial_coefficients": int(
+            np.count_nonzero(passed & ~zeros & ~units)
+        ),
+    }
+    return counts, valid, passed
+
+
+def split_generator_row(row: np.ndarray) -> dict[int, np.ndarray]:
+    shapes = {11: (6, 78, 4), 14: (6, 120, 15), 15: (6, 136, 11)}
+    blocks: dict[int, np.ndarray] = {}
+    offset = 0
+    for degree in (11, 14, 15):
+        size = math.prod(shapes[degree])
+        blocks[degree] = row[offset : offset + size].reshape(shapes[degree])
+        offset += size
+    require(offset == row.size == 21648, "generator residue layout")
+    return blocks
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(
+        packet["schema"]
+        == "ust.g3fe.h02.component20.eight-prime-graded-promotion-audit.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+
+    source_paths = [bound_path(row) for row in packet["inputs"]["split_prime_packets"]]
+    residue_path = bound_path(packet["campaign"]["residue_archive"])
+    masks_path = bound_path(
+        packet["seven_prime_construction_eighth_prime_holdout"]["masks"]
+    )
+    archive = np.load(residue_path, allow_pickle=False)
+    primes = tuple(int(value) for value in archive["primes"])
+    generator_residues = archive["generator_power_basis_residues"].astype(np.int64)
+    syzygy_residues = archive["syzygy_power_basis_residues"].astype(np.int64)
+    require(primes == PRIMES, "prime order")
+    require(generator_residues.shape == (8, 21648), "generator residue shape")
+    require(syzygy_residues.shape == (8, 216), "syzygy residue shape")
+
+    for prime_index, (source_path, prime) in enumerate(
+        zip(source_paths, primes, strict=True)
+    ):
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        require(int(source["field"]["prime"]) == prime, f"source prime p={prime}")
+        require(all(source["checks"].values()), f"source checks p={prime}")
+        roots = tuple(int(value) for value in source["field"]["roots"])
+        root_rows = {int(row["gamma_root"]): row for row in source["root_kernels"]}
+        require(tuple(root_rows) == roots and len(roots) == 6, f"source roots p={prime}")
+        generator_blocks = split_generator_row(generator_residues[prime_index])
+        syzygy_coefficients = syzygy_residues[prime_index].reshape(6, 36)
+
+        normalization_profiles: list[tuple[tuple[int, ...], ...]] = []
+        for root in roots:
+            kernel_path = bound_path(root_rows[root]["kernel"])
+            payload = kernel_runtime.read_kernel(kernel_path)
+            dependent = payload["dependent"]
+            selected = np.flatnonzero(
+                (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+            )
+            kernel = (
+                payload["matrix"][COMPONENT_START:COMPONENT_PAST, :][:, selected]
+                .toarray()
+                .astype(np.int64)
+                % prime
+            )
+            require(kernel.shape == (136, 100), f"kernel shape p={prime} root={root}")
+            require(eliminate(kernel, prime)[0] == 100, f"kernel rank p={prime} root={root}")
+
+            generators = {
+                degree: evaluate(coefficients, root, prime)
+                for degree, coefficients in generator_blocks.items()
+            }
+            degree12 = multiply(generators[11], 11, 12, prime)
+            degree13 = multiply(generators[11], 11, 13, prime)
+            degree14_prior = multiply(generators[11], 11, 14, prime)
+            degree14 = np.concatenate((degree14_prior, generators[14]), axis=1)
+            prior15 = np.concatenate(
+                (
+                    multiply(generators[11], 11, 15, prime),
+                    multiply(generators[14], 14, 15, prime),
+                ),
+                axis=1,
+            )
+            generated15 = np.concatenate((prior15, generators[15]), axis=1)
+            ranks = (
+                eliminate(generators[11], prime)[0],
+                eliminate(degree12, prime)[0],
+                eliminate(degree13, prime)[0],
+                eliminate(degree14_prior, prime)[0],
+                eliminate(degree14, prime)[0],
+                eliminate(prior15, prime)[0],
+                eliminate(generated15, prime)[0],
+                eliminate(np.concatenate((generated15, kernel), axis=1), prime)[0],
+            )
+            require(
+                ranks == (4, 11, 20, 31, 46, 89, 100, 100),
+                f"graded generation p={prime} root={root}: {ranks}",
+            )
+
+            syzygies = evaluate(syzygy_coefficients, root, prime)
+            linear = syzygies[:12]
+            quadratic = syzygies[12:]
+            require(
+                np.count_nonzero((degree12 @ linear) % prime) == 0,
+                f"linear syzygy p={prime} root={root}",
+            )
+            require(
+                np.count_nonzero((degree13 @ quadratic) % prime) == 0,
+                f"quadratic syzygy p={prime} root={root}",
+            )
+            inherited = linear_syzygy_multiples(linear, prime)
+            require(eliminate(inherited, prime)[0] == 3, f"inherited syzygies p={prime} root={root}")
+            require(
+                eliminate(np.column_stack((inherited, quadratic)), prime)[0] == 4,
+                f"new quadratic syzygy p={prime} root={root}",
+            )
+            normalization_profiles.append(
+                tuple(
+                    eliminate(block, prime)[1]
+                    for block in (
+                        generators[11],
+                        generators[14],
+                        generators[15],
+                        inherited,
+                        np.column_stack((inherited, quadratic)),
+                    )
+                )
+            )
+        require(
+            len(set(normalization_profiles)) == 1,
+            f"common normalization profile p={prime}",
+        )
+        print(f"verify G3FE p={prime}: six canonical fibers replayed", flush=True)
+
+    generator_counts, generator_valid, generator_pass = reconstruction_masks(
+        generator_residues, primes
+    )
+    syzygy_counts, syzygy_valid, syzygy_pass = reconstruction_masks(
+        syzygy_residues, primes
+    )
+    declared = packet["seven_prime_construction_eighth_prime_holdout"]
+    require(generator_counts == declared["generator_coefficients"], "generator reconstruction counts")
+    require(syzygy_counts == declared["syzygy_coefficients"], "syzygy reconstruction counts")
+    masks = np.load(masks_path, allow_pickle=False)
+    require(
+        np.array_equal(np.packbits(generator_valid), masks["generator_valid"]),
+        "generator valid mask",
+    )
+    require(
+        np.array_equal(np.packbits(generator_pass), masks["generator_pass"]),
+        "generator pass mask",
+    )
+    require(
+        np.array_equal(np.packbits(syzygy_valid), masks["syzygy_valid"]),
+        "syzygy valid mask",
+    )
+    require(
+        np.array_equal(np.packbits(syzygy_pass), masks["syzygy_pass"]),
+        "syzygy pass mask",
+    )
+    require(
+        generator_counts["passing_nontrivial_coefficients"]
+        == syzygy_counts["passing_nontrivial_coefficients"]
+        == 0,
+        "no nontrivial coefficient promotion",
+    )
+    print(
+        "verify UST.G3FE component20 eight-prime graded promotion audit: PASS "
+        f"fibers=48 generator_pass={generator_counts['holdout_passes']}/21648 "
+        f"syzygy_pass={syzygy_counts['holdout_passes']}/216"
+    )
+
+
+if __name__ == "__main__":
+    main()

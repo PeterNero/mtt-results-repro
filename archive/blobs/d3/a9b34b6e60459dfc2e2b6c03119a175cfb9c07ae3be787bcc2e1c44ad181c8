@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Verify UST.G3G syzygy, determinant, K-class and FM arithmetic."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3g_two_fiber_stable_recombination.packet.json"
+G3E = ROOT / "state" / "ust_g3e_opposite_complex_bfield_wit.packet.json"
+LOCK = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def raising_shift(vector: tuple[sp.Expr, ...], variables: tuple[sp.Symbol, ...]) -> tuple[sp.Expr, ...]:
+    substitutions = {
+        variables[0]: variables[1],
+        variables[1]: variables[2],
+        variables[2]: variables[0],
+    }
+    shifted = [sp.Integer(0)] * 3
+    for index, coefficient in enumerate(vector):
+        shifted[(index + 1) % 3] = coefficient.subs(substitutions, simultaneous=True)
+    return tuple(sp.expand(value) for value in shifted)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    lock = load(LOCK)
+    require(
+        packet["schema"] == "mtt.unified-source.q79-two-fiber-stable-recombination-result.v1",
+        "schema",
+    )
+    require(packet["theorem_id"] == "UST.G3G", "theorem id")
+    require(
+        packet["state"]
+        == "CLOSED_EXACT_FIBERWISE_STABLE_RECOMBINATION_ORDINARY_DETERMINANT_NOGO_GLOBAL_PROJECTIVE_DESCENT_OPEN",
+        "state",
+    )
+
+    local_source = packet["source"]["local_g3e_packet"]
+    require(local_source["path"] == str(G3E.relative_to(ROOT)).replace("\\", "/"), "local G3E path")
+    require(hashlib.sha256(G3E.read_bytes()).hexdigest() == local_source["sha256"], "local G3E hash")
+
+    qg = next(repository for repository in lock["repositories"] if repository["id"] == "q79-quantum-gravity")
+    require(qg["commit"] == packet["source"]["q79_quantum_gravity_commit"], "qg commit")
+    locked = {source["path"]: source for source in qg["sources"]}
+    for artifact in packet["source"]["artifacts"]:
+        require(artifact["path"] in locked, f"unlocked source: {artifact['path']}")
+        require(locked[artifact["path"]]["sha256"] == artifact["sha256"], f"source hash: {artifact['path']}")
+
+    T0, T1, T2 = sp.symbols("T0 T1 T2")
+    theta = (T0, T1, T2)
+    syzygies = (
+        (sp.Integer(0), T2, -T1),
+        (-T2, sp.Integer(0), T0),
+        (T1, -T0, sp.Integer(0)),
+    )
+    fermat = T0**3 + T1**3 + T2**3
+    for index, syzygy in enumerate(syzygies):
+        require(sp.expand(sum(theta[i] * syzygy[i] for i in range(3))) == 0, f"syzygy {index}")
+        nonzero_indices = [i for i, coefficient in enumerate(syzygy) if coefficient != 0]
+        require(len(nonzero_indices) == 2, f"syzygy {index} support")
+        remaining = ({0, 1, 2} - set(nonzero_indices)).pop()
+        coordinate_point = {variable: sp.Integer(int(i == remaining)) for i, variable in enumerate(theta)}
+        require(fermat.subs(coordinate_point) == 1, f"coordinate point {index} is not on Fermat cubic")
+
+    require(raising_shift(syzygies[0], theta) == syzygies[1], "shift s0 to s1")
+    require(raising_shift(syzygies[1], theta) == syzygies[2], "shift s1 to s2")
+    require(raising_shift(syzygies[2], theta) == syzygies[0], "shift s2 to s0")
+
+    recombination = packet["stable_recombination"]
+    require(recombination["syzygy_clock_characters_mod3"] == [0, 2, 1], "clock characters")
+    degrees = recombination["fiber_line_degrees"]
+    require(degrees == {"L": 3, "N": 3, "P=L^-1*N": 0}, "line degrees")
+    require(recombination["middle_rank"] == 2 and recombination["middle_degree"] == 3, "middle pair")
+    require(recombination["middle_is_stable"] is True, "middle stability")
+    require(recombination["extension_is_nonsplit"] is True, "nonsplit extension")
+    require(recombination["K_class_preserved"] is True, "K-class")
+    require(recombination["determinant_preserved"] is True, "determinant")
+    require(recombination["continuous_fit_parameters"] == 0, "no fit")
+
+    cutset = packet["ordinary_determinant_cutset"]
+    require(cutset["degree"] == cutset["selected_zero_count"] == 2, "degree-two determinant")
+    require(cutset["ordinary_scalar_repair_in_frozen_atlas_exists"] is False, "ordinary no-go")
+
+    fm = packet["fourier_mukai_repair"]
+    line_input = fm["degree_six_line_input"]
+    stable_input = fm["stable_rank_two_input"]
+    line_output = [line_input[1], -line_input[0]]
+    stable_output = [stable_input[1], -stable_input[0]]
+    require(line_output == fm["degree_six_line_output"] == [6, -1], "line transform")
+    require(stable_output == fm["stable_rank_two_output"] == [3, -2], "stable transform")
+    twisted = [line_output[0] + stable_output[0], line_output[1] + stable_output[1]]
+    require(twisted == fm["total_twisted_output"] == [9, -3], "twisted output")
+    ordinary = [twisted[0], twisted[1] + fm["target_B_degree_correction"]]
+    require(ordinary == fm["total_ordinary_output"] == [9, 0], "ordinary output")
+    require(fm["shifted_skyscraper_count_after_local_repair"] == 0, "local defect removed")
+
+    residue = packet["residue_diagnostic"]
+    require(residue["ordinary_determinant_degree_mod3"] == 2, "determinant residue")
+    require(residue["inverse_residue_mod3"] == residue["selected_finite_qutrit_multiplier_m"] == 1, "inverse residue")
+    require(residue["numeric_residues_match"] is True, "numeric residue diagnostic")
+    require(residue["analytic_and_finite_twist_classes_identified"] is False, "twist anti-conflation")
+    require(not any(packet["promotion_boundary"].values()), "global promotion must remain open")
+
+    print("UST.G3G two-fiber stable recombination: PASS")
+    print("qutrit Koszul syzygies: 3/3 exact and nowhere zero")
+    print("local corrected transform: (1,6)+(2,3)->(9,-3), shifted defects 0")
+    print("ordinary frozen-atlas determinant defects: exactly 2")
+    print("global alpha/sigma descent is open in G3G; closed downstream by G3R")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""Promote the H02 component-0 branch-square source over Q(gamma)."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from sympy import Poly, symbols, sympify
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as dm_runtime
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3dz"
+OUT = ROOT / "state" / "ust_g3dz_h02_component0_cayley_lift.packet.json"
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3BW = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3DX = ROOT / "state" / "ust_g3dx_h02_prefix_structural_gap_localization.packet.json"
+G3DY = ROOT / "state" / "ust_g3dy_h02_branch_sextic_square_source.packet.json"
+K3_BASE = (
+    ROOT.parent
+    / "mtt-protospinor-gr-response-proof"
+    / "certificates"
+    / "q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json"
+)
+EXPECTED_K3_HASH = "2f7dd722c5e387baf9438e6c2e14fe66f564de2109030ab08516552dabb86035"
+CORE_DIMENSION = 24767
+UPDATE_DIMENSION = 6022
+COMPONENT_DIMENSION = 190
+SOURCE_DIMENSION = 28
+FINITE_Q_RANK = 4748
+OLD_STRUCTURAL_UPPER = 5223
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    path, repository = path.resolve(), repository.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def sparse_from_entries(
+    entries: dict[tuple[int, int], int], shape: tuple[int, int]
+) -> sparse.csc_matrix:
+    rows: list[int] = []
+    columns: list[int] = []
+    values: list[int] = []
+    for (row, column), value in sorted(entries.items()):
+        if value:
+            rows.append(row)
+            columns.append(column)
+            values.append(value)
+    return sparse.csc_matrix(
+        (np.asarray(values, dtype=np.int64), (rows, columns)), shape=shape
+    )
+
+
+def k_action(
+    lift: sparse.csc_matrix,
+    descriptors: list[tuple[int, tuple[int, ...]]],
+    core_columns: np.ndarray,
+    core_row_lookup: dict[int, int],
+    target_lookup: dict[tuple[int, ...], int],
+    f6_terms: list[tuple[tuple[int, int, int], int]],
+) -> sparse.csc_matrix:
+    entries: dict[tuple[int, int], int] = defaultdict(int)
+    coo = lift.tocoo()
+    for local_column, source_column, value in zip(
+        coo.row, coo.col, coo.data, strict=True
+    ):
+        generator, multiplier = descriptors[int(core_columns[int(local_column)])]
+        require(generator == 7, "lift lies in dPhi/du block")
+        exponent = list(multiplier)
+        exponent[3] += 2
+        ambient_row = target_lookup[tuple(exponent)]
+        core_row = core_row_lookup.get(ambient_row)
+        if core_row is not None:
+            entries[(core_row, int(source_column))] += int(value)
+        for f6_exponent, coefficient in f6_terms:
+            exponent = list(multiplier)
+            for index in range(3):
+                exponent[index] += f6_exponent[index]
+            ambient_row = target_lookup[tuple(exponent)]
+            core_row = core_row_lookup.get(ambient_row)
+            if core_row is not None:
+                entries[(core_row, int(source_column))] -= int(value) * coefficient
+    return sparse_from_entries(entries, (CORE_DIMENSION, SOURCE_DIMENSION))
+
+
+def main() -> None:
+    packets = {name: load(path) for name, path in (
+        ("G3BI", G3BI), ("G3BW", G3BW), ("G3DE", G3DE),
+        ("G3DX", G3DX), ("G3DY", G3DY),
+    )}
+    require(all(all(packet["checks"].values()) for packet in packets.values()), "input checks")
+    require(sha256(K3_BASE) == EXPECTED_K3_HASH, "selected q79 K3 hash")
+    k3 = load(K3_BASE)
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay, factor = load(macaulay_path), load(factor_path)
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    descriptor_lookup = {descriptor: index for index, descriptor in enumerate(descriptors)}
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+
+    dm_record = packets["G3BW"]["DM_reduction"]["arrays"]
+    dm_path = ROOT / dm_record["path"]
+    require(sha256(dm_path) == dm_record["sha256"], "DM arrays hash")
+    dm = np.load(dm_path, allow_pickle=False)
+    core_candidates = np.flatnonzero(dm["component_sizes"] == CORE_DIMENSION)
+    require(core_candidates.size == 1, "unique 24767 core")
+    core_component = int(core_candidates[0])
+    core_rows = np.flatnonzero(dm["component_by_row"] == core_component).astype(np.int32)
+    core_columns = np.flatnonzero(dm["component_by_column"] == core_component).astype(np.int32)
+    require(core_rows.size == core_columns.size == CORE_DIMENSION, "core dimensions")
+    ambient_core_rows = dm["complement_rows"][core_rows].astype(np.int32)
+    core_row_lookup = {int(row): index for index, row in enumerate(ambient_core_rows)}
+    core_column_lookup = {int(column): index for index, column in enumerate(core_columns)}
+
+    source_record = packets["G3DY"]["evidence"]["arrays"]
+    source_path = ROOT / source_record["path"]
+    require(sha256(source_path) == source_record["sha256"], "G3DY source arrays hash")
+    source = np.load(source_path, allow_pickle=False)
+    degree6 = [tuple(int(value) for value in row) for row in source["degree6_multipliers"]]
+    principal_numerator = source["principal_macaulay_numerator"].astype(np.int64)
+    require(principal_numerator.shape == (COMPONENT_DIMENSION, SOURCE_DIMENSION), "source shape")
+    source_numerator = sparse.lil_matrix((UPDATE_DIMENSION, SOURCE_DIMENSION), dtype=np.int64)
+    source_numerator[:COMPONENT_DIMENSION, :] = principal_numerator
+    source_numerator = source_numerator.tocsc()
+
+    x, y, z = symbols("x y z")
+    f6 = Poly(
+        sympify(
+            k3["explicit_K3"]["F6_equals_G3_squared_plus_Q2_H4"],
+            locals={"x": x, "y": y, "z": z},
+        ),
+        x, y, z,
+    )
+    f6_terms = [
+        (tuple(int(value) for value in exponent), int(coefficient))
+        for exponent, coefficient in f6.terms()
+    ]
+    lift_factor_terms = [
+        (exponent + (0,), coefficient) for exponent, coefficient in f6_terms
+    ] + [((0, 0, 0, 2), 1)]
+    correction_t0 = dm_runtime.correction_derivatives_exact(packets["G3BI"])[4]
+
+    lift_entries: list[dict[tuple[int, int], int]] = [defaultdict(int) for _ in range(6)]
+    missing_descriptors = 0
+    for source_column, multiplier6 in enumerate(degree6):
+        for correction_exponent, gamma_coefficients in correction_t0.items():
+            for factor_exponent, factor_coefficient in lift_factor_terms:
+                multiplier = list(correction_exponent)
+                for index in range(4):
+                    multiplier[index] += (
+                        multiplier6[index] if index < 3 else 0
+                    ) + factor_exponent[index]
+                multiplier[6] += 3
+                multiplier[9] += 1
+                selected_column = descriptor_lookup.get((7, tuple(multiplier)))
+                if selected_column is None or selected_column not in core_column_lookup:
+                    missing_descriptors += 1
+                    continue
+                local_column = core_column_lookup[selected_column]
+                for degree, coefficient in enumerate(gamma_coefficients):
+                    lift_entries[degree][(local_column, source_column)] += (
+                        int(coefficient) * factor_coefficient
+                    )
+    require(missing_descriptors == 0, "every lift monomial is a selected core coordinate")
+    lift_matrices = [
+        sparse_from_entries(entries, (CORE_DIMENSION, SOURCE_DIMENSION))
+        for entries in lift_entries
+    ]
+    require(
+        all(
+            len(
+                set().union(
+                    *[
+                        set(matrix.indices[matrix.indptr[column] : matrix.indptr[column + 1]])
+                        for matrix in lift_matrices
+                    ]
+                )
+            ) == 119
+            for column in range(SOURCE_DIMENSION)
+        ),
+        "119-term shifted lift columns",
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    source_out = EVIDENCE / "H02.component0.source_numerator.npz"
+    sparse.save_npz(source_out, source_numerator, compressed=True)
+    lift_records = []
+    for degree, matrix in enumerate(lift_matrices):
+        path = EVIDENCE / f"H02.component0.cayley_lift_numerator.gamma_degree{degree}.npz"
+        sparse.save_npz(path, matrix, compressed=True)
+        lift_records.append({**record(path), "shape": list(matrix.shape), "nonzero_entries": int(matrix.nnz)})
+
+    factorization = packets["G3DE"]["factorization"]
+    u_coefficients = []
+    for item in factorization["U_gamma_coefficients"]:
+        path = ROOT / item["path"]
+        require(sha256(path) == item["sha256"], "U coefficient hash")
+        u_coefficients.append(sparse.load_npz(path).tocsr().astype(np.int64))
+    residual_nonzeros = []
+    for degree, lift in enumerate(lift_matrices):
+        base_action = k_action(
+            lift, descriptors, core_columns, core_row_lookup, target_lookup, f6_terms
+        )
+        update_action = (u_coefficients[degree][core_rows, :] @ source_numerator).tocsc()
+        residual = (base_action + update_action).tocsc()
+        residual.eliminate_zeros()
+        residual_nonzeros.append(int(residual.nnz))
+    require(residual_nonzeros == [0] * 6, "exact six-coefficient bordered lift identity")
+
+    used_core_coordinates = np.unique(
+        np.concatenate([matrix.nonzero()[0] for matrix in lift_matrices])
+    ).astype(np.int32)
+    w_support_entries = 0
+    for item in factorization["W_gamma_coefficients"]:
+        path = ROOT / item["path"]
+        require(sha256(path) == item["sha256"], "W coefficient hash")
+        matrix = sparse.load_npz(path).tocsr()
+        w_support_entries += int(matrix[:, core_columns[used_core_coordinates]].nnz)
+    require(w_support_entries == 0, "W vanishes on lift support")
+
+    remainder_entries: list[dict[int, int]] = [defaultdict(int) for _ in range(6)]
+    for source_column, multiplier6 in enumerate(degree6):
+        for correction_exponent, gamma_coefficients in correction_t0.items():
+            exponent = list(correction_exponent)
+            for index in range(3):
+                exponent[index] += multiplier6[index]
+            exponent[3] += 4
+            exponent[6] += 3
+            exponent[9] += 1
+            ambient_row = target_lookup[tuple(exponent)]
+            for degree, coefficient in enumerate(gamma_coefficients):
+                remainder_entries[degree][ambient_row] += int(coefficient)
+    remainder_rows = np.asarray(
+        sorted({row for entries in remainder_entries for row, value in entries.items() if value}),
+        dtype=np.int32,
+    )
+    require(not any(int(row) in core_row_lookup for row in remainder_rows), "w4 remainder avoids core")
+    complement_lookup = {int(row): index for index, row in enumerate(dm["complement_rows"])}
+    quotient_remainder_rows = np.asarray(
+        [row for row in remainder_rows if int(row) not in complement_lookup], dtype=np.int32
+    )
+    complement_remainder = np.asarray(
+        [complement_lookup[int(row)] for row in remainder_rows if int(row) in complement_lookup],
+        dtype=np.int32,
+    )
+    remainder_components = np.unique(dm["component_by_row"][complement_remainder]).astype(np.int32)
+    require(np.all(remainder_components != core_component), "remainder only outside core")
+
+    indices_path = EVIDENCE / "H02.component0.cayley_lift_indices.npz"
+    np.savez_compressed(
+        indices_path,
+        core_rows=core_rows,
+        core_columns=core_columns,
+        ambient_core_rows=ambient_core_rows,
+        used_core_coordinates=used_core_coordinates,
+        remainder_rows=remainder_rows,
+        quotient_remainder_rows=quotient_remainder_rows,
+        remainder_components=remainder_components,
+    )
+
+    prefix = packets["G3DX"]["prefix_gap_localization"]
+    first = prefix["component_rows"][0]
+    require(
+        (first["dimension"], first["finite_rank_increment"], first["structural_rank_increment"])
+        == (190, 162, 190),
+        "G3DX component-zero ledger",
+    )
+    exact_component_rank = COMPONENT_DIMENSION - SOURCE_DIMENSION
+    remaining_structural_increment = int(prefix["final_structural_rank"]) - (
+        CORE_DIMENSION + int(first["structural_rank_increment"])
+    )
+    promoted_border_upper = CORE_DIMENSION + exact_component_rank + remaining_structural_increment
+    promoted_q_upper = promoted_border_upper - CORE_DIMENSION
+    require(
+        (exact_component_rank, remaining_structural_increment, promoted_q_upper)
+        == (162, 5033, 5195),
+        "promoted rank arithmetic",
+    )
+
+    checks = {
+        "G3BI_G3BW_G3DE_G3DX_G3DY_and_selected_q79_K3_are_hash_bound": True,
+        "all28_normalized_sources_are_F6_squared_over16_times_Sym6": True,
+        "the_universal_lift_is_C0_times_F6_plus_w2_times_Sym6_over16": True,
+        "all_lift_monomials_are_selected_dPhi_du_core_coordinates": missing_descriptors == 0,
+        "every_lift_column_has119_exact_monomial_coordinates": True,
+        "all_six_Z_gamma_coefficients_of_Acore_L_plus_U_N_vanish": residual_nonzeros == [0] * 6,
+        "all_six_W_coefficients_vanish_on_the_lift_support": w_support_entries == 0,
+        "the_exact_remainder_is_C0_w4_Sym6_and_has_no_core_row": True,
+        "good_reduction_lower162_and_exact_kernel_upper162_decide_component0_rank": exact_component_rank == 162,
+        "the_global_Q_gamma_rank_interval_improves_from4748_5223_to4748_5195": promoted_q_upper == 5195,
+        "no_remaining_component_or_global_rank_equality_is_inferred": True,
+    }
+    require(all(checks.values()), "G3DZ checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dz-h02-component0-cayley-lift.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DZ",
+        "status": "CLOSED_EXACT_H02_COMPONENT0_CAYLEY_LIFT_RANK162_AND_GLOBAL_INTERVAL_4748_5195",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(G3BI), "G3BW": record(G3BW), "G3DE": record(G3DE),
+            "G3DX": record(G3DX), "G3DY": record(G3DY),
+            "q79_K3_base": external_record(K3_BASE, K3_BASE.parents[1]),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_coordinate_factorization": external_record(factor_path, mld),
+        },
+        "exact_lift": {
+            "Cayley_equation": "Phi=u*(w^2-F6)+v*E+s*F_B89",
+            "correction": "s*C=s*t0*C0",
+            "source_basis": "N_m=(F6^2/16)*m, m in Sym^6(Q^3)",
+            "base_lift": "y_m=(C0*(F6+w^2)/16)*m*t2^3*s^2 in the dPhi/du block",
+            "polynomial_identity": "(w^2-F6)*C0*(F6+w^2)*m+C0*F6^2*m=C0*w^4*m",
+            "projected_identity": "A_core*y_m+U*N_m=0 and W*y_m=0",
+            "normalization_denominator": 16,
+            "source_numerator": record(source_out),
+            "lift_numerator_gamma_coefficients": lift_records,
+            "lift_shape": [CORE_DIMENSION, SOURCE_DIMENSION],
+            "lift_union_nonzeros_per_column": 119,
+            "used_core_coordinates": int(used_core_coordinates.size),
+            "Acore_L_plus_U_N_residual_nonzeros_by_gamma_degree": residual_nonzeros,
+            "W_entries_on_lift_support": w_support_entries,
+            "indices": record(indices_path),
+            "w4_remainder_distinct_rows": int(remainder_rows.size),
+            "w4_remainder_quotient_rows": int(quotient_remainder_rows.size),
+            "w4_remainder_noncore_components": int(remainder_components.size),
+        },
+        "rank_promotion": {
+            "component0_columns": COMPONENT_DIMENSION,
+            "exact_independent_kernel_columns": SOURCE_DIMENSION,
+            "good_reduction_rank_lower_bound": 162,
+            "exact_kernel_rank_upper_bound": 162,
+            "component0_rank_over_Q_gamma": exact_component_rank,
+            "remaining_structural_increment": remaining_structural_increment,
+            "previous_global_Q_rank_interval": [FINITE_Q_RANK, OLD_STRUCTURAL_UPPER],
+            "promoted_global_Q_rank_interval": [FINITE_Q_RANK, promoted_q_upper],
+            "remaining_global_gap": promoted_q_upper - FINITE_Q_RANK,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_global_Q_gamma_rank_is4748": False,
+            "claims_the_other1246_finite_kernel_relations_lift": False,
+            "claims_the_w4_remainder_vanishes_in_the_full_Macaulay_space": False,
+            "claims_B_ETA9_01_or_B_ETA9_02_is_closed": False,
+        },
+        "theorem": {
+            "name": "ustG3dzH02Component0CayleyLift",
+            "tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_COMPONENT_SOURCE_PROMOTION",
+            "statement": "For every m in Sym6, the selected source (F6^2/16)m has the exact Cayley lift y_m=C0(F6+w^2)m*t2^3*s^2/16 in the dPhi/du block. The identity K(F6+w^2)+F6^2=w^4 leaves only C0*w^4*m, whose rows are disjoint from the selected 24767-row core, while the correction has zero u derivative and hence W*y_m=0. The 28 independent vectors therefore lie in the Q(gamma) kernel. Good reduction gives the opposite rank bound, so component0 has exact rank162. Replacing its structural increment190 by162 tightens the global Q rank interval to4748..5195.",
+        },
+        "frontier_delta": {
+            "before": "Component0 had a geometrically identified 28-dimensional finite kernel but no characteristic-zero bordered annihilation; the global Q rank interval was4748..5223.",
+            "after": "The exact Cayley lift promotes all28 component0 relations over Q(gamma), proves component0 rank162 and reduces the global upper bound by28 to5195. The remaining gap447 belongs to later ordered components.",
+        },
+        "next_required_object": "Apply the same source-first analysis to component9, whose finite rank169 versus structural increment252 contributes the next83 positive gap units. Search its normalized kernel for a common q79 Cayley/Koszul factor before any further prime campaign.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DZ H02 component0 Cayley lift: PASS")
+    print("component0_rank_Qgamma=162 global_Q_interval=4748..5195 remaining_gap=447")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

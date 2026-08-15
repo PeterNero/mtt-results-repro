@@ -1,0 +1,114 @@
+# UST.G3FN - H02 Component-20 Hilbert--Burch Source Theorem
+
+## Status
+
+`CLOSED_EXACT_48_FIBER_HILBERT_BURCH_SOURCE_QGAMMA_IDENTIFICATION_OPEN`
+
+This is an exact theorem at all 48 archived split fibers. It replaces the
+first nontrivial part of the component-20 kernel graph by one compact
+determinantal source. It is not yet a lift to `Q(gamma)`.
+
+## Leading kernel ideal
+
+Let `R=k[x,y,z]`. At each split fiber, the component-20 kernel determines four
+minimal homogeneous generators
+
+```text
+g0,g1,g2,g3 in R_11.
+```
+
+Their coefficient-degree `0` through `8` syzygy dimensions are exactly
+
+```text
+0, 1, 4, 9, 16, 25, 36, 49, 65.
+```
+
+The degree-1 syzygy and its multiples account for three of the four
+degree-2 syzygies, leaving one new degree-2 class. In coefficient degree 8,
+their inherited multiples span 64 dimensions inside a 65-dimensional
+syzygy space. Thus exactly one further minimal class occurs in degree 8.
+
+The three minimal syzygy degrees are therefore
+
+```text
+1, 2, 8,
+```
+
+and satisfy `1+2+8=11`.
+
+## Determinantal source
+
+Put the three normalized syzygies into the columns of
+
+```text
+S = [L1,Q2,O8],  shape(S)=4 x 3.
+```
+
+At every fiber, the four signed maximal minors of `S` reproduce
+`(g0,g1,g2,g3)` up to one common nonzero field unit. On the fixed projective
+line
+
+```text
+[x:y:z]=[s:t:s+2t],
+```
+
+the four restricted degree-11 forms have gcd one. Hence the maximal-minor
+ideal has grade two and the Hilbert--Burch theorem applies. For
+`J=(g0,g1,g2,g3)`, the exact resolution is
+
+```text
+0 -> R(-12) + R(-13) + R(-19) -> R(-11)^4 -> J -> 0.
+```
+
+This holds independently at six roots for each of eight split primes.
+
+## Compression and promotion boundary
+
+The only new column, `O8`, has 1,080 power-basis slots per prime. This is a
+factor-20 reduction from the 21,600 residues in the prior normalized graph
+payload. Seven-prime CRT reconstruction followed by the eighth-prime holdout
+passes only zeros and one unit among the reconstructible coefficients; no
+nontrivial coefficient promotes by blind small-height reconstruction.
+
+That failure is useful: the remaining task is not to collect more graph
+samples. It is to derive `L1,Q2,O8` from the selected geometric source over
+`Q(gamma)`.
+
+## Relation to UST.G3FK
+
+UST.G3FK has four selected normals and three selected equations. UST.G3FN has
+four rows and three syzygy columns. This matching `4 versus 3` shape is a
+strong, exact structural clue, but this theorem does not identify the two
+matrices. The required bridge must include the Cox shifts and reproduce the
+four G3FN minors in the exact G3EX presentation.
+
+The further 15 generators in degree 14 and 11 in degree 15 are not part of
+the Hilbert--Burch subideal `J`; their full homological role is determined in
+UST.G3FO.
+
+## Rejected shortcuts
+
+Two compact alternatives were tested and fail at an exact split fiber:
+
+1. The intrinsic conic operator `4*d_x*d_z-d_y^2` has a fourth-kernel with
+   the right abstract dimensions `100+36`, but its 100-plane differs from
+   every archived component-20 kernel.
+2. Neither a constant order-8 apolar operator nor one degree-22
+   catalecticant source has a nonzero solution for the archived kernel.
+
+These no-go probes rule out the simplest harmonic and single-moment sources;
+they do not rule out the selected Koszul/mapping-cone construction.
+
+## Reproduction
+
+```powershell
+python build_ust_g3fn_component20_hilbert_burch_source.py
+python verify_ust_g3fn_component20_hilbert_burch_source.py
+```
+
+Evidence:
+
+```text
+evidence/ust_g3fn/H02.component20.hilbert_burch_source.json
+evidence/ust_g3fn/H02.component20.hilbert_burch_source.npz
+```

@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Export an exact arbitrary row range of the selected G3AP Macaulay map."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import threading
+
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as fixed_chunk
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+RANGE_ROOT = ROOT / "state" / "ust_g3ap_selected_cayley_target_macaulay_ranges"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def paths(total: int, start: int, stop: int) -> dict[str, Path]:
+    stem = f"balanced{total}_rows{start:05d}-{stop - 1:05d}"
+    return {
+        "script": RANGE_ROOT / f"{stem}.sing",
+        "output": RANGE_ROOT / f"{stem}.singular.out.gz",
+        "triples": RANGE_ROOT / f"{stem}.packed-triples",
+        "packet": RANGE_ROOT / f"{stem}.packet.json",
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--balanced-rows", type=int, default=50000)
+    parser.add_argument("--global-start", type=int, required=True)
+    parser.add_argument("--global-stop", type=int, required=True)
+    parser.add_argument("--timeout", type=int, default=43200)
+    args = parser.parse_args()
+    require(
+        21 <= args.balanced_rows <= macaulay.EXPECTED_SOURCE_MULTIPLES,
+        "balanced rows",
+    )
+    require(
+        0 <= args.global_start < args.global_stop <= args.balanced_rows,
+        "global range",
+    )
+    RANGE_ROOT.mkdir(parents=True, exist_ok=True)
+
+    leaders, base_packet = fixed_chunk.load_coordinates()
+    targets, _ = macaulay.coordinate_data(leaders)
+    target_index = {value: index for index, value in enumerate(targets, start=1)}
+    require(len(target_index) == len(targets), "unique target coordinates")
+    all_sources, _ = macaulay.source_data(leaders)
+    selected, quotas = macaulay.balanced_source_subset(
+        all_sources, args.balanced_rows
+    )
+    rows = selected[args.global_start : args.global_stop]
+    require(rows, "nonempty range")
+
+    output_paths = paths(
+        args.balanced_rows, args.global_start, args.global_stop
+    )
+    source_text = macaulay.SOURCE.read_text(encoding="ascii")
+    output_paths["script"].write_text(
+        macaulay.export_script(source_text, rows), encoding="ascii"
+    )
+    process = subprocess.Popen(
+        singular_command(ROOT, output_paths["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    require(process.stdout is not None, "Singular stdout")
+    nonzeros = 0
+    singular_errors: list[str] = []
+    marker = f"G3AP_MACAULAY_EXPORT_ROWS={len(rows)}"
+    marker_seen = False
+    pass_seen = False
+    timed_out = threading.Event()
+
+    def kill_on_timeout() -> None:
+        if process.poll() is None:
+            timed_out.set()
+            process.kill()
+
+    watchdog = threading.Timer(args.timeout, kill_on_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        with (
+            gzip.open(output_paths["output"], "wt", encoding="utf-8") as raw_output,
+            output_paths["triples"].open("w", encoding="ascii") as triple_output,
+        ):
+            for line in process.stdout:
+                raw_output.write(line)
+                stripped = line.rstrip()
+                if stripped == marker:
+                    marker_seen = True
+                elif stripped == "G3AP_MACAULAY_EXPORT_PASS":
+                    pass_seen = True
+                if line.lstrip().startswith("?"):
+                    singular_errors.append(stripped)
+                if not line.startswith("G3AP_MACAULAY_TERM="):
+                    continue
+                row_text, component_text, exponent_text, coefficient_text = (
+                    stripped.split("=", 1)[1].split("|", 3)
+                )
+                local_row = int(row_text)
+                require(1 <= local_row <= len(rows), "local source row")
+                coordinate = (
+                    int(component_text),
+                    tuple(int(value) for value in exponent_text.split(",")),
+                )
+                require(coordinate in target_index, "term outside target coordinates")
+                packed = macaulay.packed_coefficient(coefficient_text)
+                require(packed != 0, "nonzero coefficient")
+                triple_output.write(
+                    f"{args.global_start + local_row} "
+                    f"{target_index[coordinate]} {packed}\n"
+                )
+                nonzeros += 1
+        returncode = process.wait()
+    finally:
+        watchdog.cancel()
+    if timed_out.is_set():
+        raise subprocess.TimeoutExpired(str(output_paths["script"]), args.timeout)
+    require(returncode == 0, "Macaulay range execution")
+    require(not singular_errors, f"Singular errors: {singular_errors[:3]}")
+    require(marker_seen and pass_seen, "Macaulay range completion markers")
+
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-range.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_EXACT_MATRIX_RANGE_NOT_G3AP_CLOSURE",
+        "inputs": {
+            "selected_source": {
+                "path": macaulay.relative(macaulay.SOURCE),
+                "sha256": macaulay.sha256(macaulay.SOURCE),
+            },
+            "base_coordinate_packet": {
+                "path": macaulay.relative(macaulay.INSPECT_PACKET),
+                "sha256": sha256(macaulay.INSPECT_PACKET),
+            },
+        },
+        "selection": {
+            "kind": "balanced_quantiles_across_all_21_selected_derivative_generators",
+            "balanced_rows": args.balanced_rows,
+            "per_generator_quotas": quotas,
+            "selection_sha256": fixed_chunk.selection_hash(selected),
+            "global_start_zero_based": args.global_start,
+            "global_stop_exclusive_zero_based": args.global_stop,
+            "range_rows": len(rows),
+        },
+        "execution": {
+            "script": {
+                "path": macaulay.relative(output_paths["script"]),
+                "sha256": sha256(output_paths["script"]),
+            },
+            "compressed_output": {
+                "path": macaulay.relative(output_paths["output"]),
+                "sha256": sha256(output_paths["output"]),
+                "bytes": output_paths["output"].stat().st_size,
+            },
+            "packed_triples": {
+                "path": macaulay.relative(output_paths["triples"]),
+                "sha256": sha256(output_paths["triples"]),
+                "bytes": output_paths["triples"].stat().st_size,
+            },
+            "nonzeros": nonzeros,
+        },
+        "matrix_shape_after_assembly": [args.balanced_rows, len(targets)],
+        "guardrails": {
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+    }
+    output_paths["packet"].write_text(
+        json.dumps(packet, indent=2) + "\n", encoding="ascii"
+    )
+    print(
+        "G3AP target Macaulay adaptive range: PASS "
+        f"rows=[{args.global_start},{args.global_stop}) nonzeros={nonzeros}"
+    )
+
+
+if __name__ == "__main__":
+    main()

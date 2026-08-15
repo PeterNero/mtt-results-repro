@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Independently verify the UST.G3FH fourth-normal source selection."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import runtime
+import verify_ust_g3ff_component20_conic_fourth_normal_source as conic_verify
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fh/H02.component20.fourth_normal_source_selection.json"
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+SOURCE_COLUMNS = 2523
+EXPECTED_TAIL = (0, 0, 0, 2, 1, 0, 0)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_local(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound local artifact: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def bound_external(row: dict[str, object], repository: Path) -> Path:
+    require(row["repository"] == repository.name, "external repository name")
+    path = repository / str(row["repository_relative_path"])
+    require(path.is_file(), f"bound external artifact: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"external size: {path.name}")
+    require(sha256(path) == row["sha256"], f"external hash: {path.name}")
+    return path
+
+
+def exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(
+        packet["schema"]
+        == "ust.g3fh.h02.component20.fourth-normal-source-selection.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_COMPONENT20_RESTRICTED_DERIVATIVE_TRANSGRESSION_AND_FINITE_DERIVED_SUPPORT_ALIGNMENT_SOURCE_SELECTION_OPEN",
+        "status",
+    )
+
+    inputs = packet["inputs"]
+    g3bi_path = bound_local(inputs["G3BI"])
+    g3de_path = bound_local(inputs["G3DE"])
+    bound_local(inputs["G3EX"])
+    indices_path = bound_local(inputs["G3EX_indices"])
+    g3ff_path = bound_local(inputs["G3FF"])
+    g3fg_path = bound_local(inputs["G3FG"])
+    alignment_path = bound_local(
+        packet["fourth_normal_identification"]["alignment_artifact"]
+    )
+
+    mld = runtime.resolve_mld()
+    macaulay_path = bound_external(inputs["MLD_macaulay"], mld)
+    factor_path = bound_external(inputs["MLD_coordinate_factorization"], mld)
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    g3bi = json.loads(g3bi_path.read_text(encoding="utf-8"))
+    g3de = json.loads(g3de_path.read_text(encoding="utf-8"))
+    g3ff = json.loads(g3ff_path.read_text(encoding="utf-8"))
+    g3fg = json.loads(g3fg_path.read_text(encoding="utf-8"))
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3de["checks"].values()), "G3DE checks")
+    require(all(g3ff["checks"].values()), "G3FF checks")
+    require(g3fg["reconstruction"]["holdout_passes"] == 0, "G3FG no-go")
+    require(
+        g3fg["exact_D7_pipeline_control"]["holdout_passes"] == 216,
+        "G3FG exact-source control",
+    )
+
+    normal_path = conic_verify.bound_path(
+        g3ff["exact_characteristic_zero_source"]["normal_source_artifact"]
+    )
+    normal = np.load(normal_path, allow_pickle=False)
+    d7 = normal["D7_gamma_coordinates"].astype(np.int64)
+    q4 = normal["q4_Sym7_basis"].astype(np.int64)
+    difference = conic_verify.selected_difference(
+        g3bi["selected_source"]["coefficient_vectors"]
+    )
+    require(
+        np.array_equal(difference, conic_verify.multiply_by_conic(d7)),
+        "independent restricted (A0+C0-A1)|r0=qD7 replay",
+    )
+
+    alignment = np.load(alignment_path, allow_pickle=False)
+    basis15 = exponents(15)
+    require(
+        np.array_equal(alignment["degree15_exponents"], np.asarray(basis15)),
+        "degree-fifteen basis",
+    )
+    require(np.array_equal(alignment["D7_gamma_coordinates"], d7), "stored D7")
+    require(np.array_equal(alignment["q4_Sym7_basis"], q4), "stored q4 carrier")
+    pivot_rows = tuple(int(value) for value in alignment["fourth_normal_pivot_rows"])
+    base_rows = tuple(int(value) for value in alignment["conic_quotient_rows"])
+    require(len(pivot_rows) == 36 and len(base_rows) == 100, "36+100 partition")
+    require(set(pivot_rows).isdisjoint(base_rows), "partition disjoint")
+    require(set(pivot_rows) | set(base_rows) == set(range(136)), "partition complete")
+    require(int(sp.Matrix(q4[np.asarray(pivot_rows), :]).det()) == 1, "unimodular pivot")
+    require(
+        {basis15[row] for row in pivot_rows}
+        == {
+            (a, 8 + b, 7 - a - b)
+            for a in range(8)
+            for b in range(8 - a)
+        },
+        "y8 Sym7 leading monomials",
+    )
+
+    macaulay = json.loads(macaulay_path.read_text(encoding="utf-8"))
+    factor = json.loads(factor_path.read_text(encoding="utf-8"))
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    selection_path = ROOT / g3de["factorization"]["selection"]["path"]
+    require(selection_path.is_file(), "G3DE selection exists")
+    require(sha256(selection_path) == g3de["factorization"]["selection"]["sha256"], "G3DE selection hash")
+    selected_updates = np.load(selection_path, allow_pickle=False)["selected_columns"].astype(np.int32)
+    update_descriptors = [descriptors[int(value)] for value in selected_updates]
+
+    indices = np.load(indices_path, allow_pickle=False)
+    source_support = indices["source_support"].astype(np.int32)
+    lift_support = indices["lift_support"].astype(np.int32)
+    source_lookup = {int(value): local for local, value in enumerate(source_support)}
+    component_source_columns: list[int] = []
+    for local, exponent in enumerate(basis15):
+        generator, multiplier = update_descriptors[COMPONENT_START + local]
+        require(generator == 4, f"t0 correction generator local={local}")
+        require(multiplier[:3] == exponent, f"source exponent local={local}")
+        require(multiplier[3:] == EXPECTED_TAIL, f"source tail local={local}")
+        component_source_columns.append(source_lookup[COMPONENT_START + local])
+
+    lift_lookup = {
+        descriptors[int(coordinate)]: local
+        for local, coordinate in enumerate(lift_support)
+    }
+    require(len(lift_lookup) == len(lift_support), "unique lift descriptors")
+    full_descriptor_set = set(descriptors)
+    require(
+        all(
+            (5, update_descriptors[COMPONENT_START + local][1])
+            in full_descriptor_set
+            for local in range(136)
+        ),
+        "full exact carrier has all136 matching t1 columns",
+    )
+    available: list[int] = []
+    missing: list[int] = []
+    t1_columns: list[int] = []
+    for local in range(136):
+        multiplier = update_descriptors[COMPONENT_START + local][1]
+        lift_local = lift_lookup.get((5, multiplier))
+        if lift_local is None:
+            missing.append(local)
+        else:
+            available.append(local)
+            t1_columns.append(SOURCE_COLUMNS + lift_local)
+
+    require(tuple(available) == base_rows, "matching t1 rows equal conic quotient")
+    require(tuple(missing) == pivot_rows, "missing t1 rows equal q4 pivots")
+    require(
+        np.array_equal(
+            alignment["component_source_columns"],
+            np.asarray(component_source_columns, dtype=np.int32),
+        ),
+        "component source-column map",
+    )
+    require(
+        np.array_equal(alignment["paired_component_rows"], np.asarray(available)),
+        "paired component rows",
+    )
+    require(
+        np.array_equal(alignment["paired_t1_lift_columns"], np.asarray(t1_columns)),
+        "paired t1 columns",
+    )
+    require(
+        np.array_equal(alignment["full_carrier_t1_rows"], np.arange(136)),
+        "full-carrier t1 rows",
+    )
+    print(
+        "UST.G3FH independent verification: PASS "
+        "source=136 finite_support=100+36 full_t1=136 det=1 restricted_transgression=s*q*D7"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""Certify an L-only or Cox-box weighted candidate by the exact target squeeze."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import build_ust_g3ap_selected_cayley_ordinary_top_lower_bound as lower
+import certify_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_candidate as canonical
+import run_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_hedge as weighted_hilbert
+import run_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_hedge as candidate_runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_boxtrunc_hilbert_hedge as box_candidate_runner
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = fiber2.SOURCE
+CANDIDATE = candidate_runner.PACKET
+SCRIPT = canonical.SCRIPT
+OUTPUT = canonical.OUTPUT
+BASE_CACHE = canonical.BASE_CACHE
+MODULE_CACHE = canonical.MODULE_CACHE
+PACKET = canonical.PACKET
+LOWER_VERIFIER = canonical.LOWER_VERIFIER
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file() and sha256(path) == record["sha256"], label)
+    return path
+
+
+def certification_script(source: str, candidate_base: Path, candidate_module: Path) -> str:
+    before, after = qring.derivative_representatives()
+    generators = ",\n  ".join(qring.derivative_generators())
+    candidate_base_relative = str(candidate_base.relative_to(ROOT)).replace("\\", "/")
+    candidate_module_relative = str(candidate_module.relative_to(ROOT)).replace("\\", "/")
+    base_relative = str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    module_relative = str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    shifts = ",".join(str(value) for value in weighted.COMPONENT_SHIFTS)
+    return weighted.weighted_base_prefix(source) + f'''LIB("multigrading.lib");
+option(noredTail);
+{before}
+ideal I0=K,E,C;
+ideal G0=std(I0);
+def cachedIdeal=read("ssi:r {candidate_base_relative}");
+ideal GI=cachedIdeal;
+int i;
+print("G3AP_F2_WLTRUNCCERT_BASE_CANDIDATE_IS_SB_ATTR="+string(attrib(GI,"isSB")));
+print("G3AP_F2_WLTRUNCCERT_BASE_CANDIDATE_SIZE="+string(size(GI)));
+for (i=1;i<=size(GI);i++)
+{{ print("G3AP_F2_WLTRUNCCERT_BASE_CANDIDATE_LEADER_"+string(i)+"_EXP="+string(leadexp(GI[i]))); }}
+ideal GICheck=std(GI);
+int equalBase=1;
+for (i=1;i<=size(G0);i++)
+{{ if (reduce(G0[i],GICheck)!=0) {{ equalBase=0; }} }}
+for (i=1;i<=size(GICheck);i++)
+{{ if (reduce(GICheck[i],G0)!=0) {{ equalBase=0; }} }}
+print("G3AP_F2_WLTRUNCCERT_BASE_IDEAL_EQUAL="+string(equalBase));
+print("G3AP_F2_WLTRUNCCERT_BASE_GB_SIZE="+string(size(GICheck)));
+for (i=1;i<=size(GICheck);i++)
+{{ print("G3AP_F2_WLTRUNCCERT_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GICheck[i]))); }}
+attrib(GICheck,"isSB",0);
+write("ssi:w {base_relative}",GICheck);
+attrib(GICheck,"isSB",1);
+qring q=GICheck;
+{after}
+module M=
+  {generators};
+intvec componentShifts={shifts};
+attrib(M,"isHomog",componentShifts);
+def cachedCandidate=read("ssi:r {candidate_module_relative}");
+module G=cachedCandidate;
+print("G3AP_F2_WLTRUNCCERT_MODULE_CANDIDATE_IS_SB_ATTR="+string(attrib(G,"isSB")));
+intmat variableCoxWeights[2][7]=
+  1,1,1,3,0,0,0,
+  0,0,0,0,1,1,1;
+setBaseMultigrading(variableCoxWeights);
+intmat componentCoxShifts[2][6]=
+  -12,-6,-15,0,-9,-18,
+  0,-3,-1,-6,-4,-2;
+G=setModuleGrading(G,componentCoxShifts);
+int coxHomogeneous=isHomogeneous(G,"checkGens");
+print("G3AP_F2_WLTRUNCCERT_COX_HOMOGENEOUS="+string(coxHomogeneous));
+attrib(G,"isSB",1);
+int badGeneratorRemainders=0;
+for (i=1;i<=size(M);i++)
+{{ if (reduce(M[i],G)!=0) {{ badGeneratorRemainders=badGeneratorRemainders+1; }} }}
+print("G3AP_F2_WLTRUNCCERT_BOUND="+string({weighted.TARGET_SCALAR_DEGREE}));
+print("G3AP_F2_WLTRUNCCERT_ORIGINAL_GENERATORS="+string(size(M)));
+print("G3AP_F2_WLTRUNCCERT_BAD_GENERATOR_REMAINDERS="+string(badGeneratorRemainders));
+print("G3AP_F2_WLTRUNCCERT_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("G3AP_F2_WLTRUNCCERT_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("G3AP_F2_WLTRUNCCERT_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {module_relative}",G);
+print("G3AP_F2_WLTRUNCCERT_PASS");
+quit;
+'''
+
+
+def parse_leaders(raw: str):
+    return qring.parse_leaders(raw.replace("G3AP_F2_WLTRUNCCERT_", "G3AP_F2_QRING_"))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    parser.add_argument(
+        "--candidate-route",
+        choices=("ltrunc", "boxtrunc"),
+        default="ltrunc",
+    )
+    args = parser.parse_args()
+    if args.candidate_route == "boxtrunc":
+        runner = box_candidate_runner
+        candidate_path = box_candidate_runner.PACKET
+        candidate_schema = (
+            "mtt.unified-source.g3ap-selected-cayley-fiber2-"
+            "weighted-boxtrunc-hilbert-candidate.v1"
+        )
+        candidate_status = "CANDIDATE_REQUIRES_INDEPENDENT_TARGET_BOX_CERTIFICATION"
+        hint_pass_marker = "G3AP_F2_WBOXTRUNC_HINT_PASS"
+        candidate_pass_marker = "G3AP_F2_WBOXTRUNC_LEADER_EXPORT_PASS"
+        candidate_engine = "boxtrunc-hilbert"
+        expected_truncation = {
+            "kind": "componentwise_H_and_L_degree_above_target",
+            "target_H_degrees": [30, 24, 33, 18, 27, 36],
+            "target_L_degrees": [2, 5, 3, 8, 6, 4],
+            "minimal_H_boundary_generators": 11994,
+            "minimal_L_boundary_generators": 165,
+            "minimal_monomial_generators": 12159,
+            "target_divisor_box_piece_of_truncation_module_is_zero": True,
+        }
+        truncation_checks = {
+            "the_12159_truncators_start_outside_each_component_target_box": True,
+            "the_truncation_module_has_zero_piece_in_every_Cox_degree_that_can_divide_the_target": True,
+        }
+    else:
+        runner = candidate_runner
+        candidate_path = CANDIDATE
+        candidate_schema = (
+            "mtt.unified-source.g3ap-selected-cayley-fiber2-"
+            "weighted-ltrunc-hilbert-candidate.v1"
+        )
+        candidate_status = (
+            "CANDIDATE_REQUIRES_INDEPENDENT_TARGET_TRUNCATION_CERTIFICATION"
+        )
+        hint_pass_marker = "G3AP_F2_WLTRUNC_HINT_PASS"
+        candidate_pass_marker = "G3AP_F2_WLTRUNC_LEADER_EXPORT_PASS"
+        candidate_engine = "ltrunc-hilbert"
+        expected_truncation = {
+            "kind": "componentwise_L_degree_above_target",
+            "target_L_degrees": [2, 5, 3, 8, 6, 4],
+            "minimal_monomial_generators": 165,
+            "target_piece_of_truncation_module_is_zero": True,
+        }
+        truncation_checks = {
+            "the_165_truncators_start_above_the_target_L_degree_in_each_component": True,
+            "the_truncation_module_has_zero_piece_in_every_Cox_degree_that_can_divide_the_target": True,
+        }
+    weighted.validate_grading()
+    subprocess.run([sys.executable, str(LOWER_VERIFIER)], cwd=ROOT, check=True)
+    lower_packet = json.loads(lower.OUT.read_text(encoding="ascii"))
+    require(
+        lower_packet["status"] == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_AT_LEAST_ONE"
+        and all(lower_packet["checks"].values())
+        and not any(lower_packet["guardrails"].values()),
+        "selected lower bound",
+    )
+    candidate = json.loads(candidate_path.read_text(encoding="ascii"))
+    require(
+        candidate["schema"] == candidate_schema
+        and candidate["status"] == candidate_status,
+        "candidate identity",
+    )
+    require(all(candidate["checks"].values()), "candidate checks")
+    require(not any(candidate["guardrails"].values()), "candidate guardrails")
+    require(candidate["truncation"] == expected_truncation, "candidate truncation")
+    require(
+        len(runner.truncation_generators())
+        == expected_truncation["minimal_monomial_generators"],
+        "independent truncation generator count",
+    )
+    source_path = checked(candidate["inputs"]["selected_source"], "selected source")
+    candidate_base = checked(candidate["inputs"]["weighted_base_cache"], "candidate base")
+    hint_path = checked(candidate["inputs"]["truncated_hint"], "truncated hint")
+    candidate_script_path = checked(candidate["execution"]["script"], "candidate script")
+    candidate_output = checked(candidate["execution"]["output"], "candidate output")
+    candidate_module = checked(candidate["execution"]["candidate_module_cache"], "candidate module")
+    hint = json.loads(hint_path.read_text(encoding="ascii"))
+    require(not any(hint["guardrails"].values()), "hint guardrails")
+    require(
+        runner.HINT_SCRIPT.read_text(encoding="ascii")
+        == runner.hint_script(runner.predecessor_leaders()),
+        "hint script reconstruction",
+    )
+    checked(hint["script"], "hint script")
+    hint_output = checked(hint["output"], "hint output")
+    require(hint_pass_marker in hint_output.read_text(encoding="utf-8"), "hint execution")
+    source = source_path.read_text(encoding="ascii")
+    require(
+        fiber2.candidate_script_matches(
+            candidate_script_path.read_text(encoding="ascii"),
+            runner.candidate_script(source, hint["hilbert_numerator"]),
+            bool(candidate["execution"].get("leader_recovery_used")),
+        ),
+        "candidate script reconstruction",
+    )
+    require(candidate_pass_marker in candidate_output.read_text(encoding="utf-8"), "candidate execution")
+    SCRIPT.write_text(certification_script(source, candidate_base, candidate_module), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)}")
+        return
+    BASE_CACHE.unlink(missing_ok=True)
+    MODULE_CACHE.unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "truncation certification execution")
+    require("G3AP_F2_WLTRUNCCERT_PASS" in completed.stdout, "certification pass")
+    expected = {
+        "G3AP_F2_WLTRUNCCERT_BASE_CANDIDATE_IS_SB_ATTR": 0,
+        "G3AP_F2_WLTRUNCCERT_BASE_IDEAL_EQUAL": 1,
+        "G3AP_F2_WLTRUNCCERT_MODULE_CANDIDATE_IS_SB_ATTR": 0,
+        "G3AP_F2_WLTRUNCCERT_COX_HOMOGENEOUS": 1,
+        "G3AP_F2_WLTRUNCCERT_ORIGINAL_GENERATORS": 21,
+        "G3AP_F2_WLTRUNCCERT_BAD_GENERATOR_REMAINDERS": 0,
+    }
+    for label, value in expected.items():
+        require(re.search(rf"^{label}={value}$", completed.stdout, re.MULTILINE) is not None, label)
+    base, module = parse_leaders(completed.stdout)
+    candidate_base_leaders = canonical.parse_candidate_base_leaders(
+        completed.stdout, "G3AP_F2_WLTRUNCCERT"
+    )
+    require(
+        canonical.same_monomial_ideal(candidate_base_leaders, base),
+        "candidate base leading ideal",
+    )
+    standards, sectors = fiber2.enumerate_target(qring.combined_leaders(base, module))
+    weighted_hilbert.annotate_weighted_sectors(sectors)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL and standards == [fiber2.EXPECTED_STANDARD], "target upper bound")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-weighted-leading-squeeze-certified-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.FIBER2.QRING.WEIGHTED-LEADING-SQUEEZE.CERTIFIED",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_QRING_WEIGHTED_LEADING_SQUEEZE_TOP_DIMENSION_ONE",
+        "inputs": {
+            "candidate": {"path": str(candidate_path.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(candidate_path)},
+            "selected_source": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SOURCE)},
+            "selected_ordinary_top_lower_bound": {"path": str(lower.OUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(lower.OUT)},
+        },
+        "grading": candidate["grading"],
+        "truncation": candidate["truncation"],
+        "execution": {
+            "script": {"path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SCRIPT)},
+            "output": {"path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(OUTPUT)},
+            "elapsed_seconds": time.time() - started,
+            "candidate_engine": candidate_engine,
+            "base_basis_size": len(base),
+            "original_module_generator_count": 21,
+            "certified_target_reduction_set_size": len(module),
+            "weighted_scalar_degree_bound": weighted.TARGET_SCALAR_DEGREE,
+            "certified_base_cache": {"path": str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(BASE_CACHE), "bytes": BASE_CACHE.stat().st_size, "isSB_trust_attribute_stored": False},
+            "certified_module_cache": {"path": str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(MODULE_CACHE), "bytes": MODULE_CACHE.stat().st_size, "valid_through_weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE, "valid_for_Cox_degree": [18, 2, 2], "is_full_standard_basis": False, "isSB_trust_attribute_stored": False},
+        },
+        "fiber_degree_two_module": {"base_quotient": "B/(K,E,C)", "components": [name for _, name, _, _ in fiber2.COMPONENTS], "component_weighted_shifts": list(weighted.COMPONENT_SHIFTS), "sectors": sectors},
+        "ordinary_top_piece": {"Cox_degree": [18, 2, 2], "H_plus_L_scalar_degree": 44, "weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE, "enumerated_monomials": total, "dimension": 1, "basis": ["w^12*t2^4*s^2"], "basis_component": "s2", "basis_base_exponent": list(fiber2.EXPECTED_STANDARD[1])},
+        "checks": {
+            "selected_source_is_hash_bound": True,
+            "selected_base_ideal_is_recomputed_and_equal_to_the_candidate_base": True,
+            "candidate_base_and_recomputed_base_have_the_same_leading_ideal": True,
+            "the_candidate_reduction_set_is_Cox_bihomogeneous": True,
+            "all_21_original_selected_generators_reduce_to_zero": True,
+            **truncation_checks,
+            "every_target_effective_candidate_reducer_therefore_belongs_to_the_selected_module": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "the_effective_candidate_leading_submodule_leaves_at_most_one_target_class": True,
+            "the_selected_toric_residue_lower_bound_supplies_at_least_one_target_class": True,
+            "the_selected_ordinary_top_piece_has_dimension_one": True,
+            "no_predecessor_entry_is_used_as_selected_source_evidence": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_the_truncated_reduction_set_is_a_full_standard_basis": False,
+            "claims_global_equality_between_the_truncated_and_untruncated_modules": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_promotion": False,
+        },
+        "next_required_object": "Independently verify, adopt canonical G3AP, and execute G3AM/G3AN.",
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP weighted truncated leading squeeze: PASS "
+        f"engine={candidate_engine} reducer={len(module)} dimension=1"
+    )
+
+
+if __name__ == "__main__":
+    main()

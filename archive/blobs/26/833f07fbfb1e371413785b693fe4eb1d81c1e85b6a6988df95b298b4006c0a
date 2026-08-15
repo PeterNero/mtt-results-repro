@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Run exact Cox-box G3AP hedges with degree-preserving component orders.
+
+The six components are merely a basis of the fiber-degree-two free module.
+Permuting them, their shifts, selected generators and target-box truncators is
+an exact graded module isomorphism.  Different position-over-term orders can,
+however, have very different standard-basis execution costs.  Outputs remain
+candidate evidence until an independent selected-source certificate is run.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import run_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_hedge as weighted_hilbert
+import run_ust_g3ap_selected_cayley_fiber2_weighted_boxtrunc_hilbert_hedge as boxtrunc
+import ust_g3ap_module_cache_recovery as cache_recovery
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+BASE_CACHE = weighted_hilbert.BASE_CACHE
+HINT_PACKET = boxtrunc.HINT_PACKET
+
+# Entries are old physical component numbers in new position order.
+PERMUTATIONS = {
+    "reverse": (6, 5, 4, 3, 2, 1),
+    "graph_a": (6, 3, 5, 2, 4, 1),
+    "graph_b": (6, 5, 3, 4, 2, 1),
+    "graph_c": (6, 3, 5, 4, 2, 1),
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def paths(label: str) -> dict[str, Path]:
+    stem = f"ust_g3ap_selected_cayley_fiber2_weighted_boxperm_{label}_hilbert"
+    return {
+        "script": STATE / f"{stem}.sing",
+        "output": STATE / f"{stem}.singular.out",
+        "cache": STATE / f"{stem}_degree254.ssi",
+        "packet": STATE / f"{stem}.packet.json",
+        "recovery_script": STATE / f"{stem}_leader_recovery.sing",
+        "recovery_output": STATE / f"{stem}_leader_recovery.singular.out",
+    }
+
+
+def position_maps(order: tuple[int, ...]) -> tuple[dict[int, int], dict[int, int]]:
+    require(tuple(sorted(order)) == (1, 2, 3, 4, 5, 6), "component permutation")
+    old_to_new = {old: new for new, old in enumerate(order, start=1)}
+    new_to_old = {new: old for old, new in old_to_new.items()}
+    return old_to_new, new_to_old
+
+
+def map_components(expression: str, old_to_new: dict[int, int]) -> str:
+    return re.sub(
+        r"gen\(([1-6])\)",
+        lambda match: f"gen({old_to_new[int(match.group(1))]})",
+        expression,
+    )
+
+
+def mapped_shifts(order: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(weighted.COMPONENT_SHIFTS[old - 1] for old in order)
+
+
+def mapped_generators(order: tuple[int, ...]) -> list[str]:
+    old_to_new, _ = position_maps(order)
+    selected = [map_components(value, old_to_new) for value in qring.derivative_generators()]
+    truncators = [
+        map_components(value, old_to_new) for value in boxtrunc.truncation_generators()
+    ]
+    require(len(selected) == 21, "21 mapped selected generators")
+    require(len(truncators) == 12159, "12159 mapped Cox-box generators")
+    return selected + truncators
+
+
+def imported_hilbert() -> tuple[list[int], dict[str, object]]:
+    require(HINT_PACKET.is_file(), "canonical Cox-box hint packet")
+    packet = json.loads(HINT_PACKET.read_text(encoding="ascii"))
+    require(
+        packet.get("schema")
+        == "mtt.unified-source.g3ap-fiber2-weighted-boxtrunc-hilbert-hint.v1",
+        "canonical Cox-box hint schema",
+    )
+    values = [int(value) for value in packet["hilbert_numerator"]]
+    require(values and values[0] == 1, "normalized imported Hilbert numerator")
+    return values, packet
+
+
+def candidate_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    hilbert: list[int],
+    cache: Path,
+) -> str:
+    old_to_new, _ = position_maps(order)
+    before, after = qring.derivative_representatives()
+    generators = mapped_generators(order)
+    shifts = ",".join(str(value) for value in mapped_shifts(order))
+    weights = ",".join(str(value) for value in weighted.BASE_WEIGHTS)
+    hint = ",".join(str(value) for value in hilbert)
+    base_relative = str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    cache_relative = str(cache.relative_to(ROOT)).replace("\\", "/")
+    marker = f"G3AP_F2_WBOXPERM_{label.upper()}"
+    canonical_component = old_to_new[6]
+    return weighted.weighted_base_prefix(source) + f'''option(noredTail);
+{before}
+def cachedBase=read("ssi:r {base_relative}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+int i;
+print("{marker}_BASE_GB_SIZE="+string(size(GI)));
+for (i=1;i<=size(GI);i++)
+{{ print("{marker}_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GI[i]))); }}
+qring q=GI;
+{after}
+module MT=
+  {',\n  '.join(generators)};
+intvec componentShifts={shifts};
+attrib(MT,"isHomog",componentShifts);
+bigintvec truncatedHilbert={hint};
+intvec selectedWeights={weights};
+degBound={weighted.TARGET_SCALAR_DEGREE};
+module G=std(MT,truncatedHilbert,selectedWeights);
+vector canonicalSocle=w^12*t2^4*gen({canonical_component});
+vector canonicalNormal=reduce(canonicalSocle,G);
+print("{marker}_BOUND="+string(degBound));
+print("{marker}_MODULE_GENERATORS="+string(size(MT)));
+print("{marker}_MODULE_GB_SIZE="+string(size(G)));
+print("{marker}_CANONICAL_NORMAL_ZERO="+string(canonicalNormal==0));
+print("{marker}_CANONICAL_NORMAL="+string(canonicalNormal));
+for (i=1;i<=size(G);i++)
+{{
+  print("{marker}_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("{marker}_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {cache_relative}",G);
+print("{marker}_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_bases(raw: str, label: str):
+    marker = f"G3AP_F2_WBOXPERM_{label.upper()}_"
+    return qring.parse_leaders(raw.replace(marker, "G3AP_F2_QRING_"))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(PERMUTATIONS), required=True)
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    parser.add_argument("--postprocess-existing", action="store_true")
+    args = parser.parse_args()
+
+    label = args.permutation
+    order = PERMUTATIONS[label]
+    old_to_new, new_to_old = position_maps(order)
+    route_paths = paths(label)
+    weighted.validate_grading()
+    require(BASE_CACHE.is_file() and BASE_CACHE.stat().st_size > 0, "weighted base cache")
+    hilbert, hint_packet = imported_hilbert()
+    source = SOURCE.read_text(encoding="ascii")
+    script = candidate_script(source, label, order, hilbert, route_paths["cache"])
+    if not args.postprocess_existing:
+        route_paths["script"].write_text(script, encoding="ascii")
+    else:
+        require(route_paths["script"].is_file(), f"{label} executed script")
+    if args.emit_only:
+        print(f"emitted {route_paths['script'].relative_to(ROOT)}")
+        return
+
+    marker = f"G3AP_F2_WBOXPERM_{label.upper()}"
+    recovery_used = False
+    evidence_output = route_paths["output"]
+    if args.postprocess_existing:
+        require(route_paths["output"].is_file(), f"{label} existing output")
+        raw = route_paths["output"].read_text(encoding="utf-8")
+        if (
+            f"{marker}_LEADER_EXPORT_PASS" not in raw
+            or f"{marker}_MODULE_LEADER_1_COMP=" not in raw
+        ):
+            raw = cache_recovery.recover(
+                source_path=SOURCE,
+                base_cache=BASE_CACHE,
+                module_cache=route_paths["cache"],
+                marker=marker,
+                module_generator_count=12180,
+                canonical_component=old_to_new[6],
+                script_path=route_paths["recovery_script"],
+                output_path=route_paths["recovery_output"],
+                timeout=args.timeout,
+            )
+            recovery_used = True
+            evidence_output = route_paths["recovery_output"]
+        elapsed_seconds = None
+        returncode = 0
+    else:
+        route_paths["cache"].unlink(missing_ok=True)
+        started = time.time()
+        completed = subprocess.run(
+            singular_command(ROOT, route_paths["script"]),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+        elapsed_seconds = time.time() - started
+        route_paths["output"].write_text(raw, encoding="utf-8")
+    require(returncode == 0, f"{label} execution")
+    require(f"{marker}_LEADER_EXPORT_PASS" in raw, f"{label} export")
+    canonical_zero_match = re.search(
+        rf"^{marker}_CANONICAL_NORMAL_ZERO=([01])$", raw, re.MULTILINE
+    )
+    require(canonical_zero_match is not None, f"{label} canonical socle diagnostic")
+    require(
+        route_paths["cache"].is_file() and route_paths["cache"].stat().st_size > 0,
+        f"{label} module cache",
+    )
+    base, module_new = parse_bases(raw, label)
+    module_old = [(new_to_old[component], exponent) for component, exponent in module_new]
+    standards, sectors = fiber2.enumerate_target(qring.combined_leaders(base, module_old))
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(len(standards) == 1, "candidate one-dimensional target")
+    standard_old_component, standard_exponent = standards[0]
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-permuted-boxtrunc-hilbert-candidate.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_REQUIRES_INDEPENDENT_PERMUTATION_AND_TARGET_BOX_CERTIFICATION",
+        "permutation": {
+            "label": label,
+            "old_components_in_new_position_order": list(order),
+            "old_to_new": {str(key): value for key, value in old_to_new.items()},
+            "new_to_old": {str(key): value for key, value in new_to_old.items()},
+            "new_position_shifts": list(mapped_shifts(order)),
+            "is_degree_preserving_module_isomorphism": True,
+        },
+        "inputs": {
+            "selected_source": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SOURCE)},
+            "weighted_base_cache": {"path": str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(BASE_CACHE), "bytes": BASE_CACHE.stat().st_size, "isSB_trust_attribute_stored": False},
+            "canonical_box_hint": {"path": str(HINT_PACKET.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(HINT_PACKET), "schema": hint_packet["schema"], "authoritative": False},
+        },
+        "truncation": hint_packet["truncation"],
+        "execution": {
+            "script": {"path": str(route_paths["script"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(route_paths["script"])},
+            "output": {"path": str(evidence_output.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(evidence_output)},
+            "original_execution_output": {"path": str(route_paths["output"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(route_paths["output"])},
+            "leader_recovery": (
+                None
+                if not recovery_used
+                else {
+                    "script": {"path": str(route_paths["recovery_script"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(route_paths["recovery_script"])},
+                    "output": {"path": str(route_paths["recovery_output"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(route_paths["recovery_output"])},
+                    "reason": "recover component labels after obsolete leadcomp exporter failure; the completed module cache is unchanged",
+                }
+            ),
+            "returncode": returncode,
+            "elapsed_seconds": elapsed_seconds,
+            "postprocessed_existing_completed_output": args.postprocess_existing,
+            "leader_recovery_used": recovery_used,
+            "base_basis_size": len(base),
+            "selected_derivative_generator_count": 21,
+            "truncation_generator_count": 12159,
+            "candidate_basis_size_through_bound": len(module_new),
+            "candidate_module_cache": {"path": str(route_paths["cache"].relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(route_paths["cache"]), "bytes": route_paths["cache"].stat().st_size, "valid_through_weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE, "isSB_trust_attribute_stored": False},
+        },
+        "candidate_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "enumerated_monomials": total,
+            "dimension_if_certified": 1,
+            "standard_old_component": standard_old_component,
+            "standard_new_component": old_to_new[standard_old_component],
+            "standard_exponent": list(standard_exponent),
+            "canonical_socle_candidate_normal_form_is_nonzero": canonical_zero_match.group(1) == "0",
+        },
+        "guardrails": {
+            "claims_imported_hint_proves_selected_flatness": False,
+            "claims_target_effective_reducers_are_certified": False,
+            "claims_G3AP_is_closed": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+        },
+        "next_required_object": "Independently reconstruct the permutation, selected module, target-box provenance and canonical-socle normalization, then combine with G3AP.LOWER.",
+    }
+    route_paths["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"G3AP weighted permuted Cox-box candidate ({label}): PASS "
+        f"module={len(module_new)} monomials={total} standard={standards[0]} certification=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

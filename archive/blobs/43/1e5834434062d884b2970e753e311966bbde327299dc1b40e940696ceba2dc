@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""Independently verify the exact setup of the permuted G3AP Cox-box routes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import re
+import tempfile
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import build_ust_g3am_selected_cayley_fiber2_response_chunk as response
+import build_ust_g3an_selected_cayley_schur_chunk as direct_schur
+import run_ust_g3ap_selected_cayley_fiber2_weighted_boxtrunc_hilbert_hedge as boxtrunc
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_qslimgb_hedge as permuted_qslimgb
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_std_hedge as permuted_std
+import ust_cayley_fiber2_reduction as reduction
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def physical_degree(component: int) -> tuple[int, int, int]:
+    _, _, (h_degree, l_degree), _ = fiber2.COMPONENTS[component - 1]
+    return h_degree, l_degree, weighted.COMPONENT_SHIFTS[component - 1]
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_permuted_reduction_loader() -> None:
+    label = "graph_a"
+    order = permuted.PERMUTATIONS[label]
+    old_to_new, new_to_old = permuted.position_maps(order)
+    permutation = {
+        "label": label,
+        "old_components_in_new_position_order": list(order),
+        "old_to_new": {str(key): value for key, value in old_to_new.items()},
+        "new_to_old": {str(key): value for key, value in new_to_old.items()},
+        "new_position_shifts": list(permuted.mapped_shifts(order)),
+        "is_degree_preserving_module_isomorphism": True,
+    }
+    with tempfile.TemporaryDirectory(dir=ROOT / "state") as temporary:
+        temporary_path = Path(temporary)
+        base_cache = temporary_path / "base.ssi"
+        module_cache = temporary_path / "module.ssi"
+        source_path = temporary_path / "source.packet.json"
+        canonical_path = temporary_path / "canonical.packet.json"
+        base_cache.write_bytes(b"fixture-base")
+        module_cache.write_bytes(b"fixture-module")
+
+        def record(path: Path) -> dict[str, object]:
+            return {
+                "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(path),
+            }
+
+        base_record = {
+            **record(base_cache),
+            "bytes": base_cache.stat().st_size,
+            "isSB_trust_attribute_stored": False,
+        }
+        module_record = {
+            **record(module_cache),
+            "bytes": module_cache.stat().st_size,
+            "valid_through_weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "valid_for_Cox_degree": [18, 2, 2],
+            "is_full_standard_basis": False,
+            "isSB_trust_attribute_stored": False,
+        }
+        source = {
+            "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-permuted-leading-squeeze-certified-top.v1",
+            "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_WEIGHTED_PERMUTED_LEADING_SQUEEZE_TOP_DIMENSION_ONE",
+            "candidate_engine": "qslimgb",
+            "permutation": permutation,
+            "execution": {
+                "certified_base_cache": base_record,
+                "certified_module_cache": module_record,
+            },
+            "checks": {"fixture": True},
+            "guardrails": {"fixture": False},
+        }
+        source_path.write_text(json.dumps(source), encoding="ascii")
+        canonical = {
+            "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+            "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+            "inputs": {
+                "fiber2_weighted_permuted_leading_squeeze_certified_top": record(
+                    source_path
+                )
+            },
+            "leading_ideal": {
+                "candidate_engine": "qslimgb",
+                "permutation": permutation,
+            },
+            "ordinary_top_piece": {
+                "basis": ["x^2*t1*u*s"],
+                "basis_old_component": 3,
+                "basis_new_component": old_to_new[3],
+                "basis_base_exponent": [2, 0, 0, 0, 0, 1, 0],
+            },
+            "checks": {"fixture": True},
+            "guardrails": {"fixture": False},
+        }
+        canonical_path.write_text(json.dumps(canonical), encoding="ascii")
+        original = reduction.CANONICAL
+        reduction.CANONICAL = canonical_path
+        try:
+            selected = reduction.selected_fiber2_reduction()
+        finally:
+            reduction.CANONICAL = original
+        require(
+            selected["candidate_engine"] == "qslimgb"
+            and selected["permutation"] == permutation
+            and selected["module_cache"] == module_cache
+            and selected["fiber_coordinates"]["initial_module_position"]
+            == old_to_new[2]
+            and selected["fiber_coordinates"]["normalization_module_position"]
+            == old_to_new[3],
+            "permuted certified reduction loader",
+        )
+
+
+def main() -> None:
+    original_selected = qring.derivative_generators()
+    original_truncators = boxtrunc.truncation_generators()
+    source = fiber2.SOURCE.read_text(encoding="ascii")
+    hilbert, _ = permuted.imported_hilbert()
+    require(len(original_selected) == 21, "21 original selected generators")
+    require(len(original_truncators) == 12159, "12159 original truncators")
+
+    for label, order in permuted.PERMUTATIONS.items():
+        old_to_new, new_to_old = permuted.position_maps(order)
+        require(all(new_to_old[old_to_new[index]] == index for index in range(1, 7)), f"{label} inverse maps")
+        shifts = permuted.mapped_shifts(order)
+        require(
+            shifts == tuple(weighted.COMPONENT_SHIFTS[index - 1] for index in order),
+            f"{label} shifted grading",
+        )
+        mapped = permuted.mapped_generators(order)
+        restored = [
+            re.sub(
+                r"gen\(([1-6])\)",
+                lambda match: f"gen({new_to_old[int(match.group(1))]})",
+                value,
+            )
+            for value in mapped
+        ]
+        require(restored[:21] == original_selected, f"{label} selected generator round trip")
+        require(restored[21:] == original_truncators, f"{label} truncator round trip")
+        route = permuted.paths(label)
+        hilbert_script = permuted.candidate_script(
+            source, label, order, hilbert, route["cache"]
+        )
+        qslimgb_route = permuted_qslimgb.paths(label)
+        qslimgb_script = permuted_qslimgb.candidate_script(
+            source, label, order, qslimgb_route["cache"]
+        )
+        std_route = permuted_std.paths(label)
+        std_script = permuted_std.candidate_script(
+            source, label, order, std_route["cache"]
+        )
+        for engine, script in (
+            ("hilbert", hilbert_script),
+            ("qslimgb", qslimgb_script),
+            ("std", std_script),
+        ):
+            require(
+                fiber2.LEAD_COMPONENT_PROCEDURE in script
+                and "ustLeadComponent(G[i])" in script
+                and "leadcomp(" not in script,
+                f"{label} {engine} public lead-component exporter",
+            )
+            obsolete = fiber2.obsolete_leadcomp_export_variant(script)
+            require(
+                fiber2.candidate_script_matches(obsolete, script, True)
+                and not fiber2.candidate_script_matches(obsolete, script, False),
+                f"{label} {engine} cache-recovery provenance boundary",
+            )
+        for new_position, old_component in enumerate(order, start=1):
+            h_degree, l_degree, old_shift = physical_degree(old_component)
+            require(shifts[new_position - 1] == old_shift, f"{label} component shift {new_position}")
+            require(
+                5 * h_degree + 18 * l_degree + old_shift == weighted.TARGET_SCALAR_DEGREE,
+                f"{label} target degree {new_position}",
+            )
+        normalization_old = 3
+        fixture = {
+            "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+            "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+            "checks": {"fixture": True},
+            "guardrails": {"fixture": False},
+            "leading_ideal": {
+                "permutation": {
+                    "label": label,
+                    "old_components_in_new_position_order": list(order),
+                    "old_to_new": {
+                        str(key): value for key, value in old_to_new.items()
+                    },
+                    "new_to_old": {
+                        str(key): value for key, value in new_to_old.items()
+                    },
+                }
+            },
+            "ordinary_top_piece": {
+                "basis": ["x^2*t1*u*s"],
+                "basis_old_component": normalization_old,
+                "basis_new_component": old_to_new[normalization_old],
+                "basis_base_exponent": [2, 0, 0, 0, 0, 1, 0],
+            },
+        }
+        coordinates = reduction.fiber2_coordinates_from_canonical(fixture)
+        require(
+            coordinates["initial_physical_component"] == "uv"
+            and coordinates["initial_module_position"] == old_to_new[2],
+            f"{label} physical uv transport",
+        )
+        require(
+            coordinates["normalization_physical_component"] == "us"
+            and coordinates["normalization_module_position"]
+            == old_to_new[normalization_old]
+            and coordinates["normalization_scalar_monomial"] == "x^2*t1",
+            f"{label} selected normalization transport",
+        )
+        response_script = response.make_script(
+            ["x"],
+            ["t0"],
+            0,
+            0,
+            {
+                "residue_field": {
+                    "gamma_relation_coefficients_ascending": [1, 0, 0, 0, 0, 0, 1]
+                },
+                "K3_cycle_source": {"Q2": "x", "G3": "y", "H4": "z"},
+            },
+            {
+                "kind": "fiber2_polynomial_module_through_degree_44",
+                "module_cache": fiber2.SOURCE,
+                "fiber_coordinates": coordinates,
+            },
+        )
+        require(
+            f"(x)*gen({old_to_new[2]})" in response_script
+            and "vector reducedSocle=reduce((x^2*t1)*"
+            f"gen({old_to_new[normalization_old]}),G);" in response_script,
+            f"{label} response script coordinate transport",
+        )
+        direct_schur_script = direct_schur.make_script(
+            ["x"],
+            ["t0"],
+            0,
+            {
+                "residue_field": {
+                    "gamma_relation_coefficients_ascending": [1, 0, 0, 0, 0, 0, 1]
+                },
+                "K3_cycle_source": {"Q2": "x", "G3": "y", "H4": "z"},
+            },
+            {
+                "kind": "fiber2_polynomial_module_through_degree_44",
+                "module_cache": fiber2.SOURCE,
+                "fiber_coordinates": coordinates,
+            },
+        )
+        require(
+            f"(x)*gen({old_to_new[2]})" in direct_schur_script
+            and "vector reducedSocle=reduce((x^2*t1)*"
+            f"gen({old_to_new[normalization_old]}),G);" in direct_schur_script,
+            f"{label} direct Schur script coordinate transport",
+        )
+
+    identity_fixture = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+        "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+        "checks": {"fixture": True},
+        "guardrails": {"fixture": False},
+        "leading_ideal": {},
+        "ordinary_top_piece": {"basis": ["w^12*t2^4*s^2"]},
+    }
+    identity = reduction.fiber2_coordinates_from_canonical(identity_fixture)
+    require(
+        identity["permutation_label"] == "identity"
+        and identity["initial_module_position"] == 2
+        and identity["normalization_module_position"] == 6
+        and identity["normalization_scalar_monomial"] == "w^12*t2^4",
+        "legacy identity coordinate transport",
+    )
+    verify_permuted_reduction_loader()
+
+    print(
+        "UST.G3AP permuted Cox-box routes: PASS "
+        f"routes={len(permuted.PERMUTATIONS)} selected=21 truncators=12159"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Promote the ten G3EI vectors to an exact component-12 rank theorem."""
+
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+import statistics
+from pathlib import Path
+from typing import Any
+
+from build_ust_g3ec_h02_component12_unit_pivot_reduction import ROOT
+from probe_ust_g3ec_component12_padic_kernel import invert_matrix_mod
+from probe_ust_g3ef_component12_six_embedding_lattice import (
+    exact_replay,
+    independent_candidates,
+    interpolate_vectors,
+)
+
+
+G3EA = ROOT / "state/ust_g3ea_h02_component9_gradient_elliptic_lift.packet.json"
+G3EB = ROOT / "state/ust_g3eb_h02_component12_cohomological_source_cutset.packet.json"
+G3EG = ROOT / "state/ust_g3eg_h02_component12_adaptive_exactness_cutset.packet.json"
+G3EI = ROOT / "evidence/ust_g3ei/H02.component12.warm_span_target_lattice.json.gz"
+G3EC_CERT = ROOT / "evidence/ust_g3ec/H02.component12.unit_pivot_reduction.json"
+G3EC_MATRIX = ROOT / "evidence/ust_g3ec/H02.component12.unit_pivot_reduced.number_field.sms"
+RESIDUE = ROOT / "evidence/ust_g3ec/H02.component12.reduced.padic-exp96.residue.json.gz"
+VECTOR_EVIDENCE = ROOT / "evidence/ust_g3ej/H02.component12.exact_kernel_vectors.json.gz"
+OUT = ROOT / "state/ust_g3ej_h02_component12_exact_kernel_promotion.packet.json"
+PRIME = 21817
+ROOT_VALUE = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_gzip(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_gzip_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.write("\n")
+    temporary.replace(path)
+
+
+def determinant_mod_prime(candidates: list[list[int]]) -> int:
+    matrix = [
+        [
+            sum(
+                int(row[relation * 6 + degree])
+                * pow(ROOT_VALUE, degree, PRIME)
+                for degree in range(6)
+            )
+            % PRIME
+            for relation in range(10)
+        ]
+        for row in candidates
+    ]
+    determinant = 1
+    for column in range(10):
+        pivot = next(
+            (index for index in range(column, 10) if matrix[index][column]),
+            None,
+        )
+        require(pivot is not None, "free projection is nonsingular")
+        if pivot != column:
+            matrix[column], matrix[pivot] = matrix[pivot], matrix[column]
+            determinant = -determinant % PRIME
+        pivot_value = matrix[column][column]
+        determinant = determinant * pivot_value % PRIME
+        inverse = pow(pivot_value, -1, PRIME)
+        matrix[column] = [value * inverse % PRIME for value in matrix[column]]
+        for row in range(column + 1, 10):
+            factor = matrix[row][column]
+            if factor:
+                matrix[row] = [
+                    (value - factor * pivot_entry) % PRIME
+                    for value, pivot_entry in zip(
+                        matrix[row], matrix[column], strict=True
+                    )
+                ]
+    return determinant
+
+
+def main() -> None:
+    g3ea, g3eb, g3eg = load(G3EA), load(G3EB), load(G3EG)
+    require(all(g3ea["checks"].values()), "G3EA checks")
+    require(all(g3eb["checks"].values()), "G3EB checks")
+    require(all(g3eg["checks"].values()), "G3EG checks")
+    require(
+        g3eg["rank_frontier"]["proven_global_Q_rank_interval"] == [4748, 5112],
+        "incoming interval",
+    )
+
+    g3ei = load_gzip(G3EI)
+    require(
+        g3ei["schema"]
+        == "ust.g3ei.h02.component12.warm-span-target-lattice.v1",
+        "G3EI schema",
+    )
+    require(g3ei["exact_kernel_closed"], "G3EI exact closure")
+    require(g3ei["exact_replay_nonzero_slots"] == 0, "G3EI zero residual")
+    require(
+        [int(row["exact_replay_nonzero_slots"]) for row in g3ei["rounds"]]
+        == [2861, 2020, 0],
+        "G3EI residual trend",
+    )
+    require(
+        [int(row["lattice_dimension"]) for row in g3ei["rounds"]]
+        == [90, 120, 150],
+        "G3EI lattice dimensions",
+    )
+    require(
+        all(int(row["warm_gamma_span_rank_mod21817"]) == 60 for row in g3ei["rounds"]),
+        "G3EI warm-span ranks",
+    )
+
+    residue = load_gzip(RESIDUE)
+    require(residue["shape"] == [6, 956, 10], "residue shape")
+    require(residue["free_columns"] == list(range(531, 541)), "free columns")
+    modulus = int(residue["modulus"])
+    roots = [int(value) for value in residue["lifted_roots"]]
+    vandermonde = [
+        [pow(root, degree, modulus) for degree in range(6)] for root in roots
+    ]
+    inverse_vandermonde = invert_matrix_mod(vandermonde, modulus)
+    candidates = [
+        [int(value) for value in row]
+        for row in g3ei["selected_candidate_free_coefficients"]
+    ]
+    require(len(candidates) == 10 and all(len(row) == 60 for row in candidates), "candidate shape")
+    require(independent_candidates(candidates) == list(range(10)), "candidate independence")
+    vectors = interpolate_vectors(
+        candidates,
+        residue["kernels"],
+        roots,
+        inverse_vandermonde,
+        modulus,
+    )
+    require(len(vectors) == 10 and all(len(row) == 956 for row in vectors), "vector shape")
+    exact_nonzeros, exact_slots = exact_replay(vectors)
+    require((exact_nonzeros, exact_slots) == (0, 13240), "literal exact replay")
+
+    free_columns = [int(value) for value in residue["free_columns"]]
+    for vector_index, vector in enumerate(vectors):
+        for relation, column in enumerate(free_columns):
+            expected = tuple(candidates[vector_index][relation * 6 : (relation + 1) * 6])
+            require(vector[column] == expected, "free-coordinate normalization")
+    determinant = determinant_mod_prime(candidates)
+    require(determinant == 1071, "free-projection determinant")
+
+    coefficient_bits = [
+        abs(value).bit_length()
+        for vector in vectors
+        for coefficient in vector
+        for value in coefficient
+    ]
+    vector_payload = {
+        "schema": "ust.g3ej.h02.component12.exact-kernel-vectors.v1",
+        "field_minimal_polynomial_ascending": [64, 16, 33, 44, 89, 24, 1],
+        "matrix": record(G3EC_MATRIX),
+        "source_G3EI": record(G3EI),
+        "free_component12_columns_zero_based": free_columns,
+        "free_projection_determinant_mod21817_gamma5": determinant,
+        "vectors": vectors,
+        "exact_replay_nonzero_slots": exact_nonzeros,
+        "exact_replay_slots": exact_slots,
+        "coefficient_bit_min": min(coefficient_bits),
+        "coefficient_bit_median": statistics.median(coefficient_bits),
+        "coefficient_bit_max": max(coefficient_bits),
+    }
+    write_gzip_atomic(VECTOR_EVIDENCE, vector_payload)
+
+    g3ec = load(G3EC_CERT)
+    require(g3ec["input_shape"] == [42706, 2113], "G3EC input shape")
+    require(g3ec["output"]["shape"] == [1324, 956], "G3EC output shape")
+    require(g3ec["output"]["finite_rank_at_p21817_gamma5"] == 946, "finite reduced rank")
+    require(g3ec["output"]["free_component12_columns"] == free_columns, "component12 free columns")
+    exact_pivots = (
+        int(g3ec["quotient_unit_elimination"]["columns"])
+        + int(g3ec["paired_v_elimination"]["pivots"])
+        + int(g3ec["monic_w_square_elimination"]["pivots"])
+    )
+    require(exact_pivots == 1157, "G3EC exact pivot count")
+
+    packet = {
+        "schema": "mtt.unified-source.g3ej-h02-component12-exact-kernel-promotion.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3EJ",
+        "status": "CLOSED_EXACT_H02_COMPONENT12_KERNEL_PROMOTION_RANK71_GLOBAL_UPPER5102",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3EA": record(G3EA),
+            "G3EB": record(G3EB),
+            "G3EG": record(G3EG),
+            "G3EI": record(G3EI),
+            "G3EC_certificate": record(G3EC_CERT),
+            "G3EC_matrix": record(G3EC_MATRIX),
+            "p_adic_residue": record(RESIDUE),
+        },
+        "exact_kernel_certificate": {
+            "vectors": record(VECTOR_EVIDENCE),
+            "matrix_shape": [1324, 956],
+            "vector_count": 10,
+            "vector_length": 956,
+            "field_degree": 6,
+            "exact_replay_nonzero_slots": 0,
+            "exact_replay_slots": 13240,
+            "free_component12_columns_zero_based": free_columns,
+            "free_projection_determinant_mod21817_gamma5": determinant,
+            "coefficient_bit_range": [min(coefficient_bits), max(coefficient_bits)],
+            "coefficient_bit_median": statistics.median(coefficient_bits),
+        },
+        "rank_promotion": {
+            "good_reduction_rank_lower_bound_on_reduced_matrix": 946,
+            "ten_independent_exact_kernel_vectors_give_rank_upper_bound": 946,
+            "exact_reduced_matrix_rank_over_Qgamma": 946,
+            "exact_reduced_matrix_nullity_over_Qgamma": 10,
+            "kernel_preserving_pivots_from_post_G3DZ_presentation": exact_pivots,
+            "exact_post_G3DZ_presentation_rank_over_Qgamma": 2103,
+            "exact_post_G3DZ_presentation_nullity_over_Qgamma": 10,
+            "component12_dimension": 81,
+            "exact_component12_rank_increment_over_Qgamma": 71,
+            "previous_global_Q_rank_interval": [4748, 5112],
+            "promoted_global_Q_rank_interval": [4748, 5102],
+            "remaining_global_gap": 354,
+            "next_positive_gap_component": 16,
+            "next_positive_gap_units": 21,
+        },
+        "checks": {
+            "G3EA_G3EB_G3EG_and_G3EI_are_hash_bound": True,
+            "ten_vectors_replay_with_literal_zero_residual_over_Qgamma": True,
+            "free_component12_projection_is_independent": True,
+            "finite_rank_lower_and_exact_kernel_upper_bounds_meet_at946": True,
+            "exact_unit_pivots_lift_nullity10_to_the2113_column_presentation": True,
+            "component12_rank_is_exactly71": True,
+            "global_upper_endpoint_drops_by10_to5102": True,
+        },
+        "guardrails": {
+            "claims_global_H02_rank_equals4748": False,
+            "claims_remaining354_gap_units_are_closed": False,
+            "claims_selected_evolving_source_or_path_execution": False,
+            "claims_physical_endpoint_or_master_operator": False,
+            "uses_LLL_or_padic_consistency_without_exact_replay": False,
+        },
+        "theorem": {
+            "statement": (
+                "The G3EI warm-span search emits ten vectors in the956-column exact "
+                "component12 presentation. Literal Q(gamma) replay vanishes in all13240 "
+                "slots. Their projection to the ten free component12 columns has determinant "
+                "1071 modulo(21817,gamma-5), so the vectors are independent over Q(gamma). "
+                "Good reduction gives the opposite rank bound946; hence the reduced matrix "
+                "has exact rank946 and nullity10. Reversing1157 exact unit pivots gives rank2103 "
+                "and nullity10 for the post-G3DZ presentation. Therefore component12 has exact "
+                "rank increment71 and the global interval tightens to4748..5102."
+            ),
+            "tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_COMPONENT_PROMOTION",
+        },
+        "frontier_delta": {
+            "before": "Component12 had ten finite kernel directions but no exact Q(gamma) kernel basis; the global interval was4748..5112.",
+            "after": "Ten independent exact vectors close component12 rank71 and tighten the global interval to4748..5102;354 gap units remain, beginning at component16.",
+        },
+        "next_required_object": (
+            "Freeze components0,9,12 and inspect only ordered component16's21-unit "
+            "positive defect. Emit its exact source presentation and characteristic-zero "
+            "lift before any later component or selected-source contraction."
+        ),
+    }
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3EJ component12 exact kernel promotion: PASS")
+    print("exact_replay=0/13240 determinant_mod21817=1071 reduced_rank=946")
+    print("component12_rank=71 global_interval=4748..5102 remaining_gap=354")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Adopt the G3AO vs K-split certificate after structural uvs closure."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+import run_ust_g3ao_selected_cayley_toric_vs_off_k_elimination as off_k
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="std")
+    args = parser.parse_args()
+    packet_path = off_k.CAMPAIGN / f"{off_k.LABEL}.{args.algorithm}.packet.json"
+    require(packet_path.is_file(), "off-K packet")
+    packet = json.loads(packet_path.read_text(encoding="ascii"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3ao-selected-cayley-toric-orbit-vs-off-k.v1",
+        "off-K schema",
+    )
+    require(packet["label"] == off_k.LABEL, "off-K label")
+    source_hash = sha256(direct.SOURCE)
+    require(packet["source_sha256"] == source_hash, "selected source")
+    require(
+        packet["passed"] is True
+        and packet["returncode"] == 0
+        and packet["timed_out"] is False,
+        "completed off-K pass",
+    )
+    require(all(packet["proof_scope"].values()), "off-K proof scope")
+    require(packet["algorithm"] == f"vs_off_k_{args.algorithm}", "algorithm")
+    script = direct.CAMPAIGN / packet["script"]["path"]
+    output = direct.CAMPAIGN / packet["output"]["path"]
+    require(script.is_file() and sha256(script) == packet["script"]["sha256"], "script")
+    require(output.is_file() and sha256(output) == packet["output"]["sha256"], "output")
+    require(
+        script.read_text(encoding="ascii")
+        == off_k.make_script(direct.selected_polynomials(), args.algorithm),
+        "exact off-K script reconstruction",
+    )
+    raw = output.read_text(encoding="utf-8")
+    require("G3AO_VS_BIDUAL_SMOOTH_EMPTY=1" in raw, "off-K smooth empty")
+    require("G3AO_VS_BIDUAL_CUSP_EMPTY=1" in raw, "off-K cusp empty")
+
+    uvs_path = direct.CAMPAIGN / "B_xyzw__T_t0t1t2__I_uvs.packet.json"
+    require(uvs_path.is_file(), "canonical structural uvs packet")
+    uvs = json.loads(uvs_path.read_text(encoding="ascii"))
+    require(uvs.get("passed") is True, "structural uvs pass")
+    require(uvs.get("source_sha256") == source_hash, "same-source uvs pass")
+    require(
+        uvs.get("certificate_method")
+        in {
+            "uvs_elliptic_bidual_contact_and_cusp_necessary_loci",
+            "uvs_quadratic_norm_and_compatibility_elimination",
+        },
+        "uvs packet excludes the enlarged K-zero smooth/cusp loci",
+    )
+
+    canonical = dict(packet)
+    canonical["schema"] = "mtt.unified-source.g3ao-selected-cayley-toric-orbit.v1"
+    canonical["certificate_method"] = "vs_K_split_uvs_structural_and_off_K_bidual"
+    canonical["dependencies"] = {
+        "structural_uvs_packet": {
+            "path": str(uvs_path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(uvs_path),
+            "certificate_method": uvs["certificate_method"],
+        }
+    }
+    canonical["proof_scope"] = {
+        **packet["proof_scope"],
+        "every_vs_critical_point_splits_into_K_zero_or_K_nonzero": True,
+        "on_K_zero_the_vs_equations_map_into_the_structural_uvs_smooth_or_cusp_loci": True,
+        "the_same_selected_source_and_full_orbit_support_are_used_in_both_parts": True,
+        "the_two_exact_empty_locus_certificates_cover_the_entire_vs_orbit": True,
+    }
+    canonical_path = direct.CAMPAIGN / f"{off_k.LABEL}.packet.json"
+    canonical_path.write_text(json.dumps(canonical, indent=2) + "\n", encoding="ascii")
+    print(f"{off_k.LABEL}: ADOPTED EXACT K-SPLIT VS CERTIFICATE")
+
+
+if __name__ == "__main__":
+    main()

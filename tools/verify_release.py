@@ -217,6 +217,26 @@ def main() -> int:
         and "zero-input" in hypothesis["continuous_parameter_claim"],
         hypothesis=hypothesis["id"],
     )
+    unified_selection = current_selection.get("unified_source_snapshot") or {}
+    unified_repository = next(
+        row
+        for row in current_snapshot["source_repositories"]
+        if row["id"] == "unified_source"
+    )
+    configured_head = str(unified_selection.get("committed_head") or "")
+    record(
+        "unified_source_snapshot_lock",
+        current_snapshot["current_layer"]["unified_source_frontier_key"]
+        == unified_selection.get("frontier_key")
+        and current_snapshot["current_layer"]["unified_source_committed_head"]
+        == configured_head
+        and str(unified_repository.get("git_head") or "").startswith(configured_head)
+        and current_snapshot["current_layer"]["unified_source_integrity"]
+        == unified_selection.get("integrity_note"),
+        configured_head=configured_head,
+        inventory_head=unified_repository.get("git_head"),
+        frontier_key=unified_selection.get("frontier_key"),
+    )
     record(
         "paper_corpus_lock",
         paper_lock["commit"] == "caf55313b90ababc43f83650cc72a325129e1252"

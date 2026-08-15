@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Independently verify the selected G3AP target-Macaulay rank squeeze."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+import build_ust_g3ap_selected_cayley_ordinary_top_lower_bound as lower
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import certify_ust_g3ap_selected_cayley_target_macaulay_candidate as certifier
+import extract_ust_g3ap_selected_cayley_target_macaulay_minor as extractor
+import run_ust_g3ap_selected_cayley_target_macaulay_minor as runner
+import ust_f1016_sparse_minor as minor
+import build_ust_f1016_native_tools as native_tools
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = certifier.PACKET
+LOWER_VERIFIER = ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_lower_bound.py"
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checked(record: dict[str, object], label: str) -> Path:
+    path = ROOT / str(record["path"])
+    require(
+        path.is_file()
+        and sha256(path) == record["sha256"]
+        and ("bytes" not in record or path.stat().st_size == record["bytes"]),
+        label,
+    )
+    return path
+
+
+def read_functional(path: Path) -> list[int]:
+    values = [int(value) for value in path.read_text(encoding="ascii").split()]
+    require(values and len(values) == values[0] + 1, "functional payload width")
+    require(
+        values[0] == macaulay.EXPECTED_TARGET_COORDINATES
+        and all(0 <= value < minor.FIELD_ORDER for value in values[1:]),
+        "functional coefficients",
+    )
+    return values[1:]
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-certified.v1"
+        and packet["theorem_id"] == "UST.G3AP.MACAULAY-RANK-SQUEEZE"
+        and packet["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_TARGET_MACAULAY_RANK_SQUEEZE_TOP_DIMENSION_ONE",
+        "certificate identity",
+    )
+    require(all(packet["checks"].values()), "certificate checks")
+    require(not any(packet["guardrails"].values()), "certificate guardrails")
+
+    source_path = checked(packet["inputs"]["selected_source"], "selected source")
+    require(source_path == macaulay.SOURCE, "selected source path")
+    lower_path = checked(
+        packet["inputs"]["selected_ordinary_top_lower_bound"], "lower bound"
+    )
+    require(lower_path == lower.OUT, "lower-bound path")
+    subprocess.run([sys.executable, str(LOWER_VERIFIER)], cwd=ROOT, check=True)
+    lower_packet = json.loads(lower_path.read_text(encoding="ascii"))
+    require(
+        lower_packet["ordinary_top_piece"]["Cox_degree"] == [18, 2, 2]
+        and lower_packet["ordinary_top_piece"]["lower_bound_dimension"] == 1,
+        "lower-bound content",
+    )
+
+    campaign_path = checked(packet["inputs"]["campaign"], "campaign")
+    base_packet_path = checked(
+        packet["inputs"]["base_coordinate_packet"], "base packet"
+    )
+    campaign = json.loads(campaign_path.read_text(encoding="ascii"))
+    base_packet = json.loads(base_packet_path.read_text(encoding="ascii"))
+    require(
+        campaign["matrix"]["rows"] >= TARGET_RANK
+        and campaign["matrix"]["columns"] == macaulay.EXPECTED_TARGET_COORDINATES
+        and campaign["inputs"]["base_coordinate_packet"]["sha256"]
+        == sha256(base_packet_path)
+        and base_packet["inputs"]["selected_source"]["sha256"] == sha256(source_path),
+        "campaign source chain",
+    )
+    replayed_targets, replayed_nonzeros = certifier.validate_campaign(
+        campaign, base_packet
+    )
+    require(
+        len(replayed_targets) == macaulay.EXPECTED_TARGET_COORDINATES
+        and replayed_nonzeros == campaign["matrix"]["nonzeros"],
+        "independent campaign transcript replay",
+    )
+    matrix_path = ROOT / campaign["matrix"]["path"]
+    require(
+        matrix_path.is_file()
+        and sha256(matrix_path) == campaign["matrix"]["sha256"],
+        "campaign matrix hash",
+    )
+
+    base = packet["base_quotient"]
+    base_cache = checked(base["cache"], "base cache")
+    original_base_cache = checked(base["original_cache"], "original base cache")
+    require(
+        base_cache == certifier.BASE_STANDARD_CACHE
+        and original_base_cache == macaulay.BASE_CACHE,
+        "base cache paths",
+    )
+    base_script = checked(base["certification_script"], "base script")
+    base_output = checked(base["certification_output"], "base output")
+    require(
+        base_script.read_text(encoding="ascii")
+        == certifier.base_certification_script(source_path.read_text(encoding="ascii")),
+        "base certification script reconstruction",
+    )
+    raw_base = base_output.read_text(encoding="utf-8")
+    require(
+        not any(line.lstrip().startswith("?") for line in raw_base.splitlines())
+        and "G3AP_MACAULAY_BASECERT_CACHE_IN_SELECTED=1" in raw_base
+        and "G3AP_MACAULAY_BASECERT_SELECTED_IN_CACHE=1" in raw_base
+        and "G3AP_MACAULAY_BASECERT_CACHE_LEADING_IN_CHECK=1" in raw_base
+        and "G3AP_MACAULAY_BASECERT_CHECK_LEADING_IN_CACHE=1" in raw_base
+        and "G3AP_MACAULAY_BASECERT_PASS" in raw_base,
+        "base ideal and leading-ideal equality transcript",
+    )
+    cache_leaders = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(
+            r"^G3AP_MACAULAY_BASECERT_CACHE_LEADER_(\d+)=([0-9,]+)$",
+            raw_base,
+            re.MULTILINE,
+        )
+    }
+    require(
+        len(cache_leaders) == base["cached_generators"]
+        and [cache_leaders[index] for index in range(1, len(cache_leaders) + 1)]
+        == [tuple(value) for value in base_packet["base_leading_exponents"]],
+        "base coordinate leaders",
+    )
+    targets, _ = macaulay.coordinate_data(
+        [tuple(value) for value in base_packet["base_leading_exponents"]]
+    )
+
+    rank_candidate_path = checked(packet["inputs"]["rank_candidate"], "rank candidate")
+    rank_candidate = json.loads(rank_candidate_path.read_text(encoding="ascii"))
+    require(
+        rank_candidate["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-rank-candidate.v1"
+        and all(rank_candidate["checks"].values())
+        and not any(rank_candidate["guardrails"].values()),
+        "rank-candidate scope",
+    )
+    require(
+        checked(rank_candidate["inputs"]["campaign"], "candidate campaign")
+        == campaign_path
+        and checked(
+            rank_candidate["inputs"]["campaign_matrix"], "candidate matrix"
+        )
+        == matrix_path,
+        "rank-candidate campaign chain",
+    )
+    require(
+        checked(rank_candidate["inputs"]["native_tools_build"], "native tools build")
+        == native_tools.RECEIPT
+        and native_tools.current(),
+        "hash-current reproducible native build",
+    )
+    extraction_path = checked(
+        rank_candidate["inputs"]["minor_extraction"], "minor extraction"
+    )
+    extraction = json.loads(extraction_path.read_text(encoding="ascii"))
+    selected_minor = checked(rank_candidate["inputs"]["selected_minor"], "selected minor")
+    require(
+        selected_minor == ROOT / extraction["minor"]["path"]
+        and extraction["minor"]["size"] == TARGET_RANK,
+        "selected minor identity",
+    )
+
+    custom = rank_candidate["engines"]["custom_sparse_column_elimination"]
+    checked(custom["source"], "custom source")
+    checked(custom["binary"], "custom binary")
+    for index, dependency in enumerate(custom.get("source_dependencies", [])):
+        checked(dependency, f"custom source dependency {index}")
+    scheduler_test = custom.get("scheduler_self_test")
+    if custom.get("scheduler") == "weighted-free-fast":
+        require(isinstance(scheduler_test, dict), "free-support scheduler self-test")
+        checked(scheduler_test["matrix"], "free-support scheduler matrix")
+        scheduler_output = checked(
+            scheduler_test["output"], "free-support scheduler output"
+        )
+        checked(scheduler_test["log"], "free-support scheduler log")
+        scheduler_scalars, scheduler_vectors = minor.parse_output(scheduler_output)
+        require(
+            scheduler_scalars["ROW_ORDER"]
+            == "adaptive-free-then-weighted-support"
+            and int(scheduler_scalars["PROCESSED_SOURCE_ROWS"]) == 2
+            and int(scheduler_scalars["RESCORED_SOURCE_ROWS"]) >= 1
+            and scheduler_vectors["SELECTED_SOURCE_ROWS_ZERO_BASED"] == [0, 2],
+            "free-support scheduler exact ordering replay",
+        )
+    custom_output = checked(custom["output"], "custom output")
+    checked(custom["log"], "custom log")
+    scalars, vectors = minor.parse_output(custom_output)
+    require(
+        scalars["SCHEMA"] == "MTTF1016SparseColumnMinorExactOutput.v2"
+        and int(scalars["SOURCE_ROWS"]) == campaign["matrix"]["rows"]
+        and int(scalars["TARGET_COORDINATES"])
+        == macaulay.EXPECTED_TARGET_COORDINATES
+        and int(scalars["MATRIX_NONZEROS"]) == campaign["matrix"]["nonzeros"]
+        and int(scalars["MINOR_SIZE"]) == TARGET_RANK,
+        "custom exact dimensions",
+    )
+    require(
+        minor.determinant(
+            vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"],
+            vectors["PIVOT_COEFFICIENTS_PACKED"],
+        )
+        == int(scalars["MINOR_DETERMINANT_PACKED"])
+        != 0,
+        "custom determinant replay",
+    )
+
+    linbox = rank_candidate["engines"]["linbox_givaro_sparse_elimination"]
+    checked(linbox["source"], "LinBox source")
+    checked(linbox["binary"], "LinBox binary")
+    linbox_output = checked(linbox["output"], "LinBox output")
+    linbox_shape = runner.parse_linbox(linbox_output.read_text(encoding="utf-8"))
+    require(
+        linbox_shape[0] == linbox_shape[1] == linbox_shape[3] == TARGET_RANK,
+        "independent LinBox rank",
+    )
+
+    functional_engine = rank_candidate["engines"][
+        "givaro_full_matrix_functional_replay"
+    ]
+    checked(functional_engine["source"], "functional-check source")
+    checked(functional_engine["binary"], "functional-check binary")
+    functional_path = checked(functional_engine["functional"], "functional artifact")
+    functional_output = checked(functional_engine["output"], "functional-check output")
+    functional = read_functional(functional_path)
+    require(functional == vectors["QUOTIENT_FUNCTIONAL_PACKED"], "functional identity")
+    functional_shape = runner.parse_functional_replay(
+        functional_output.read_text(encoding="utf-8")
+    )
+    require(
+        functional_shape[:4]
+        == (
+            campaign["matrix"]["rows"],
+            macaulay.EXPECTED_TARGET_COORDINATES,
+            campaign["matrix"]["nonzeros"],
+            campaign["matrix"]["rows"],
+        ),
+        "independent functional replay",
+    )
+    functional_hash = hashlib.sha256(
+        json.dumps(functional, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    quotient = packet["quotient_functional"]
+    normalization = quotient["normalization_target_coordinate_zero_based"]
+    require(
+        functional_hash == quotient["packed_coefficients_sha256"]
+        and quotient["packed_coefficients"] == functional
+        and functional[normalization] == quotient["normalization_value_packed"] == 1
+        and list(targets[normalization][1]) == quotient["normalization_base_exponent"]
+        and targets[normalization][0] == quotient["normalization_component"],
+        "normalized quotient functional",
+    )
+
+    selftest = rank_candidate["field_self_test"]
+    self_matrix = checked(selftest["matrix"], "self-test matrix")
+    self_custom = checked(selftest["custom_output"], "self-test custom output")
+    checked(selftest["custom_log"], "self-test custom log")
+    self_linbox = checked(selftest["linbox_output"], "self-test LinBox output")
+    self_functional = checked(selftest["functional"], "self-test functional")
+    self_functional_output = checked(
+        selftest["functional_output"], "self-test functional output"
+    )
+    require(
+        self_matrix.read_text(encoding="ascii")
+        == "2 2 4\n1 1 1\n1 2 101\n2 1 10510100501\n2 2 810585892836\n"
+        and minor.parse_output(self_custom)[1]["QUOTIENT_FUNCTIONAL_PACKED"]
+        == read_functional(self_functional)
+        and runner.parse_linbox(self_linbox.read_text(encoding="utf-8"))
+        == (2, 2, 4, 1)
+        and runner.parse_functional_replay(
+            self_functional_output.read_text(encoding="utf-8")
+        )
+        == (2, 2, 4, 2, 2),
+        "selected-field minpoly self-test",
+    )
+
+    relation = packet["target_relation_map"]
+    top = packet["ordinary_top_piece"]
+    require(
+        relation["coordinates"] == len(targets) == 39726
+        and relation["exact_rank"] == TARGET_RANK
+        and relation["codimension_upper_bound"] == 1
+        and top["upper_bound_dimension"] == top["lower_bound_dimension"]
+        == top["dimension"]
+        == 1
+        and top["basis"] == [quotient["normalization_basis"]],
+        "dimension squeeze",
+    )
+    print(
+        "UST.G3AP target Macaulay rank-squeeze verifier: PASS "
+        f"coordinates={len(targets)} rank={TARGET_RANK} dimension=1 "
+        f"basis={top['basis'][0]}"
+    )
+
+
+if __name__ == "__main__":
+    main()

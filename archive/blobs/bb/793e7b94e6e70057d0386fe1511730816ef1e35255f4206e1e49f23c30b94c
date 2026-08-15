@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Independently verify the G3BR H02 endpoint initializer."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+PRIME = 21817
+GAMMA_ROOT = 5
+DIMENSION = 42706
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    repository = Path(record.get("repository_path", default_repository))
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["schema"] == "mtt.unified-source.g3br-h02-alternate-split-prime-initializer.v1", "schema")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    inputs = packet["inputs"]
+    for key in ("G3BI", "G3BK", "G3BQ"):
+        verify_record(inputs[key])
+    for key in (
+        "three_block_oracle",
+        "base",
+        "global_F0",
+        "B89",
+        "H02_Macaulay",
+        "H02_CSC",
+        "H02_factorization",
+        "split_prime_solver",
+    ):
+        verify_record(inputs[key], mld)
+
+    g3bi = load(verify_record(inputs["G3BI"]))
+    g3bk = load(verify_record(inputs["G3BK"]))
+    minpoly = packet["field"]["minimal_polynomial_coefficients_ascending"]
+    require(
+        sum(int(value) * pow(GAMMA_ROOT, power, PRIME) for power, value in enumerate(minpoly))
+        % PRIME
+        == 0,
+        "split root",
+    )
+    base_packet = load(verify_record(inputs["base"], mld))
+    global_f0 = load(verify_record(inputs["global_F0"], mld))
+    b89 = load(verify_record(inputs["B89"], mld))
+    generators0, generators1, source_counts = oracle.exact_generators(base_packet, global_f0, b89)
+    require(source_counts == packet["source_term_counts"], "source term counts")
+    macaulay = load(verify_record(inputs["H02_Macaulay"], mld))
+    csc = load(verify_record(inputs["H02_CSC"], mld))
+    factor = load(verify_record(inputs["H02_factorization"], mld))
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = [int(value) for value in csc["binary"]["quotient_unit_rows"]]
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    require(len(target) == DIMENSION and len(quotient_rows) == 248 and len(descriptors) == 42458, "H02 dimensions")
+
+    indptr = [0]
+    indices: list[int] = []
+    data: list[int] = []
+    exact_entries = 248
+    vanished = 0
+    for row in quotient_rows:
+        indices.append(row)
+        data.append(1)
+        indptr.append(len(indices))
+    for descriptor in descriptors:
+        column = oracle.exact_column(descriptor, generators0, target_lookup)
+        reduced = exporter.append_column(column, PRIME, GAMMA_ROOT, indices, data)
+        exact_entries += len(column)
+        vanished += len(column) - reduced
+        indptr.append(len(indices))
+    base_chart = sparse.csc_matrix(
+        (
+            np.asarray(data, dtype=np.uint32),
+            np.asarray(indices, dtype=np.int32),
+            np.asarray(indptr, dtype=np.int64),
+        ),
+        shape=(DIMENSION, DIMENSION),
+        dtype=np.uint32,
+    )
+    require(exact_entries == int(packet["base_chart"]["exact_entries_before_evaluation"]), "base exact entries")
+    require(vanished == int(packet["base_chart"]["entries_vanishing_at_proof_place"]), "base vanished entries")
+
+    derivatives = initializer.correction_derivatives(g3bi, exporter, PRIME, GAMMA_ROOT)
+    update = initializer.correction_update(macaulay, factor, derivatives, PRIME)
+    update_path = verify_record(packet["endpoint_update"]["matrix"])
+    stored_update = sparse.load_npz(update_path).tocsc()
+    require((stored_update != update).nnz == 0, "endpoint update replay")
+    endpoint = (
+        base_chart.astype(np.uint64)
+        + sparse.hstack(
+            [sparse.csc_matrix((DIMENSION, 248), dtype=np.uint64), update.astype(np.uint64)],
+            format="csc",
+        )
+    ).tocsc()
+    endpoint.data %= PRIME
+    endpoint.eliminate_zeros()
+    chart_path = verify_record(packet["endpoint_chart"]["binary"])
+    stored_chart, chart_prime, quotient_units, image_rank = initializer.read_chart(chart_path)
+    require(chart_prime == PRIME and (quotient_units, image_rank) == (248, 42458), "stored chart typing")
+    require((stored_chart != endpoint).nnz == 0, "endpoint chart replay")
+    require(endpoint.nnz == int(packet["endpoint_chart"]["nonzero_entries"]), "endpoint nnz")
+
+    rhs_path = verify_record(packet["determinant_rhs"]["binary"])
+    solver = verify_record(inputs["split_prime_solver"], mld)
+    replay_log = ROOT / "evidence" / "ust_g3br" / "H02.p21817.g5.G3BI_endpoint.verify.determinant.log"
+    command = [
+        "wsl",
+        runtime.wsl_path(solver),
+        "--chart",
+        runtime.wsl_path(chart_path),
+        "--rhs",
+        runtime.wsl_path(rhs_path),
+        "--log",
+        runtime.wsl_path(replay_log),
+        "--determinant-only",
+    ]
+    completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = initializer.parse_log(replay_log)
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(fields.get("STATUS") == "SUCCESS", "replay solver status")
+    require(determinant == int(packet["endpoint_chart"]["determinant_mod21817"]) == 419, "determinant replay")
+    print("UST.G3BR H02 alternate split-prime initializer verifier: PASS")
+    print(f"shape={DIMENSION} update_nnz={update.nnz} endpoint_nnz={endpoint.nnz} determinant={determinant}")
+
+
+if __name__ == "__main__":
+    main()

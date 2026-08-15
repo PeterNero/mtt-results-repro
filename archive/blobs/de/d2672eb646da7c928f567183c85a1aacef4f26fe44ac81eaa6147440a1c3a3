@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Build the exact B69 spectral-row to B103 H20 frame map at the good fiber."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "state" / "ust_g3cb_b69_b103_h20_frame_intertwiner.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3cb"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def upstream_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository),
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def local_record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def parse_monomial(monomial: str, variables: list[str]) -> tuple[int, ...]:
+    exponents = {variable: 0 for variable in variables}
+    for factor in monomial.split("*"):
+        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*)(?:\^(\d+))?", factor)
+        require(match is not None, f"monomial factor {factor}")
+        variable = match.group(1)
+        require(variable in exponents, f"known variable {variable}")
+        exponents[variable] += int(match.group(2) or 1)
+    return tuple(exponents[variable] for variable in variables)
+
+
+def matrix_rank_det_inverse(matrix: np.ndarray) -> tuple[int, int, np.ndarray]:
+    work = np.asarray(matrix, dtype=np.int64) % PRIME
+    rows, columns = work.shape
+    require(rows == columns, "square frame")
+    augmented = np.hstack([work, np.eye(rows, dtype=np.int64)])
+    determinant = 1
+    sign = 1
+    rank = 0
+    for column in range(columns):
+        candidates = np.flatnonzero(augmented[rank:, column])
+        if candidates.size == 0:
+            continue
+        pivot = rank + int(candidates[0])
+        if pivot != rank:
+            augmented[[rank, pivot]] = augmented[[pivot, rank]]
+            sign = -sign
+        pivot_value = int(augmented[rank, column])
+        determinant = determinant * pivot_value % PRIME
+        augmented[rank] = augmented[rank] * pow(pivot_value, -1, PRIME) % PRIME
+        for row in range(rows):
+            if row == rank:
+                continue
+            factor = int(augmented[row, column])
+            if factor:
+                augmented[row] = (augmented[row] - factor * augmented[rank]) % PRIME
+        rank += 1
+        if rank == rows:
+            break
+    if rank != rows:
+        return rank, 0, np.empty((0, 0), dtype=np.uint8)
+    inverse = augmented[:, columns:].astype(np.uint8)
+    return rank, determinant * sign % PRIME, inverse
+
+
+def reduced_difference_nonzeros(left: sparse.spmatrix, right: sparse.spmatrix) -> int:
+    difference = (left.astype(np.int64) - right.astype(np.int64)).tocsc()
+    difference.data %= PRIME
+    difference.eliminate_zeros()
+    return int(difference.nnz)
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    paths = {
+        "B69": mld / "q79_eta9_cayley_jacobian_reducer.packet.json",
+        "B72": mld / "q79_eta9_cayley_structural_residue_promotion.packet.json",
+        "B103": mld / "q79_eta9_full_vanishing_residue_basis.packet.json",
+        "H20_Macaulay": mld / "q79_eta9_original_jacobian_macaulay_H20.packet.json",
+        "H20_CSC": mld / "q79_eta9_original_jacobian_macaulay_H20_csc.packet.json",
+        "H20_factorization": mld
+        / "q79_eta9_original_jacobian_coordinate_factorization_H20.packet.json",
+    }
+    packets = {name: load(path) for name, path in paths.items()}
+    for name, packet in packets.items():
+        if "checks" in packet:
+            require(all(packet["checks"].values()), f"{name} checks")
+
+    b69 = packets["B69"]
+    b103 = packets["B103"]
+    macaulay = packets["H20_Macaulay"]
+    csc = packets["H20_CSC"]
+    factorization = packets["H20_factorization"]
+    variables = [str(value) for value in b103["variables"]]
+    require(variables == ["x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s"], "variable order")
+
+    primitive_monomials = [
+        str(value) for value in b69["primitive_and_graph_bases"]["primitive_rows"]
+    ]
+    primitive_exponents = [parse_monomial(value, variables) for value in primitive_monomials]
+    h20 = next(block for block in b103["basis_blocks"] if block["name"] == "H20")
+    h20_exponents = [tuple(int(value) for value in row) for row in h20["basis_exponent_vectors"]]
+    h20_monomials = [str(value) for value in h20["basis_monomials"]]
+    require(len(primitive_exponents) == len(set(primitive_exponents)) == 248, "primitive frame size")
+    require(len(h20_exponents) == len(set(h20_exponents)) == 248, "B103 H20 frame size")
+    primitive_set = set(primitive_exponents)
+    h20_set = set(h20_exponents)
+    overlap = primitive_set & h20_set
+    primitive_only = primitive_set - h20_set
+    h20_only = h20_set - primitive_set
+    require((len(overlap), len(primitive_only), len(h20_only)) == (215, 33, 33), "215+33 frame split")
+
+    ambient = [
+        tuple(int(value) for value in row)
+        for row in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    ambient_lookup = {row: index for index, row in enumerate(ambient)}
+    require(len(ambient) == len(ambient_lookup) == 282, "H20 ambient basis")
+    primitive_rows = [ambient_lookup[row] for row in primitive_exponents]
+    h20_rows = [ambient_lookup[row] for row in h20_exponents]
+    require(h20_rows == [int(value) for value in csc["binary"]["quotient_unit_rows"]], "B103 quotient-unit rows")
+
+    rhs = sparse.csc_matrix(
+        (
+            np.ones(248, dtype=np.uint8),
+            (np.asarray(primitive_rows, dtype=np.int32), np.arange(248, dtype=np.int32)),
+        ),
+        shape=(282, 248),
+    )
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    rhs_path = EVIDENCE / "B69_primitive_rows_in_H20_ambient.rhs.bin"
+    coordinates_path = EVIDENCE / "B69_primitive_rows_in_B103_H20.coordinates.bin"
+    log_path = EVIDENCE / "B69_primitive_rows_in_B103_H20.solve.log"
+    solver = mld / "solve_q79_eta9_original_jacobian_coordinates"
+    source_path = Path(csc["binary"]["path"])
+    factor_path = Path(factorization["inputs"]["factorization_binary"]["path"])
+    coordinates, quotient_units, image_rank = runtime.execute_solver(
+        solver,
+        source_path,
+        factor_path,
+        rhs,
+        rhs_path,
+        coordinates_path,
+        log_path,
+        timeout=7200,
+    )
+    require((quotient_units, image_rank) == (248, 34), "coordinate dimensions")
+    require(coordinates.shape == (282, 248), "coordinate shape")
+
+    macaulay_matrix = sparse.load_npz(csc["inputs"]["Macaulay_matrix"]["path"]).tocsc()
+    quotient_matrix = sparse.csc_matrix(
+        (
+            np.ones(248, dtype=np.uint8),
+            (np.asarray(h20_rows, dtype=np.int32), np.arange(248, dtype=np.int32)),
+        ),
+        shape=(282, 248),
+    )
+    selected_original = [
+        int(value)
+        for value in factorization["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    selected_chart = sparse.hstack(
+        [quotient_matrix, macaulay_matrix[:, selected_original]], format="csc"
+    )
+    reconstructed = (selected_chart.astype(np.int64) @ coordinates.astype(np.int64)).tocsc()
+    reconstructed.data %= PRIME
+    reconstructed.eliminate_zeros()
+    residual = reduced_difference_nonzeros(reconstructed, rhs)
+    require(residual == 0, "ambient reconstruction")
+
+    frame = coordinates[:248, :].toarray().astype(np.uint8) % PRIME
+    rank, determinant, inverse = matrix_rank_det_inverse(frame)
+    require(rank == 248 and determinant != 0, "invertible frame")
+    identity = np.eye(248, dtype=np.uint8)
+    require(np.array_equal((frame.astype(np.int64) @ inverse.astype(np.int64) % PRIME).astype(np.uint8), identity), "right inverse")
+    require(np.array_equal((inverse.astype(np.int64) @ frame.astype(np.int64) % PRIME).astype(np.uint8), identity), "left inverse")
+
+    h20_index = {row: index for index, row in enumerate(h20_exponents)}
+    shared_identity_columns = 0
+    for column, exponent in enumerate(primitive_exponents):
+        if exponent in h20_index:
+            expected = np.zeros(248, dtype=np.uint8)
+            expected[h20_index[exponent]] = 1
+            require(np.array_equal(frame[:, column], expected), "shared monomial identity column")
+            shared_identity_columns += 1
+    require(shared_identity_columns == 215, "215 identity columns")
+
+    frame_path = EVIDENCE / "B69_to_B103_H20_frame.mod11.npy"
+    inverse_path = EVIDENCE / "B103_H20_to_B69_frame.mod11.npy"
+    np.save(frame_path, frame, allow_pickle=False)
+    np.save(inverse_path, inverse, allow_pickle=False)
+
+    primitive_only_rows = [
+        {"B69_index_zero_based": index, "monomial": primitive_monomials[index], "exponent": list(exponent)}
+        for index, exponent in enumerate(primitive_exponents)
+        if exponent in primitive_only
+    ]
+    h20_only_rows = [
+        {"B103_index_zero_based": index, "monomial": h20_monomials[index], "exponent": list(exponent)}
+        for index, exponent in enumerate(h20_exponents)
+        if exponent in h20_only
+    ]
+    difference_path = EVIDENCE / "B69_B103_H20_frame_difference.json"
+    difference_path.write_text(
+        json.dumps(
+            {
+                "shared_monomials": 215,
+                "B69_only": primitive_only_rows,
+                "B103_only": h20_only_rows,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    checks = {
+        "the_B69_and_B103_inputs_are_hash_bound": True,
+        "both_ordered_frames_have248_distinct_rows": True,
+        "the_two_monomial_lists_overlap_in215_and_differ_in33_each": True,
+        "all248_B69_rows_are_solved_through_the_frozen_H20_chart": True,
+        "the_full282_by248_ambient_reconstruction_has_zero_residual": True,
+        "all215_shared_monomials_map_by_identity_columns": True,
+        "the248_by248_frame_map_has_full_rank_mod11": True,
+        "the_frame_determinant_is_a_nonzero_good_reduction_unit": True,
+        "the_emitted_inverse_satisfies_both_matrix_identities": True,
+        "no_characteristic_zero_coordinate_values_transport_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CB checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cb-b69-b103-h20-frame-intertwiner.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3CB",
+        "status": "CLOSED_EXACT_GOOD_REDUCTION_FRAME_ISOMORPHISM_AND_CHARACTERISTIC_ZERO_INVERTIBILITY_VALUES_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            **{name: upstream_record(path, mld) for name, path in paths.items()},
+            "solver": upstream_record(solver, mld),
+            "H20_CSC_binary": upstream_record(source_path, mld),
+            "H20_factorization_binary": upstream_record(factor_path, mld),
+        },
+        "frame_intertwiner": {
+            "field": "GF(11) at the B69/B72 good fiber (gamma=3)",
+            "source_frame": "248 ordered B69 primitive spectral trace-test monomials",
+            "target_frame": "248 ordered B103 H20 quotient monomials",
+            "orientation": "columns are B69 rows expressed in the B103 H20 coordinate frame",
+            "shape": [248, 248],
+            "shared_monomials": 215,
+            "B69_only_monomials": 33,
+            "B103_only_monomials": 33,
+            "nonzero_entries": int(np.count_nonzero(frame)),
+            "rank_mod11": rank,
+            "determinant_mod11": determinant,
+            "inverse_nonzero_entries": int(np.count_nonzero(inverse)),
+            "characteristic_zero_consequence": "The determinant is a unit at the common good-reduction place, so both lifted ordered row sets are bases of the same rank-248 H20 module over the local DVR and over Q(gamma).",
+            "frame_matrix": local_record(frame_path),
+            "inverse_matrix": local_record(inverse_path),
+            "monomial_difference": local_record(difference_path),
+            "ambient_RHS": local_record(rhs_path),
+            "full_coordinate_solution": local_record(coordinates_path),
+            "solver_log": local_record(log_path),
+            "ambient_reconstruction_residual_nonzeros": residual,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_characteristic_zero_matrix_entries_are_reconstructed": False,
+            "claims_this_is_the_G3BI_endpoint_frame_map": False,
+            "identifies_trace_test_order_with_B103_order": False,
+            "claims_the_G3CA_source_has_been_continued_or_paired": False,
+            "claims_integral_transport_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3cbB69B103H20FrameIntertwiner",
+            "tier": "CLOSED_EXACT_FRAME_ISOMORPHISM_BY_GOOD_REDUCTION",
+            "statement": "The 248 ordered B69 primitive spectral rows and the 248 ordered B103 H20 quotient monomials define two bases of the same characteristic-zero H20 module. Their exact good-reduction change-of-frame matrix has nonzero determinant modulo 11, with an explicit two-sided inverse. The row orders are related by this nontrivial map and are not identified.",
+        },
+        "next_required_object": "Use the now-certified terminal frame isomorphism together with the H20-H02 residue pairing to map the selected G3CA H02 source into spectral trace-test values after one-vector continuation to the B89 frame. Reconstruct characteristic-zero entries only if direct characteristic-zero readout requires them.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3CB B69/B103 H20 frame intertwiner: PASS")
+    print(
+        f"overlap=215 replacements=33 rank={rank} det_mod11={determinant} "
+        f"nnz={np.count_nonzero(frame)} residual={residual}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

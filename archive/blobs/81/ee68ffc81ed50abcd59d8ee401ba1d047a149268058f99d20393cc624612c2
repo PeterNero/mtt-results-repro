@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Verify the fast contract for UST.G3F.
+
+The 55-second exact Groebner replay is intentionally separate in
+verify_ust_g3f_q79_no_splitting_line.py.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+RESULT = ROOT / "state" / "ust_g3f_q79_hs_global_stability.packet.json"
+NO_LINE = ROOT / "state" / "ust_g3f_q79_no_splitting_line.packet.json"
+LOCK = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    result = load(RESULT)
+    no_line = load(NO_LINE)
+    lock = load(LOCK)
+
+    require(result["schema"] == "mtt.unified-source.q79-hs-global-stability-result.v1", "result schema")
+    require(result["theorem_id"] == "UST.G3F", "theorem id")
+    require(
+        result["state"] == "CLOSED_EXACT_SOURCE_U3_STABILITY_AND_HE_PHYSICAL_W9_OPEN",
+        "result state",
+    )
+    expected_local_hash = result["source"]["local_exact_certificate"]["sha256"]
+    require(hashlib.sha256(NO_LINE.read_bytes()).hexdigest() == expected_local_hash, "no-line packet hash")
+    require(no_line["prime"] == 5, "finite-field prime")
+    require(no_line["all_three_dual_plane_charts_are_empty"] is True, "all line charts empty")
+    require([row["chart"] for row in no_line["charts"]] == ["x", "y", "z"], "dual-plane chart cover")
+    for row in no_line["charts"]:
+        require(row["unit_ideal"] is True, f"{row['chart']} chart unit ideal")
+        require(row["reduced_groebner_basis"] == ["1"], f"{row['chart']} reduced basis")
+
+    repositories = {repository["id"]: repository for repository in lock["repositories"]}
+    qg = repositories["q79-quantum-gravity"]
+    base = repositories["q79-protospinor-gr-response"]
+    require(qg["commit"] == result["source"]["q79_quantum_gravity_commit"], "qg commit")
+    require(base["commit"] == result["source"]["q79_base_commit"], "base commit")
+    qg_sources = {source["path"]: source for source in qg["sources"]}
+    for artifact in result["source"]["artifacts"]:
+        require(artifact["path"] in qg_sources, f"unlocked qg artifact: {artifact['path']}")
+        require(qg_sources[artifact["path"]]["sha256"] == artifact["sha256"], "qg source hash")
+    base_sources = {source["path"]: source for source in base["sources"]}
+    base_artifact = result["source"]["base_artifact"]
+    require(base_artifact["path"] in base_sources, "unlocked base artifact")
+    require(base_sources[base_artifact["path"]]["sha256"] == base_artifact["sha256"], "base hash")
+
+    geometry = result["degree_geometry"]
+    require(geometry["delta_is_primitive"] is True, "primitive Euler class")
+    require((geometry["H_square"], geometry["H_dot_delta"]) == (2, 0), "q79 lattice")
+    require(geometry["balanced_degree_is_independent_of_t"] is True, "uniform balanced degree")
+    require(geometry["all_effective_divisors_are_vertical"] is True, "vertical divisors")
+    require(geometry["degree_one_effective_divisors_exist"] is False, "no degree-one divisor")
+    require(geometry["minimum_positive_effective_degree"] == 2, "effective degree gap")
+
+    hs = result["hartshorne_serre"]
+    require(hs["rank_F"] == 3 and hs["degree_F"] == 2, "F rank and degree")
+    require(Fraction(hs["slope_F"]) == Fraction(2, 3), "F slope")
+    require(hs["extension_image_characters_mod3"] == [1, 2], "distinct clock characters")
+    require(hs["extension_classes_independent_in_full_Ext1"] is True, "Ext independence")
+    require(hs["Hom_F_O_is_zero"] is True, "critical quotient exclusion")
+
+    stability = result["stability"]
+    require(stability["rank_one_maximum_degree"] == 0, "rank-one slope bound")
+    require(stability["rank_two_quotient_minimum_degree"] == 2, "rank-two quotient gap")
+    rank_two_slope = Fraction(hs["degree_F"] - stability["rank_two_quotient_minimum_degree"], 2)
+    require(rank_two_slope == stability["rank_two_subsheaf_maximum_slope"] == 0, "rank-two slope")
+    require(Fraction(stability["rank_one_maximum_degree"]) < Fraction(hs["slope_F"]), "rank-one strictness")
+    require(rank_two_slope < Fraction(hs["slope_F"]), "rank-two strictness")
+    require(stability["saturation_and_reflexive_hulls_included"] is True, "saturation coverage")
+    require(stability["codimension_two_ideal_quotients_included"] is True, "ideal quotient coverage")
+    require(stability["F_stable_for_every_balanced_t"] is True, "F stability")
+    require(stability["kappa_dual_stable_for_every_balanced_t"] is True, "dual stability")
+
+    analytic = result["analytic_conclusion"]
+    require(analytic["source_structure_group"] == "U(3)", "source group")
+    require(analytic["Hermite_Einstein_connection_exists"] is True, "HE consequence")
+    require(analytic["trace_free_projective_HYM"] is True, "projective HYM")
+    require(analytic["ordinary_SU3_HYM_claimed"] is False, "nontrivial determinant guard")
+    require(analytic["physical_hidden_W9_constructed"] is False, "W9 guard")
+    require(analytic["B_HS_01_closed"] is False, "blocker guard")
+    require(result["continuous_fit_parameters"] == 0 and result["observed_inputs"] == 0, "no fitted data")
+
+    print("UST.G3F q79 HS global stability and projective HE: PASS")
+    print("no splitting line over characteristic zero: true")
+    print("F and kappa_hol stable on every balanced-ray metric: true")
+    print("physical hidden W9 constructed: false")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Verify every direct-module H-only/L-truncated G3AP candidate route."""
+
+from __future__ import annotations
+
+import math
+import re
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_honly_direct_ltrunc_hedge as route
+import run_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_hedge as ltrunc
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def exact_h_monomials(degree: int) -> int:
+    return sum(
+        math.comb(degree - 3 * w_power + 2, 2)
+        for w_power in range(degree // 3 + 1)
+    )
+
+
+def main() -> None:
+    route.honly.validate_grading()
+    source = route.SOURCE.read_text(encoding="ascii")
+    selected_old = fiber2.module_generators()
+    boundaries_old = ltrunc.truncation_generators()
+    require(len(selected_old) == 39, "selected direct generator count")
+    require(len(boundaries_old) == 165, "L-boundary count")
+    require(selected_old[:18] == [
+        f"{equation}*gen({component})"
+        for component in range(1, 7)
+        for equation in ("K", "E", "C")
+    ], "18 componentwise base-ideal relations")
+
+    exact_target_count = 0
+    for component, _, (target_h, target_l), _ in fiber2.COMPONENTS:
+        shift = route.COMPONENT_SHIFTS[component - 1]
+        require(target_h + shift == route.TARGET_H_DEGREE, f"component {component} H target")
+        component_boundaries = [
+            value for value in boundaries_old if value.endswith(f"*gen({component})")
+        ]
+        require(
+            len(component_boundaries) == math.comb(target_l + 3, 2),
+            f"component {component} minimal L boundary",
+        )
+        exact_target_count += exact_h_monomials(target_h) * math.comb(target_l + 2, 2)
+    require(exact_target_count == fiber2.EXPECTED_TOTAL, "complete exact target count")
+
+    for label, order in permuted.PERMUTATIONS.items():
+        old_to_new, _ = permuted.position_maps(order)
+        expected = [
+            permuted.map_components(value, old_to_new)
+            for value in selected_old + boundaries_old
+        ]
+        require(route.mapped_generators(order) == expected, f"{label} mapped direct module")
+        for engine in route.ENGINES:
+            paths = route.paths(label, engine)
+            script = route.candidate_script(
+                source, label, order, paths["module_cache"], engine
+            )
+            require(route.DIRECT_MODULE_RING in script, f"{label}/{engine} H-only ring")
+            require("ideal GI=std(I0);" not in script, f"{label}/{engine} no quotient conversion")
+            require(
+                f"degBound={route.TARGET_H_DEGREE};" in script,
+                f"{label}/{engine} H bound",
+            )
+            require(f"module G={engine}(MT);" in script, f"{label}/{engine} engine")
+            require(
+                ("LIB(\"standard.lib\");" in script) == (engine == "qslimgb"),
+                f"{label}/{engine} sparse library identity",
+            )
+            shifts = re.search(r"intvec componentShifts=([^;]+);", script)
+            require(shifts is not None, f"{label}/{engine} shifts")
+            require(
+                tuple(int(value) for value in shifts.group(1).split(","))
+                == route.mapped_shifts(order),
+                f"{label}/{engine} mapped shifts",
+            )
+
+    print(
+        "UST.G3AP direct H-only/L-truncated routes: PASS "
+        "routes=4 engines=2 selected=39 truncators=165 "
+        f"target={exact_target_count} bound=H36 proof_status=CANDIDATE_ONLY"
+    )
+
+
+if __name__ == "__main__":
+    main()

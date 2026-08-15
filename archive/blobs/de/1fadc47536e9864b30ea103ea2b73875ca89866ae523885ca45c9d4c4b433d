@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Locate and invoke msolve reproducibly on native hosts or through WSL."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import subprocess
+
+from ust_singular_runtime import wsl_path
+
+
+def msolve_output_is_unit_ideal(raw_output: str) -> bool:
+    """Recognize msolve 0.9.4's exact empty-variety serialization.
+
+    A unit reduced basis is emitted as a one-element basis whose final marker
+    is ``[1]:``.  Nonunit bases begin their bracketed polynomial payload with
+    ``[1*...`` instead.
+    """
+    lines = [line.strip() for line in raw_output.splitlines() if line.strip()]
+    return bool(
+        lines
+        and lines[-1] == "[1]:"
+        and re.search(r"#length of basis:\s+1 element(?:\s|$)", raw_output)
+    )
+
+
+def msolve_command(
+    root: Path,
+    input_path: Path,
+    output_path: Path,
+    *,
+    threads: int = 1,
+    verbosity: int = 1,
+    saturate: bool = False,
+) -> list[str]:
+    if not 1 <= threads <= 16:
+        raise ValueError("msolve threads must be between 1 and 16")
+    binary_override = os.environ.get("MTT_MSOLVE_BIN")
+    if os.name != "nt":
+        binary = binary_override or shutil.which("msolve")
+        if not binary:
+            raise FileNotFoundError("msolve; set MTT_MSOLVE_BIN")
+        command = [
+            str(binary),
+            "-f",
+            str(input_path),
+            "-o",
+            str(output_path),
+            "-t",
+            str(threads),
+            "-v",
+            str(verbosity),
+            "-g",
+            "2",
+            "-l",
+            "2",
+            "-c",
+            "0",
+            "-d",
+            "0",
+        ]
+        if saturate:
+            command.append("-S")
+        return command
+
+    distribution = os.environ.get("MTT_WSL_DISTRIBUTION", "Ubuntu")
+    home_probe = subprocess.run(
+        ["wsl", "-d", distribution, "--", "sh", "-c", 'printf "%s" "$HOME"'],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    home = home_probe.stdout.strip()
+    root_override = os.environ.get("MTT_MSOLVE_ROOT")
+    if not root_override and home:
+        candidate = f"{home}/.local/opt/msolve-0.9.4"
+        probe = subprocess.run(
+            ["wsl", "-d", distribution, "--", "test", "-x", f"{candidate}/usr/bin/msolve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if probe.returncode == 0:
+            root_override = candidate
+    relative_input = str(input_path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    relative_output = str(output_path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    if root_override:
+        binary = binary_override or f"{root_override}/usr/bin/msolve"
+        library = f"{root_override}/usr/lib/x86_64-linux-gnu"
+        prefix = f"export LD_LIBRARY_PATH={shlex.quote(library)}; "
+    else:
+        binary = binary_override or "msolve"
+        prefix = ""
+    shell = (
+        prefix
+        + f"cd {shlex.quote(wsl_path(root))} && "
+        + f"{shlex.quote(binary)} -f {shlex.quote(relative_input)} "
+        + f"-o {shlex.quote(relative_output)} -t {threads} -v {verbosity} "
+        + "-g 2 -l 2 -c 0 -d 0"
+        + (" -S" if saturate else "")
+    )
+    return ["wsl", "-d", distribution, "--", "bash", "-lc", shell]

@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Independently replay the 48-fiber UST.G3FZ second-jet theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fz_component20_second_jet_o8_source as theorem
+import probe_ust_g3fy_selected_degree21_source_span as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main() -> None:
+    packet = json.loads(theorem.CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3FZ", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    require(
+        sha256(theorem.ARRAYS) == packet["campaign"]["artifact"]["sha256"],
+        "artifact hash",
+    )
+
+    result = np.load(theorem.ARRAYS, allow_pickle=False)
+    g3fn = np.load(theorem.G3FN, allow_pickle=False)
+    g3fx = np.load(theorem.G3FX, allow_pickle=False)
+    g3bi = theorem.load(theorem.G3BI)
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+    profiles: list[tuple[int, ...]] = []
+    source_profiles: list[tuple[int, ...]] = []
+    replayed = 0
+    for prime_index, packet_path in enumerate(conic.SPLIT_PACKETS):
+        split = theorem.load(packet_path)
+        prime = int(split["field"]["prime"])
+        roots = tuple(int(value) for value in split["field"]["roots"])
+        root_rows = {
+            int(row["gamma_root"]): row for row in split["root_kernels"]
+        }
+        for root_index, gamma in enumerate(roots):
+            generators, syzygy_block, _ = g3fe.extract_fiber(
+                ROOT / root_rows[gamma]["kernel"]["path"], prime
+            )
+            forms9 = tuple(
+                source_runtime.evaluate_selected_form(
+                    coefficient_vectors, theta, gamma, prime
+                )
+                for theta in range(3)
+            )
+            canonical, source_coefficient, profile, source_profile = theorem.fiber_source(
+                generators[11],
+                syzygy_block,
+                theorem.evaluate_coordinates(
+                    g3fx["D7_gamma_coordinates"], gamma, prime
+                ),
+                theorem.evaluate_coordinates(
+                    g3fx["B6_gamma_coordinates"], gamma, prime
+                ),
+                forms9,
+                g3fn["degree8_syzygy_values"][prime_index, root_index],
+                prime,
+            )
+            require(
+                np.array_equal(
+                    canonical,
+                    result["degree8_syzygy_replay"][prime_index, root_index]
+                    % prime,
+                ),
+                f"replay p={prime} gamma={gamma}",
+            )
+            require(
+                np.array_equal(
+                    source_coefficient,
+                    result["second_jet_source_coefficients"][
+                        prime_index, root_index
+                    ]
+                    % prime,
+                ),
+                f"source coefficient replay p={prime} gamma={gamma}",
+            )
+            profiles.append(profile)
+            source_profiles.append(source_profile)
+            replayed += 1
+    require(replayed == 48 and len(set(profiles)) == 1, "common48 replay")
+    require(tuple(profiles[0]) == tuple(result["common_profile"]), "profile artifact")
+    require(tuple(profiles[0]) == (15, 5, 0, 33, 17, 1), "expected profile")
+    require(len(set(source_profiles)) == 1, "common source normalization profile")
+    require(
+        tuple(source_profiles[0])
+        == tuple(result["source_normalization_profile"]),
+        "source normalization artifact",
+    )
+    print(
+        "UST.G3FZ independent verification: PASS "
+        "fibers=48 profile=15,5,0,33,17,1"
+    )
+
+
+if __name__ == "__main__":
+    main()

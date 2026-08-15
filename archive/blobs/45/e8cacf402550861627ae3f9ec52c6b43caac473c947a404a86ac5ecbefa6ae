@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Independent checks for the G3BF index-four and parity-first theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+from fractions import Fraction
+from pathlib import Path
+
+import build_ust_g3bf_algebraic_product_tube_index_four as builder
+import run_ust_g3bf_parity_first_pairing_one_dual as runner
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bf_algebraic_product_tube_index_four.packet.json"
+SYNTHETIC_INPUT = ROOT / "state" / "ust_g3bf_parity_first_payload.test-only.json"
+SYNTHETIC_OUTPUT = ROOT / "state" / "ust_g3bf_parity_first_payload.test-only.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def real_point(interval: dict) -> Fraction:
+    low = Fraction(*interval["real"]["lower"])
+    high = Fraction(*interval["real"]["upper"])
+    require(low == high, "synthetic point interval")
+    return low
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bf-algebraic-product-tube-index-four.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_ALGEBRAIC_PRODUCT_TUBE_INDEX_FOUR_AND_PARITY_FIRST_REDUCTION_PRODUCTION_ODD_RESIDUE_AND_READOUTS_OPEN",
+        "G3BF packet",
+    )
+    require(all(packet["checks"].values()), "G3BF checks")
+    require(not any(packet["guardrails"].values()), "G3BF guardrails")
+
+    evidence = load(builder.EVIDENCE)
+    require(
+        {name: item["sha256"] for name, item in evidence["source_packets"].items()}
+        == builder.EXPECTED_SOURCE_HASHES,
+        "source packet locks",
+    )
+    require(sha256(builder.G3BB) == builder.G3BB_SHA256, "G3BB source lock")
+    require(
+        sha256(builder.G3BC) == builder.EXPECTED_SOURCE_HASHES["UST_G3BC_pairing_one_replacement"],
+        "G3BC source lock",
+    )
+
+    gram = evidence["selected_lattice"]["gram"]
+    require(gram == [[2, 0], [0, -4]], "exact selected lattice")
+    observed_pairings = set()
+    for horizontal in range(-100, 101):
+        for vertical in range(-100, 101):
+            pairing = gram[1][0] * horizontal + gram[1][1] * vertical
+            require(pairing % 4 == 0, "algebraic product-tube index divisibility")
+            observed_pairings.add(pairing)
+    require(4 in observed_pairings and -4 in observed_pairings, "generator four realized")
+    require(packet["algebraic_index_theorem"]["algebraic_product_tube_image"] == "4Z", "4Z image")
+    require(packet["algebraic_index_theorem"]["full_integral_tube_image"] == "Z", "unit full image")
+    require(packet["algebraic_index_theorem"]["quotient"] == "Z/4Z", "index-four quotient")
+    require(
+        "B85 proves" in packet["algebraic_index_theorem"]["provenance"]
+        and "path connected" in packet["common_marking_theorem"]["connected_domain"]
+        and "Pi_C(V_Z)" in packet["common_marking_theorem"]["path_independence"],
+        "provenance and common-marking theorem",
+    )
+
+    for odd_residue in range(-999, 1000, 2):
+        root_coefficient, meridian_coefficient = runner.canonical_mod_four_coefficients(odd_residue)
+        require(meridian_coefficient in (-1, 1), "canonical sign coefficient")
+        require(4 * root_coefficient + odd_residue * meridian_coefficient == 1, "unit identity")
+
+    payload = load(SYNTHETIC_INPUT)
+    expected = payload["expected"]
+    result = load(SYNTHETIC_OUTPUT)
+    root_certificate_path = (
+        SYNTHETIC_INPUT.parent / payload["root_tube_row"]["certificate_path"]
+    ).resolve()
+    root_certificate = load(root_certificate_path)
+    require(
+        root_certificate["normalization_tier"]
+        == "INTEGRAL_ALGEBRAIC_PRODUCT_TUBE_IN_FIXED_B89_MARKING"
+        and root_certificate["common_B89_marking"]["base_pencil_sha256"]
+        == builder.PENCIL_SHA256
+        and root_certificate["checks"]["the_root_is_expressed_in_the_fixed_B89_integral_marking"],
+        "root common B89 marking certificate",
+    )
+    selection = result["canonical_selection"]
+    require(selection["first_odd_order_index"] == expected["first_odd_order_index"] == 2, "first odd")
+    require(selection["first_odd_residue"] == expected["first_odd_residue"] == 7, "odd value")
+    require(selection["root_coefficient"] == expected["root_coefficient"] == 2, "root coefficient")
+    require(selection["meridian_coefficient"] == expected["meridian_coefficient"] == -1, "meridian coefficient")
+    require(result["unit_certificate"]["relation_defect"] == expected["relation_defect"] == 1, "unit defect")
+    readout = result["deligne_readout"]["complex_interval_coordinates"]
+    require(result["deligne_readout"]["coordinate_count"] == 248, "248 readout")
+    require(
+        [real_point(readout[index]) for index in range(4)]
+        == list(map(Fraction, expected["readout_real_coordinates_0_through_3"])),
+        "two-term readout combination",
+    )
+    require(result["test_only"] and not result["production_promotable"], "test nonpromotion")
+    require(not any(result["guardrails"].values()), "runner guardrails")
+
+    with tempfile.TemporaryDirectory() as directory:
+        temporary = Path(directory)
+        replay = runner.execute(SYNTHETIC_INPUT, temporary / "replay.json", allow_test_only=True)
+        require(
+            replay["canonical_selection"] == result["canonical_selection"]
+            and replay["finite_tube_combination"] == result["finite_tube_combination"]
+            and replay["deligne_readout"] == result["deligne_readout"],
+            "independent executor replay",
+        )
+
+        pending_payload = load(SYNTHETIC_INPUT)
+        pending_payload["affine_residue_rows"] = pending_payload["affine_residue_rows"][:2]
+        pending_payload["root_tube_row"]["certificate_path"] = str(
+            (SYNTHETIC_INPUT.parent / pending_payload["root_tube_row"]["certificate_path"]).resolve()
+        )
+        for row in pending_payload["affine_residue_rows"]:
+            row["certificate_path"] = str(
+                (SYNTHETIC_INPUT.parent / row["certificate_path"]).resolve()
+            )
+        pending_path = temporary / "pending.input.json"
+        pending_path.write_text(json.dumps(pending_payload, indent=2) + "\n", encoding="utf-8")
+        pending = runner.execute(pending_path, temporary / "pending.output.json", allow_test_only=True)
+        require(
+            pending["status"] == "TEST_ONLY_FIRST_ODD_RESIDUE_NOT_SUPPLIED"
+            and pending["verified_even_prefix_length"] == 2
+            and not pending["canonical_selection"]["pairing_one_dual_emitted"],
+            "even-prefix resumable state",
+        )
+
+    multiplication = packet["Deligne_multiplication_theorem"]
+    require(
+        "4 beta_C" in multiplication["root_specialization"]
+        and "Tor_4" in multiplication["decision_asymmetry"],
+        "four-torsion boundary",
+    )
+    require(
+        packet["readiness_effect"]["first_odd_residue_exists"] == "CLOSED_EXACT"
+        and packet["readiness_effect"]["beta_C_zero_or_nonzero"] == "OPEN",
+        "frontier scope",
+    )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BF"]["state"]
+        == "closed_exact_algebraic_product_tube_index_four_and_parity_first_reduction"
+        and gates["UST.G3BF"]["depends_on"] == ["UST.G3BB", "UST.G3BC", "B.ETA9.01"],
+        "G3BF frontier gate",
+    )
+    require(
+        "4Z" in frontier["frontier_delta_g3bf"]
+        and "first odd" in frontier["frontier_delta_g3bf"]
+        and "four-torsion" in frontier["frontier_delta_g3bf"]
+        and "root tube" in frontier["next_action"],
+        "G3BF frontier delta",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BF" in document.read_text(encoding="utf-8"), f"G3BF integration {document.name}")
+    theorem_text = (
+        ROOT / "UST_G3BF_ALGEBRAIC_PRODUCT_TUBE_INDEX_FOUR_AND_PARITY_FIRST_DELIGNE_REDUCTION_THEOREM_v1.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "does not decide `beta_C`" in theorem_text
+        and "four-torsion" in theorem_text
+        and "optional fallback" in theorem_text
+        and "B85 already proved" in theorem_text
+        and "hash-bound transport certificate" in theorem_text,
+        "G3BF theorem guardrails",
+    )
+    print("UST.G3BF algebraic product-tube index four: PASS first-odd reduction replay")
+
+
+if __name__ == "__main__":
+    main()

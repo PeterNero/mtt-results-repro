@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Verify the exact G3CR H02/H11/H20 recursive correction chain."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cr_selected_source_recursive_first_jet.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "build_q79_eta9_toric_return_stage1_chunk.py").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def verify_local(record: dict[str, Any]) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"record {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"bytes {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    mld = resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_full_recursive_H20_source_block as common
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    require(packet["theorem_id"] == "UST.G3CR", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    for name, record in packet["inputs"].items():
+        if "path" in record:
+            path = verify_local(record)
+            if name.endswith("solver_log"):
+                require("SUCCESS" in path.read_text(encoding="utf-8"), f"solver log {name}")
+        else:
+            path = mld / record["repository_relative_path"]
+            require(path.is_file() and sha256(path) == record["sha256"], f"external {name}")
+    full_npz_path = verify_local(packet["full_recursive_first_jet_correction"]["NPZ"])
+    full_dense_path = verify_local(packet["full_recursive_first_jet_correction"]["dense_uint8"])
+
+    g3cq = load(ROOT / packet["inputs"]["G3CQ"]["path"])
+    h02_coordinates, h02_q, _ = solver_io.read_coordinates(ROOT / packet["inputs"]["H02_coordinates"]["path"])
+    h11_coordinates, h11_q, _ = solver_io.read_coordinates(ROOT / packet["inputs"]["H11_coordinates"]["path"])
+    h20_coordinates, h20_q, _ = solver_io.read_coordinates(ROOT / packet["inputs"]["H20_coordinates"]["path"])
+    require((h02_q, h11_q, h20_q) == (248, 1013, 248), "quotient dimensions")
+    h02_rhs = sparse.load_npz(ROOT / g3cq["H02_return_correction"]["ambient_scipy_NPZ"]["path"]).tocsc()
+    h11_rhs = sparse.load_npz(ROOT / "evidence" / "ust_g3cr" / "g3cr_recursive_H11_ambient.npz").tocsc()
+    h20_rhs = sparse.load_npz(ROOT / "evidence" / "ust_g3cr" / "g3cr_recursive_H20_ambient.npz").tocsc()
+    for name, coordinates, rhs in (
+        ("H02", h02_coordinates, h02_rhs),
+        ("H11", h11_coordinates, h11_rhs),
+        ("H20", h20_coordinates, h20_rhs),
+    ):
+        selected, _ = common.selected_source_matrix(name)
+        reconstruction = (selected @ coordinates.astype(np.int32)).tocsc()
+        reconstruction.data %= PRIME
+        reconstruction.eliminate_zeros()
+        require(common.exact_residual_nonzeros(reconstruction, rhs) == 0, f"{name} reconstruction")
+
+    expected_h02 = np.fromfile(
+        ROOT / g3cq["H02_return_correction"]["normal_form_binary_uint8"]["path"], dtype=np.uint8
+    ).reshape(248, 1)
+    require(common.exact_residual_nonzeros(h02_coordinates[:h02_q, :], sparse.csc_matrix(expected_h02)) == 0, "H02 normal form")
+    assembled = sparse.vstack(
+        [h20_coordinates[:h20_q, :], h11_coordinates[:h11_q, :], h02_coordinates[:h02_q, :]],
+        format="csc",
+    )
+    assembled.data %= PRIME
+    assembled.eliminate_zeros()
+    stored = sparse.load_npz(full_npz_path).tocsc()
+    require(common.exact_residual_nonzeros(assembled, stored) == 0, "full NPZ")
+    dense = np.fromfile(full_dense_path, dtype=np.uint8).reshape(1509, 1)
+    require(np.array_equal(dense, assembled.toarray().astype(np.uint8)), "full dense")
+    require(assembled.nnz == 1360, "full nnz")
+
+    terminal = load(mld / packet["inputs"]["terminal_H20_divergence"]["repository_relative_path"])
+    require(terminal["checks"]["the_divergence_of_every_H20_original_Jacobian_preimage_is_identically_zero"], "terminal divergence")
+    print("UST.G3CR selected-source recursive first jet verification: PASS")
+    print(
+        f"H02_q_nnz={h02_coordinates[:h02_q,:].nnz} "
+        f"H11_q_nnz={h11_coordinates[:h11_q,:].nnz} "
+        f"H20_q_nnz={h20_coordinates[:h20_q,:].nnz} full_nnz={assembled.nnz}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Verify UST.G3L monad cohomology and the rank-four Yoneda quotient."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3l_monad_yoneda_rank_four.packet.json"
+G3K_PATH = ROOT / "state" / "ust_g3k_derived_schur_yoneda_reduction.packet.json"
+G3J_PATH = ROOT / "state" / "ust_g3j_reverse_ext_representation_nogo.packet.json"
+SCHEMA_PATH = ROOT / "state" / "ust_g3l_normal_yoneda_block.schema.json"
+TEMPLATE_PATH = ROOT / "state" / "ust_g3l_normal_yoneda_block_candidate.template.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def dimension(rep: dict[str, int]) -> int:
+    return sum(rep.values())
+
+
+def subtract(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+    result = {key: left[key] - right[key] for key in ("trivial", "chi", "chi2")}
+    require(all(value >= 0 for value in result.values()), "negative representation multiplicity")
+    return result
+
+
+def verify_sources(packet: dict, lock: dict) -> tuple[dict, dict]:
+    for key, path in (
+        ("g3k_derived_yoneda", G3K_PATH),
+        ("g3j_reverse_ext", G3J_PATH),
+    ):
+        source = packet["inputs"][key]
+        require(source["path"] == str(path.relative_to(ROOT)).replace("\\", "/"), f"{key} path")
+        require(source["sha256"] == sha256(path), f"{key} hash")
+
+    repository = next(item for item in lock["repositories"] if item["id"] == "q79-quantum-gravity")
+    for key in ("holomorphic_hartshorne_serre_source", "qutrit_orbit_atlas"):
+        source = packet["inputs"][key]
+        require(source["repository_id"] == repository["id"], f"{key} repository")
+        locked = next(item for item in repository["sources"] if item["path"] == source["path"])
+        require(source["sha256"] == locked["sha256"], f"{key} hash")
+
+    return load(G3K_PATH), load(G3J_PATH)
+
+
+def verify_normalization(packet: dict) -> None:
+    data = packet["normalization"]
+    require(data["dual_graph"] == "K_(2,3)", "dual graph")
+    require(data["vertical_component_count"] == 2, "vertical count")
+    require(data["horizontal_component_count"] == 3, "horizontal count")
+    require(data["node_count"] == 6, "node count")
+    require(data["vertical_node_coordinates"] == ["u=0,W=+3", "u=0,W=-3"], "vertical nodes")
+    require(data["vertical_nodes_have_same_degree2_projection_image"], "same projection image")
+    require(data["H_multidegree"] == [0, 0, 2, 2, 2], "H multidegree")
+    require(data["D_multidegree"] == [3, 3, 0, 0, 0], "D multidegree")
+
+    # The two vertical points are the two sheets over u=0. Pullback sections
+    # therefore have equal evaluations after one common fiber trivialization.
+    base_eval = sp.Matrix([[1, 0, 0], [1, 0, 0]])
+    require(base_eval.rank() == data["H0_XH_to_vertical_h1_evaluation_rank"] == 1, "base evaluation rank")
+    require(data["degree_two_two_node_evaluation_rank"] == 1, "degree-two node rank")
+
+    # H on the normalization has two vertical constants and two horizontal
+    # sections on each of three components. One horizontal section vanishes
+    # at both nodes, while the other has equal values at the two sheets.
+    h_eval = sp.zeros(6, 8)
+    for j in range(3):
+        plus = 2 * j
+        minus = plus + 1
+        visible_col = 2 + 2 * j
+        h_eval[plus, 0] = 1
+        h_eval[plus, visible_col] = -1
+        h_eval[minus, 1] = 1
+        h_eval[minus, visible_col] = -1
+    require(h_eval.rank() == data["H_normalization_evaluation_rank"] == 4, "H evaluation rank")
+    require(8 - h_eval.rank() == data["H_Gamma_h0_dimension"] == 4, "H Gamma h0")
+    require(data["H_Gamma_h1_dimension"] == 4, "H Gamma h1")
+
+    # H D^-1 has no vertical H0. Each positive horizontal block has one
+    # node-visible direction and one direction in the evaluation kernel.
+    hd_eval = sp.zeros(6, 6)
+    for j in range(3):
+        plus = 2 * j
+        minus = plus + 1
+        visible_col = 2 * j
+        hd_eval[plus, visible_col] = 1
+        hd_eval[minus, visible_col] = 1
+    require(hd_eval.rank() == data["HD_inverse_horizontal_evaluation_rank"] == 3, "HD^-1 rank")
+    require(6 - hd_eval.rank() == data["HD_inverse_horizontal_kernel_dimension"] == 3, "HD^-1 H0")
+    require(6 - hd_eval.rank() == data["HD_inverse_node_cokernel_dimension"] == 3, "node cokernel")
+    require(data["HD_inverse_vertical_h1_dimension"] == 2 * 3 == 6, "vertical H1")
+    require(data["HD_inverse_h0_dimension"] == 3, "HD^-1 h0")
+    require(
+        data["HD_inverse_h1_dimension"]
+        == data["HD_inverse_node_cokernel_dimension"] + data["HD_inverse_vertical_h1_dimension"]
+        == 9,
+        "HD^-1 h1",
+    )
+
+
+def verify_cohomology_and_rank(packet: dict, g3k: dict, g3j: dict) -> None:
+    reps = packet["cohomology_representations"]
+    reg = {"trivial": 1, "chi": 1, "chi2": 1}
+    require(reps["Reg"] == reg, "regular representation")
+    require(reps["H_Gamma"]["h0"] == {"trivial": 2, "chi": 1, "chi2": 1}, "H Gamma h0 rep")
+    require(reps["H_Gamma"]["h1"] == reps["H_Gamma"]["h0"], "H Gamma h1 rep")
+    require(dimension(reps["I_H"]["h0"]) == 1, "I(H) h0")
+    require(reps["I_H"]["h1"] == {"trivial": 2, "chi": 1, "chi2": 1}, "I(H) h1")
+    require(reps["I_H"]["h2"] == reg, "I(H) h2")
+    require(dimension(reps["I_H_two_generator_linearizations"]["h0"]) == 2, "I(H)^2 h0")
+    require(
+        reps["I_H_two_generator_linearizations"]["h1"]
+        == {"trivial": 2, "chi": 3, "chi2": 3},
+        "I(H)^2 h1",
+    )
+    require(reps["I_H_two_generator_linearizations"]["h2"] == {key: 2 for key in reg}, "I(H)^2 h2")
+    require(dimension(reps["E_H"]["h0"]) == 2, "E(H) h0")
+    require(dimension(reps["E_H"]["h1"]) == 9, "E(H) h1")
+    require(reps["E_H"]["h2"] == {"trivial": 1, "chi": 0, "chi2": 0}, "E(H) h2")
+    require(reps["E_H"]["h1"] == g3j["reverse_ext"]["character_multiplicities"], "reverse representation")
+    require(reps["HD_inverse"]["h0"] == reg, "HD^-1 rep h0")
+    require(dimension(reps["HD_inverse"]["h1"]) == 9, "HD^-1 rep h1")
+
+    exact = packet["long_exact_sequence"]
+    require(exact["H0_I2_to_H0_E_is_isomorphism"], "H0 isomorphism")
+    require(exact["H0_HD_inverse_to_H1_I2_rank"] == 3, "first boundary rank")
+    require(
+        exact["H1_I2_to_reverse_Ext_rank"]
+        == dimension(reps["I_H_two_generator_linearizations"]["h1"])
+        - exact["H0_HD_inverse_to_H1_I2_rank"]
+        == 5,
+        "I2 to reverse rank",
+    )
+    require(exact["reverse_Ext_dimension"] == g3k["derived_inverse_block"]["reverse_dimension"] == 9, "R dimension")
+
+    expected_kernel = subtract(reps["I_H_two_generator_linearizations"]["h1"], reg)
+    require(expected_kernel == {"trivial": 1, "chi": 2, "chi2": 2}, "kernel character derivation")
+    require(exact["q_kernel_character_multiplicities"] == expected_kernel, "q kernel character")
+    require(exact["q_kernel_dimension"] == dimension(expected_kernel) == 5, "q kernel")
+    require(exact["q_rank"] == exact["reverse_Ext_dimension"] - exact["q_kernel_dimension"] == 4, "q rank")
+
+    expected_image = subtract(reps["E_H"]["h1"], expected_kernel)
+    require(exact["q_image_character_multiplicities"] == expected_image == {"trivial": 2, "chi": 1, "chi2": 1}, "q image")
+    expected_cokernel = subtract(reps["HD_inverse"]["h1"], expected_image)
+    require(exact["q_cokernel_character_multiplicities"] == expected_cokernel == expected_kernel, "q cokernel rep")
+    require(exact["q_cokernel_dimension"] == dimension(expected_cokernel) == 5, "q cokernel")
+    require(exact["H1_HD_inverse_to_H2_I2_rank"] == 5, "next boundary rank")
+    require(exact["H2_I2_to_H2_E_rank"] == 1, "H2 terminal rank")
+
+    # Build a canonical character-block representative of the quotient map:
+    # ranks (2,1,1) on the (trivial, chi, chi2) three-dimensional blocks.
+    q_block = sp.diag(1, 1, 0, 1, 0, 0, 1, 0, 0)
+    require(q_block.rank() == exact["q_rank"] == 4, "explicit q block rank")
+    require(len(q_block.nullspace()) == exact["q_kernel_dimension"] == 5, "explicit q nullity")
+
+    edge = packet["yoneda_edge"]
+    require(edge["local_to_global_edge_exists"], "Ext edge")
+    require(edge["q_is_mu_E_edge_quotient"], "q naturality")
+    require(edge["mu_E_rank_lower_bound"] == exact["q_rank"] == 4, "mu_E rank lower bound")
+    require(edge["mu_E_kernel_dimension_upper_bound"] == exact["q_kernel_dimension"] == 5, "mu_E kernel bound")
+    require(edge["mu_E_kernel_contained_in_q_kernel"], "kernel containment")
+    require(edge["remaining_normal_block_domain"] == "K_j=ker(q_j)=1+2chi+2chi2", "normal block domain")
+    require(edge["remaining_normal_block_domain_dimension"] == 5, "normal block dimension")
+    require(edge["normal_symbol_pointwise_surjective"], "normal symbol surjectivity")
+    require(edge["normal_symbol_surjective_at_all_six_nodes"], "normal symbol node surjectivity")
+    require(edge["remaining_failure_is_global_Cech_not_local_rank"], "global Cech boundary")
+    require(not edge["remaining_normal_block_computed"], "normal block silently computed")
+    require(not edge["nonzero_mu_E_kernel_constructed"], "kernel silently promoted")
+
+
+def verify_next_contract() -> None:
+    schema = load(SCHEMA_PATH)
+    template = load(TEMPLATE_PATH)
+    expected = "mtt.unified-source.q79-normal-yoneda-block.v1"
+    require(schema["$id"] == expected, "schema id")
+    require(schema["properties"]["schema"]["const"] == expected, "schema const")
+    require(schema["properties"]["domain_dimension"]["const"] == 5, "schema domain dimension")
+    require(schema["properties"]["rank"]["maximum"] == 5, "schema rank maximum")
+    require(schema["properties"]["kernel_dimension"]["maximum"] == 5, "schema kernel maximum")
+    require(template["schema"] == expected, "template schema")
+    require(template["domain_dimension"] == 5, "template domain dimension")
+    require(template["rank"] + template["kernel_dimension"] == template["domain_dimension"], "template rank-nullity")
+    require(not template["shift_compatible_nonzero_orbit"], "template orbit promoted")
+    require(template["empirical_inputs"] == [], "template empirical inputs")
+    require(not template["physical_promotion_requested"], "template physical promotion")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    require(packet["schema"] == "mtt.unified-source.q79-monad-yoneda-rank-four.v1", "packet schema")
+    require(packet["theorem_id"] == "UST.G3L", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_FOUR_OF_NINE_REVERSE_DIRECTIONS_OBSTRUCTED_FIVE_DIMENSIONAL_NORMAL_BLOCK_OPEN",
+        "packet status",
+    )
+    g3k, g3j = verify_sources(packet, lock)
+    require(packet["monad"]["W"] == "M*N*H^-1", "W line typing")
+    require(packet["monad"]["D_equals_W_restricted_to_Gamma"], "D/W restriction")
+    require(packet["monad"]["middle_bundle"] == "M*H^-1 + N*H^-1 + O_X^2", "middle typing")
+    require(packet["monad"]["right_target"] == "W", "right target")
+    require(packet["monad"]["line_weights_match"], "monad line weights")
+    require(packet["monad"]["composition_zero"], "monad composition")
+    require(packet["monad"]["middle_cohomology"] == "E_j", "monad cohomology")
+    require(packet["monad"]["right_kernel"] == "kappa_j", "monad kernel")
+    verify_normalization(packet)
+    verify_cohomology_and_rank(packet, g3k, g3j)
+    verify_next_contract()
+
+    frontier = packet["frontier"]
+    require(frontier["nine_direction_search_retired"], "nine-direction search not retired")
+    require(frontier["four_reverse_directions_excluded_exactly"], "four directions not excluded")
+    require(frontier["remaining_candidate_subspace_dimension"] == 5, "candidate subspace")
+    require(
+        frontier["remaining_candidate_character_multiplicities"]
+        == {"trivial": 1, "chi": 2, "chi2": 2},
+        "candidate characters",
+    )
+    require(not frontier["global_repaired_alpha_twisted_object_constructed"], "global object promoted")
+    require(not frontier["physical_hidden_W9_constructed"], "W9 promoted")
+    require(not frontier["B_HS_01_closed"], "B.HS.01 promoted")
+    require(packet["continuous_fit_parameters"] == 0, "fit parameter introduced")
+    require(packet["observed_inputs"] == 0, "observed input introduced")
+
+    print("UST.G3L monad/Yoneda rank-four theorem: PASS")
+    print("same-base-point H evaluation rank: 1")
+    print("q shadow rank: 4; candidate mu_E kernel: 1+2chi+2chi2, dimension at most 5")
+    print("downstream G3N: fixed-line column is nonzero; locked route retired")
+
+
+if __name__ == "__main__":
+    main()

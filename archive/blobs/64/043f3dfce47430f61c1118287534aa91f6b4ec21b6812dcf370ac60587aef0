@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""Independent replay checks for the UST.G3BK correction operator packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from collections import deque
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+PRIME = 11
+GAMMA = 3
+VARIABLES = ("x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s")
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "q79_eta9_full_vanishing_residue_basis.packet.json").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def eval_mod11(coefficients: list[int]) -> int:
+    return sum(int(value) * pow(GAMMA, power, PRIME) for power, value in enumerate(coefficients)) % PRIME
+
+
+def correction_rows(g3bi: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for source in g3bi["exact_construction"]["right_inverse_rows"]:
+        x, y, z = (int(value) for value in source["source_monomial"])
+        coefficients = [int(value) for value in source["correction_gamma_coordinates"]]
+        rows.append(
+            {
+                "F": (x, y, z, 0, 1, 0, 0, 0, 0, 0),
+                "sF": (x, y, z, 0, 1, 0, 0, 0, 0, 1),
+                "coefficients": coefficients,
+                "reduced": eval_mod11(coefficients),
+            }
+        )
+    require(len(rows) == 19 and sum(row["reduced"] != 0 for row in rows) == 18, "correction support")
+    return rows
+
+
+def weighted_base_monomials(h_degree: int, l_degree: int):
+    if h_degree < 0 or l_degree < 0:
+        return
+    for w in range(h_degree // 3 + 1):
+        xyz = h_degree - 3 * w
+        for x in range(xyz + 1):
+            for y in range(xyz - x + 1):
+                z = xyz - x - y
+                for t0 in range(l_degree + 1):
+                    for t1 in range(l_degree - t0 + 1):
+                        t2 = l_degree - t0 - t1
+                        yield (x, y, z, w, t0, t1, t2)
+
+
+def cox_monomials(degree: tuple[int, int, int]) -> list[tuple[int, ...]]:
+    h, l, xi = degree
+    if xi < 0:
+        return []
+    result = []
+    for u in range(xi + 1):
+        for v in range(xi - u + 1):
+            s = xi - u - v
+            for base in weighted_base_monomials(h + 6 * u + 9 * s, l + 3 * v + s):
+                result.append(base + (u, v, s))
+    require(len(result) == len(set(result)), "unique verifier monomials")
+    return result
+
+
+def locate(blocks: list[dict[str, Any]], column: int) -> tuple[int, int]:
+    for generator, block in enumerate(blocks):
+        first = int(block["first_column"])
+        stop = int(block["past_last_column"])
+        if first <= column < stop:
+            return generator, column - first
+    raise AssertionError("selected Macaulay column")
+
+
+def replay_update(
+    macaulay: dict[str, Any], factor: dict[str, Any], correction: list[dict[str, Any]]
+) -> sparse.csc_matrix:
+    derivatives = []
+    for variable in range(10):
+        terms: dict[tuple[int, ...], int] = {}
+        for row in correction:
+            coefficient = int(row["reduced"])
+            exponent = row["sF"]
+            power = exponent[variable]
+            if coefficient == 0 or power == 0:
+                continue
+            reduced = list(exponent)
+            reduced[variable] -= 1
+            key = tuple(reduced)
+            terms[key] = (terms.get(key, 0) + coefficient * power) % PRIME
+        derivatives.append([(value, exponent) for exponent, value in sorted(terms.items()) if value])
+
+    target = [tuple(int(value) for value in row) for row in macaulay["target_monomial_basis"]["exponent_vectors"]]
+    lookup = {row: index for index, row in enumerate(target)}
+    blocks = macaulay["column_blocks"]
+    multiplier_cache = [
+        cox_monomials(tuple(int(value) for value in block["coefficient_Cox_degree"]))
+        for block in blocks
+    ]
+    descriptors = []
+    for raw in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]:
+        generator, local = locate(blocks, int(raw))
+        descriptors.append((generator, multiplier_cache[generator][local]))
+
+    row_indices: list[int] = []
+    column_indices: list[int] = []
+    values: list[int] = []
+    for selected_column, (generator, multiplier) in enumerate(descriptors):
+        entries: dict[int, int] = {}
+        for coefficient, exponent in derivatives[generator]:
+            product = tuple(a + b for a, b in zip(multiplier, exponent))
+            row = lookup.get(product)
+            require(row is not None, "replayed update term")
+            entries[row] = (entries.get(row, 0) + coefficient) % PRIME
+        for row, value in entries.items():
+            if value:
+                row_indices.append(row)
+                column_indices.append(selected_column)
+                values.append(value)
+    matrix = sparse.csc_matrix(
+        (np.asarray(values, dtype=np.uint8), (row_indices, column_indices)),
+        shape=(len(target), len(descriptors)),
+    )
+    matrix.sum_duplicates()
+    matrix.data %= PRIME
+    matrix.eliminate_zeros()
+    return matrix
+
+
+def dense_rank_mod11(matrix: np.ndarray) -> int:
+    work = np.asarray(matrix, dtype=np.int64) % PRIME
+    rows, columns = work.shape
+    rank = 0
+    for column in range(columns):
+        candidates = np.flatnonzero(work[rank:, column])
+        if candidates.size == 0:
+            continue
+        pivot = rank + int(candidates[0])
+        work[[rank, pivot]] = work[[pivot, rank]]
+        work[rank] = work[rank] * pow(int(work[rank, column]), -1, PRIME) % PRIME
+        factors = work[rank + 1 :, column].copy()
+        active = np.flatnonzero(factors)
+        if active.size:
+            target_rows = rank + 1 + active
+            work[target_rows] = (
+                work[target_rows] - factors[active, None] * work[rank]
+            ) % PRIME
+        rank += 1
+        if rank == rows:
+            break
+    return rank
+
+
+def verify_certificate(
+    matrix: sparse.csc_matrix, certificate_path: Path, summary: dict[str, Any]
+) -> None:
+    arrays = np.load(certificate_path)
+    row_match = arrays["row_match"]
+    cover_rows = arrays["minimum_vertex_cover_rows"]
+    cover_columns = arrays["minimum_vertex_cover_columns"]
+    labels = arrays["bipartite_component_labels"]
+    require(row_match.size == matrix.shape[0], "row matching length")
+    matched_rows = np.flatnonzero(row_match >= 0)
+    matched_columns = row_match[matched_rows]
+    require(np.unique(matched_columns).size == matched_columns.size, "matching columns distinct")
+    csr = matrix.tocsr()
+    for row, column in zip(matched_rows, matched_columns, strict=True):
+        require(int(column) in csr.indices[csr.indptr[row] : csr.indptr[row + 1]], "matching edge")
+    row_cover = np.zeros(matrix.shape[0], dtype=np.bool_)
+    column_cover = np.zeros(matrix.shape[1], dtype=np.bool_)
+    row_cover[cover_rows] = True
+    column_cover[cover_columns] = True
+    coo = matrix.tocoo()
+    require(bool(np.all(row_cover[coo.row] | column_cover[coo.col])), "cover contains support")
+    require(
+        matched_rows.size == cover_rows.size + cover_columns.size == int(summary["maximum_matching_size"]),
+        "matching-cover cardinality",
+    )
+    graph_rows = np.concatenate([coo.row, matrix.shape[0] + coo.col])
+    graph_columns = np.concatenate([matrix.shape[0] + coo.col, coo.row])
+    graph = sparse.csr_matrix(
+        (np.ones(graph_rows.size, dtype=np.uint8), (graph_rows, graph_columns)),
+        shape=(matrix.shape[0] + matrix.shape[1],) * 2,
+    )
+    _, replay_labels = connected_components(graph, directed=False, return_labels=True)
+    # Component labels are deterministic for the frozen sparse ordering.
+    require(np.array_equal(labels, replay_labels), "component labels replay")
+    exact_rank = 0
+    for label in np.unique(labels[coo.row]):
+        rows = np.flatnonzero(labels[: matrix.shape[0]] == label)
+        columns = np.flatnonzero(labels[matrix.shape[0] :] == label)
+        exact_rank += dense_rank_mod11(matrix[rows][:, columns].toarray())
+    require(exact_rank == int(summary["exact_algebraic_rank_mod11"]), "componentwise exact rank")
+
+
+def source_hash(
+    source_block: dict[str, Any],
+    target: dict[str, Any] | list[tuple[int, ...]],
+    correction: list[dict[str, Any]],
+    pole: int,
+) -> tuple[str, str, int, int]:
+    source = [tuple(int(value) for value in row) for row in source_block["basis_exponent_vectors"]]
+    target_rows = (
+        [tuple(int(value) for value in row) for row in target]
+        if isinstance(target, list)
+        else [
+            tuple(int(value) for value in row)
+            for row in target["target_monomial_basis"]["exponent_vectors"]
+        ]
+    )
+    lookup = {row: index for index, row in enumerate(target_rows)}
+    exact = hashlib.sha256()
+    reduced = hashlib.sha256()
+    exact_count = 0
+    reduced_count = 0
+    for column, basis in enumerate(source):
+        seen = set()
+        for term in correction:
+            product = tuple(a + b for a, b in zip(basis, term["sF"]))
+            row = lookup.get(product)
+            require(row is not None and row not in seen, "source row replay")
+            seen.add(row)
+            coefficients = [-pole * int(value) for value in term["coefficients"]]
+            exact.update(f"{column}:{row}:".encode("ascii"))
+            exact.update(",".join(str(value) for value in coefficients).encode("ascii"))
+            exact.update(b"\n")
+            exact_count += 1
+            value = (-pole * int(term["reduced"])) % PRIME
+            if value:
+                reduced.update(f"{column}:{row}:{value}\n".encode("ascii"))
+                reduced_count += 1
+    return exact.hexdigest(), reduced.hexdigest(), exact_count, reduced_count
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["schema"] == "mtt.unified-source.g3bk-correction-pencil-operator.v1", "schema")
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    require(packet["parameter_ledger"]["accepted_physical_knobs"] == 0, "no knobs")
+    mld = resolve_mld()
+
+    for key in ("G3BI_explicit_root_start", "G3BJ_transcendental_arc"):
+        record = packet["inputs"][key]
+        path = ROOT / record["path"]
+        require(sha256(path) == record["sha256"], f"{key} hash")
+    for key, record in packet["inputs"].items():
+        if "repository" not in record:
+            continue
+        path = mld / record["path"]
+        require(sha256(path) == record["sha256"], f"{key} upstream hash")
+
+    g3bi = load(ROOT / packet["inputs"]["G3BI_explicit_root_start"]["path"])
+    correction = correction_rows(g3bi)
+    h20 = packet["H20_rank_one_resolvent"]
+    numerator = [3261, 1627, -611, -3170, -827, 2917]
+    denominator = [-335, 547, 1304, 627, 443, -407]
+    require(h20["alpha_C"]["numerator_coefficients_ascending"] == numerator, "numerator")
+    require(h20["alpha_C"]["denominator_coefficients_ascending"] == denominator, "denominator")
+    require(eval_mod11(numerator) == 9 and eval_mod11(denominator) == 8, "H20 reductions")
+    require(eval_mod11([a + b for a, b in zip(numerator, denominator)]) == 6, "endpoint unit")
+
+    b103 = load(mld / "q79_eta9_full_vanishing_residue_basis.packet.json")
+    blocks = {block["name"]: block for block in b103["basis_blocks"]}
+    for target in ("H20", "H11", "H02"):
+        update = packet["good_reduction_family_updates"][target]
+        matrix_path = ROOT / update["matrix"]["path"]
+        certificate_path = ROOT / update["matching_cover_certificate"]["path"]
+        require(sha256(matrix_path) == update["matrix"]["sha256"], f"{target} matrix hash")
+        require(sha256(certificate_path) == update["matching_cover_certificate"]["sha256"], f"{target} certificate hash")
+        matrix = sparse.load_npz(matrix_path).tocsc()
+        macaulay = load(mld / f"q79_eta9_original_jacobian_macaulay_{target}.packet.json")
+        factor = load(mld / f"q79_eta9_original_jacobian_coordinate_factorization_{target}.packet.json")
+        replay = replay_update(macaulay, factor, correction)
+        difference = (matrix.astype(np.int16) - replay.astype(np.int16)).tocsc()
+        difference.data %= PRIME
+        difference.eliminate_zeros()
+        require(difference.nnz == 0, f"{target} update replay")
+        summary = update["good_reduction_update"]
+        require(list(matrix.shape) == summary["shape"] and int(matrix.nnz) == summary["nonzero_entries"], f"{target} summary")
+        verify_certificate(matrix, certificate_path, summary)
+
+    source_specs = (
+        ("H20_to_H11", "H20", "H11", 3),
+        ("H11_to_H02", "H11", "H02", 4),
+        ("H02_to_pole6", "H02", None, 5),
+    )
+    for name, source_name, target_name, pole in source_specs:
+        target = (
+            cox_monomials((9, 1, 3))
+            if target_name is None
+            else load(mld / f"q79_eta9_original_jacobian_macaulay_{target_name}.packet.json")
+        )
+        exact, reduced, exact_count, reduced_count = source_hash(
+            blocks[source_name], target, correction, pole
+        )
+        emitted = packet["characteristic_zero_derivative_sources"][name]
+        require(exact == emitted["canonical_exact_source_sha256"], f"{name} exact hash")
+        require(reduced == emitted["canonical_good_reduction_source_sha256"], f"{name} reduction hash")
+        require(exact_count == emitted["exact_nonzero_entries_over_Q_gamma"], f"{name} exact count")
+        require(reduced_count == emitted["good_reduction_nonzero_entries"], f"{name} reduction count")
+
+    expected_ranks = {"H20": 1, "H11": 982, "H02": 6016}
+    for target, rank in expected_ranks.items():
+        require(
+            packet["good_reduction_family_updates"][target]["good_reduction_update"]["exact_algebraic_rank_mod11"] == rank,
+            f"{target} frozen exact rank",
+        )
+    print("UST.G3BK correction-pencil operator compiler verifier: PASS")
+    print("rank_mod11=H20:1,H11:982,H02:6016 source_rows=4712+19247+4712")
+    print(f"packet_sha256={sha256(PACKET)}")
+
+
+if __name__ == "__main__":
+    main()

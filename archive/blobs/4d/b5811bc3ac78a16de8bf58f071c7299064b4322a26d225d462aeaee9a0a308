@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+"""Compose the full selected pole-six original-partial preimage first jet."""
+
+from __future__ import annotations
+
+import bisect
+import hashlib
+import json
+import os
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cs"
+OUT = ROOT / "state" / "ust_g3cs_selected_pole_six_preimage_first_jet.packet.json"
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3CN = ROOT / "state" / "ust_g3cn_pole_six_family_transform_first_jet.packet.json"
+G3CQ = ROOT / "state" / "ust_g3cq_selected_source_transform_defect.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.resolve().relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "build_q79_eta9_toric_return_stage1_chunk.py").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def polynomial(rows: list[dict[str, Any]]) -> dict[tuple[int, ...], int]:
+    return {
+        tuple(int(value) for value in row["exponent"]): int(row["coefficient_mod11"]) % PRIME
+        for row in rows
+        if int(row["coefficient_mod11"]) % PRIME
+    }
+
+
+def sparse_polynomial(poly: dict[tuple[int, ...], int]) -> list[dict[str, Any]]:
+    return [
+        {"exponent": list(exponent), "coefficient_mod11": int(coefficient) % PRIME}
+        for exponent, coefficient in sorted(poly.items())
+        if int(coefficient) % PRIME
+    ]
+
+
+def polynomial_text(poly: dict[tuple[int, ...], int], ordinary) -> str:
+    pieces: list[str] = []
+    for exponent, coefficient in sorted(poly.items()):
+        coefficient %= PRIME
+        if coefficient == 0:
+            continue
+        monomial = ordinary.monomial_text(exponent)
+        pieces.append(monomial if coefficient == 1 else f"{coefficient}*{monomial}")
+    return "+".join(pieces) if pieces else "0"
+
+
+def derivative(poly: dict[tuple[int, ...], int], variable: int) -> dict[tuple[int, ...], int]:
+    result: dict[tuple[int, ...], int] = {}
+    for exponent, coefficient in poly.items():
+        power = exponent[variable]
+        if power == 0:
+            continue
+        target = list(exponent)
+        target[variable] -= 1
+        key = tuple(target)
+        result[key] = (result.get(key, 0) + coefficient * power) % PRIME
+        if result[key] == 0:
+            del result[key]
+    return result
+
+
+def add_poly(
+    target: dict[tuple[int, ...], int],
+    source: dict[tuple[int, ...], int],
+    scale: int = 1,
+) -> None:
+    for exponent, coefficient in source.items():
+        target[exponent] = (target.get(exponent, 0) + scale * coefficient) % PRIME
+        if target[exponent] == 0:
+            del target[exponent]
+
+
+def selected_column_metadata(group: dict[str, Any], factor: dict[str, Any], macaulay) -> list[tuple[int, tuple[int, ...]]]:
+    blocks = group["Macaulay_matrix"]["column_blocks"]
+    first_columns = [int(block["first_column"]) for block in blocks]
+    monomial_cache: dict[tuple[int, int, int], list[tuple[int, ...]]] = {}
+    result: list[tuple[int, tuple[int, ...]]] = []
+    selected_columns = [int(value) for value in factor["selected_original_Jacobian_matrix_columns_zero_based"]]
+    for column in selected_columns:
+        block_index = bisect.bisect_right(first_columns, column) - 1
+        require(block_index >= 0, "selected column block")
+        block = blocks[block_index]
+        require(column < int(block["past_last_column"]), "selected column interval")
+        degree = tuple(int(value) for value in block["coefficient_Cox_degree"])
+        if degree not in monomial_cache:
+            monomial_cache[degree] = [
+                tuple(int(value) for value in exponent)
+                for exponent in macaulay.monomials_of_cox_degree(degree)
+            ]
+        local_index = column - int(block["first_column"])
+        multipliers = monomial_cache[degree]
+        require(0 <= local_index < len(multipliers), "multiplier index")
+        result.append((int(block["generator_index_one_based"]) - 1, multipliers[local_index]))
+    return result
+
+
+def compose_image_first_jet(
+    g3cn: dict[str, Any],
+    schedule: dict[str, Any],
+    ls_rows: list[dict[tuple[int, ...], int]],
+    mld: Path,
+    solver_io,
+    macaulay,
+) -> tuple[list[dict[tuple[int, ...], int]], dict[str, int]]:
+    result: list[defaultdict[tuple[int, ...], int]] = [defaultdict(int) for _ in range(10)]
+    image_nonzeros = 0
+    selected_image_nonzeros = 0
+    term_products = 0
+    for group, summary in zip(schedule["groups_in_selected_order"], g3cn["groups"], strict=True):
+        if "artifacts" not in summary:
+            continue
+        group_index = int(group["group_index"])
+        group_packet = load(mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"group_{group_index:02d}.packet.json")
+        factor_packet = load(mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"group_{group_index:02d}.factor.packet.json")
+        require(all(group_packet["checks"].values()) and all(factor_packet["checks"].values()), f"group {group_index} inputs")
+        coordinate_path = ROOT / summary["artifacts"]["first_jet_coordinates"]["path"]
+        require(sha256(coordinate_path) == summary["artifacts"]["first_jet_coordinates"]["sha256"], f"group {group_index} coordinates")
+        coordinates, quotient_rows, image_rows = solver_io.read_coordinates(coordinate_path)
+        image = coordinates[quotient_rows:, :].tocsc()
+        metadata = selected_column_metadata(group_packet, factor_packet, macaulay)
+        require(len(metadata) == image_rows == image.shape[0], f"group {group_index} metadata")
+        start = int(group["selected_column_start"])
+        stop = int(group["selected_column_stop"])
+        require(image.shape[1] == stop - start, f"group {group_index} selected width")
+        image_nonzeros += int(image.nnz)
+        for local_column in range(stop - start):
+            multiplier = ls_rows[start + local_column]
+            if not multiplier:
+                continue
+            first = int(image.indptr[local_column])
+            past = int(image.indptr[local_column + 1])
+            selected_image_nonzeros += past - first
+            term_products += (past - first) * len(multiplier)
+            for position in range(first, past):
+                coordinate = int(image.data[position]) % PRIME
+                generator, image_exponent = metadata[int(image.indices[position])]
+                target = result[generator]
+                for ls_exponent, ls_coefficient in multiplier.items():
+                    exponent = tuple(
+                        left + right
+                        for left, right in zip(image_exponent, ls_exponent, strict=True)
+                    )
+                    target[exponent] = (
+                        target[exponent] + coordinate * ls_coefficient
+                    ) % PRIME
+                    if target[exponent] == 0:
+                        del target[exponent]
+    return [dict(row) for row in result], {
+        "all_image_coordinate_nonzeros": image_nonzeros,
+        "selected_LS_active_image_coordinate_nonzeros": selected_image_nonzeros,
+        "sparse_term_products_before_collection": term_products,
+    }
+
+
+def parse_marker(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, flags=re.MULTILINE)
+    require(match is not None, f"missing {label}")
+    return int(match.group(1))
+
+
+def make_script(
+    image_rows: list[dict[tuple[int, ...], int]],
+    correction_b0: str,
+    ordinary,
+    targeted,
+    cayley_reducer,
+    stage,
+    image_cache: Path,
+    full_cache: Path,
+    return_cache: Path,
+    normal_cache: Path,
+    next_cache: Path,
+) -> str:
+    assignments = "\n".join(
+        f"imageDerivative[{index + 1},1]={polynomial_text(row, ordinary)};"
+        for index, row in enumerate(image_rows)
+    )
+    coefficient_degrees = [
+        (10, 1, 2), (10, 1, 2), (10, 1, 2), (12, 1, 2),
+        (9, 2, 2), (9, 2, 2), (9, 2, 2), (3, 1, 3),
+        (9, -2, 3), (0, 0, 3),
+    ]
+    degree_checks = "\n".join(
+        f"if (coxDegreeCheck(fullDerivative[{index + 1},1],{degree[0]},{degree[1]},{degree[2]})==0) {{ fullCoefficientDegreesOK=0; }}"
+        for index, degree in enumerate(coefficient_degrees)
+    )
+    divergence = "+".join(
+        f"diff(fullDerivative[{index + 1},1],{variable})"
+        for index, variable in enumerate(ordinary.VARIABLES)
+    )
+    return targeted.model_prefix() + stage.make_degree_check_procedure() + f'''// G3CS complete selected pole-six preimage first jet.
+def cachedBasis=read("ssi:r {cayley_reducer.wsl_path(cayley_reducer.BASIS_CACHE)}");
+ideal G=cachedBasis;
+attrib(G,"isSB",1);
+def cachedTransform=read("ssi:r {cayley_reducer.wsl_path(stage.TRANSFORM_CACHE)}");
+matrix T=cachedTransform;
+def cachedLS=read("ssi:r {cayley_reducer.wsl_path(ROOT / "evidence" / "ust_g3cq" / "selected_source_pole_six_division_LS.ssi")}");
+matrix LS=cachedLS;
+def cachedCorrection=read("ssi:r {cayley_reducer.wsl_path(ROOT / "evidence" / "ust_g3cq" / "selected_source_original_partial_correction.ssi")}");
+matrix quotientCorrection=cachedCorrection;
+matrix baseCoefficients=T*LS;
+matrix imageDerivative[10][1];
+{assignments}
+matrix fullDerivative=imageDerivative+quotientCorrection;
+poly B0={correction_b0};
+poly familyDerivative=s*(B0*t0);
+ideal Jprime=jacob(familyDerivative);
+matrix differentiatedIdentity=matrix(Jprime)*baseCoefficients+matrix(J)*fullDerivative;
+int differentiatedIdentityZero=(differentiatedIdentity[1,1]==0);
+int fullCoefficientDegreesOK=1;
+{degree_checks}
+poly fullReturnDerivative=-({divergence});
+int fullReturnDegreeOK=coxDegreeCheck(fullReturnDerivative,9,1,2);
+ideal fullReturnIdeal=fullReturnDerivative;
+list fullReturnDivision=division(fullReturnIdeal,G);
+matrix fullNextL=fullReturnDivision[1];
+matrix fullReturnResidual=matrix(fullReturnIdeal)-matrix(G)*fullNextL;
+poly fullNormalForm=fullReturnResidual[1,1];
+write("ssi:w {cayley_reducer.wsl_path(image_cache)}",imageDerivative);
+write("ssi:w {cayley_reducer.wsl_path(full_cache)}",fullDerivative);
+write("ssi:w {cayley_reducer.wsl_path(return_cache)}",fullReturnIdeal);
+write("ssi:w {cayley_reducer.wsl_path(normal_cache)}",ideal(fullNormalForm));
+write("ssi:w {cayley_reducer.wsl_path(next_cache)}",fullNextL);
+int vi; int imageRowsUsed=0; int imageTerms=0; int fullRowsUsed=0; int fullTerms=0;
+for (vi=1;vi<=10;vi++)
+{{
+  if (imageDerivative[vi,1]!=0) {{ imageRowsUsed++; imageTerms=imageTerms+size(imageDerivative[vi,1]); }}
+  if (fullDerivative[vi,1]!=0) {{ fullRowsUsed++; fullTerms=fullTerms+size(fullDerivative[vi,1]); }}
+}}
+int gi; int nextUsed=0; int nextTerms=0;
+for (gi=1;gi<=size(G);gi++)
+{{
+  if (fullNextL[gi,1]!=0) {{ nextUsed++; nextTerms=nextTerms+size(fullNextL[gi,1]); }}
+}}
+print("G3CS_FULL_RETURN="+string(fullReturnDerivative));
+print("G3CS_FULL_NORMAL_FORM="+string(fullNormalForm));
+print("G3CS_GAMMA_REL="+string(gammaRelation));
+print("G3CS_DIFFERENTIATED_IDENTITY_ZERO="+string(differentiatedIdentityZero));
+print("G3CS_IMAGE_ROWS_USED="+string(imageRowsUsed));
+print("G3CS_IMAGE_TERMS="+string(imageTerms));
+print("G3CS_FULL_ROWS_USED="+string(fullRowsUsed));
+print("G3CS_FULL_TERMS="+string(fullTerms));
+print("G3CS_FULL_COEFFICIENT_DEGREES_OK="+string(fullCoefficientDegreesOK));
+print("G3CS_FULL_RETURN_TERMS="+string(size(fullReturnDerivative)));
+print("G3CS_FULL_RETURN_DEGREE_OK="+string(fullReturnDegreeOK));
+print("G3CS_FULL_NORMAL_FORM_TERMS="+string(size(fullNormalForm)));
+print("G3CS_NEXT_USED="+string(nextUsed));
+print("G3CS_NEXT_TERMS="+string(nextTerms));
+print("G3CS_PASS");
+quit;
+'''
+
+
+def main() -> None:
+    mld = resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_cayley_jacobian_reducer as cayley_reducer
+    import build_q79_eta9_cayley_ordinary_top_dimension as ordinary
+    import build_q79_eta9_original_jacobian_macaulay as macaulay
+    import build_q79_eta9_smooth_graph_slice_witness as residue
+    import build_q79_eta9_targeted_original_jacobian_transform as targeted
+    import build_q79_eta9_toric_return_stage1_chunk as stage
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    g3bi = load(G3BI)
+    g3cn = load(G3CN)
+    g3cq = load(G3CQ)
+    require(all(g3bi["checks"].values()) and all(g3cn["checks"].values()) and all(g3cq["checks"].values()), "input checks")
+    schedule_path = mld / "q79_eta9_targeted_original_jacobian_macaulay_schedule.packet.json"
+    schedule = load(schedule_path)
+    require(all(schedule["checks"].values()), "schedule checks")
+    ls_payload = load(ROOT / g3cq["division_multipliers"]["json"]["path"])
+    ls_rows = [polynomial(row) for row in ls_payload["rows"]]
+    require(len(ls_rows) == 225, "225 LS rows")
+    image_rows, composition_counts = compose_image_first_jet(
+        g3cn, schedule, ls_rows, mld, solver_io, macaulay
+    )
+    correction_payload = load(
+        ROOT / g3cq["selected_first_order_coefficient_correction"]["json"]["path"]
+    )
+    correction_rows = [
+        polynomial(row["terms"])
+        for row in correction_payload["rows_in_original_variable_order"]
+    ]
+    full_rows: list[dict[tuple[int, ...], int]] = []
+    for image, correction in zip(image_rows, correction_rows, strict=True):
+        combined = dict(image)
+        add_poly(combined, correction)
+        full_rows.append(combined)
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    image_json_path = EVIDENCE / "selected_pole_six_image_preimage_first_jet.json"
+    full_json_path = EVIDENCE / "selected_pole_six_full_preimage_first_jet.json"
+    script_path = EVIDENCE / "selected_pole_six_full_preimage_first_jet.sing"
+    output_path = EVIDENCE / "selected_pole_six_full_preimage_first_jet.singular.out"
+    image_cache = EVIDENCE / "selected_pole_six_image_preimage_first_jet.ssi"
+    full_cache = EVIDENCE / "selected_pole_six_full_preimage_first_jet.ssi"
+    return_cache = EVIDENCE / "selected_pole_six_full_return_first_jet.ssi"
+    normal_cache = EVIDENCE / "selected_pole_six_full_return_H02_normal_form.ssi"
+    next_cache = EVIDENCE / "selected_pole_six_full_return_next_quotient.ssi"
+    return_json_path = EVIDENCE / "selected_pole_six_full_return_first_jet.json"
+    normal_json_path = EVIDENCE / "selected_pole_six_full_return_H02_normal_form.json"
+    normal_binary_path = EVIDENCE / "selected_pole_six_full_return_H02_normal_form.u8"
+    ambient_rhs_path = EVIDENCE / "selected_pole_six_full_return_H02_ambient.rhs.cscbin"
+    ambient_npz_path = EVIDENCE / "selected_pole_six_full_return_H02_ambient.npz"
+    image_json_path.write_text(
+        json.dumps(
+            {
+                "schema": "mtt.unified-source.g3cs-image-preimage-first-jet.v1",
+                "rows_in_original_variable_order": [
+                    {"variable": variable, "terms": sparse_polynomial(row)}
+                    for variable, row in zip(ordinary.VARIABLES, image_rows, strict=True)
+                ],
+            },
+            indent=2,
+            ensure_ascii=True,
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    full_json_path.write_text(
+        json.dumps(
+            {
+                "schema": "mtt.unified-source.g3cs-full-preimage-first-jet.v1",
+                "identity": "Jprime*h0+J0*hprime=0",
+                "composition": "hprime=sum_j T_j_prime*LS_j+c_selected",
+                "rows_in_original_variable_order": [
+                    {"variable": variable, "terms": sparse_polynomial(row)}
+                    for variable, row in zip(ordinary.VARIABLES, full_rows, strict=True)
+                ],
+            },
+            indent=2,
+            ensure_ascii=True,
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    correction_b0, correction_terms = __import__(
+        "probe_ust_g3bm_correction_toric_return_chunk"
+    ).correction_b0(g3bi, ordinary)
+    require(len(correction_terms) == 18, "correction terms")
+    script_path.write_text(
+        make_script(
+            image_rows,
+            correction_b0,
+            ordinary,
+            targeted,
+            cayley_reducer,
+            stage,
+            image_cache,
+            full_cache,
+            return_cache,
+            normal_cache,
+            next_cache,
+        ),
+        encoding="utf-8",
+    )
+    output, engine, timed_out, elapsed = residue.run_singular(script_path, 1800.0)
+    output_path.write_text(output, encoding="utf-8")
+    require(not timed_out, f"Singular timeout after {elapsed:.1f}s")
+    require("G3CS_PASS" in output, output[-4000:])
+    require(parse_marker(output, "G3CS_GAMMA_REL") == 0, "gamma relation")
+    require(parse_marker(output, "G3CS_DIFFERENTIATED_IDENTITY_ZERO") == 1, "differentiated identity")
+    require(parse_marker(output, "G3CS_FULL_COEFFICIENT_DEGREES_OK") == 1, "coefficient degrees")
+    require(parse_marker(output, "G3CS_FULL_RETURN_DEGREE_OK") == 1, "return degree")
+
+    return_match = re.search(r"^G3CS_FULL_RETURN=(.*)$", output, flags=re.MULTILINE)
+    normal_match = re.search(r"^G3CS_FULL_NORMAL_FORM=(.*)$", output, flags=re.MULTILINE)
+    require(return_match is not None and normal_match is not None, "return markers")
+    full_return = {
+        tuple(key): int(value) % PRIME
+        for key, value in stage.strict.parse_normal_form(return_match.group(1).strip()).items()
+        if int(value) % PRIME
+    }
+    normal_form = {
+        tuple(key): int(value) % PRIME
+        for key, value in stage.strict.parse_normal_form(normal_match.group(1).strip()).items()
+        if int(value) % PRIME
+    }
+    python_return: dict[tuple[int, ...], int] = {}
+    for variable, row in enumerate(full_rows):
+        add_poly(python_return, derivative(row, variable), -1)
+    require(python_return == full_return, "independent full minus divergence")
+    require(len(full_return) == parse_marker(output, "G3CS_FULL_RETURN_TERMS"), "return terms")
+    require(len(normal_form) == parse_marker(output, "G3CS_FULL_NORMAL_FORM_TERMS"), "normal terms")
+
+    b103 = load(stage.B103)
+    h02 = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    h02_lookup = {
+        tuple(int(value) for value in exponent): index
+        for index, exponent in enumerate(h02["basis_exponent_vectors"])
+    }
+    require(all(exponent in h02_lookup for exponent in normal_form), "normal form H02 basis")
+    normal_vector = np.zeros(248, dtype=np.uint8)
+    for exponent, coefficient in normal_form.items():
+        normal_vector[h02_lookup[exponent]] = coefficient
+    normal_binary_path.write_bytes(normal_vector.tobytes(order="C"))
+    h02_macaulay = load(stage.H02_MACAULAY)
+    ambient_vectors = [
+        tuple(int(value) for value in exponent)
+        for exponent in h02_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    ambient_lookup = {exponent: index for index, exponent in enumerate(ambient_vectors)}
+    require(all(exponent in ambient_lookup for exponent in full_return), "return H02 ambient basis")
+    ambient = sparse.csc_matrix(
+        (
+            np.asarray(list(full_return.values()), dtype=np.uint8),
+            (
+                np.asarray([ambient_lookup[exponent] for exponent in full_return], dtype=np.int32),
+                np.zeros(len(full_return), dtype=np.int32),
+            ),
+        ),
+        shape=(42706, 1),
+        dtype=np.uint8,
+    )
+    solver_io.write_rhs(ambient_rhs_path, ambient)
+    sparse.save_npz(ambient_npz_path, ambient, compressed=True)
+    return_json_path.write_text(
+        json.dumps(
+            {
+                "schema": "mtt.unified-source.g3cs-full-return-first-jet.v1",
+                "formula": "-div(hprime)",
+                "Cox_degree": [9, 1, 2],
+                "terms": sparse_polynomial(full_return),
+            },
+            indent=2,
+            ensure_ascii=True,
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    normal_json_path.write_text(
+        json.dumps(
+            {
+                "schema": "mtt.unified-source.g3cs-full-return-h02-normal-form.v1",
+                "basis": "B103 H02",
+                "nonzero_coordinates": int(np.count_nonzero(normal_vector)),
+                "terms": sparse_polynomial(normal_form),
+            },
+            indent=2,
+            ensure_ascii=True,
+        )
+        + "\n",
+        encoding="ascii",
+    )
+
+    checks = {
+        "G3BI_G3CN_and_G3CQ_are_hash_bound_and_passing": True,
+        "all_G3CN_image_coordinate_jets_touched_by_the_selected_LS_rows_are_composed": True,
+        "the_quotient_defect_correction_is_added_with_the_G3CQ_positive_sign": True,
+        "the_exact_differentiated_identity_Jprime_h0_plus_J_hprime_equals_zero": True,
+        "all_ten_full_preimage_derivative_rows_have_the_required_Cox_degrees": True,
+        "Python_and_Singular_full_minus_divergence_returns_agree_exactly": True,
+        "the_full_return_lies_in_the_complete_H02_ambient_basis": True,
+        "the_full_return_normal_form_lies_in_the_B103_H02_basis": True,
+        "no_characteristic_zero_action_path_integration_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CS checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cs-selected-pole-six-preimage-first-jet.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CS",
+        "status": "CLOSED_EXACT_GF11_SELECTED_POLE_SIX_FULL_ORIGINAL_PARTIAL_PREIMAGE_FIRST_JET",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "field": "GF(11) at gamma=3 and family base a=0",
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3CN": record(G3CN),
+            "G3CQ": record(G3CQ),
+            "schedule": external_record(schedule_path, mld),
+            "B103": external_record(stage.B103, mld),
+            "H02_Macaulay": external_record(stage.H02_MACAULAY, mld),
+        },
+        "image_jet_composition": {
+            **composition_counts,
+            "nonzero_original_partial_rows": parse_marker(output, "G3CS_IMAGE_ROWS_USED"),
+            "collected_coefficient_terms": parse_marker(output, "G3CS_IMAGE_TERMS"),
+            "json": record(image_json_path),
+            "Singular_SSI": record(image_cache),
+        },
+        "full_preimage_first_jet": {
+            "formula": "hprime=sum_j T_j_prime*LS_j+c_selected",
+            "differentiated_identity": "Jprime*h0+J0*hprime=0",
+            "nonzero_original_partial_rows": parse_marker(output, "G3CS_FULL_ROWS_USED"),
+            "coefficient_terms": parse_marker(output, "G3CS_FULL_TERMS"),
+            "json": record(full_json_path),
+            "Singular_SSI": record(full_cache),
+        },
+        "full_H02_return_first_jet": {
+            "formula": "-div(hprime)",
+            "ambient_nonzero_terms": len(full_return),
+            "normal_form_nonzero_terms": len(normal_form),
+            "B103_nonzero_coordinates": int(np.count_nonzero(normal_vector)),
+            "next_lower_pole_Groebner_generators_used": parse_marker(output, "G3CS_NEXT_USED"),
+            "next_lower_pole_coefficient_terms": parse_marker(output, "G3CS_NEXT_TERMS"),
+            "ambient_json": record(return_json_path),
+            "ambient_Singular_SSI": record(return_cache),
+            "ambient_solver_RHS": record(ambient_rhs_path),
+            "ambient_scipy_NPZ": record(ambient_npz_path),
+            "normal_form_json": record(normal_json_path),
+            "normal_form_binary_uint8": record(normal_binary_path),
+            "normal_form_Singular_SSI": record(normal_cache),
+            "next_quotient_Singular_SSI": record(next_cache),
+        },
+        "execution": {
+            "engine": engine,
+            "elapsed_seconds": elapsed,
+            "script": record(script_path),
+            "output": record(output_path),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_quotient_correction_alone_is_the_full_preimage_derivative": False,
+            "claims_the_H02_normal_form_alone_is_the_full_recursive_connection_derivative": False,
+            "claims_characteristic_zero_connection_action": False,
+            "claims_integral_G3BJ_parallel_transport_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3csSelectedPoleSixPreimageFirstJet",
+            "tier": "CLOSED_EXACT_SELECTED_GF11_FULL_POLE_SIX_PREIMAGE_DERIVATIVE",
+            "statement": (
+                "At the selected proof fiber, composing every G3CN image-coordinate jet touched by the exact "
+                "selected LS multipliers gives the image part of the ten-row pole-six preimage derivative. "
+                "Adding the G3CQ quotient-defect correction yields hprime, and exact Singular replay proves "
+                "Jprime*h0+J0*hprime=0. Its independently replayed minus divergence is emitted as one complete "
+                "H02 ambient first-jet row and B103 normal form."
+            ),
+        },
+        "frontier_delta": {
+            "before": "G3CQ/G3CR closed only the quotient-defect correction branch; the 7.35-million-entry G3CN image jet had not been composed with the selected source multipliers.",
+            "after": "All selected image-jet contributions and the quotient correction are now assembled into the exact full ten-row pole-six preimage derivative, with the differentiated Jacobian identity proved and its complete H02 return emitted.",
+        },
+        "next_required_object": (
+            "Differentiate the H02/H11/H20 coordinate equations using this full H02 ambient derivative, the "
+            "existing G3BK family-update matrices and the selected G3BQ base preimages. Emit the complete "
+            "1509-coordinate derivative of the selected connection action at the proof fiber."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CS selected pole-six preimage first jet: PASS")
+    print(
+        f"image_products={composition_counts['sparse_term_products_before_collection']} "
+        f"image_terms={packet['image_jet_composition']['collected_coefficient_terms']} "
+        f"full_terms={packet['full_preimage_first_jet']['coefficient_terms']} "
+        f"return_terms={len(full_return)} H02_nnz={np.count_nonzero(normal_vector)}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

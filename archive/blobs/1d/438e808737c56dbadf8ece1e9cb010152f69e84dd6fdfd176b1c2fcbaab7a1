@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Independently verify the exact H11 base-resolvent coupling rank."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import nmod_mat
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cy_h11_exact_base_resolvent_coupling_rank.packet.json"
+PRIME = 21817
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_local(item: dict[str, Any]) -> Path:
+    path = ROOT / item["path"]
+    require(path.stat().st_size == int(item["bytes"]), f"bytes {path}")
+    require(sha256(path) == item["sha256"], f"hash {path}")
+    return path
+
+
+def pattern_union(items: list[dict[str, Any]]) -> sparse.csr_matrix:
+    matrices = [sparse.load_npz(ROOT / item["path"]).tocsr() for item in items]
+    result = sparse.csr_matrix(matrices[0].shape, dtype=np.uint8)
+    for matrix in matrices:
+        current = matrix.copy()
+        current.data = np.ones(current.nnz, dtype=np.uint8)
+        result = result + current
+    result.data[:] = 1
+    result.eliminate_zeros()
+    return result
+
+
+def evaluate(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.uint64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value.astype(np.uint16)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    g3cv = load(verify_local(packet["inputs"]["G3CV"]))
+    g3cw = load(verify_local(packet["inputs"]["G3CW"]))
+    g3cx = load(verify_local(packet["inputs"]["G3CX"]))
+    certificate = np.load(
+        verify_local(packet["rank_identity"]["certificate"]), allow_pickle=False
+    )
+
+    mld = runtime.resolve_mld()
+    dm_item = packet["inputs"]["H11_DM_arrays"]
+    dm_path = mld / dm_item["repository_relative_path"]
+    require(sha256(dm_path) == dm_item["sha256"], "DM arrays hash")
+    dm = np.load(dm_path, allow_pickle=False)
+    chart_item = packet["inputs"]["root5_B89_chart"]
+    chart_path = mld / chart_item["repository_relative_path"]
+    require(sha256(chart_path) == chart_item["sha256"], "root5 chart hash")
+    chart, prime, quotient, image = initializer.read_chart(chart_path)
+    require((prime, quotient, image) == (PRIME, 1013, 4426), "chart typing")
+    a_pattern = chart[dm["complement_ambient_rows"], 1013:].tocsr()
+    a_pattern.data = np.ones(a_pattern.nnz, dtype=np.uint8)
+    u_pattern = pattern_union(g3cv["factorization"]["U_gamma_coefficients"])
+    w_pattern = pattern_union(g3cv["factorization"]["W_gamma_coefficients"])
+    bordered = sparse.bmat(
+        [[a_pattern, u_pattern], [w_pattern, None]], format="csr", dtype=np.uint8
+    )
+    bordered.data[:] = 1
+    matching = maximum_bipartite_matching(bordered, perm_type="column").astype(
+        np.int32
+    )
+    require(np.array_equal(matching, certificate["bordered_matching_row_to_column"]), "matching replay")
+    matching_size = int(np.count_nonzero(matching >= 0))
+    cover_rows = certificate["bordered_minimum_vertex_cover_rows"].astype(np.int32)
+    cover_columns = certificate["bordered_minimum_vertex_cover_columns"].astype(np.int32)
+    coo = bordered.tocoo()
+    require(
+        bool(np.all(np.isin(coo.row, cover_rows) | np.isin(coo.col, cover_columns))),
+        "vertex cover",
+    )
+    require(
+        matching_size == cover_rows.size + cover_columns.size == 5136,
+        "matching-cover equality",
+    )
+
+    q_path = ROOT / g3cw["reduced_kernel_action"]["coefficient_archive"]["path"]
+    q = evaluate(np.load(q_path, allow_pickle=False)["coefficients"], 5)
+    q_rank = int(nmod_mat(988, 988, q.reshape(-1).tolist(), PRIME).rank())
+    rows = certificate["Q_minor_rows"].astype(np.int32)
+    columns = certificate["Q_minor_columns"].astype(np.int32)
+    require(rows.size == columns.size == 710, "minor shape")
+    minor = q[np.ix_(rows, columns)]
+    determinant = int(nmod_mat(710, 710, minor.reshape(-1).tolist(), PRIME).det())
+    require(q_rank == 710 and determinant != 0, "rank lower certificate")
+    identity = packet["rank_identity"]
+    require(int(identity["bordered_maximum_matching_size"]) == 5136, "stored matching")
+    require(int(identity["characteristic_zero_rank_upper_bound"]) == 710, "upper bound")
+    require(int(identity["exact_rank_over_Q_gamma"]) == 710, "exact rank")
+    require(
+        int(identity["good_reduction"]["selected_minor_determinant_mod21817"])
+        == determinant,
+        "minor determinant replay",
+    )
+    require(
+        g3cx["kernel_reduction"]["proved_characteristic_zero_rank_interval"]
+        == [710, 740],
+        "G3CX prior interval",
+    )
+    print("UST.G3CY H11 exact base-resolvent coupling rank verifier: PASS")
+    print(
+        f"bordered_matching=5136 minimum_cover=5136 "
+        f"upper=710 lower=710 exact_rank=710 minor_det={determinant}"
+    )
+
+
+if __name__ == "__main__":
+    main()

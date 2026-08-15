@@ -1,0 +1,724 @@
+// Deterministic sparse-column minor search over the selected F_101^6 field.
+//
+// The input is the row-oriented packed SMS format emitted by
+// build_ust_g3ap_selected_cayley_target_macaulay_matrix.py:
+//
+//   source_rows target_coordinates nonzeros
+//   source_row target_coordinate packed_F1016_coefficient
+//
+// Each source row is a relation vector, hence a column of the linear map into
+// the target coordinate space.  The program performs exact sparse elimination
+// and records a nonzero rank minor rather than returning only a rank number.
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <numeric>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+
+constexpr int kPrime = 101;
+constexpr std::uint64_t kFieldOrder = 1061520150601ULL;  // 101^6
+constexpr std::array<int, 6> kMinpolyLower{64, 16, 33, 44, 89, 24};
+
+struct Element {
+    std::array<std::uint8_t, 6> coefficient{};
+};
+
+bool operator==(const Element& left, const Element& right) {
+    return left.coefficient == right.coefficient;
+}
+
+bool is_zero(const Element& value) {
+    return std::all_of(
+        value.coefficient.begin(), value.coefficient.end(),
+        [](std::uint8_t coefficient) { return coefficient == 0; });
+}
+
+Element one() {
+    Element result;
+    result.coefficient[0] = 1;
+    return result;
+}
+
+int mod101(int value) {
+    value %= kPrime;
+    return value < 0 ? value + kPrime : value;
+}
+
+Element unpack(std::uint64_t packed) {
+    if (packed >= kFieldOrder) {
+        throw std::runtime_error("packed coefficient is outside F_101^6");
+    }
+    Element result;
+    for (auto& coefficient : result.coefficient) {
+        coefficient = static_cast<std::uint8_t>(packed % kPrime);
+        packed /= kPrime;
+    }
+    return result;
+}
+
+std::uint64_t pack(const Element& value) {
+    std::uint64_t packed = 0;
+    std::uint64_t place = 1;
+    for (const auto coefficient : value.coefficient) {
+        packed += place * coefficient;
+        place *= kPrime;
+    }
+    return packed;
+}
+
+Element subtract(const Element& left, const Element& right) {
+    Element result;
+    for (std::size_t index = 0; index < 6; ++index) {
+        result.coefficient[index] = static_cast<std::uint8_t>(
+            mod101(static_cast<int>(left.coefficient[index]) -
+                   static_cast<int>(right.coefficient[index])));
+    }
+    return result;
+}
+
+Element add(const Element& left, const Element& right) {
+    Element result;
+    for (std::size_t index = 0; index < 6; ++index) {
+        result.coefficient[index] = static_cast<std::uint8_t>(
+            mod101(static_cast<int>(left.coefficient[index]) +
+                   static_cast<int>(right.coefficient[index])));
+    }
+    return result;
+}
+
+Element multiply(const Element& left, const Element& right) {
+    std::array<int, 11> convolution{};
+    for (std::size_t left_index = 0; left_index < 6; ++left_index) {
+        for (std::size_t right_index = 0; right_index < 6; ++right_index) {
+            convolution[left_index + right_index] +=
+                static_cast<int>(left.coefficient[left_index]) *
+                static_cast<int>(right.coefficient[right_index]);
+        }
+    }
+    for (int degree = 10; degree >= 6; --degree) {
+        const int leading = mod101(convolution[degree]);
+        if (leading != 0) {
+            for (int lower = 0; lower < 6; ++lower) {
+                convolution[degree - 6 + lower] -=
+                    leading * kMinpolyLower[lower];
+            }
+        }
+        convolution[degree] = 0;
+    }
+    Element result;
+    for (std::size_t index = 0; index < 6; ++index) {
+        result.coefficient[index] =
+            static_cast<std::uint8_t>(mod101(convolution[index]));
+    }
+    return result;
+}
+
+Element power(Element base, std::uint64_t exponent) {
+    Element result = one();
+    while (exponent != 0) {
+        if ((exponent & 1U) != 0) {
+            result = multiply(result, base);
+        }
+        exponent >>= 1U;
+        if (exponent != 0) {
+            base = multiply(base, base);
+        }
+    }
+    return result;
+}
+
+Element inverse(const Element& value) {
+    if (is_zero(value)) {
+        throw std::runtime_error("attempted to invert zero");
+    }
+    const Element result = power(value, kFieldOrder - 2);
+    if (!(multiply(value, result) == one())) {
+        throw std::runtime_error("F_101^6 inversion self-check failed");
+    }
+    return result;
+}
+
+Element negate(const Element& value) {
+    Element result;
+    for (std::size_t index = 0; index < 6; ++index) {
+        result.coefficient[index] = value.coefficient[index] == 0
+            ? 0
+            : static_cast<std::uint8_t>(kPrime - value.coefficient[index]);
+    }
+    return result;
+}
+
+struct Entry {
+    std::uint32_t row;
+    Element value;
+};
+
+struct Header {
+    std::uint64_t source_rows{};
+    std::uint64_t target_coordinates{};
+    std::uint64_t nonzeros{};
+};
+
+Header read_header(std::ifstream& input) {
+    Header header;
+    if (!(input >> header.source_rows >> header.target_coordinates >> header.nonzeros) ||
+        header.source_rows == 0 || header.target_coordinates == 0) {
+        throw std::runtime_error("invalid packed sparse header");
+    }
+    return header;
+}
+
+struct IncidencePass {
+    Header header;
+    std::vector<std::uint32_t> incidence;
+};
+
+IncidencePass inspect_input(const std::string& path) {
+    std::ifstream input(path);
+    if (!input) {
+        throw std::runtime_error("cannot open matrix: " + path);
+    }
+    IncidencePass result;
+    result.header = read_header(input);
+    result.incidence.assign(result.header.target_coordinates, 0);
+    std::uint64_t previous_source = 0;
+    for (std::uint64_t index = 0; index < result.header.nonzeros; ++index) {
+        std::uint64_t source = 0;
+        std::uint64_t target = 0;
+        std::uint64_t packed = 0;
+        if (!(input >> source >> target >> packed) || source == 0 || target == 0 ||
+            source > result.header.source_rows || target > result.header.target_coordinates ||
+            source < previous_source || packed == 0 || packed >= kFieldOrder) {
+            throw std::runtime_error(
+                "invalid or unsorted packed sparse entry at index " +
+                std::to_string(index));
+        }
+        previous_source = source;
+        ++result.incidence[target - 1];
+    }
+    return result;
+}
+
+class ExactEliminator {
+public:
+    ExactEliminator(
+        std::size_t rows,
+        std::vector<std::uint32_t> original_to_priority,
+        std::vector<std::uint32_t> priority_to_original)
+        : rows_(rows),
+          original_to_priority_(std::move(original_to_priority)),
+          priority_to_original_(std::move(priority_to_original)),
+          basis_(rows),
+          coefficient_(rows),
+          nonzero_words_((rows + 63) / 64, 0) {}
+
+    void set_original_value(std::uint32_t original_row, const Element& value) {
+        if (is_zero(value)) {
+            throw std::runtime_error("zero matrix entry");
+        }
+        const auto row = original_to_priority_.at(original_row);
+        if (!is_zero(coefficient_[row])) {
+            throw std::runtime_error("duplicate target coordinate in source row");
+        }
+        coefficient_[row] = value;
+        nonzero_words_[row / 64] |= std::uint64_t{1} << (row % 64);
+        ++current_nonzeros_;
+    }
+
+    bool insert(
+        std::uint32_t source_row,
+        std::vector<std::uint32_t>& selected_source_rows,
+        std::vector<std::uint32_t>& pivot_original_rows,
+        std::vector<Element>& pivot_coefficients) {
+        maximum_working_terms_ = std::max(maximum_working_terms_, current_nonzeros_);
+        std::size_t search_from = 0;
+        while (current_nonzeros_ != 0) {
+            const auto pivot = first_nonzero(search_from);
+            if (pivot >= rows_) {
+                throw std::runtime_error("bitset/coefficient inconsistency");
+            }
+            if (basis_[pivot].empty()) {
+                const Element pivot_coefficient = coefficient_[pivot];
+                const Element pivot_inverse = inverse(pivot_coefficient);
+                auto& new_basis = basis_[pivot];
+                new_basis.reserve(current_nonzeros_);
+                for (std::size_t word_index = pivot / 64;
+                     word_index < nonzero_words_.size(); ++word_index) {
+                    auto word = nonzero_words_[word_index];
+                    while (word != 0) {
+                        const auto bit = static_cast<unsigned>(__builtin_ctzll(word));
+                        const auto row = static_cast<std::uint32_t>(word_index * 64 + bit);
+                        if (row < rows_) {
+                            new_basis.push_back(
+                                Entry{row, multiply(coefficient_[row], pivot_inverse)});
+                            coefficient_[row] = Element{};
+                        }
+                        word &= word - 1;
+                    }
+                    nonzero_words_[word_index] = 0;
+                }
+                basis_terms_ += new_basis.size();
+                current_nonzeros_ = 0;
+                selected_source_rows.push_back(source_row);
+                pivot_original_rows.push_back(priority_to_original_.at(pivot));
+                pivot_coefficients.push_back(pivot_coefficient);
+                ++rank_;
+                return true;
+            }
+
+            const Element factor = coefficient_[pivot];
+            for (const auto& entry : basis_[pivot]) {
+                const bool old_nonzero = !is_zero(coefficient_[entry.row]);
+                const Element product = multiply(factor, entry.value);
+                const Element updated = subtract(coefficient_[entry.row], product);
+                const bool new_nonzero = !is_zero(updated);
+                if (!old_nonzero && new_nonzero) {
+                    nonzero_words_[entry.row / 64] |=
+                        std::uint64_t{1} << (entry.row % 64);
+                    ++current_nonzeros_;
+                } else if (old_nonzero && !new_nonzero) {
+                    nonzero_words_[entry.row / 64] &=
+                        ~(std::uint64_t{1} << (entry.row % 64));
+                    --current_nonzeros_;
+                }
+                coefficient_[entry.row] = updated;
+            }
+            ++reductions_;
+            coefficient_updates_ += basis_[pivot].size();
+            maximum_working_terms_ = std::max(maximum_working_terms_, current_nonzeros_);
+            search_from = pivot;
+        }
+        return false;
+    }
+
+    std::size_t rank() const { return rank_; }
+    std::uint64_t basis_terms() const { return basis_terms_; }
+    std::uint64_t reductions() const { return reductions_; }
+    std::uint64_t coefficient_updates() const { return coefficient_updates_; }
+    std::size_t maximum_working_terms() const { return maximum_working_terms_; }
+
+    std::pair<std::uint32_t, std::vector<Element>> quotient_functional() const {
+        if (rank_ + 1 != rows_) {
+            throw std::runtime_error(
+                "a unique quotient functional requires target rank rows-1");
+        }
+        std::size_t free_priority = rows_;
+        for (std::size_t row = 0; row < rows_; ++row) {
+            if (basis_[row].empty()) {
+                if (free_priority != rows_) {
+                    throw std::runtime_error("more than one free target coordinate");
+                }
+                free_priority = row;
+            }
+        }
+        if (free_priority == rows_) {
+            throw std::runtime_error("missing free target coordinate");
+        }
+
+        std::vector<Element> priority_functional(rows_);
+        priority_functional[free_priority] = one();
+        for (std::size_t reverse = rows_; reverse-- > 0;) {
+            if (basis_[reverse].empty()) {
+                continue;
+            }
+            Element sum;
+            for (const auto& entry : basis_[reverse]) {
+                if (entry.row == reverse) {
+                    if (!(entry.value == one())) {
+                        throw std::runtime_error("non-unit normalized pivot");
+                    }
+                    continue;
+                }
+                if (entry.row < reverse) {
+                    throw std::runtime_error("basis row violates echelon order");
+                }
+                sum = add(
+                    sum,
+                    multiply(entry.value, priority_functional[entry.row]));
+            }
+            priority_functional[reverse] = negate(sum);
+        }
+
+        for (std::size_t pivot = 0; pivot < rows_; ++pivot) {
+            if (basis_[pivot].empty()) {
+                continue;
+            }
+            Element dot;
+            for (const auto& entry : basis_[pivot]) {
+                dot = add(
+                    dot,
+                    multiply(entry.value, priority_functional[entry.row]));
+            }
+            if (!is_zero(dot)) {
+                throw std::runtime_error("quotient functional basis replay failed");
+            }
+        }
+
+        std::vector<Element> original_functional(rows_);
+        for (std::size_t priority = 0; priority < rows_; ++priority) {
+            original_functional[priority_to_original_[priority]] =
+                priority_functional[priority];
+        }
+        return {
+            priority_to_original_[free_priority], std::move(original_functional)};
+    }
+
+private:
+    std::size_t first_nonzero(std::size_t start) const {
+        std::size_t word_index = start / 64;
+        if (word_index >= nonzero_words_.size()) {
+            return rows_;
+        }
+        auto word = nonzero_words_[word_index];
+        word &= (~std::uint64_t{0}) << (start % 64);
+        while (true) {
+            if (word != 0) {
+                return word_index * 64 + static_cast<unsigned>(__builtin_ctzll(word));
+            }
+            ++word_index;
+            if (word_index >= nonzero_words_.size()) {
+                return rows_;
+            }
+            word = nonzero_words_[word_index];
+        }
+    }
+
+    std::size_t rows_;
+    std::vector<std::uint32_t> original_to_priority_;
+    std::vector<std::uint32_t> priority_to_original_;
+    std::vector<std::vector<Entry>> basis_;
+    std::vector<Element> coefficient_;
+    std::vector<std::uint64_t> nonzero_words_;
+    std::size_t current_nonzeros_{};
+    std::size_t rank_{};
+    std::uint64_t basis_terms_{};
+    std::uint64_t reductions_{};
+    std::uint64_t coefficient_updates_{};
+    std::size_t maximum_working_terms_{};
+};
+
+bool odd_inversion_count(const std::vector<std::uint32_t>& values) {
+    if (values.empty()) {
+        return false;
+    }
+    const auto maximum = *std::max_element(values.begin(), values.end());
+    std::vector<std::uint32_t> fenwick(static_cast<std::size_t>(maximum) + 2, 0);
+    std::uint64_t previous = 0;
+    bool odd = false;
+    for (const auto value : values) {
+        std::uint64_t not_greater = 0;
+        for (std::size_t position = static_cast<std::size_t>(value) + 1;
+             position > 0; position -= position & (~position + 1)) {
+            not_greater += fenwick[position];
+        }
+        if (((previous - not_greater) & 1U) != 0) {
+            odd = !odd;
+        }
+        for (std::size_t position = static_cast<std::size_t>(value) + 1;
+             position < fenwick.size(); position += position & (~position + 1)) {
+            ++fenwick[position];
+        }
+        ++previous;
+    }
+    return odd;
+}
+
+Element minor_determinant(
+    const std::vector<std::uint32_t>& pivot_rows,
+    const std::vector<Element>& pivot_coefficients) {
+    Element determinant = one();
+    for (const auto& coefficient : pivot_coefficients) {
+        determinant = multiply(determinant, coefficient);
+    }
+    return odd_inversion_count(pivot_rows) ? negate(determinant) : determinant;
+}
+
+void write_vector(
+    std::ofstream& output,
+    const std::string& label,
+    const std::vector<std::uint32_t>& values) {
+    output << label << ' ' << values.size() << '\n';
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0) {
+            output << ' ';
+        }
+        output << values[index];
+    }
+    output << '\n';
+}
+
+void write_elements(
+    std::ofstream& output,
+    const std::string& label,
+    const std::vector<Element>& values) {
+    output << label << ' ' << values.size() << '\n';
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index != 0) {
+            output << ' ';
+        }
+        output << pack(values[index]);
+    }
+    output << '\n';
+}
+
+std::uint64_t verify_quotient_functional(
+    const std::string& matrix_path,
+    const Header& expected_header,
+    const std::vector<Element>& functional) {
+    if (functional.size() != expected_header.target_coordinates) {
+        throw std::runtime_error("quotient functional width mismatch");
+    }
+    std::ifstream input(matrix_path);
+    if (!input) {
+        throw std::runtime_error("cannot reopen matrix for quotient replay");
+    }
+    const Header header = read_header(input);
+    if (header.source_rows != expected_header.source_rows ||
+        header.target_coordinates != expected_header.target_coordinates ||
+        header.nonzeros != expected_header.nonzeros) {
+        throw std::runtime_error("matrix header changed before quotient replay");
+    }
+
+    std::uint64_t current_source = 0;
+    std::uint64_t entries = 0;
+    Element dot;
+    for (; entries < header.nonzeros; ++entries) {
+        std::uint64_t source = 0;
+        std::uint64_t target = 0;
+        std::uint64_t packed = 0;
+        if (!(input >> source >> target >> packed) || source == 0 || target == 0 ||
+            source > header.source_rows || target > header.target_coordinates ||
+            packed == 0 || packed >= kFieldOrder || source < current_source) {
+            throw std::runtime_error("invalid quotient-replay matrix entry");
+        }
+        if (current_source != 0 && source != current_source) {
+            if (!is_zero(dot)) {
+                throw std::runtime_error(
+                    "quotient functional does not annihilate source row " +
+                    std::to_string(current_source - 1));
+            }
+            dot = Element{};
+        }
+        current_source = source;
+        dot = add(
+            dot,
+            multiply(unpack(packed), functional[target - 1]));
+    }
+    if (current_source != 0 && !is_zero(dot)) {
+        throw std::runtime_error(
+            "quotient functional does not annihilate source row " +
+            std::to_string(current_source - 1));
+    }
+    std::uint64_t extra_source = 0;
+    std::uint64_t extra_target = 0;
+    std::uint64_t extra_packed = 0;
+    if (input >> extra_source >> extra_target >> extra_packed) {
+        throw std::runtime_error("matrix has entries beyond its declared nonzeros");
+    }
+    return entries;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        if (argc < 2) {
+            throw std::runtime_error(
+                "usage: ust_f1016_sparse_column_minor MATRIX "
+                "[--target-rank N] [--output FILE] [--progress-seconds S]");
+        }
+        const std::string matrix_path = argv[1];
+        std::string output_path = matrix_path + ".minor.out";
+        std::size_t requested_rank = 0;
+        double progress_seconds = 10.0;
+        for (int index = 2; index < argc; ++index) {
+            const std::string argument = argv[index];
+            if (argument == "--target-rank" && index + 1 < argc) {
+                requested_rank = static_cast<std::size_t>(std::stoull(argv[++index]));
+            } else if (argument == "--output" && index + 1 < argc) {
+                output_path = argv[++index];
+            } else if (argument == "--progress-seconds" && index + 1 < argc) {
+                progress_seconds = std::stod(argv[++index]);
+            } else {
+                throw std::runtime_error("unknown or incomplete argument: " + argument);
+            }
+        }
+
+        const IncidencePass inspection = inspect_input(matrix_path);
+        const auto& header = inspection.header;
+        const std::size_t target_rank = requested_rank == 0
+            ? static_cast<std::size_t>(std::min(header.source_rows, header.target_coordinates))
+            : requested_rank;
+        if (target_rank == 0 || target_rank > header.source_rows ||
+            target_rank > header.target_coordinates) {
+            throw std::runtime_error("invalid target rank");
+        }
+
+        std::vector<std::uint32_t> priority_to_original(header.target_coordinates);
+        std::iota(priority_to_original.begin(), priority_to_original.end(), 0);
+        std::stable_sort(
+            priority_to_original.begin(), priority_to_original.end(),
+            [&inspection](std::uint32_t left, std::uint32_t right) {
+                if (inspection.incidence[left] != inspection.incidence[right]) {
+                    return inspection.incidence[left] < inspection.incidence[right];
+                }
+                return left < right;
+            });
+        std::vector<std::uint32_t> original_to_priority(header.target_coordinates);
+        for (std::size_t priority = 0; priority < priority_to_original.size(); ++priority) {
+            original_to_priority[priority_to_original[priority]] =
+                static_cast<std::uint32_t>(priority);
+        }
+
+        ExactEliminator eliminator(
+            header.target_coordinates,
+            std::move(original_to_priority),
+            std::move(priority_to_original));
+        std::vector<std::uint32_t> selected_source_rows;
+        std::vector<std::uint32_t> pivot_target_coordinates;
+        std::vector<Element> pivot_coefficients;
+        selected_source_rows.reserve(target_rank);
+        pivot_target_coordinates.reserve(target_rank);
+        pivot_coefficients.reserve(target_rank);
+
+        std::ifstream input(matrix_path);
+        if (!input) {
+            throw std::runtime_error("cannot reopen matrix");
+        }
+        const Header replay_header = read_header(input);
+        if (replay_header.source_rows != header.source_rows ||
+            replay_header.target_coordinates != header.target_coordinates ||
+            replay_header.nonzeros != header.nonzeros) {
+            throw std::runtime_error("matrix header changed between passes");
+        }
+
+        std::uint64_t next_source = 0;
+        std::uint64_t next_target = 0;
+        std::uint64_t next_packed = 0;
+        std::uint64_t entries_read = 0;
+        bool have_entry = static_cast<bool>(input >> next_source >> next_target >> next_packed);
+        const auto started = std::chrono::steady_clock::now();
+        auto next_progress = started + std::chrono::duration<double>(progress_seconds);
+        std::uint64_t processed_sources = 0;
+        for (std::uint64_t source = 1; source <= header.source_rows; ++source) {
+            while (have_entry && next_source == source) {
+                eliminator.set_original_value(
+                    static_cast<std::uint32_t>(next_target - 1), unpack(next_packed));
+                ++entries_read;
+                have_entry = static_cast<bool>(input >> next_source >> next_target >> next_packed);
+            }
+            eliminator.insert(
+                static_cast<std::uint32_t>(source - 1),
+                selected_source_rows,
+                pivot_target_coordinates,
+                pivot_coefficients);
+            processed_sources = source;
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= next_progress) {
+                const auto elapsed = std::chrono::duration<double>(now - started).count();
+                std::cout << "processed=" << processed_sources << '/' << header.source_rows
+                          << " rank=" << eliminator.rank() << '/' << target_rank
+                          << " basis_terms=" << eliminator.basis_terms()
+                          << " max_terms=" << eliminator.maximum_working_terms()
+                          << " reductions=" << eliminator.reductions()
+                          << " elapsed=" << std::fixed << std::setprecision(1)
+                          << elapsed << "s\n" << std::flush;
+                next_progress = now + std::chrono::duration<double>(progress_seconds);
+            }
+            if (eliminator.rank() >= target_rank) {
+                break;
+            }
+        }
+        if (entries_read > header.nonzeros) {
+            throw std::runtime_error("read more entries than declared");
+        }
+
+        const auto finished = std::chrono::steady_clock::now();
+        const auto elapsed = std::chrono::duration<double>(finished - started).count();
+        if (eliminator.rank() != target_rank) {
+            throw std::runtime_error(
+                "requested exact rank was not reached; reached " +
+                std::to_string(eliminator.rank()));
+        }
+        const Element determinant =
+            minor_determinant(pivot_target_coordinates, pivot_coefficients);
+        if (is_zero(determinant)) {
+            throw std::runtime_error("selected exact minor has zero determinant");
+        }
+
+        const bool emit_quotient_functional = target_rank + 1 == header.target_coordinates;
+        std::uint32_t quotient_normalization_coordinate = 0;
+        std::vector<Element> quotient_functional;
+        std::uint64_t quotient_verified_entries = 0;
+        if (emit_quotient_functional) {
+            auto quotient = eliminator.quotient_functional();
+            quotient_normalization_coordinate = quotient.first;
+            quotient_functional = std::move(quotient.second);
+            if (!(quotient_functional.at(quotient_normalization_coordinate) == one())) {
+                throw std::runtime_error("quotient functional normalization failed");
+            }
+            quotient_verified_entries = verify_quotient_functional(
+                matrix_path, header, quotient_functional);
+        }
+
+        std::ofstream output(output_path);
+        if (!output) {
+            throw std::runtime_error("cannot open output certificate");
+        }
+        output << "SCHEMA MTTF1016SparseColumnMinorExactOutput.v2\n";
+        output << "STATUS EXACT_F1016_NONZERO_MINOR_FOUND\n";
+        output << "FIELD_PRIME 101\n";
+        output << "FIELD_DEGREE 6\n";
+        output << "FIELD_MINPOLY_PACKED_LOWER 64,16,33,44,89,24\n";
+        output << "SOURCE_ROWS " << header.source_rows << '\n';
+        output << "TARGET_COORDINATES " << header.target_coordinates << '\n';
+        output << "MATRIX_NONZEROS " << header.nonzeros << '\n';
+        output << "PROCESSED_SOURCE_ROWS " << processed_sources << '\n';
+        output << "MINOR_SIZE " << target_rank << '\n';
+        output << "MINOR_DETERMINANT_PACKED " << pack(determinant) << '\n';
+        output << "BASIS_TERMS " << eliminator.basis_terms() << '\n';
+        output << "MAXIMUM_WORKING_TERMS " << eliminator.maximum_working_terms() << '\n';
+        output << "REDUCTIONS " << eliminator.reductions() << '\n';
+        output << "COEFFICIENT_UPDATES " << eliminator.coefficient_updates() << '\n';
+        output << "QUOTIENT_FUNCTIONAL_EMITTED "
+               << (emit_quotient_functional ? 1 : 0) << '\n';
+        if (emit_quotient_functional) {
+            output << "QUOTIENT_NORMALIZATION_TARGET_COORDINATE_ZERO_BASED "
+                   << quotient_normalization_coordinate << '\n';
+            output << "QUOTIENT_FUNCTIONAL_VERIFIED_SOURCE_ROWS "
+                   << header.source_rows << '\n';
+            output << "QUOTIENT_FUNCTIONAL_VERIFIED_MATRIX_NONZEROS "
+                   << quotient_verified_entries << '\n';
+        }
+        output << "ELAPSED_SECONDS " << std::fixed << std::setprecision(6)
+               << elapsed << '\n';
+        write_vector(output, "SELECTED_SOURCE_ROWS_ZERO_BASED", selected_source_rows);
+        write_vector(output, "PIVOT_TARGET_COORDINATES_ZERO_BASED", pivot_target_coordinates);
+        write_elements(output, "PIVOT_COEFFICIENTS_PACKED", pivot_coefficients);
+        if (emit_quotient_functional) {
+            write_elements(
+                output, "QUOTIENT_FUNCTIONAL_PACKED", quotient_functional);
+        }
+        output << "END_CERTIFICATE\n";
+
+        std::cout << "SUCCESS rank=" << target_rank
+                  << " determinant_packed=" << pack(determinant)
+                  << " processed=" << processed_sources
+                  << " elapsed=" << std::fixed << std::setprecision(3)
+                  << elapsed << "s output=" << output_path << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "ERROR " << error.what() << '\n';
+        return 1;
+    }
+}

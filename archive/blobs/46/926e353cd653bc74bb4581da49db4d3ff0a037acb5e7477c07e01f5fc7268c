@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Independently replay the UST.G3FY finite kernel and source obstruction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fy_pdelta_socle_kernel_source as theorem
+import probe_ust_g3fy_selected_degree21_source_span as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main() -> None:
+    packet = json.loads(theorem.CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3FY", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    arrays_record = packet["good_reduction_witness"]["artifact"]
+    require(sha256(theorem.ARRAYS) == arrays_record["sha256"], "array hash")
+    arrays = np.load(theorem.ARRAYS, allow_pickle=False)
+
+    _, _, g3bi, sextic, g3_polynomial, h4_polynomial, pdelta_polynomial = (
+        theorem.selected_polynomials()
+    )
+    require(
+        (theorem.hilbert_dimension(6), theorem.hilbert_dimension(12)) == (19, 1),
+        "Hilbert dimensions",
+    )
+    prime = int(arrays["prime"][0])
+    gamma = int(arrays["gamma"][0])
+    kernel18, profile = runtime.pdelta_kernel(
+        sextic, pdelta_polynomial, prime
+    )
+    require(
+        np.array_equal(kernel18 % prime, arrays["pdelta_kernel_degree6"] % prime),
+        "kernel replay",
+    )
+    require(profile["kernel_dimension"] == 18, "kernel dimension")
+    require(graded.rref(kernel18, prime)[0] == 18, "kernel rank")
+
+    x, y, z = sextic.gens
+    variables = (x, y, z)
+    q = runtime.polynomial_vector(sp.Poly(x * z - y**2, *variables), 2, prime)
+    g3 = runtime.polynomial_vector(g3_polynomial, 3, prime)
+    h4 = runtime.polynomial_vector(h4_polynomial, 4, prime)
+    pdelta = runtime.polynomial_vector(pdelta_polynomial, 6, prime)
+    factors = runtime.selected_degree12_factors(q, g3, h4, pdelta, prime)
+    require(
+        tuple(factors) == tuple(arrays["selected_degree12_factor_labels"]),
+        "factor labels",
+    )
+
+    target = arrays["target_primitive_degree15"].astype(np.int64) % prime
+    _, _, target_annihilator = graded.rref(
+        target.T, prime, emit_nullspace=True
+    )
+    require(target_annihilator is not None, "target annihilator")
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+    source21: list[np.ndarray] = []
+    source_labels: list[str] = []
+    for theta in range(3):
+        a_theta = runtime.evaluate_selected_form(
+            coefficient_vectors, theta, gamma, prime
+        )
+        for label, factor in factors.items():
+            source_labels.append(f"A{theta}*{label}")
+            source21.append(runtime.product(factor, 12, a_theta, 9, prime))
+    require(
+        tuple(source_labels) == tuple(arrays["selected_degree21_source_labels"]),
+        "source labels",
+    )
+
+    replay_ranks: list[int] = []
+    replay_nullities: list[int] = []
+    for ordinary in (False, True):
+        candidates = [
+            runtime.contract(kernel18, source, prime, ordinary=ordinary)
+            for source in source21
+        ]
+        obstruction = np.stack(
+            [
+                (target_annihilator.T @ candidate % prime).reshape(-1)
+                for candidate in candidates
+            ],
+            axis=1,
+        )
+        rank = graded.rref(obstruction, prime)[0]
+        replay_ranks.append(rank)
+        replay_nullities.append(obstruction.shape[1] - rank)
+    require(
+        np.array_equal(
+            replay_ranks, arrays["target_containment_obstruction_ranks"]
+        ),
+        "obstruction rank replay",
+    )
+    require(
+        np.array_equal(
+            replay_nullities,
+            arrays["target_containment_obstruction_nullities"],
+        ),
+        "obstruction nullity replay",
+    )
+    require(replay_ranks == [33, 33] and replay_nullities == [0, 0], "source no-go")
+    print(
+        "UST.G3FY independent verification: PASS "
+        "kernel=18 source_obstructions=33,33"
+    )
+
+
+if __name__ == "__main__":
+    main()

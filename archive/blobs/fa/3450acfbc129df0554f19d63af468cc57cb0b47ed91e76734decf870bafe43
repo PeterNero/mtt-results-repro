@@ -1,0 +1,97 @@
+# UST.G3FV Selected Cox Hilbert--Burch Source Theorem
+
+## Scope
+
+UST.G3FK writes the selected K3, elliptic and eta9 equations as contractions
+of one four-normal row. G3FV asks the immediate upstream question left open by
+the finite G3FN theorem: does that selected source itself carry a
+Hilbert--Burch object, before any finite interpolation or RREF normalization?
+
+The answer is yes at the Cox-homogeneous level. Equality with the finite
+component-20 apolar complex remains a separate comparison theorem.
+
+## The source matrix
+
+Transpose the exact G3FK coefficient matrix and write
+
+```text
+      K3       E          F
+q   [ H4       0        t0 D7 ]
+r   [ rbar     0        t0 B6 ]
+ell [ 0        qe       A1    ]
+t2  [ 0        t2^2     A2    ].
+```
+
+This is a `4 x 3` Cox-homogeneous matrix `S` over `Q(gamma)`. Its rows are the
+four selected normals and its columns are the three selected equations.
+
+Set
+
+```text
+C_E = qe A2 - t2^2 A1,
+C_K = t0 (H4 B6 - rbar D7).
+```
+
+The signed maximal minors are exactly
+
+```text
+Delta = (rbar C_E, -H4 C_E, -t2^2 C_K, qe C_K),
+```
+
+and direct expansion gives `S^T Delta = 0`.
+
+## Height two
+
+The pairs `(H4,rbar)` and `(qe,t2^2)` are coprime. A common divisor of `C_E`
+and `C_K` would therefore have to be either `t0`, which does not divide
+`C_E`, or a base-variable divisor common to `A1` and `A2`.
+
+The latter possibility is excluded by a good-reduction certificate. At
+`p=21817`, `gamma=5`, restrict weighted-homogeneously by
+
+```text
+x=s, y=t, z=s+2t, w=s^3+2st^2+t^3.
+```
+
+Both selected forms remain degree nine after setting `s=1`, and their gcd in
+`F_21817[t]` is one. A nonconstant weighted-homogeneous common factor over
+`Q(gamma)` would have a nonzero positive-degree reduction on this graded test
+curve, contradicting that gcd.
+
+Consequently the four maximal minors have gcd one. Their proper determinantal
+ideal has height at most two by the determinantal height bound and cannot lie
+in a height-one prime. Its height is therefore exactly two.
+
+## Theorem
+
+Hilbert--Burch now gives the exact complex
+
+```text
+0 -> R^3 --S--> R^4 --Delta^T--> I_3(S) -> 0.
+```
+
+Thus the four-generator/three-syzygy architecture is derived directly from
+the one selected G3FK source. It is no longer merely a numerical shape seen
+in G3FN.
+
+## What remains open
+
+G3FV does **not** identify the entries of `S` with the normalized finite G3FN
+matrix. The finite matrix lives after Cox/H02 residue projection and
+divided-power apolar duality; its column degrees are `1,2,8`. The next theorem
+must construct that functor and prove that the image of this exact Cox complex
+is the G3FN complex, equivalently the G3FR mixed-degree inverse source
+`18@15 + 1@16 + 1@19`.
+
+No component-20 rank-36 promotion, global H02 equality or physical endpoint
+is claimed here.
+
+## Reproduction
+
+```powershell
+python build_ust_g3fv_selected_cox_hilbert_burch_source.py
+python verify_ust_g3fv_selected_cox_hilbert_burch_source.py
+```
+
+The machine certificate is
+`evidence/ust_g3fv/selected_cox_hilbert_burch_source.json`.

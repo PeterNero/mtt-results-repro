@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Verify exact reconstruction of the G3AO smooth-primal Lagrange input."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_primal_lagrange_msolve_input as builder
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = json.loads(builder.OUT.read_text(encoding="ascii"))
+    require(packet["source_sha256"] == sha256(direct.SOURCE), "selected source")
+    require(all(packet["checks"].values()), "input checks")
+    dependency = packet["dependencies"]["elliptic_bidual_identity"]
+    dependency_path = builder.ROOT / dependency["path"]
+    require(dependency_path.is_file() and sha256(dependency_path) == dependency["sha256"], "bidual identity")
+    identity = json.loads(dependency_path.read_text(encoding="ascii"))
+    require(identity["theorem_id"] == dependency["theorem_id"] and all(identity["checks"].values()), "bidual identity checks")
+    polynomials = direct.selected_polynomials()
+    g = sp.symbols("g")
+    minpoly = sp.Poly(sp.sympify(polynomials["minpoly"].replace("^", "**")), g, modulus=101)
+    require(minpoly.degree() == 6 and minpoly.is_irreducible, "irreducible F101 extension")
+    script = direct.CAMPAIGN / packet["export_script"]["path"]
+    raw_path = direct.CAMPAIGN / packet["raw_output"]["path"]
+    require(script.is_file() and sha256(script) == packet["export_script"]["sha256"], "export script")
+    require(raw_path.is_file() and sha256(raw_path) == packet["raw_output"]["sha256"], "raw export")
+    require(script.read_text(encoding="ascii") == builder.make_export_script(polynomials), "exact script")
+    raw = raw_path.read_text(encoding="utf-8")
+    require("G3AO_MSOLVE_EXPORT_PASS" in raw, "export marker")
+    generators = common.parse_locus(raw, "smooth")
+    input_path = direct.CAMPAIGN / packet["input"]["path"]
+    require(input_path.is_file() and sha256(input_path) == packet["input"]["sha256"], "input")
+    require(input_path.read_text(encoding="ascii") == builder.make_msolve_input(polynomials, generators), "input reconstruction")
+    require(packet["generator_count_including_minpoly"] == len(generators) + 1, "generator count")
+    print("UST.G3AO uvs smooth-primal Lagrange input verifier: PASS")
+
+
+if __name__ == "__main__":
+    main()

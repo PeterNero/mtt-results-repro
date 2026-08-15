@@ -1,0 +1,507 @@
+#!/usr/bin/env python3
+"""Independently replay the UST.G3AF two-H joint coefficient lift."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import verify_ust_g3ad_fixed_fq_second_h_graph_obstruction as arithmetic
+import verify_ust_g3ae_second_h_joint_coefficient_lift as g3ae
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3af_two_h_joint_coefficient_lift.packet.json"
+P = 101
+P2 = P * P
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def trim(values, modulus):
+    result = [int(value) % modulus for value in values]
+    while len(result) > 1 and result[-1] == 0:
+        result.pop()
+    return result or [0]
+
+
+def pad(values, size, modulus):
+    result = [int(value) % modulus for value in values]
+    return result + [0] * max(0, size - len(result))
+
+
+def add(left, right, modulus):
+    left = list(left)
+    right = list(right)
+    size = max(len(left), len(right))
+    return trim(
+        [a + b for a, b in zip(pad(left, size, modulus), pad(right, size, modulus))],
+        modulus,
+    )
+
+
+def neg(value, modulus):
+    return trim([-entry for entry in value], modulus)
+
+
+def sub(left, right, modulus):
+    return add(left, neg(right, modulus), modulus)
+
+
+def scale(value, scalar, modulus):
+    return trim([scalar * entry for entry in value], modulus)
+
+
+def mul(left, right, modulus):
+    left = list(left)
+    right = list(right)
+    result = [0] * (len(left) + len(right) - 1)
+    for i, a in enumerate(left):
+        for j, b in enumerate(right):
+            result[i + j] = (result[i + j] + a * b) % modulus
+    return trim(result, modulus)
+
+
+def power(value, exponent, modulus):
+    result = [1]
+    base = list(value)
+    while exponent:
+        if exponent & 1:
+            result = mul(result, base, modulus)
+        base = mul(base, base, modulus)
+        exponent //= 2
+    return result
+
+
+def shift(value, degree, modulus):
+    return [0] * degree + trim(value, modulus)
+
+
+def pullback(cubic, numerator, denominator, modulus):
+    result = [0]
+    for degree, coefficient in enumerate(cubic):
+        term = mul(
+            power(numerator, degree, modulus),
+            power(denominator, 3 - degree, modulus),
+            modulus,
+        )
+        result = add(result, scale(term, coefficient, modulus), modulus)
+    return result
+
+
+def solve_scalar(matrix, rhs, prime):
+    column_count = len(matrix[0])
+    rows = [
+        [entry % prime for entry in row] + [value % prime]
+        for row, value in zip(matrix, rhs)
+    ]
+    pivots = []
+    pivot_row = 0
+    for column in range(column_count):
+        selected = next(
+            (row for row in range(pivot_row, len(rows)) if rows[row][column]),
+            None,
+        )
+        if selected is None:
+            continue
+        rows[pivot_row], rows[selected] = rows[selected], rows[pivot_row]
+        inverse = pow(rows[pivot_row][column], -1, prime)
+        rows[pivot_row] = [(entry * inverse) % prime for entry in rows[pivot_row]]
+        for row in range(len(rows)):
+            if row == pivot_row or rows[row][column] == 0:
+                continue
+            factor = rows[row][column]
+            rows[row] = [
+                (left - factor * right) % prime
+                for left, right in zip(rows[row], rows[pivot_row])
+            ]
+        pivots.append(column)
+        pivot_row += 1
+        if pivot_row == len(rows):
+            break
+    for row in rows:
+        if all(entry == 0 for entry in row[:column_count]):
+            require(row[-1] == 0, "consistent scalar system")
+    solution = [0] * column_count
+    for row, column in enumerate(pivots):
+        solution[column] = rows[row][-1]
+    return solution, pivots
+
+
+def divided(value, size):
+    dense = pad(value, size, P2)
+    require(all(entry % P == 0 for entry in dense), "divisible first-order residual")
+    return [(entry // P) % P for entry in dense]
+
+
+def qconstant(value, modulus, degree):
+    return arithmetic.qelement((int(value),), modulus, degree)
+
+
+def first_graph_values(packet, relation, modulus):
+    degree = len(relation) - 1
+    graph = packet["selected_first_H_graph"]
+    source = graph["source_coordinates_mod1012"]
+    marked = graph["marked_map_hensel"]
+    return {
+        "source": {
+            "r": qconstant(source["r"], modulus, degree),
+            "w": qconstant(source["w"], modulus, degree),
+        },
+        "P": [qconstant(value, modulus, degree) for value in marked["P_mod1012"]],
+        "Q": [qconstant(value, modulus, degree) for value in marked["Q_mod1012"]],
+        "S": [qconstant(value, modulus, degree) for value in marked["S_mod1012"]],
+        "k": qconstant(marked["k_mod1012"], modulus, degree),
+        "h": [qconstant(value, modulus, degree) for value in graph["line_sextic_mod1012"]],
+    }
+
+
+def graph_matrix(basis, data, relation, modulus, one, zero):
+    targets = g3ae.target_coordinates(data, relation, modulus, one, zero)
+    columns = [
+        g3ae.basis_column(row, data, targets, relation, modulus, one, zero)
+        for row in basis
+    ]
+    return [
+        [columns[column][row] for column in range(len(columns))]
+        for row in range(32)
+    ]
+
+
+def restriction(
+    source_packet,
+    basis,
+    correction,
+    data,
+    relation,
+    modulus,
+    one,
+    zero,
+):
+    degree = len(relation) - 1
+    coefficients = {
+        (
+            row["target_coordinate"],
+            row["basis_kind"],
+            tuple(row["powers_xyz"]),
+        ): arithmetic.qelement(row["gamma_coefficients_ascending"], modulus, degree)
+        for row in source_packet["fixed_FQ"]["nonzero_gamma_rows"]
+    }
+    components = [([zero], [zero]) for _ in range(3)]
+    for index, basis_row in enumerate(basis):
+        key = (
+            basis_row["target_coordinate"],
+            basis_row["basis_kind"],
+            tuple(basis_row["powers_xyz"]),
+        )
+        coefficient = coefficients.get(key, zero)
+        if correction is not None:
+            lifted = arithmetic.qscale(
+                arithmetic.qelement(correction[index], modulus, degree), P, modulus
+            )
+            coefficient = arithmetic.qadd(coefficient, lifted, modulus)
+        monomial = arithmetic.restrict_monomial(
+            basis_row["powers_xyz"],
+            data["source"]["r"],
+            data["source"]["w"],
+            relation,
+            modulus,
+            one,
+            zero,
+        )
+        restricted = arithmetic.pscale(
+            monomial, coefficient, relation, modulus, zero
+        )
+        coordinate = basis_row["target_coordinate"]
+        even, odd = components[coordinate]
+        if basis_row["basis_kind"] == "base_degree9":
+            even = arithmetic.padd(even, restricted, modulus, zero)
+        else:
+            odd = arithmetic.padd(odd, restricted, modulus, zero)
+        components[coordinate] = (even, odd)
+
+    targets = g3ae.target_coordinates(data, relation, modulus, one, zero)
+    result = ([zero], [zero])
+    for component, target in zip(components, targets):
+        contribution = arithmetic.multiply_sheet_pairs(
+            component, target, data["h"], relation, modulus, zero
+        )
+        result = (
+            arithmetic.padd(result[0], contribution[0], modulus, zero),
+            arithmetic.padd(result[1], contribution[1], modulus, zero),
+        )
+    return arithmetic.ppad(result[0], 16, zero) + arithmetic.ppad(
+        result[1], 16, zero
+    )
+
+
+def replay_first_graph(packet, source, relation):
+    graph = packet["selected_first_H_graph"]
+    residue = graph["residue_derivation"]
+    require(residue["line_sextic"] == [22, 39, 54, 7, 45, 5, 92], "line residue")
+    numerator = [1, -9]
+    denominator = [-1, 24]
+    p_bar = pullback([100, 15, 82, 1], numerator, denominator, P)
+    q_bar = pullback([1, 71, 23, 97], numerator, denominator, P)
+    s_raw = pullback([-200, -15, 0, 1], numerator, denominator, P)
+    require(p_bar == [36, 66, 73, 31], "independent pulled-back P")
+    require(q_bar == [43, 28, 4, 24], "independent pulled-back Q")
+    require(s_raw == [85, 63, 49, 43], "independent pulled-back sheet row")
+    require(
+        scale(residue["line_sextic"], pow(15, 6, P), P)
+        == scale(mul(p_bar, q_bar, P), 65, P),
+        "independent Mobius line identity",
+    )
+    x_squared_d = mul(power(numerator, 2, P), denominator, P)
+    raw_p = scale(add(x_squared_d, scale(p_bar, 16, P), P), 10, P)
+    require(raw_p == residue["raw_direct"]["P"], "raw direct P")
+    require(p_bar == residue["raw_direct"]["Q"], "raw direct Q")
+    require(s_raw == residue["raw_direct"]["S"], "raw direct S")
+
+    normalized = residue["normalized"]
+    q0 = normalized["Q"]
+    p0 = normalized["P"]
+    s0 = normalized["S"]
+    complement0 = normalized["complement"]
+    require(q0 == [37, 51, 61, 1], "normalized Q")
+    require(p0 == [91, 74, 94, 41], "normalized P")
+    require(s0 == [56, 32, 81, 1], "normalized S")
+    require(complement0 == [6, 18, 17, 1], "normalized complement")
+    require(normalized["k"] == 31 and normalized["lambda"] == 50, "normalized scalars")
+
+    degree = len(relation) - 1
+    zero2 = arithmetic.qzero(degree)
+    one2 = arithmetic.qone(degree)
+    source_coordinates = graph["source_coordinates_mod1012"]
+    variables = {
+        "x": [zero2, one2],
+        "y": [one2],
+        "z": [
+            qconstant(source_coordinates["w"], P2, degree),
+            qconstant(source_coordinates["r"], P2, degree),
+        ],
+    }
+    h_elements = arithmetic.evaluate_expression(
+        graph["F6_integer_expression"], variables, relation, P2, one2, zero2
+    )
+    h = []
+    for value in h_elements:
+        require(all(coordinate == 0 for coordinate in value[1:]), "base-ring line coefficient")
+        h.append(value[0])
+    require(h == graph["line_sextic_mod1012"], "first-H lifted line")
+    h_monic = scale(h, pow(h[-1], -1, P2), P2)
+
+    factor = graph["factor_hensel"]
+    factor_rhs = divided(sub(h_monic, mul(q0, complement0, P2), P2), 6)
+    columns = [shift(complement0, index, P) for index in range(3)]
+    columns += [shift(q0, index, P) for index in range(3)]
+    matrix = [[pad(column, 6, P)[row] for column in columns] for row in range(6)]
+    factor_correction, factor_pivots = solve_scalar(matrix, factor_rhs, P)
+    require(factor_pivots == list(range(6)), "factor rank")
+    require(factor_rhs == factor["rhs"], "factor rhs")
+    require(factor_correction == factor["correction_Q_then_complement"], "factor correction")
+    q = [(q0[index] + P * factor_correction[index]) % P2 for index in range(3)] + [1]
+    complement = [
+        (complement0[index] + P * factor_correction[index + 3]) % P2
+        for index in range(3)
+    ] + [1]
+    require(q == factor["Q_mod1012"], "lifted Q")
+    require(complement == factor["complement_mod1012"], "lifted complement")
+    require(mul(q, complement, P2) == h_monic, "lifted factorization")
+
+    marked = graph["marked_map_hensel"]
+    lambda0 = normalized["lambda"]
+    map0 = sub(
+        mul(q, add(power(p0, 3, P2), scale(power(q, 3, P2), 16, P2), P2), P2),
+        scale(mul(h, power(s0, 2, P2), P2), lambda0, P2),
+        P2,
+    )
+    map_rhs = [(-value) % P for value in divided(map0, 13)]
+    derivative_p = scale(mul([value % P for value in q], power(p0, 2, P), P), 3, P)
+    derivative_s = scale(mul([value % P for value in h], s0, P), -2 * lambda0, P)
+    derivative_lambda = scale(mul([value % P for value in h], power(s0, 2, P), P), -1, P)
+    columns = [shift(derivative_p, index, P) for index in range(4)]
+    columns += [shift(derivative_s, index, P) for index in range(3)]
+    columns += [derivative_lambda]
+    matrix = [[pad(column, 13, P)[row] for column in columns] for row in range(13)]
+    map_correction, map_pivots = solve_scalar(matrix, map_rhs, P)
+    require(map_pivots == list(range(8)), "map rank")
+    require(map_rhs == marked["rhs"], "map rhs")
+    require(map_correction == marked["correction_P_then_S_lower_then_lambda"], "map correction")
+    p_values = [(p0[index] + P * map_correction[index]) % P2 for index in range(4)]
+    s_values = [(s0[index] + P * map_correction[index + 4]) % P2 for index in range(3)] + [1]
+    lambda_value = (lambda0 + P * map_correction[7]) % P2
+    require(p_values == marked["P_mod1012"], "lifted P")
+    require(s_values == marked["S_mod1012"], "lifted S")
+    require(lambda_value == marked["lambda_mod1012"], "lifted lambda")
+    identity = sub(
+        mul(q, add(power(p_values, 3, P2), scale(power(q, 3, P2), 16, P2), P2), P2),
+        scale(mul(h, power(s_values, 2, P2), P2), lambda_value, P2),
+        P2,
+    )
+    require(identity == [0], "lifted marked-map identity")
+    k = marked["k_mod1012"]
+    require(k % P == normalized["k"], "lifted k residue")
+    require((k * k + 3 * lambda_value) % P2 == 0, "lifted k identity")
+
+
+def main() -> None:
+    packet = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AF", "theorem id")
+    require(
+        packet["status"] == "CLOSED_EXACT_TWO_H_FIRST_ORDER_JOINT_GRAPH_COEFFICIENT_LIFT",
+        "status",
+    )
+    inputs = packet["inputs"]
+    expected_external = {
+        "first_H_hensel_source": {
+            "repository": "12 Quantum Gravity",
+            "repository_commit": "1fa48cb247ff3098e46d1e39ca770287510a4959",
+            "source_path": "q79_hyperplane_fermat_prym_hensel_candidate.packet.json",
+            "sha256": "53fd4002f519e60baab0f61a82fc3dd193673aadbe88aab497c1be68d73b8d15",
+            "git_blob": "0fa7c6c843616545b301112179cfc2f698807eb1",
+            "hash_convention": "UTF-8 bytes with CRLF normalized to LF (Git blob content)",
+        },
+        "first_H_map_source": {
+            "repository": "12 Quantum Gravity",
+            "repository_commit": "1fa48cb247ff3098e46d1e39ca770287510a4959",
+            "source_path": "q79_explicit_fermat_map_and_invariant_quartic_cutset.packet.json",
+            "sha256": "1a9ad27b5f422d58af5cb6a075a754e0bcaf9cce0eeb3265007434d587f44891",
+            "git_blob": "428ec190c18451ec7b487a451898ddc8381e57b2",
+            "hash_convention": "UTF-8 bytes with CRLF normalized to LF (Git blob content)",
+        },
+    }
+    for name, expected in expected_external.items():
+        require(inputs[name] == expected, f"external source lock: {name}")
+    g3ad_lock = inputs["local_G3AD_packet"]
+    g3ae_lock = inputs["local_G3AE_packet"]
+    g3ad_path = ROOT / g3ad_lock["path"]
+    g3ae_path = ROOT / g3ae_lock["path"]
+    require(sha256(g3ad_path) == g3ad_lock["sha256"], "G3AD source hash")
+    require(sha256(g3ae_path) == g3ae_lock["sha256"], "G3AE source hash")
+    source = json.loads(g3ad_path.read_text(encoding="utf-8"))
+    prior = json.loads(g3ae_path.read_text(encoding="utf-8"))
+    require(source["theorem_id"] == "UST.G3AD", "G3AD source")
+    require(prior["theorem_id"] == "UST.G3AE", "G3AE source")
+    require(packet["completion_ring"] == source["completion_ring"], "completion ring")
+
+    relation = tuple(source["completion_ring"]["gamma_relation_coefficients_ascending"])
+    replay_first_graph(packet, source, relation)
+    degree = len(relation) - 1
+    zero = arithmetic.qzero(degree)
+    one = arithmetic.qone(degree)
+    basis = g3ae.coefficient_basis()
+    system = packet["simultaneous_linear_system"]
+    require(system["column_basis"] == basis, "basis order")
+    require(system["shape"] == [64, 249], "stacked shape")
+
+    first = first_graph_values(packet, relation, P)
+    second = g3ae.graph_values(source, relation, P)
+    first_matrix = graph_matrix(basis, first, relation, P, one, zero)
+    second_matrix = graph_matrix(basis, second, relation, P, one, zero)
+    first_serialized = [[list(value) for value in row] for row in first_matrix]
+    second_serialized = [[list(value) for value in row] for row in second_matrix]
+    require(canonical_hash(first_serialized) == system["first_H_matrix_sha256"], "first matrix hash")
+    require(canonical_hash(second_serialized) == system["second_H_matrix_sha256"], "second matrix hash")
+    require(
+        canonical_hash(first_serialized + second_serialized) == system["stacked_matrix_sha256"],
+        "stacked matrix hash",
+    )
+
+    zero2 = arithmetic.qzero(degree)
+    one2 = arithmetic.qone(degree)
+    first2 = first_graph_values(packet, relation, P2)
+    fixed_first = restriction(source, basis, None, first2, relation, P2, one2, zero2)
+    require(
+        all(coordinate % P == 0 for value in fixed_first for coordinate in value),
+        "first-H special-fiber containment",
+    )
+    first_obstruction = [
+        arithmetic.qelement(((coordinate // P) % P for coordinate in value), P, degree)
+        for value in fixed_first
+    ]
+    first_rows = [
+        {
+            "sheet_parity": "even" if index < 16 else "odd",
+            "x_degree": index % 16,
+            "gamma_coefficients_mod101": list(value),
+        }
+        for index, value in enumerate(first_obstruction)
+    ]
+    first_record = packet["first_H_fixed_lift_restriction"]
+    require(first_rows == first_record["first_order_rows"], "first obstruction rows")
+    require(canonical_hash(first_rows) == first_record["first_order_rows_sha256"], "first obstruction hash")
+    require(sum(value != zero for value in first_obstruction) == first_record["nonzero_first_order_row_count"] == 29, "first obstruction count")
+    second_obstruction = [
+        arithmetic.qelement(row["gamma_coefficients_mod101"], P, degree)
+        for row in source["restriction_test"]["first_order_rows"]
+    ]
+    rhs = [arithmetic.qneg(value, P) for value in first_obstruction + second_obstruction]
+    require(canonical_hash([list(value) for value in rhs]) == system["rhs_sha256"], "rhs hash")
+
+    _, first_pivots = g3ae.rref(first_matrix, [zero] * 32, relation, P, zero)
+    _, second_pivots = g3ae.rref(second_matrix, [zero] * 32, relation, P, zero)
+    stacked = first_matrix + second_matrix
+    canonical_solution, stacked_pivots = g3ae.rref(stacked, rhs, relation, P, zero)
+    require(len(first_pivots) == system["first_H_rank"] == 26, "first rank")
+    require(len(second_pivots) == system["second_H_rank"] == 26, "second rank")
+    require(stacked_pivots == system["stacked_pivot_columns"], "stacked pivots")
+    require(len(stacked_pivots) == system["stacked_rank"] == 52, "stacked rank")
+    require(system["stacked_nullity"] == 249 - 52 == 197, "stacked nullity")
+    require(system["stacked_cokernel_dimension"] == 64 - 52 == 12, "stacked cokernel")
+
+    emitted = [zero] * 249
+    for row in packet["canonical_correction"]["sparse_rows"]:
+        index = row["coefficient_index"]
+        require(
+            {key: row[key] for key in ("target_coordinate", "basis_kind", "powers_xyz")}
+            == basis[index],
+            "sparse basis row",
+        )
+        require(emitted[index] == zero, "unique sparse coefficient")
+        emitted[index] = arithmetic.qelement(row["gamma_coefficients_mod101"], P, degree)
+    require(emitted == canonical_solution, "canonical stacked solution")
+    correction_record = packet["canonical_correction"]
+    require(canonical_hash([list(value) for value in emitted]) == correction_record["full_solution_sha256"], "solution hash")
+    require(sum(value != zero for value in emitted) == correction_record["nonzero_coefficient_count"] == 52, "solution support")
+    require(g3ae.matrix_vector(stacked, emitted, relation, P, zero) == rhs, "stacked correction equation")
+
+    second2 = g3ae.graph_values(source, relation, P2)
+    corrected_first = restriction(source, basis, emitted, first2, relation, P2, one2, zero2)
+    corrected_second = restriction(source, basis, emitted, second2, relation, P2, one2, zero2)
+    require(all(value == zero2 for value in corrected_first), "corrected first-H restriction")
+    require(all(value == zero2 for value in corrected_second), "corrected second-H restriction")
+
+    result = packet["joint_lift_result"]
+    require(result["all_64_restriction_rows_zero_mod1012"] is True, "64-row result")
+    require(result["same_global_coefficient_correction_used_for_both_graphs"] is True, "same correction")
+    frontier = packet["frontier_delta"]
+    require(frontier["same_eta9_coefficient_member_contains_both_H_graphs_mod1012"] is True, "two-H frontier")
+    require(frontier["four_H_graph_included"] is False, "4H overreach")
+    require(frontier["beta_C_computed"] is False, "beta overreach")
+    for label, value in packet["guardrails"].items():
+        require(value is False, f"guardrail violated: {label}")
+
+    print("UST.G3AF two-H joint coefficient lift: PASS")
+    print("first-H marked Fermat map: unique normalized lift modulo 101^2")
+    print("restriction ranks: 26 + 26 -> stacked rank 52/64")
+    print("canonical correction: 52 nonzero coefficients; stacked nullity 197")
+    print("same eta9 coefficient lift contains both selected H graphs modulo 101^2")
+    print("open: 4H component, iteration/convergence, beta_C and visible HYM")
+
+
+if __name__ == "__main__":
+    main()

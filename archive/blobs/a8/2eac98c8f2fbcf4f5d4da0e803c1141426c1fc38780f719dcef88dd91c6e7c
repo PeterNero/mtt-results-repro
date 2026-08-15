@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""Certify the selected G3AP minor through exact SCC determinant factors."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_incremental_full_submap as incremental
+import build_ust_f1016_native_tools as native_tools
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import certify_ust_g3ap_selected_cayley_target_macaulay_incremental_rank as base
+import run_ust_g3ap_selected_cayley_target_macaulay_full_minor as full_runner
+import run_ust_g3ap_selected_cayley_target_macaulay_minor as shared_runner
+import ust_f1016_sparse_minor as minor
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+THEOREM = ROOT / "UST_G3AP_STRUCTURAL_SCC_MINOR_FACTORIZATION_LEMMA_v1.md"
+SOURCE = ROOT / "ust_g3ap_minor_structural_decomposition.cpp"
+BINARY = STATE / "ust_g3ap_minor_structural_decomposition"
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+EXPECTED_LARGEST_SHA256 = "b11841da2b3fd28b68cf56b2c7515b29b4ed201d8b1f3c5f26b1279057269efe"
+EXPECTED_REMAINDER_SHA256 = "4f98cbfe1df3b9346b391ff659c7c91a63bac5b3f005f994062205f772131aae"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def artifact_paths(matrix: Path) -> dict[str, Path]:
+    paths = base.artifact_paths(matrix)
+    stem = matrix.name[: -len(".packed-sms")]
+    paths.update(
+        {
+            "structural_output": STATE / f"{stem}.minor-scc-decomposition.out",
+            "largest_matrix": STATE / f"{stem}.minor-largest-scc.packed-sms",
+            "remainder_matrix": STATE / f"{stem}.minor-remainder-scc.packed-sms",
+            "largest_linbox": STATE / f"{stem}.minor-largest-scc.linbox.out",
+            "remainder_linbox": STATE / f"{stem}.minor-remainder-scc.linbox.out",
+            "packet": STATE / f"{stem}.rank-witness-scc.packet.json",
+        }
+    )
+    return paths
+
+
+def matrix_header(path: Path) -> tuple[int, int, int]:
+    with path.open("r", encoding="ascii") as stream:
+        values = tuple(int(value) for value in stream.readline().split())
+    require(len(values) == 3, f"SMS header: {path.name}")
+    return values  # type: ignore[return-value]
+
+
+def run_structural(
+    minor_matrix: Path, paths: dict[str, Path], timeout: int
+) -> str:
+    compile_run = subprocess.run(
+        [
+            "wsl",
+            "-e",
+            "g++",
+            "-O3",
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-pedantic",
+            "-o",
+            base.relative(BINARY),
+            base.relative(SOURCE),
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    require(compile_run.returncode == 0, f"structural analyzer build:\n{compile_run.stdout}")
+    completed = subprocess.run(
+        [
+            "wsl",
+            "-e",
+            f"./{base.relative(BINARY)}",
+            base.relative(minor_matrix),
+            base.relative(paths["largest_matrix"]),
+            base.relative(paths["remainder_matrix"]),
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    paths["structural_output"].write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, f"structural decomposition:\n{completed.stdout}")
+    return completed.stdout
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--reuse-factors", action="store_true")
+    parser.add_argument("--reuse-linbox", action="store_true")
+    parser.add_argument("--reuse-functional", action="store_true")
+    args = parser.parse_args()
+
+    locator = json.loads(incremental.LATEST.read_text(encoding="ascii"))
+    campaign_path = base.checked(locator["packet"], "incremental campaign")
+    matrix_path = base.checked(locator["matrix"], "incremental matrix")
+    campaign = json.loads(campaign_path.read_text(encoding="ascii"))
+    require(
+        campaign["schema"].endswith("incremental-full-submap.v1")
+        and all(campaign["checks"].values())
+        and not any(campaign["guardrails"].values())
+        and ROOT / campaign["matrix"]["path"] == matrix_path,
+        "incremental exact submap",
+    )
+    paths = artifact_paths(matrix_path)
+    extraction = json.loads(paths["extraction_packet"].read_text(encoding="ascii"))
+    minor_matrix = ROOT / extraction["minor"]["path"]
+    require(
+        minor_matrix == paths["minor_matrix"]
+        and base.sha256(minor_matrix) == extraction["minor"]["sha256"]
+        and extraction["minor"]["size"] == TARGET_RANK,
+        "selected minor binding",
+    )
+
+    subprocess.run(
+        [sys.executable, str(ROOT / "build_ust_f1016_native_tools.py")],
+        cwd=ROOT,
+        check=True,
+    )
+    require(native_tools.current(), "hash-current native exact engines")
+    field_selftest = full_runner.run_field_selftests()
+
+    if args.reuse_factors:
+        for name in ("structural_output", "largest_matrix", "remainder_matrix"):
+            require(paths[name].is_file(), f"existing {name}")
+        structural_raw = paths["structural_output"].read_text(encoding="utf-8")
+    else:
+        structural_raw = run_structural(minor_matrix, paths, args.timeout)
+
+    matching = re.search(r"STRUCTURAL_MATCHING size=(\d+) dimension=(\d+)", structural_raw)
+    blocks = re.search(
+        r"DETERMINANT_BLOCKS count=(\d+) largest=(\d+) "
+        r"largest_internal_edges=(\d+) remainder_internal_edges=(\d+) "
+        r"cross_edges=(\d+)",
+        structural_raw,
+    )
+    factors = re.search(
+        r"FACTOR_MATRICES largest_dimension=(\d+) largest_nonzeros=(\d+) "
+        r"remainder_dimension=(\d+) remainder_nonzeros=(\d+)",
+        structural_raw,
+    )
+    require(matching is not None and blocks is not None and factors is not None, "structural output")
+    matching_size, matching_dimension = map(int, matching.groups())
+    block_count, largest_size, largest_edges, remainder_edges, cross_edges = map(
+        int, blocks.groups()
+    )
+    emitted_largest, emitted_largest_edges, remainder_size, emitted_remainder_edges = map(
+        int, factors.groups()
+    )
+    require(
+        matching_size == matching_dimension == TARGET_RANK
+        and block_count == 3202
+        and largest_size == emitted_largest == 35561
+        and remainder_size == TARGET_RANK - largest_size == 4164
+        and largest_edges == emitted_largest_edges == 30193060
+        and remainder_edges == emitted_remainder_edges == 193335
+        and largest_edges + remainder_edges + cross_edges
+        == extraction["minor"]["nonzeros"],
+        "complete SCC factorization",
+    )
+    require(
+        matrix_header(paths["largest_matrix"])
+        == (largest_size, largest_size, largest_edges)
+        and matrix_header(paths["remainder_matrix"])
+        == (remainder_size, remainder_size, remainder_edges)
+        and base.sha256(paths["largest_matrix"]) == EXPECTED_LARGEST_SHA256
+        and base.sha256(paths["remainder_matrix"]) == EXPECTED_REMAINDER_SHA256,
+        "factor matrix headers",
+    )
+
+    if not args.reuse_linbox:
+        largest_raw = shared_runner.run_exact(
+            shared_runner.LINBOX_BINARY,
+            [base.relative(paths["largest_matrix"])],
+            paths["largest_linbox"],
+            args.timeout,
+        )
+        remainder_raw = shared_runner.run_exact(
+            shared_runner.LINBOX_BINARY,
+            [base.relative(paths["remainder_matrix"])],
+            paths["remainder_linbox"],
+            args.timeout,
+        )
+    else:
+        require(
+            paths["largest_linbox"].is_file() and paths["remainder_linbox"].is_file(),
+            "existing SCC LinBox outputs",
+        )
+        largest_raw = paths["largest_linbox"].read_text(encoding="utf-8")
+        remainder_raw = paths["remainder_linbox"].read_text(encoding="utf-8")
+    largest_shape = shared_runner.parse_linbox(largest_raw)
+    remainder_shape = shared_runner.parse_linbox(remainder_raw)
+    require(
+        largest_shape == (largest_size, largest_size, largest_edges, largest_size)
+        and remainder_shape
+        == (remainder_size, remainder_size, remainder_edges, remainder_size),
+        "independent exact SCC factor ranks",
+    )
+
+    if not args.reuse_functional:
+        functional_raw = shared_runner.run_exact(
+            shared_runner.FUNCTIONAL_BINARY,
+            [base.relative(matrix_path), base.relative(paths["functional"])],
+            paths["functional_output"],
+            args.timeout,
+        )
+    else:
+        require(paths["functional_output"].is_file(), "existing incremental functional replay")
+        functional_raw = paths["functional_output"].read_text(encoding="utf-8")
+    functional_shape = shared_runner.parse_functional_replay(functional_raw)
+    require(
+        functional_shape
+        == (
+            campaign["matrix"]["rows"],
+            campaign["matrix"]["columns"],
+            campaign["matrix"]["nonzeros"],
+            campaign["matrix"]["rows"],
+            macaulay.EXPECTED_TARGET_COORDINATES,
+        ),
+        "independent incremental functional replay",
+    )
+
+    custom_scalars, custom_vectors = minor.parse_output(paths["custom_output"])
+    require(
+        int(custom_scalars["MINOR_SIZE"]) == TARGET_RANK
+        and minor.determinant(
+            custom_vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"],
+            custom_vectors["PIVOT_COEFFICIENTS_PACKED"],
+        )
+        == int(custom_scalars["MINOR_DETERMINANT_PACKED"])
+        != 0,
+        "custom determinant replay",
+    )
+    selected_rows = custom_vectors["SELECTED_SOURCE_ROWS_ZERO_BASED"]
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "incremental-rank-witness.v1"
+        ),
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AP.INCREMENTAL-FULL-MAP-RANK-WITNESS.SCC",
+        "status": (
+            "CLOSED_EXACT_RANK39725_SCC_FACTORS_IN_SELECTED_FULL_MAP_SUBSET_"
+            "NOT_YET_FULL_SOURCE_FUNCTIONAL_REPLAY"
+        ),
+        "inputs": {
+            "native_tools_build": base.record(native_tools.RECEIPT),
+            "incremental_campaign": base.record(campaign_path),
+            "incremental_matrix": base.record(matrix_path),
+            "minor_extraction": base.record(paths["extraction_packet"]),
+            "selected_minor": base.record(paths["minor_matrix"]),
+            "structural_factorization_lemma": base.record(THEOREM),
+        },
+        "engines": {
+            "custom_sparse_column_elimination": {
+                "scheduler": "weighted-free-fast",
+                "source": base.record(shared_runner.WEIGHTED_FREE_FAST_SOURCE),
+                "source_dependencies": [
+                    base.record(shared_runner.CUSTOM_SOURCE),
+                    base.record(shared_runner.GREEDY_SOURCE),
+                    base.record(shared_runner.WEIGHTED_FREE_SOURCE),
+                ],
+                "binary": base.record(shared_runner.WEIGHTED_FREE_FAST_BINARY),
+                "output": base.record(paths["custom_output"]),
+                "log": base.record(paths["custom_log"]),
+            },
+            "structural_scc_factorization": {
+                "source": base.record(SOURCE),
+                "binary": base.record(BINARY),
+                "output": base.record(paths["structural_output"]),
+                "perfect_matching_size": matching_size,
+                "scc_blocks": block_count,
+                "cross_block_nonzeros_removed_from_diagonal_factors": cross_edges,
+                "largest_factor": base.record(paths["largest_matrix"]),
+                "remainder_factor": base.record(paths["remainder_matrix"]),
+            },
+            "linbox_givaro_scc_factor_elimination": {
+                "source": base.record(shared_runner.LINBOX_SOURCE),
+                "binary": base.record(shared_runner.LINBOX_BINARY),
+                "largest_output": base.record(paths["largest_linbox"]),
+                "remainder_output": base.record(paths["remainder_linbox"]),
+            },
+            "givaro_incremental_matrix_functional_replay": {
+                "source": base.record(shared_runner.FUNCTIONAL_SOURCE),
+                "binary": base.record(shared_runner.FUNCTIONAL_BINARY),
+                "functional": base.record(paths["functional"]),
+                "output": base.record(paths["functional_output"]),
+            },
+        },
+        "field_self_test": field_selftest,
+        "rank": {
+            "ambient_target_coordinates": macaulay.EXPECTED_TARGET_COORDINATES,
+            "selected_minor_size": TARGET_RANK,
+            "independent_linbox_rank": TARGET_RANK,
+            "independent_route": "perfect_matching_SCC_block_triangular_factorization",
+            "factor_ranks": [largest_size, remainder_size],
+            "selected_source_rows_zero_based_sha256": hashlib.sha256(
+                json.dumps(selected_rows, separators=(",", ":")).encode("ascii")
+            ).hexdigest(),
+            "quotient_functional": extraction["minor"]["quotient_functional"],
+        },
+        "checks": {
+            "the_incremental_rows_are_an_exact_subset_of_the_full_selected_map": True,
+            "the_custom_engine_emits_a_nonzero_rank39725_minor": True,
+            "the_pivot_determinant_is_independently_recomputed": True,
+            "the_minor_nonzero_graph_has_a_perfect_matching": True,
+            "the_SCC_condensation_gives_exact_block_triangular_factors": True,
+            "independent_LinBox_Givaro_elimination_finds_every_factor_full_rank": True,
+            "therefore_the_selected_minor_has_rank39725": True,
+            "the_normalized_quotient_functional_annihilates_the_incremental_submap": True,
+            "independent_Givaro_arithmetic_replays_the_incremental_functional": True,
+            "therefore_the_full_selected_map_has_rank_at_least39725": True,
+        },
+        "guardrails": {
+            "claims_every_incremental_raw_source_stream_is_independently_replayed": False,
+            "claims_the_functional_annihilates_all_92979_rows": False,
+            "claims_the_full_map_rank_is_at_most39725": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Combine this exact rank lower witness with the selected ordinary-top "
+            "lower theorem, the full source certificate, and full functional replay."
+        ),
+    }
+    require(all(packet["checks"].values()), "SCC rank witness checks")
+    paths["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    base.LATEST.write_text(
+        json.dumps({"packet": base.record(paths["packet"])}, indent=2) + "\n",
+        encoding="ascii",
+    )
+    print(
+        "G3AP incremental SCC rank witness: PASS "
+        f"minor={TARGET_RANK} factors={largest_size}+{remainder_size} "
+        "full_functional_replay=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

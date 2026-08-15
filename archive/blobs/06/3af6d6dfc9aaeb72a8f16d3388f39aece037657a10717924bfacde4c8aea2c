@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Export the uneliminated G3AO uvs bidual ideals for exact msolve/F4."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+import run_ust_g3ao_selected_cayley_toric_uvs_dual_elimination as dual
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "uvs_dual_msolve"
+EXPORT_SCRIPT = CAMPAIGN / "export_bidual_ideals.sing"
+RAW_OUTPUT = CAMPAIGN / "export_bidual_ideals.singular.out"
+SMOOTH_INPUT = CAMPAIGN / "smooth.msolve.in"
+SINGULAR_INPUT = CAMPAIGN / "singular.msolve.in"
+OUT = CAMPAIGN / "inputs.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_export_script(polynomials: dict[str, str]) -> str:
+    script = dual.make_script(polynomials, "std")
+    basis_start = script.index("ideal smoothBasis=std(smoothRestricted);")
+    export = '''int exportIndex;
+print("G3AO_MSOLVE_SMOOTH_COUNT="+string(size(smoothRestricted)));
+for (exportIndex=1;exportIndex<=size(smoothRestricted);exportIndex++)
+{ print("G3AO_MSOLVE_SMOOTH_"+string(exportIndex)+"="+string(smoothRestricted[exportIndex])); }
+print("G3AO_MSOLVE_SINGULAR_COUNT="+string(size(singularRestricted)));
+for (exportIndex=1;exportIndex<=size(singularRestricted);exportIndex++)
+{ print("G3AO_MSOLVE_SINGULAR_"+string(exportIndex)+"="+string(singularRestricted[exportIndex])); }
+print("G3AO_MSOLVE_EXPORT_PASS");
+quit;
+'''
+    return script[:basis_start] + export
+
+
+def make_msolve_input(polynomials: dict[str, str], generators: list[str]) -> str:
+    equations = [common.normalize_for_msolve(polynomials["minpoly"])]
+    equations.extend(common.normalize_for_msolve(value) for value in generators)
+    return "y,z,w,orbitInv,g\n101\n" + ",\n".join(equations) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--reuse-export", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    polynomials = direct.selected_polynomials()
+    g = sp.symbols("g")
+    minpoly = sp.Poly(
+        sp.sympify(polynomials["minpoly"].replace("^", "**")),
+        g,
+        modulus=101,
+    )
+    require(minpoly.degree() == 6 and minpoly.is_irreducible, "irreducible F101 extension")
+    EXPORT_SCRIPT.write_text(make_export_script(polynomials), encoding="ascii")
+    if args.reuse_export:
+        require(RAW_OUTPUT.is_file(), "reusable raw export")
+        raw_output = RAW_OUTPUT.read_text(encoding="utf-8")
+    else:
+        completed = subprocess.run(
+            singular_command(ROOT, EXPORT_SCRIPT),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        RAW_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+        require(completed.returncode == 0, "Singular bidual-ideal export")
+        raw_output = completed.stdout
+    require("G3AO_MSOLVE_EXPORT_PASS" in raw_output, "export marker")
+    smooth = common.parse_locus(raw_output, "smooth")
+    singular = common.parse_locus(raw_output, "singular")
+    SMOOTH_INPUT.write_text(make_msolve_input(polynomials, smooth), encoding="ascii")
+    SINGULAR_INPUT.write_text(make_msolve_input(polynomials, singular), encoding="ascii")
+    packet = {
+        "schema": "mtt.unified-source.g3ao-uvs-dual-msolve-inputs.v1",
+        "source_sha256": sha256(direct.SOURCE),
+        "field_presentation": {
+            "characteristic": 101,
+            "extension_variable": "g",
+            "minpoly": polynomials["minpoly"],
+            "degree": 6,
+            "irreducible_over_F101": True,
+            "all_roots_are_Frobenius_conjugate": True,
+            "emptiness_is_invariant_under_that_conjugation": True,
+        },
+        "export_script": {
+            "path": str(EXPORT_SCRIPT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(EXPORT_SCRIPT),
+        },
+        "raw_output": {
+            "path": str(RAW_OUTPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(RAW_OUTPUT),
+        },
+        "loci": {
+            "smooth": {
+                "generator_count": len(smooth) + 1,
+                "input": {
+                    "path": str(SMOOTH_INPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(SMOOTH_INPUT),
+                },
+            },
+            "singular": {
+                "generator_count": len(singular) + 1,
+                "input": {
+                    "path": str(SINGULAR_INPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(SINGULAR_INPUT),
+                },
+            },
+        },
+        "checks": {
+            "selected_uneliminated_bidual_ideals_are_exported_exactly": True,
+            "the_extension_minpoly_is_irreducible_and_adjoined_over_F101": True,
+            "both_smooth_and_singular_loci_are_emitted": True,
+            "no_coefficient_is_rounded_or_coerced_to_GF11": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AO uvs bidual msolve inputs: PASS "
+        f"smooth={len(smooth)+1} singular={len(singular)+1}"
+    )
+
+
+if __name__ == "__main__":
+    main()

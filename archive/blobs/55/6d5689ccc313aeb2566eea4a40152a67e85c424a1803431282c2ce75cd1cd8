@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Solve the complete degree-21 catalecticant source-containment problem."""
+
+from __future__ import annotations
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fy_pdelta_socle_kernel_source as socle
+import probe_ust_g3fy_selected_degree21_source_span as runtime
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def main() -> None:
+    (
+        _base,
+        _pdelta_packet,
+        _g3bi,
+        sextic,
+        _g3_polynomial,
+        _h4_polynomial,
+        pdelta_polynomial,
+    ) = socle.selected_polynomials()
+    arrays = np.load(runtime.G3FR, allow_pickle=False)
+    prime = int(arrays["primes"][0])
+    gamma = int(arrays["roots"][0, 0])
+    require((prime, gamma) == (21817, 5), "anchor fiber")
+    kernel18, _ = runtime.pdelta_kernel(sextic, pdelta_polynomial, prime)
+    target = arrays["degree15_primitives"][0, 0].astype(np.int64) % prime
+    _, _, target_annihilator = graded.rref(
+        target.T, prime, emit_nullspace=True
+    )
+    require(
+        target_annihilator is not None
+        and target_annihilator.shape == (136, 118),
+        "target annihilator",
+    )
+
+    degree21_dimension = len(graded.homogeneous_exponents(21))
+    require(degree21_dimension == 253, "degree21 dimension")
+    for ordinary in (False, True):
+        obstruction_columns: list[np.ndarray] = []
+        for source_index in range(degree21_dimension):
+            source = np.zeros(degree21_dimension, dtype=np.int64)
+            source[source_index] = 1
+            candidate = runtime.contract(
+                kernel18, source, prime, ordinary=ordinary
+            )
+            obstruction_columns.append(
+                (target_annihilator.T @ candidate % prime).reshape(-1)
+            )
+            if (source_index + 1) % 25 == 0:
+                print(
+                    f"G3GI convention={'ordinary' if ordinary else 'divided'} "
+                    f"assembled={source_index + 1}/253",
+                    flush=True,
+                )
+        obstruction = np.stack(obstruction_columns, axis=1)
+        rank, _, nullspace = graded.rref(
+            obstruction, prime, emit_nullspace=True
+        )
+        require(nullspace is not None, "full source nullspace")
+        full_rank_solutions = 0
+        solution_profiles: list[tuple[int, int, int]] = []
+        solution_supports: list[list[tuple[int, int, int]]] = []
+        basis21 = graded.homogeneous_exponents(21)
+        for solution_index in range(nullspace.shape[1]):
+            source = nullspace[:, solution_index]
+            candidate = runtime.contract(
+                kernel18, source, prime, ordinary=ordinary
+            )
+            candidate_rank = graded.rref(candidate, prime)[0]
+            joint_rank = graded.rref(
+                np.concatenate((candidate, target), axis=1), prime
+            )[0]
+            source_terms = int(np.count_nonzero(source))
+            solution_profiles.append(
+                (source_terms, candidate_rank, joint_rank)
+            )
+            solution_supports.append(
+                [basis21[int(index)] for index in np.flatnonzero(source)]
+            )
+            full_rank_solutions += int(candidate_rank == joint_rank == 18)
+        print(
+            f"G3GI convention={'ordinary' if ordinary else 'divided'} "
+            f"full_source_dimension=253 obstruction_rank={rank} "
+            f"nullity={nullspace.shape[1]} full_rank_basis_solutions="
+            f"{full_rank_solutions} profiles={solution_profiles}",
+            flush=True,
+        )
+        print(
+            f"G3GI convention={'ordinary' if ordinary else 'divided'} "
+            f"trivial_source_supports={solution_supports}",
+            flush=True,
+        )
+
+
+if __name__ == "__main__":
+    main()

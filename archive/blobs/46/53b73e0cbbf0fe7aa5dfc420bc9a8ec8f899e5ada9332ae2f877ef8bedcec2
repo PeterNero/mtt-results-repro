@@ -1,0 +1,574 @@
+#!/usr/bin/env python3
+"""Build the exact target-degree G3AP Macaulay relation matrix.
+
+This is an independent finite-linear-algebra hedge for the G3AP upper bound.
+It first identifies standard coordinates in Q=B/(K,E,C), then emits selected
+derivative-relation multiples in the six-component target piece.  A generated
+matrix remains candidate evidence until its structure and rank are certified.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import run_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_hedge as weighted_hilbert
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+BASE_CACHE = weighted_hilbert.BASE_CACHE
+INSPECT_SCRIPT = STATE / "ust_g3ap_selected_cayley_target_macaulay_base.sing"
+INSPECT_OUTPUT = STATE / "ust_g3ap_selected_cayley_target_macaulay_base.singular.out"
+INSPECT_PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay_base.packet.json"
+INSPECT_LOCK = STATE / "ust_g3ap_selected_cayley_target_macaulay_base.lock"
+EXPORT_SCRIPT = STATE / "ust_g3ap_selected_cayley_target_macaulay_export.sing"
+EXPORT_OUTPUT = STATE / "ust_g3ap_selected_cayley_target_macaulay_export.singular.out"
+MATRIX = STATE / "ust_g3ap_selected_cayley_target_macaulay.packed-sms"
+MATRIX_PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay.packet.json"
+
+EXPECTED_TARGET_COORDINATES = 39726
+EXPECTED_SOURCE_MULTIPLES = 92979
+PRIME = 101
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def monomial(exponent: tuple[int, ...]) -> str:
+    names = ("x", "y", "z", "w", "t0", "t1", "t2")
+    factors = []
+    for name, power in zip(names, exponent):
+        if power == 1:
+            factors.append(name)
+        elif power > 1:
+            factors.append(f"{name}^{power}")
+    return "*".join(factors) or "1"
+
+
+def all_monomials(h_degree: int, l_degree: int):
+    for w_power in range(h_degree // 3 + 1):
+        xyz_degree = h_degree - 3 * w_power
+        for x_power in range(xyz_degree + 1):
+            for y_power in range(xyz_degree - x_power + 1):
+                z_power = xyz_degree - x_power - y_power
+                for t0_power in range(l_degree + 1):
+                    for t1_power in range(l_degree - t0_power + 1):
+                        t2_power = l_degree - t0_power - t1_power
+                        yield (
+                            x_power,
+                            y_power,
+                            z_power,
+                            w_power,
+                            t0_power,
+                            t1_power,
+                            t2_power,
+                        )
+
+
+def minimal_trie(leaders: list[tuple[int, ...]]) -> fiber2.Trie:
+    trie = fiber2.Trie()
+    for exponent in sorted(set(leaders), key=lambda value: (sum(value), value)):
+        if not trie.divides(exponent):
+            trie.add(exponent)
+    return trie
+
+
+def standard_monomials(
+    h_degree: int, l_degree: int, trie: fiber2.Trie
+) -> list[tuple[int, ...]]:
+    return [
+        exponent
+        for exponent in all_monomials(h_degree, l_degree)
+        if not trie.divides(exponent)
+    ]
+
+
+def inspect_script(source: str) -> str:
+    cache = relative(BASE_CACHE)
+    return weighted.weighted_base_prefix(source) + f'''option(noredTail);
+def cachedBase=read("ssi:r {cache}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+int i;
+vector componentTest=x*gen(3);
+print("G3AP_MACAULAY_LEAD_COMPONENT_TEST="+string(ustLeadComponent(componentTest)));
+print("G3AP_MACAULAY_BASE_SIZE="+string(size(GI)));
+print("G3AP_MACAULAY_BASE_K_ZERO="+string(reduce(K,GI)==0));
+print("G3AP_MACAULAY_BASE_E_ZERO="+string(reduce(E,GI)==0));
+print("G3AP_MACAULAY_BASE_C_ZERO="+string(reduce(C,GI)==0));
+for (i=1;i<=size(GI);i++)
+{{ print("G3AP_MACAULAY_BASE_LEADER_"+string(i)+"="+string(leadexp(GI[i]))); }}
+print("G3AP_MACAULAY_BASE_PASS");
+quit;
+'''
+
+
+def parse_base_leaders(raw: str) -> list[tuple[int, ...]]:
+    size_match = re.search(r"^G3AP_MACAULAY_BASE_SIZE=(\d+)$", raw, re.MULTILINE)
+    require(size_match is not None, "base size")
+    require("G3AP_MACAULAY_LEAD_COMPONENT_TEST=3" in raw, "module lead component helper")
+    require("G3AP_MACAULAY_BASE_K_ZERO=1" in raw, "K in cached base ideal")
+    require("G3AP_MACAULAY_BASE_E_ZERO=1" in raw, "E in cached base ideal")
+    require("G3AP_MACAULAY_BASE_C_ZERO=1" in raw, "C in cached base ideal")
+    require("G3AP_MACAULAY_BASE_PASS" in raw, "base inspection marker")
+    parsed = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(
+            r"^G3AP_MACAULAY_BASE_LEADER_(\d+)=([0-9,]+)$", raw, re.MULTILINE
+        )
+    }
+    size = int(size_match.group(1))
+    require(set(parsed) == set(range(1, size + 1)), "complete base leaders")
+    leaders = [parsed[index] for index in range(1, size + 1)]
+    require(all(len(value) == 7 for value in leaders), "base leader widths")
+    return leaders
+
+
+def relation_rows() -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    generator = 0
+    for variable in ("x", "y", "z"):
+        for suffix, degree in (("u2_us", (25, 2)), ("uv_vs", (19, 5)), ("us_s2", (28, 3))):
+            rows.append({"generator": generator, "label": f"{variable}_{suffix}", "multiplier_degree": degree})
+            generator += 1
+    for suffix, degree in (("u2_us", (27, 2)), ("uv_vs", (21, 5)), ("us_s2", (30, 3))):
+        rows.append({"generator": generator, "label": f"w_{suffix}", "multiplier_degree": degree})
+        generator += 1
+    for variable in ("t0", "t1", "t2"):
+        for suffix, degree in (("uv_us", (24, 3)), ("v2_vs", (18, 6)), ("vs_s2", (27, 4))):
+            rows.append({"generator": generator, "label": f"{variable}_{suffix}", "multiplier_degree": degree})
+            generator += 1
+    require([row["generator"] for row in rows] == list(range(21)), "generator order")
+    return rows
+
+
+def coordinate_data(leaders: list[tuple[int, ...]]) -> tuple[list[tuple[int, tuple[int, ...]]], list[dict[str, object]]]:
+    trie = minimal_trie(leaders)
+    targets: list[tuple[int, tuple[int, ...]]] = []
+    target_counts: list[dict[str, object]] = []
+    for component, name, (h_degree, l_degree), _ in fiber2.COMPONENTS:
+        values = standard_monomials(h_degree, l_degree, trie)
+        targets.extend((component, exponent) for exponent in values)
+        target_counts.append(
+            {
+                "component": component,
+                "name": name,
+                "base_Cox_degree": [h_degree, l_degree],
+                "standard_coordinates": len(values),
+            }
+        )
+    require(len(targets) == EXPECTED_TARGET_COORDINATES, "target coordinate count")
+    return targets, target_counts
+
+
+def source_data(leaders: list[tuple[int, ...]]) -> tuple[list[tuple[int, tuple[int, ...]]], list[dict[str, object]]]:
+    trie = minimal_trie(leaders)
+    sources: list[tuple[int, tuple[int, ...]]] = []
+    counts: list[dict[str, object]] = []
+    for row in relation_rows():
+        h_degree, l_degree = row["multiplier_degree"]
+        values = standard_monomials(int(h_degree), int(l_degree), trie)
+        sources.extend((int(row["generator"]), exponent) for exponent in values)
+        counts.append({**row, "standard_multipliers": len(values)})
+    require(len(sources) == EXPECTED_SOURCE_MULTIPLES, "source multiple count")
+    return sources, counts
+
+
+def balanced_source_subset(
+    sources: list[tuple[int, tuple[int, ...]]], total: int
+) -> tuple[list[tuple[int, tuple[int, ...]]], list[int]]:
+    """Select deterministic quantiles from every derivative-generator block."""
+    require(21 <= total <= len(sources), "balanced source row count")
+    grouped = [
+        [value for value in sources if value[0] == generator]
+        for generator in range(21)
+    ]
+    quotient, remainder = divmod(total, len(grouped))
+    quotas = [quotient + (generator < remainder) for generator in range(len(grouped))]
+    require(all(1 <= quota <= len(group) for quota, group in zip(quotas, grouped)), "balanced quotas")
+    selected: list[tuple[int, tuple[int, ...]]] = []
+    for quota, group in zip(quotas, grouped):
+        if quota == len(group):
+            selected.extend(group)
+            continue
+        if quota == 1:
+            selected.append(group[len(group) // 2])
+            continue
+        indices = [index * (len(group) - 1) // (quota - 1) for index in range(quota)]
+        require(len(set(indices)) == quota, "distinct balanced quantiles")
+        selected.extend(group[index] for index in indices)
+    require(len(selected) == total, "balanced source selection size")
+    return selected, quotas
+
+
+def run_inspection(timeout: int) -> tuple[list[tuple[int, ...]], dict[str, object]]:
+    source = SOURCE.read_text(encoding="ascii")
+    INSPECT_SCRIPT.write_text(inspect_script(source), encoding="ascii")
+    completed = subprocess.run(
+        singular_command(ROOT, INSPECT_SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    INSPECT_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "base inspection execution")
+    leaders = parse_base_leaders(completed.stdout)
+    targets, target_counts = coordinate_data(leaders)
+    sources, source_counts = source_data(leaders)
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-base.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_COORDINATE_ENUMERATION_NOT_G3AP_CLOSURE",
+        "inputs": {
+            "selected_source": {"path": relative(SOURCE), "sha256": sha256(SOURCE)},
+            "untrusted_base_cache": {"path": relative(BASE_CACHE), "sha256": sha256(BASE_CACHE), "bytes": BASE_CACHE.stat().st_size},
+            "inspection_script": {"path": relative(INSPECT_SCRIPT), "sha256": sha256(INSPECT_SCRIPT)},
+            "inspection_output": {"path": relative(INSPECT_OUTPUT), "sha256": sha256(INSPECT_OUTPUT)},
+        },
+        "base_basis_size": len(leaders),
+        "base_leading_exponents": [list(value) for value in leaders],
+        "target": {"coordinates": len(targets), "sectors": target_counts},
+        "source": {"multiples": len(sources), "relations": source_counts},
+        "guardrails": {
+            "claims_cached_base_is_independently_certified": False,
+            "claims_relation_matrix_is_emitted": False,
+            "claims_matrix_rank": False,
+            "claims_G3AP_is_closed": False,
+        },
+    }
+    INSPECT_PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    return leaders, packet
+
+
+def load_inspection() -> tuple[list[tuple[int, ...]], dict[str, object]]:
+    """Load a hash-current coordinate packet without rewriting shared state."""
+    packet = json.loads(INSPECT_PACKET.read_text(encoding="ascii"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-base.v1",
+        "base packet schema",
+    )
+    selected = packet["inputs"]["selected_source"]
+    cache = packet["inputs"]["untrusted_base_cache"]
+    script = packet["inputs"]["inspection_script"]
+    output = packet["inputs"]["inspection_output"]
+    require(
+        selected["path"] == relative(SOURCE)
+        and selected["sha256"] == sha256(SOURCE),
+        "base packet selected source",
+    )
+    require(
+        cache["path"] == relative(BASE_CACHE)
+        and BASE_CACHE.is_file()
+        and cache["sha256"] == sha256(BASE_CACHE)
+        and cache["bytes"] == BASE_CACHE.stat().st_size,
+        "base packet cache",
+    )
+    require(
+        script["path"] == relative(INSPECT_SCRIPT)
+        and INSPECT_SCRIPT.is_file()
+        and script["sha256"] == sha256(INSPECT_SCRIPT)
+        and INSPECT_SCRIPT.read_text(encoding="ascii")
+        == inspect_script(SOURCE.read_text(encoding="ascii")),
+        "base packet inspection script",
+    )
+    require(
+        output["path"] == relative(INSPECT_OUTPUT)
+        and INSPECT_OUTPUT.is_file()
+        and output["sha256"] == sha256(INSPECT_OUTPUT),
+        "base packet inspection output",
+    )
+    leaders = parse_base_leaders(INSPECT_OUTPUT.read_text(encoding="utf-8"))
+    targets, target_counts = coordinate_data(leaders)
+    sources, source_counts = source_data(leaders)
+    replayed_source = json.loads(
+        json.dumps({"multiples": len(sources), "relations": source_counts})
+    )
+    require(
+        packet["base_basis_size"] == len(leaders)
+        and packet["base_leading_exponents"] == [list(value) for value in leaders]
+        and packet["target"]
+        == {"coordinates": len(targets), "sectors": target_counts}
+        and packet["source"] == replayed_source
+        and len(targets) == EXPECTED_TARGET_COORDINATES
+        and len(sources) == EXPECTED_SOURCE_MULTIPLES,
+        "base packet coordinate replay",
+    )
+    return leaders, packet
+
+
+def ensure_inspection(timeout: int) -> tuple[list[tuple[int, ...]], dict[str, object]]:
+    """Reuse a current packet; recompute only when its provenance is stale."""
+    try:
+        return load_inspection()
+    except (AssertionError, KeyError, OSError, ValueError, json.JSONDecodeError):
+        pass
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            INSPECT_LOCK.mkdir()
+        except FileExistsError:
+            try:
+                return load_inspection()
+            except (
+                AssertionError,
+                KeyError,
+                OSError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                pass
+            try:
+                stale = time.time() - INSPECT_LOCK.stat().st_mtime > 600
+            except FileNotFoundError:
+                continue
+            if stale:
+                try:
+                    INSPECT_LOCK.rmdir()
+                except (FileNotFoundError, OSError):
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError("timed out waiting for base-inspection lock")
+            time.sleep(0.25)
+            continue
+
+        try:
+            # Another process may have completed between the first replay and
+            # our atomic lock acquisition.
+            try:
+                return load_inspection()
+            except (
+                AssertionError,
+                KeyError,
+                OSError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                return run_inspection(timeout)
+        finally:
+            try:
+                INSPECT_LOCK.rmdir()
+            except FileNotFoundError:
+                pass
+
+
+def export_script(source: str, sources: list[tuple[int, tuple[int, ...]]]) -> str:
+    before, after = qring.derivative_representatives()
+    generators = ",\n  ".join(qring.derivative_generators())
+    cache = relative(BASE_CACHE)
+    commands = []
+    for row_number, (generator, exponent) in enumerate(sources, start=1):
+        commands.append(
+            f'rr=({monomial(exponent)})*M[{generator + 1}]; '
+            'for (ci=1;ci<=6;ci++) { pp=reduce(rr[ci],ZQ); '
+            f'while(pp!=0) {{ print("G3AP_MACAULAY_TERM={row_number}|"+'
+            'string(ci)+"|"+string(leadexp(pp))+"|"+string(leadcoef(pp))); '
+            'pp=pp-lead(pp); } }'
+        )
+    return weighted.weighted_base_prefix(source) + f'''option(noredTail);
+{before}
+def cachedBase=read("ssi:r {cache}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+qring q=GI;
+{after}
+module M=
+  {generators};
+ideal ZQ=std(0);
+vector rr;
+poly pp;
+int ci;
+{chr(10).join(commands)}
+print("G3AP_MACAULAY_EXPORT_ROWS={len(sources)}");
+print("G3AP_MACAULAY_EXPORT_PASS");
+quit;
+'''
+
+
+COEFFICIENT_TERM = re.compile(r"^(-)?(?:(\d+)\*)?g(?:\^(\d+))?$")
+
+
+def packed_coefficient(value: str) -> int:
+    value = value.strip()
+    while value.startswith("(") and value.endswith(")"):
+        value = value[1:-1].strip()
+    value = value.replace("-", "+-")
+    if value.startswith("+"):
+        value = value[1:]
+    coefficients = [0] * 6
+    for term in value.split("+"):
+        term = term.strip()
+        if not term:
+            continue
+        if "g" not in term:
+            coefficients[0] = (coefficients[0] + int(term)) % PRIME
+            continue
+        match = COEFFICIENT_TERM.fullmatch(term)
+        require(match is not None, f"coefficient term {term!r}")
+        sign = -1 if match.group(1) else 1
+        scalar = int(match.group(2) or 1)
+        power = int(match.group(3) or 1)
+        require(0 <= power < 6, "canonical coefficient degree")
+        coefficients[power] = (coefficients[power] + sign * scalar) % PRIME
+    return sum(coefficient * PRIME**power for power, coefficient in enumerate(coefficients))
+
+
+def run_export(
+    leaders: list[tuple[int, ...]], sample_rows: int, balanced_rows: int, timeout: int
+) -> dict[str, object]:
+    targets, target_counts = coordinate_data(leaders)
+    all_sources, source_counts = source_data(leaders)
+    require(not (sample_rows and balanced_rows), "exclusive row-selection modes")
+    quotas: list[int] | None = None
+    if balanced_rows:
+        sources, quotas = balanced_source_subset(all_sources, balanced_rows)
+        selection_kind = "balanced_quantiles_across_all_21_selected_derivative_generators"
+    elif sample_rows:
+        sources = all_sources[:sample_rows]
+        selection_kind = "prefix_smoke_sample"
+    else:
+        sources = all_sources
+        selection_kind = "all_selected_relation_multiples"
+    target_index = {value: index for index, value in enumerate(targets, start=1)}
+    require(len(target_index) == len(targets), "unique target coordinates")
+    source = SOURCE.read_text(encoding="ascii")
+    EXPORT_SCRIPT.write_text(export_script(source, sources), encoding="ascii")
+
+    with EXPORT_OUTPUT.open("w", encoding="utf-8") as output:
+        process = subprocess.Popen(
+            singular_command(ROOT, EXPORT_SCRIPT),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        require(process.stdout is not None, "Singular stdout")
+        triples: list[tuple[int, int, int]] = []
+        singular_errors = []
+        for line in process.stdout:
+            output.write(line)
+            if line.lstrip().startswith("?"):
+                singular_errors.append(line.rstrip())
+            if not line.startswith("G3AP_MACAULAY_TERM="):
+                continue
+            row_text, component_text, exponent_text, coefficient_text = line.rstrip().split("=", 1)[1].split("|", 3)
+            coordinate = (int(component_text), tuple(int(value) for value in exponent_text.split(",")))
+            require(coordinate in target_index, f"relation term outside target coordinates: {coordinate}")
+            packed = packed_coefficient(coefficient_text)
+            require(packed != 0, "nonzero exported coefficient")
+            triples.append((int(row_text), target_index[coordinate], packed))
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+    raw = EXPORT_OUTPUT.read_text(encoding="utf-8")
+    require(returncode == 0, "Macaulay export execution")
+    require(not singular_errors, f"Singular export errors: {singular_errors[:3]}")
+    require(f"G3AP_MACAULAY_EXPORT_ROWS={len(sources)}" in raw, "export row count")
+    require("G3AP_MACAULAY_EXPORT_PASS" in raw, "export marker")
+
+    with MATRIX.open("w", encoding="ascii") as stream:
+        stream.write(f"{len(sources)} {len(targets)} {len(triples)}\n")
+        for row, column, packed in triples:
+            stream.write(f"{row} {column} {packed}\n")
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-matrix.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_EXACT_SELECTED_RELATION_MATRIX_REQUIRES_RANK_CERTIFICATE",
+        "inputs": {
+            "selected_source": {"path": relative(SOURCE), "sha256": sha256(SOURCE)},
+            "base_coordinate_packet": {"path": relative(INSPECT_PACKET), "sha256": sha256(INSPECT_PACKET)},
+        },
+        "execution": {
+            "script": {"path": relative(EXPORT_SCRIPT), "sha256": sha256(EXPORT_SCRIPT)},
+            "output": {"path": relative(EXPORT_OUTPUT), "sha256": sha256(EXPORT_OUTPUT)},
+            "matrix": {"path": relative(MATRIX), "sha256": sha256(MATRIX), "bytes": MATRIX.stat().st_size},
+        },
+        "matrix": {
+            "rows": len(sources),
+            "columns": len(targets),
+            "nonzeros": len(triples),
+            "full_source_row_count": len(all_sources),
+            "is_full_source_matrix": len(sources) == len(all_sources),
+            "row_selection": {
+                "kind": selection_kind,
+                "requested_rows": len(sources),
+                "per_generator_quotas": quotas,
+            },
+            "target_sectors": target_counts,
+            "source_relations": source_counts,
+            "coefficient_encoding": "sum_i coefficient_i * 101^i for the Singular basis 1,g,...,g^5",
+            "selected_minpoly": [64, 16, 33, 44, 89, 24, 1],
+        },
+        "guardrails": {
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+    }
+    MATRIX_PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    return packet
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--inspect-only", action="store_true")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--sample-rows", type=int, default=0)
+    selection.add_argument("--balanced-rows", type=int, default=0)
+    args = parser.parse_args()
+    require(args.sample_rows >= 0, "sample rows")
+    require(args.balanced_rows >= 0, "balanced rows")
+    require(SOURCE.is_file(), "selected source")
+    require(BASE_CACHE.is_file() and BASE_CACHE.stat().st_size > 0, "weighted base cache")
+    leaders, base_packet = run_inspection(args.timeout)
+    print(
+        "G3AP target Macaulay coordinates: PASS "
+        f"base={base_packet['base_basis_size']} target={base_packet['target']['coordinates']} "
+        f"source={base_packet['source']['multiples']}"
+    )
+    if args.inspect_only:
+        return
+    packet = run_export(leaders, args.sample_rows, args.balanced_rows, args.timeout)
+    print(
+        "G3AP target Macaulay matrix candidate: PASS "
+        f"rows={packet['matrix']['rows']} columns={packet['matrix']['columns']} "
+        f"nonzeros={packet['matrix']['nonzeros']} rank=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

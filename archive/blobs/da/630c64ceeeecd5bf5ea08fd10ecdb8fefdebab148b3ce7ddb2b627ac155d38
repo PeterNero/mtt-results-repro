@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Independently replay the compact G3BM first-return assembly."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import assemble_ust_g3bm_correction_toric_return as assembly
+import probe_ust_g3bm_correction_toric_return_chunk as chunk_builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bm_correction_toric_return.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_path(record: dict[str, Any]) -> Path:
+    return ROOT / record["path"]
+
+
+def verify_record(record: dict[str, Any], repository: Path | None = None) -> Path:
+    path = (
+        repository / record["repository_relative_path"]
+        if repository is not None
+        else local_path(record)
+    )
+    require(path.is_file(), f"record path {path}")
+    require(sha256(path) == record["sha256"], f"record hash {path.name}")
+    require(path.stat().st_size == record["bytes"], f"record bytes {path.name}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["schema"] == "mtt.unified-source.g3bm-correction-toric-return.v1", "schema")
+    require(all(packet["checks"].values()), "recorded checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain non-claims")
+    mld = chunk_builder.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_gauss_manin_strict_blocks as linear
+    import build_q79_eta9_gauss_manin_block_chunk as polynomial
+    import build_q79_eta9_toric_return_stage1_chunk as stage
+
+    verify_record(packet["inputs"]["G3BI"])
+    verify_record(packet["inputs"]["G3BK"])
+    for name, record in packet["inputs"].items():
+        if name in ("G3BI", "G3BK"):
+            continue
+        verify_record(record, mld)
+
+    b103 = load(stage.B103)
+    h02_macaulay = load(stage.H02_MACAULAY)
+    source = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    source_vectors = [tuple(int(value) for value in row) for row in source["basis_exponent_vectors"]]
+    target_lookup = {row: index for index, row in enumerate(source_vectors)}
+    ambient_vectors = [
+        tuple(int(value) for value in row)
+        for row in h02_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    ambient_lookup = {row: index for index, row in enumerate(ambient_vectors)}
+    require(len(target_lookup) == 248 and len(ambient_lookup) == 42706, "coordinate bases")
+
+    reconstructed_h02 = np.zeros((248, 248), dtype=np.uint8)
+    reconstructed_ambient_chunks = []
+    covered: list[int] = []
+    next_support: set[int] = set()
+    next_terms = 0
+    for chunk_record in packet["chunks"]:
+        chunk_path = verify_record(chunk_record)
+        chunk = load(chunk_path)
+        require(all(chunk["checks"].values()), "chunk checks")
+        start = int(chunk["row_start"])
+        stop = int(chunk["row_stop"])
+        count = stop - start
+        require(chunk_record["rows"] == [start, stop], "chunk range record")
+        for section in ("execution", "serialized_exact_objects", "coordinate_objects"):
+            for item in chunk[section].values():
+                if isinstance(item, dict) and "path" in item:
+                    verify_record(item)
+
+        h02_record = chunk["coordinate_objects"]["H02_normal_form"]
+        stored_h02 = np.frombuffer(
+            local_path(h02_record).read_bytes(), dtype=np.uint8
+        ).reshape((count, 248))
+        ambient_record = chunk["coordinate_objects"]["ambient_return"]
+        stored_ambient = sparse.load_npz(local_path(ambient_record)).tocsc()
+        require(stored_ambient.shape == (42706, count), "stored ambient chunk shape")
+
+        raw_record = chunk["execution"]["raw_output"]
+        ambient_texts, normal_texts, recursive_rows = stage.parse_output(
+            local_path(raw_record).read_text(encoding="utf-8"), count
+        )
+        replay_h02 = np.zeros((count, 248), dtype=np.uint8)
+        ambient_rows: list[int] = []
+        ambient_columns: list[int] = []
+        ambient_data: list[int] = []
+        require(len(chunk["sparse_rows"]) == count, "row summary count")
+        for offset, summary in enumerate(chunk["sparse_rows"]):
+            source_index = start + offset
+            require(int(summary["source_index"]) == source_index, "ordered source index")
+            require(
+                tuple(int(value) for value in summary["source_exponent_vector"])
+                == source_vectors[source_index],
+                "source exponent replay",
+            )
+            ambient = polynomial.parse_normal_form(ambient_texts[offset])
+            normal = polynomial.parse_normal_form(normal_texts[offset])
+            require(len(ambient) == int(summary["ambient_return_term_count"]), "ambient term count")
+            require(len(normal) == int(summary["H02_normal_form_term_count"]), "H02 term count")
+            for exponent, coefficient in ambient.items():
+                require(exponent in ambient_lookup, "ambient exponent in basis")
+                ambient_rows.append(ambient_lookup[exponent])
+                ambient_columns.append(offset)
+                ambient_data.append(coefficient % PRIME)
+            for exponent, coefficient in normal.items():
+                require(exponent in target_lookup, "normal exponent in H02 basis")
+                replay_h02[offset, target_lookup[exponent]] = coefficient % PRIME
+            require(
+                recursive_rows[offset] == summary["next_lower_pole_Groebner_support"],
+                "recursive support replay",
+            )
+            next_support.update(recursive_rows[offset]["Groebner_generator_indices_one_based"])
+            next_terms += int(recursive_rows[offset]["coefficient_terms"])
+            covered.append(source_index)
+        replay_ambient = sparse.csc_matrix(
+            (
+                np.asarray(ambient_data, dtype=np.uint8),
+                (
+                    np.asarray(ambient_rows, dtype=np.int32),
+                    np.asarray(ambient_columns, dtype=np.int32),
+                ),
+            ),
+            shape=(42706, count),
+            dtype=np.uint8,
+        )
+        replay_ambient.sum_duplicates()
+        replay_ambient.data %= PRIME
+        replay_ambient.eliminate_zeros()
+        require(np.array_equal(stored_h02, replay_h02), "H02 chunk raw-output replay")
+        require((stored_ambient != replay_ambient).nnz == 0, "ambient chunk raw-output replay")
+        reconstructed_h02[start:stop, :] = stored_h02
+        reconstructed_ambient_chunks.append(stored_ambient)
+
+    require(covered == list(range(248)), "complete ordered source coverage")
+    reconstructed_ambient = sparse.hstack(reconstructed_ambient_chunks, format="csc")
+    h02_record = packet["H02_first_normal_form_block"]
+    matrix_record = h02_record["binary"]
+    verify_record(matrix_record)
+    stored_full_h02 = np.frombuffer(
+        local_path(matrix_record).read_bytes(), dtype=np.uint8
+    ).reshape((248, 248))
+    require(np.array_equal(stored_full_h02, reconstructed_h02), "assembled H02 replay")
+    require(int(np.count_nonzero(stored_full_h02)) == h02_record["nonzero_entries"], "H02 nnz")
+    rank, pivots = linear.echelon_pivot_columns(stored_full_h02)
+    determinant = linear.determinant_mod_prime(stored_full_h02) if rank == 248 else 0
+    require(rank == h02_record["rank"], "H02 rank replay")
+    require(pivots == h02_record["pivot_columns"], "H02 pivots replay")
+    require(determinant == h02_record["determinant_mod11"], "H02 determinant replay")
+
+    ambient_record = packet["H02_ambient_return"]
+    npz_record = ambient_record["scipy_npz"]
+    verify_record(npz_record)
+    verify_record(ambient_record["solver_CSC"])
+    stored_full_ambient = sparse.load_npz(local_path(npz_record)).tocsc()
+    require((stored_full_ambient != reconstructed_ambient).nnz == 0, "assembled ambient replay")
+    require(stored_full_ambient.nnz == ambient_record["nonzero_entries"], "ambient nnz")
+
+    recursive = packet["next_recursive_stage"]
+    require(sorted(next_support) == recursive["Groebner_support_union_indices_one_based"], "support union replay")
+    require(len(next_support) == recursive["Groebner_support_union_count"], "support count replay")
+    require(next_terms == recursive["quotient_coefficient_terms_with_multiplicity"], "term count replay")
+    print("UST.G3BM correction toric return verifier: PASS")
+    print(
+        f"H02_rank={rank} H02_nnz={np.count_nonzero(stored_full_h02)} "
+        f"ambient_nnz={stored_full_ambient.nnz} next_support={len(next_support)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

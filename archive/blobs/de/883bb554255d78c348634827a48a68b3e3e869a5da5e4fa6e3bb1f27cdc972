@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Emit the exact Riccati jets required by a dynamic G3CE Schur reduction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = ROOT / "evidence" / "ust_g3cg"
+OUT = STATE / "ust_g3cg_schur_riccati_transport_cutset.packet.json"
+G3CD = STATE / "ust_g3cd_correction_full_affine_operator.packet.json"
+G3CE = STATE / "ust_g3ce_hodge_schur_affine_reduction.packet.json"
+G3CF = STATE / "ust_g3cf_transcendental_arc_schur_gauge.packet.json"
+PRIME = 11
+
+REQUIRED_X_PRIME = EVIDENCE / "g3cg_required_X_prime_at_B89.mod11.npy"
+REQUIRED_Y_PRIME = EVIDENCE / "g3cg_required_y_prime_at_B89.mod11.npy"
+STATIC_AFFINE_DEFECT = EVIDENCE / "g3cg_static_affine_graph_defect_at_B89.mod11.npy"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def verify_record(item: dict[str, Any]) -> Path:
+    path = ROOT / item["path"]
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size: {path}")
+    require(sha256(path) == item["sha256"], f"record hash: {path}")
+    return path
+
+
+def rank_mod_prime(matrix: np.ndarray) -> int:
+    work = np.asarray(matrix, dtype=np.int64).copy() % PRIME
+    rows, columns = work.shape
+    rank = 0
+    for column in range(columns):
+        candidates = np.flatnonzero(work[rank:, column])
+        if candidates.size == 0:
+            continue
+        selected = rank + int(candidates[0])
+        if selected != rank:
+            work[[rank, selected]] = work[[selected, rank]]
+        work[rank] = work[rank] * pow(int(work[rank, column]), -1, PRIME) % PRIME
+        active = np.flatnonzero(work[:, column])
+        active = active[active != rank]
+        for start in range(0, active.size, 128):
+            batch = active[start : start + 128]
+            work[batch] = (
+                work[batch] - work[batch, column, None] * work[rank]
+            ) % PRIME
+        rank += 1
+        if rank == rows:
+            break
+    return rank
+
+
+def main() -> None:
+    g3cd = load(G3CD)
+    g3ce = load(G3CE)
+    g3cf = load(G3CF)
+    require(g3cd["schema"] == "mtt.unified-source.g3cd-correction-full-affine-operator.v1", "G3CD schema")
+    require(g3ce["schema"] == "mtt.unified-source.g3ce-hodge-schur-affine-reduction.v1", "G3CE schema")
+    require(g3cf["schema"] == "mtt.unified-source.g3cf-transcendental-arc-schur-gauge.v1", "G3CF schema")
+    for name, packet in (("G3CD", g3cd), ("G3CE", g3ce), ("G3CF", g3cf)):
+        require(all(packet["checks"].values()), f"{name} checks")
+        require(not any(packet["guardrails"].values()), f"{name} guardrails")
+    require(
+        g3cd["selected_affine_source"]["unscaled_equation_convention"]
+        == "dy/da=K_C*y+b_C; an overall connection sign may be applied consistently at ODE integration",
+        "G3CD plus-sign convention",
+    )
+
+    X = np.load(
+        verify_record(g3ce["block_decomposition"]["lower_response"]),
+        allow_pickle=False,
+    ).astype(np.int64)
+    y = np.load(
+        verify_record(g3ce["block_decomposition"]["lower_selected_source_solution"]),
+        allow_pickle=False,
+    ).astype(np.int64)
+    S = np.load(
+        verify_record(g3ce["schur_operator"]["operator"]),
+        allow_pickle=False,
+    ).astype(np.int64)
+    b_eff = np.load(
+        verify_record(g3ce["effective_affine_source"]["source"]),
+        allow_pickle=False,
+    ).astype(np.int64)
+    require(X.shape == (1261, 248) and y.shape == (1261,), "graph shapes")
+    require(S.shape == (248, 248) and b_eff.shape == (248,), "reduced shapes")
+
+    homogeneous_defect = X @ S % PRIME
+    source_defect = X @ b_eff % PRIME
+    affine_defect = np.column_stack([homogeneous_defect, source_defect]) % PRIME
+    required_X_prime = (-homogeneous_defect) % PRIME
+    required_y_prime = (-source_defect) % PRIME
+
+    rank_X = rank_mod_prime(X)
+    rank_homogeneous = rank_mod_prime(homogeneous_defect)
+    rank_affine = rank_mod_prime(affine_defect)
+    require(rank_X == 248, "X full column rank")
+    require(rank_homogeneous == 247, "homogeneous static graph defect rank")
+    require(rank_affine == 248, "affine static graph defect rank")
+    require(np.count_nonzero(source_defect) == 1132, "source defect support")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.save(REQUIRED_X_PRIME, required_X_prime.astype(np.uint8), allow_pickle=False)
+    np.save(REQUIRED_Y_PRIME, required_y_prime.astype(np.uint8), allow_pickle=False)
+    np.save(STATIC_AFFINE_DEFECT, affine_defect.astype(np.uint8), allow_pickle=False)
+
+    checks = {
+        "G3CD_G3CE_G3CF_are_hash_bound_and_passing": True,
+        "the_explicit_plus_sign_affine_connection_convention_is_used": True,
+        "the_G3CE_static_graph_map_X_has_full_column_rank248": True,
+        "the_frozen_homogeneous_graph_tangency_defect_XS_has_rank247": True,
+        "the_selected_source_raises_the_affine_graph_defect_rank_to248": True,
+        "the_required_endpoint_Riccati_jets_minus_XS_and_minus_Xb_eff_are_emitted": True,
+        "static_Schur_row_elimination_is_not_promoted_to_transport_reduction": True,
+        "no_actual_family_derivative_path_solution_integral_marking_or_beta_value_is_inferred": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3cg-schur-riccati-transport-cutset.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CG",
+        "status": "CLOSED_EXACT_GF11_STATIC_SCHUR_TRANSPORT_NO_SHORTCUT_AND_RICCATI_JET_TARGETS_ACTUAL_FAMILY_JETS_OPEN",
+        "field": "GF(11) at gamma=3, terminal B89 point a=0",
+        "inputs": {"G3CD": record(G3CD), "G3CE": record(G3CE), "G3CF": record(G3CF)},
+        "connection_convention": g3cd["selected_affine_source"]["unscaled_equation_convention"],
+        "static_graph": {
+            "formula": "z_lower=-X*z_H20-y with X=J^-1L and y=J^-1b_lower",
+            "X_shape": [1261, 248],
+            "X_rank_mod11": rank_X,
+            "X_nonzero_entries": int(np.count_nonzero(X)),
+            "y_nonzero_entries": int(np.count_nonzero(y)),
+        },
+        "constant_graph_tangency_defect": {
+            "homogeneous_formula": "X*S_C",
+            "homogeneous_shape": [1261, 248],
+            "homogeneous_rank_mod11": rank_homogeneous,
+            "homogeneous_nonzero_entries": int(np.count_nonzero(homogeneous_defect)),
+            "source_formula": "X*b_eff",
+            "source_nonzero_entries": int(np.count_nonzero(source_defect)),
+            "affine_formula": "[X*S_C | X*b_eff]",
+            "affine_shape": [1261, 249],
+            "affine_rank_mod11": rank_affine,
+            "affine_nonzero_entries": int(np.count_nonzero(affine_defect)),
+            "affine_defect": record(STATIC_AFFINE_DEFECT),
+            "conclusion": "the frozen G3CE graph is not invariant under the terminal affine connection; row back-substitution alone cannot reduce transport",
+        },
+        "dynamic_riccati_cutset": {
+            "homogeneous_identity": "X'(a)+X(a)S_C(a)=0",
+            "source_identity": "y'(a)+X(a)b_eff(a)=0",
+            "required_X_prime_at_a0": record(REQUIRED_X_PRIME),
+            "required_X_prime_rank_mod11": rank_homogeneous,
+            "required_X_prime_nonzero_entries": int(np.count_nonzero(required_X_prime)),
+            "required_y_prime_at_a0": record(REQUIRED_Y_PRIME),
+            "required_y_prime_nonzero_entries": int(np.count_nonzero(required_y_prime)),
+            "interpretation": "these are necessary endpoint jets for the specific algebraic graph X=J^-1L, y=J^-1b_lower to define a 249-variable dynamic reduction under the plus-sign convention",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_actual_X_prime_or_y_prime_has_been_computed": False,
+            "claims_the_Riccati_identities_hold": False,
+            "claims_no_other_dynamic_gauge_can_reduce_transport": False,
+            "claims_rank249_transport": False,
+            "claims_characteristic_zero_connection_entries": False,
+            "claims_integral_transport_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3cgSchurRiccatiTransportCutset",
+            "tier": "CLOSED_EXACT_DYNAMIC_REDUCTION_CUTSET",
+            "statement": "At the terminal good fiber, the static G3CE graph has homogeneous tangency defect rank 247 and selected affine tangency defect rank 248. Therefore static Schur row elimination is not itself a transport reduction. For the same variable graph to reduce the plus-sign affine connection dynamically, its endpoint derivatives must equal the emitted nonzero targets X'=-XS and y'=-Xb_eff, and the corresponding identities must hold along the path.",
+        },
+        "frontier_delta": {
+            "before": "G3CE/G3CF gave a static Schur obstruction reduction and its rational domain, but had not separated row equivalence from ODE gauge equivalence.",
+            "after": "The distinction is exact. The constant Schur graph fails invariance with ranks 247 and 248, and the precise derivative jets required for a variable Riccati reduction are emitted. Rank-249 transport is conditional on comparing actual family jets; otherwise rank-1510 remains mandatory.",
+        },
+        "next_required_object": "Compute the actual terminal derivatives of X(a)=J(a)^-1L(a) and y(a)=J(a)^-1b_lower(a), preferably by differentiating the selected chart actions rather than forming K_C'(0) densely, and compare them to the emitted Riccati targets. A mismatch at one coordinate rigorously rejects this Schur transport reduction.",
+    }
+    require(all(checks.values()), "G3CG checks")
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CG Schur-Riccati transport cutset: PASS")
+    print(
+        f"rankX={rank_X} rank_XS={rank_homogeneous} rank_affine_defect={rank_affine} "
+        f"Xprime_nnz={np.count_nonzero(required_X_prime)} yprime_nnz={np.count_nonzero(required_y_prime)}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Independently replay the anchor of the G3FW separation theorem."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3ft_component20_full_relation_height_campaign as height
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "evidence/ust_g3fw/H02.component20.apolar_selection_separation.json"
+INDICES = ROOT / "evidence/ust_g3ex/H02.component20.cohomological.indices.npz"
+TARGET_PACKET = ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def profile(kernel: np.ndarray, prime: int) -> tuple[int, ...]:
+    rank, _, nullspace = graded.rref(kernel.T, prime, emit_nullspace=True)
+    require(rank == 100 and nullspace is not None, "kernel rank")
+    annihilator = nullspace.T
+    return tuple(
+        graded.ideal_piece(annihilator, degree, prime)[0].shape[1]
+        for degree in range(16)
+    )
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fw.h02.component20.apolar-selection-separation.v1", "schema")
+    prime, root = 21817, 5
+    support = np.load(INDICES, allow_pickle=False)["source_support"]
+    local = np.flatnonzero((support >= 4327) & (support < 4463))
+    residues = np.load(height.cache_paths(prime)[0], allow_pickle=False)[
+        "normalized_relation_power_basis_residues"
+    ].astype(np.int64)
+    normalized = residues[-1]
+    for degree in reversed(range(5)):
+        normalized = (normalized * root + residues[degree]) % prime
+    canonical = normalized[local]
+
+    target_packet = json.loads(TARGET_PACKET.read_text(encoding="utf-8"))
+    row = next(value for value in target_packet["root_kernels"] if int(value["gamma_root"]) == root)
+    payload = kernel_runtime.read_kernel(ROOT / row["kernel"]["path"])
+    selected = np.flatnonzero((payload["dependent"] >= 4363) & (payload["dependent"] < 4463))
+    target = payload["matrix"][4327:4463, :][:, selected].toarray().astype(np.int64) % prime
+
+    require(np.array_equal(canonical[36:], np.eye(100, dtype=np.int64)), "canonical identity")
+    require(np.array_equal(target[36:], np.eye(100, dtype=np.int64)), "target identity")
+    require(np.count_nonzero(canonical[:36] != target[:36]) > 0, "independent blocks differ")
+    require(profile(canonical, prime) == tuple(packet["anchor_ideal_profiles_degrees0_through15"]["G3FT_canonical_plane"]), "canonical profile")
+    require(profile(target, prime) == tuple(packet["anchor_ideal_profiles_degrees0_through15"]["G3FR_selected_plane"]), "target profile")
+    require(packet["raw_fourth_normal_test"]["common_rank_profile"] == [4, 4, 8], "raw no-go")
+    require(all(packet["checks"].values()) and not any(packet["guardrails"].values()), "claim discipline")
+    print("UST.G3FW independent verification: PASS anchor_profiles=distinct raw_candidate=no-go")
+
+
+if __name__ == "__main__":
+    main()

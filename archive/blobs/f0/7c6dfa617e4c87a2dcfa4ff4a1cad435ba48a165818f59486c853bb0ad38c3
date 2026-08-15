@@ -1,0 +1,88 @@
+# UST.G3DE H02 Fraction-Free Path Woodbury Theorem v1
+
+## Status
+
+`CLOSED_EXACT_SELECTED_H02_FRACTION_FREE_PATH_WOODBURY_FACTORIZATION`
+
+UST.G3BZ proved that the selected H02 correction update has exact rank
+`6,022` over `Q(gamma)`. UST.G3DE turns that rank statement into the exact
+factorization required by an inverse-action or path solver.
+
+## Exact factorization
+
+Write the selected H02 complement chart as
+
+```text
+A(a,gamma) = A0(gamma) + a Delta_C(gamma),
+```
+
+where `A0` is the B89 chart and `Delta_C` is the G3BI correction. The G3BZ
+rank witness selects `6,022` rows and `6,022` columns. From the six exact
+`Z[gamma]` coefficient matrices define
+
+```text
+U = Delta_C[:, selected columns],
+W = Delta_C[selected rows, :],
+S = Delta_C[selected rows, selected columns].
+```
+
+The selected specialization has nonzero minor determinant `10028 mod 21817`,
+so `S` is invertible over `Q(gamma)`. Since G3BZ independently proves
+`rank(Delta_C)=6022`, exact linear algebra gives
+
+```text
+Delta_C = U S^-1 W,
+```
+
+equivalently
+
+```text
+Delta_C det(S) = U adj(S) W.
+```
+
+All eighteen polynomial submatrices are emitted. At the selected split place,
+the independent block replay reconstructs every component of `Delta_C` with
+zero mismatch; the component ranks sum to `6,022`.
+
+## Reduced inverse equation
+
+For
+
+```text
+P  = A0^-1 U,
+x0 = A0^-1 b,
+```
+
+the full `42,458`-dimensional equation is exactly equivalent to
+
+```text
+(S + a W P) z = a W x0,
+x = x0 - P z.
+```
+
+Thus the selected H02 varying solve has dimension `6,022`, not `42,458`.
+This is an exact rank factorization, not a low-rank approximation.
+
+## Boundary
+
+G3DE does not yet evaluate `P`, contract the evolving G3CA/G3CC source into
+`x0`, solve the reduced equation along G3BJ, or recover the H02 quotient and
+recursive lower-Hodge returns. It does not construct the pairing-one integral
+rank-1,509 start representative, execute the 248-row readout, or decide
+`beta_C`.
+
+The next operator target is therefore precise: evaluate the two B89 base
+actions through the existing H02 DM decomposition, then solve the emitted
+`6,022`-dimensional kernel on the selected path.
+
+## Reproduction
+
+```powershell
+python build_ust_g3de_h02_fraction_free_path_woodbury.py
+python verify_ust_g3de_h02_fraction_free_path_woodbury.py
+```
+
+The packet is
+`state/ust_g3de_h02_fraction_free_path_woodbury.packet.json`; exact `U`, `S`,
+`W` coefficient matrices and the selected coordinates are under
+`evidence/ust_g3de/`.

@@ -1,0 +1,87 @@
+// Exact sparse rank over F_101^6 using LinBox's no-reordering elimination.
+
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <string>
+
+#include <givaro/extension.h>
+#include <givaro/givpoly1.h>
+#include <givaro/modular.h>
+#include <linbox/field/field-traits.h>
+
+namespace LinBox {
+template <class BaseField>
+struct ClassifyRing<Givaro::Extension<BaseField>> {
+    using categoryTag = RingCategories::ModularTag;
+};
+}  // namespace LinBox
+
+#include <linbox/matrix/sparse-matrix.h>
+#include <linbox/solutions/methods.h>
+#include <linbox/solutions/rank.h>
+#include <linbox/util/error.h>
+
+using namespace LinBox;
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "usage: ust_f1016_sparse_rank_no_reordering MATRIX\n";
+        return 64;
+    }
+
+    using BaseField = Givaro::Modular<int64_t>;
+    using PolynomialDomain = Givaro::Poly1Dom<BaseField, Givaro::Dense>;
+    using Field = Givaro::Extension<BaseField>;
+    BaseField base(101);
+    PolynomialDomain polynomials(base, "g");
+    PolynomialDomain::Element minpoly;
+    polynomials.init(minpoly, Givaro::Degree(6));
+    const int64_t coefficients[7] = {64, 16, 33, 44, 89, 24, 1};
+    for (std::size_t index = 0; index < 7; ++index) {
+        base.init(minpoly[index], coefficients[index]);
+    }
+    Field field(polynomials, minpoly);
+
+    std::ifstream input(argv[1]);
+    std::size_t rows = 0;
+    std::size_t columns = 0;
+    std::size_t nonzeros = 0;
+    if (!input || !(input >> rows >> columns >> nonzeros)) {
+        std::cerr << "invalid packed sparse header\n";
+        return 65;
+    }
+    SparseMatrix<Field, SparseMatrixFormat::SparseSeq> matrix(field, rows, columns);
+    for (std::size_t index = 0; index < nonzeros; ++index) {
+        std::size_t row = 0;
+        std::size_t column = 0;
+        Givaro::Integer packed;
+        if (!(input >> row >> column >> packed) || row == 0 || column == 0 ||
+            row > rows || column > columns) {
+            std::cerr << "invalid packed sparse entry at index " << index << "\n";
+            return 65;
+        }
+        Field::Element value;
+        field.init(value, packed);
+        if (!field.isZero(value)) {
+            matrix.setEntry(row - 1, column - 1, value);
+        }
+    }
+
+    std::size_t rank = 0;
+    try {
+        Method::SparseElimination method;
+        method.pivotStrategy = PivotStrategy::None;
+        rankInPlace(rank, matrix, method);
+    } catch (const LinboxError& error) {
+        std::cerr << "linbox exception: " << error << "\n";
+        return 2;
+    } catch (const std::exception& error) {
+        std::cerr << "rank exception: " << error.what() << "\n";
+        return 2;
+    }
+    std::cout << "EXACT_F1016_NO_REORDERING_SPARSE_ELIMINATION_RANK rows=" << rows
+              << " columns=" << columns << " nonzeros=" << nonzeros
+              << " rank=" << rank << "\n";
+    return 0;
+}

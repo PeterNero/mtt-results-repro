@@ -1,0 +1,492 @@
+#!/usr/bin/env python3
+"""Recover short component-16 kernel vectors across all six embeddings."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import statistics
+import time
+from pathlib import Path
+from typing import Any
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    ZERO,
+    coefficient_add,
+    coefficient_multiply,
+)
+from probe_ust_g3ec_component12_padic_kernel import invert_matrix_mod
+from ust_fplll_backend import reduce_fplll
+from ust_flatter_backend import reduce_flatter
+
+
+ROOT = Path(__file__).resolve().parent
+RESIDUE = ROOT / "evidence/ust_g3em/H02.component16.reduced.padic-exp64.residue.json.gz"
+MATRIX = ROOT / "evidence/ust_g3el/H02.component16.unit_pivot_reduced.number_field.sms"
+OUTPUT = ROOT / "evidence/ust_g3en/H02.component16.six_embedding_lattice.json.gz"
+PRIME = 21817
+ROWS = 1238
+COLUMNS = 1221
+RELATIONS = 21
+FIELD_DEGREE = 6
+VARIABLES = RELATIONS * FIELD_DEGREE
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def centered(value: int, modulus: int) -> int:
+    value %= modulus
+    return value - modulus if value > modulus // 2 else value
+
+
+def load_gzip(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_gzip_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.write("\n")
+    temporary.replace(path)
+
+
+def modular_pivots(rows: list[list[int]]) -> list[int]:
+    pivots: list[list[int]] = []
+    pivot_columns: list[int] = []
+    for source in rows:
+        row = [int(value) % PRIME for value in source]
+        for pivot, column in zip(pivots, pivot_columns, strict=True):
+            factor = row[column]
+            if factor:
+                row = [
+                    (value - factor * prior) % PRIME
+                    for value, prior in zip(row, pivot, strict=True)
+                ]
+        column = next((index for index, value in enumerate(row) if value), None)
+        require(column is not None, "independent warm coefficient rows")
+        inverse = pow(row[column], -1, PRIME)
+        pivots.append([value * inverse % PRIME for value in row])
+        pivot_columns.append(column)
+    return pivot_columns
+
+
+def coupling_matrix(
+    kernels: list[list[list[int]]],
+    roots: list[int],
+    inverse_vandermonde: list[list[int]],
+    modulus: int,
+    samples: list[int],
+) -> list[list[int]]:
+    output_count = FIELD_DEGREE * len(samples)
+    root_powers = [
+        [pow(root, degree, modulus) for degree in range(FIELD_DEGREE)]
+        for root in roots
+    ]
+    coupling = [[0] * output_count for _ in range(VARIABLES)]
+    for relation in range(RELATIONS):
+        for degree in range(FIELD_DEGREE):
+            variable = relation * FIELD_DEGREE + degree
+            for sample_index, coordinate in enumerate(samples):
+                root_values = [
+                    int(kernels[root][coordinate][relation])
+                    * root_powers[root][degree]
+                    % modulus
+                    for root in range(FIELD_DEGREE)
+                ]
+                for output_degree in range(FIELD_DEGREE):
+                    coupling[variable][
+                        sample_index * FIELD_DEGREE + output_degree
+                    ] = sum(
+                        inverse_vandermonde[output_degree][root]
+                        * root_values[root]
+                        for root in range(FIELD_DEGREE)
+                    ) % modulus
+    return coupling
+
+
+def build_lattice(
+    coupling: list[list[int]],
+    modulus: int,
+    seed_candidates: list[list[int]] | None,
+) -> list[list[int]]:
+    output_count = len(coupling[0])
+    variable_rows = [
+        [1 if column == row else 0 for column in range(VARIABLES)]
+        + [centered(value, modulus) for value in coupling[row]]
+        for row in range(VARIABLES)
+    ]
+    if seed_candidates is None:
+        rows = variable_rows
+    else:
+        require(len(seed_candidates) == RELATIONS, "warm candidate count")
+        pivot_columns = modular_pivots(seed_candidates)
+        seed_rows = []
+        for candidate in seed_candidates:
+            output = [
+                centered(
+                    sum(
+                        int(candidate[variable]) * coupling[variable][column]
+                        for variable in range(VARIABLES)
+                    ),
+                    modulus,
+                )
+                for column in range(output_count)
+            ]
+            seed_rows.append([int(value) for value in candidate] + output)
+        rows = seed_rows + [
+            row for index, row in enumerate(variable_rows) if index not in pivot_columns
+        ]
+        require(len(rows) == VARIABLES, "warm variable row count")
+    rows.extend(
+        [0] * VARIABLES
+        + [modulus if column == row else 0 for column in range(output_count)]
+        for row in range(output_count)
+    )
+    require(len(rows) == len(rows[0]), "square lattice")
+    return rows
+
+
+def candidate_vectors(reduced: list[list[int]], count: int) -> list[list[int]]:
+    ranked = sorted(
+        (
+            (sum(int(value) * int(value) for value in row), index, row)
+            for index, row in enumerate(reduced)
+            if any(row[:VARIABLES])
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    output = [
+        [int(value) for value in row[:VARIABLES]]
+        for _, _, row in ranked[:count]
+    ]
+    require(len(output) == count, "candidate count")
+    return output
+
+
+def independent_candidates(candidates: list[list[int]]) -> list[int]:
+    rows: list[tuple[int, list[int]]] = []
+    for index, candidate in enumerate(candidates):
+        rows.append(
+            (
+                index,
+                [
+                    sum(
+                        candidate[relation * FIELD_DEGREE + degree]
+                        * pow(5, degree, PRIME)
+                        for degree in range(FIELD_DEGREE)
+                    )
+                    % PRIME
+                    for relation in range(RELATIONS)
+                ],
+            )
+        )
+    pivots: dict[int, list[int]] = {}
+    selected: list[int] = []
+    for index, source in rows:
+        row = list(source)
+        while any(row):
+            column = next(column for column, value in enumerate(row) if value)
+            prior = pivots.get(column)
+            if prior is None:
+                inverse = pow(row[column], -1, PRIME)
+                pivots[column] = [value * inverse % PRIME for value in row]
+                selected.append(index)
+                break
+            factor = row[column]
+            row = [
+                (value - factor * prior_value) % PRIME
+                for value, prior_value in zip(row, prior, strict=True)
+            ]
+        if len(selected) == RELATIONS:
+            break
+    return selected
+
+
+def interpolate_vectors(
+    candidates: list[list[int]],
+    kernels: list[list[list[int]]],
+    roots: list[int],
+    inverse_vandermonde: list[list[int]],
+    modulus: int,
+) -> list[list[tuple[int, ...]]]:
+    root_powers = [
+        [pow(root, degree, modulus) for degree in range(FIELD_DEGREE)]
+        for root in roots
+    ]
+    vectors: list[list[tuple[int, ...]]] = []
+    for candidate in candidates:
+        transforms = [
+            [
+                sum(
+                    candidate[relation * FIELD_DEGREE + degree]
+                    * root_powers[root][degree]
+                    for degree in range(FIELD_DEGREE)
+                )
+                % modulus
+                for relation in range(RELATIONS)
+            ]
+            for root in range(FIELD_DEGREE)
+        ]
+        vector: list[tuple[int, ...]] = []
+        for coordinate in range(COLUMNS):
+            values = [
+                sum(
+                    int(kernels[root][coordinate][relation])
+                    * transforms[root][relation]
+                    for relation in range(RELATIONS)
+                )
+                % modulus
+                for root in range(FIELD_DEGREE)
+            ]
+            vector.append(
+                tuple(
+                    centered(
+                        sum(
+                            inverse_vandermonde[degree][root] * values[root]
+                            for root in range(FIELD_DEGREE)
+                        ),
+                        modulus,
+                    )
+                    for degree in range(FIELD_DEGREE)
+                )
+            )
+        vectors.append(vector)
+    return vectors
+
+
+def exact_replay(vectors: list[list[tuple[int, ...]]]) -> tuple[int, int]:
+    with MATRIX.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require((rows, columns, degree) == (ROWS, COLUMNS, FIELD_DEGREE), "matrix shape")
+        require(minimal == (64, 16, 33, 44, 89, 24, 1), "matrix field")
+        residuals = [[ZERO for _ in vectors] for _ in range(rows)]
+        count = 0
+        for line in handle:
+            values = list(map(int, line.split()))
+            row = values[0] - 1
+            column = values[1] - 1
+            coefficient = tuple(values[2:])
+            for vector_index, vector in enumerate(vectors):
+                residuals[row][vector_index] = coefficient_add(
+                    residuals[row][vector_index],
+                    coefficient_multiply(coefficient, vector[column]),
+                )
+            count += 1
+    require(count == declared, "declared matrix entries")
+    nonzero = sum(value != ZERO for row in residuals for value in row)
+    return nonzero, rows * len(vectors)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--initial-samples", type=int, default=10)
+    parser.add_argument("--add-samples", type=int, default=5)
+    parser.add_argument("--candidate-count", type=int, default=42)
+    parser.add_argument("--threshold-bits", type=int, default=400)
+    parser.add_argument("--residue", type=Path, default=RESIDUE)
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--delta", type=float, default=0.75)
+    parser.add_argument("--eta", type=float, default=0.51)
+    parser.add_argument(
+        "--fplll-mode",
+        choices=("wrapper", "fast", "heuristic", "proved"),
+        default="fast",
+    )
+    parser.add_argument(
+        "--fplll-float",
+        choices=("mpfr", "dd", "qd", "dpe", "double", "longdouble"),
+        default="dpe",
+    )
+    parser.add_argument("--fplll-precision", type=int, default=256)
+    parser.add_argument(
+        "--backend",
+        choices=("fplll", "flatter", "flatter-fplll"),
+        default="fplll",
+    )
+    arguments = parser.parse_args()
+    require(arguments.candidate_count >= RELATIONS, "enough candidates")
+
+    residue_path = arguments.residue
+    if not residue_path.is_absolute():
+        residue_path = ROOT / residue_path
+    output_path = arguments.output
+    if not output_path.is_absolute():
+        output_path = ROOT / output_path
+    residue = load_gzip(residue_path)
+    require(residue["shape"] == [FIELD_DEGREE, COLUMNS, RELATIONS], "residue shape")
+    modulus = int(residue["modulus"])
+    roots = [int(value) for value in residue["lifted_roots"]]
+    kernels = residue["kernels"]
+    free = set(int(value) for value in residue["free_columns"])
+    available = [coordinate for coordinate in range(COLUMNS) if coordinate not in free]
+    samples = sorted(
+        {
+            available[round(index * (len(available) - 1) / (arguments.initial_samples - 1))]
+            for index in range(arguments.initial_samples)
+        }
+    )
+    vandermonde = [
+        [pow(root, degree, modulus) for degree in range(FIELD_DEGREE)]
+        for root in roots
+    ]
+    inverse_vandermonde = invert_matrix_mod(vandermonde, modulus)
+    rounds: list[dict[str, Any]] = []
+    warm_candidates: list[list[int]] | None = None
+    if arguments.resume:
+        previous = load_gzip(output_path)
+        require(not previous["exact_kernel_closed"], "resume only open search")
+        rounds = list(previous["rounds"])
+        samples = sorted(
+            set(int(value) for value in rounds[-1]["samples"])
+            | {
+                int(item["coordinate"])
+                for item in rounds[-1]["worst_new_coordinates"]
+            }
+        )
+        warm_candidates = [
+            [int(value) for value in row]
+            for row in previous["selected_candidate_free_coefficients"]
+        ]
+
+    exact_nonzeros = -1
+    exact_slots = ROWS * RELATIONS
+    selected_coefficients: list[list[int]] = []
+    for _ in range(arguments.rounds):
+        started = time.monotonic()
+        coupling = coupling_matrix(
+            kernels, roots, inverse_vandermonde, modulus, samples
+        )
+        lattice = build_lattice(coupling, modulus, warm_candidates)
+        lll_started = time.monotonic()
+        if arguments.backend == "flatter":
+            reduced = reduce_flatter(lattice, arguments.delta)
+        elif arguments.backend == "flatter-fplll":
+            preconditioned = reduce_flatter(lattice, arguments.delta)
+            reduced = reduce_fplll(
+                preconditioned,
+                arguments.delta,
+                arguments.eta,
+                arguments.fplll_mode,
+                arguments.fplll_float,
+                True,
+                False,
+                arguments.fplll_precision,
+            )
+        else:
+            reduced = reduce_fplll(
+                lattice,
+                arguments.delta,
+                arguments.eta,
+                arguments.fplll_mode,
+                arguments.fplll_float,
+                True,
+                False,
+                arguments.fplll_precision,
+            )
+        lll_elapsed = time.monotonic() - lll_started
+        candidates = candidate_vectors(reduced, arguments.candidate_count)
+        vectors = interpolate_vectors(
+            candidates, kernels, roots, inverse_vandermonde, modulus
+        )
+        selected = independent_candidates(candidates)
+        require(len(selected) == RELATIONS, "21 independent candidates")
+        selected_vectors = [vectors[index] for index in selected]
+        exact_nonzeros, exact_slots = exact_replay(selected_vectors)
+        scores: list[tuple[int, int, int]] = []
+        all_bits: list[int] = []
+        for coordinate in available:
+            bits = [
+                abs(value).bit_length()
+                for vector in vectors
+                for value in vector[coordinate]
+            ]
+            all_bits.extend(bits)
+            scores.append(
+                (
+                    sum(value > arguments.threshold_bits for value in bits),
+                    max(bits),
+                    coordinate,
+                )
+            )
+        worst = sorted(
+            (score for score in scores if score[2] not in samples), reverse=True
+        )[: arguments.add_samples]
+        round_record = {
+            "round": len(rounds),
+            "backend": arguments.backend,
+            "samples": list(samples),
+            "lattice_dimension": len(lattice),
+            "candidate_count": len(candidates),
+            "selected_independent_candidates": selected,
+            "coefficient_bit_median": statistics.median(all_bits),
+            "coefficient_bit_max": max(all_bits),
+            "coefficients_over_threshold": sum(
+                value > arguments.threshold_bits for value in all_bits
+            ),
+            "exact_replay_nonzero_slots": exact_nonzeros,
+            "exact_replay_slots": exact_slots,
+            "worst_new_coordinates": [
+                {
+                    "coordinate": coordinate,
+                    "over_threshold": count,
+                    "max_bits": maximum,
+                }
+                for count, maximum, coordinate in worst
+            ],
+            "lll_elapsed_seconds": lll_elapsed,
+            "elapsed_seconds": time.monotonic() - started,
+        }
+        rounds.append(round_record)
+        selected_coefficients = [candidates[index] for index in selected]
+        warm_candidates = selected_coefficients
+        payload = {
+            "schema": "ust.g3en.h02.component16.six-embedding-lattice.v1",
+            "date": "2026-08-14",
+            "source_residue": residue_path.relative_to(ROOT).as_posix(),
+            "matrix": MATRIX.relative_to(ROOT).as_posix(),
+            "modulus_bits": modulus.bit_length(),
+            "rounds": rounds,
+            "selected_candidate_free_coefficients": selected_coefficients,
+            "exact_replay_nonzero_slots": exact_nonzeros,
+            "exact_replay_slots": exact_slots,
+            "exact_kernel_closed": exact_nonzeros == 0,
+            "claim_boundary": (
+                "Only 21 independent vectors with literal zero Q(gamma) replay "
+                "promote component16. LLL and p-adic consistency alone do not."
+            ),
+        }
+        write_gzip_atomic(output_path, payload)
+        print(
+            f"G3EN round={round_record['round']} samples={len(samples)} "
+            f"lattice={len(lattice)} lll={lll_elapsed:.3f}s "
+            f"median_bits={round_record['coefficient_bit_median']} "
+            f"over={round_record['coefficients_over_threshold']} "
+            f"exact_nonzeros={exact_nonzeros} "
+            f"worst={[item[2] for item in worst]} "
+            f"elapsed={round_record['elapsed_seconds']:.3f}s",
+            flush=True,
+        )
+        if exact_nonzeros == 0:
+            break
+        samples = sorted(set(samples) | {item[2] for item in worst})
+
+    print(
+        f"G3EN_FINAL exact_kernel_closed={exact_nonzeros == 0} "
+        f"exact_nonzeros={exact_nonzeros} output={output_path.relative_to(ROOT).as_posix()}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

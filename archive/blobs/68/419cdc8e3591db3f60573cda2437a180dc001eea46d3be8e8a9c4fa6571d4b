@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""Build the guarded G3EG component-12 adaptive exactness cutset packet."""
+
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "state/ust_g3eg_h02_component12_adaptive_exactness_cutset.packet.json"
+G3EA = ROOT / "state/ust_g3ea_h02_component9_gradient_elliptic_lift.packet.json"
+G3EB = ROOT / "state/ust_g3eb_h02_component12_cohomological_source_cutset.packet.json"
+G3EC_CERT = ROOT / "evidence/ust_g3ec/H02.component12.unit_pivot_reduction.json"
+G3EC_MATRIX = ROOT / "evidence/ust_g3ec/H02.component12.unit_pivot_reduced.number_field.sms"
+G3ED_CERT = ROOT / "evidence/ust_g3ed/H02.component12.unit_saturation.json"
+G3ED_MATRIX = ROOT / "evidence/ust_g3ed/H02.component12.unit_saturated.number_field.sms"
+PADIC96 = ROOT / "evidence/ust_g3ec/H02.component12.reduced.padic-exp96.residue.json.gz"
+PADIC96_LOG = ROOT / "evidence/ust_g3ec/padic-reduced-exp96-residue.log"
+RECON64 = ROOT / "evidence/ust_g3ec/H02.component12.reduced.padic-exp64.reconstruction.json.gz"
+RECON96 = ROOT / "evidence/ust_g3ec/H02.component12.reduced.padic-exp96.reconstruction.json.gz"
+G3EF = ROOT / "evidence/ust_g3ef/H02.component12.six_embedding_lattice.json.gz"
+FRACTION_FREE_LOG = ROOT / "evidence/ust_g3ed/fraction-free-full.log"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_gzip(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def read_log(path: Path) -> str:
+    data = path.read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8")
+
+
+def reconstruction_map(payload: dict[str, Any]) -> dict[int, tuple[int, int]]:
+    return {
+        int(index): (int(numerator), int(denominator))
+        for index, numerator, denominator in payload["coefficients"]
+    }
+
+
+def main() -> None:
+    g3ea, g3eb = load(G3EA), load(G3EB)
+    require(all(g3ea["checks"].values()), "G3EA checks")
+    require(all(g3eb["checks"].values()), "G3EB checks")
+    require(
+        g3ea["rank_promotion"]["promoted_global_Q_rank_interval"] == [4748, 5112],
+        "G3EA global interval",
+    )
+    require(
+        g3eb["status"]
+        == "CLOSED_EXACT_COMPONENT12_COHOMOLOGICAL_SOURCE_CUTSET_PROMOTION_OPEN",
+        "G3EB status",
+    )
+
+    g3ec, g3ed = load(G3EC_CERT), load(G3ED_CERT)
+    require(g3ec["input_shape"] == [42706, 2113], "G3EC input shape")
+    require(g3ec["quotient_unit_elimination"] == {"rows": 227, "columns": 227}, "G3EC quotient units")
+    require(g3ec["paired_v_elimination"]["pivots"] == 254, "G3EC paired v pivots")
+    require(g3ec["monic_w_square_elimination"]["pivots"] == 676, "G3EC w-square pivots")
+    require(g3ec["output"]["shape"] == [1324, 956], "G3EC output shape")
+    require(g3ec["output"]["finite_rank_at_p21817_gamma5"] == 946, "G3EC finite rank")
+    require(g3ec["output"]["finite_nullity"] == 10, "G3EC finite nullity")
+    require(g3ed["input_shape"] == [1324, 956], "G3ED input shape")
+    require(len(g3ed["exact_unit_pivots"]) == 85, "G3ED unit pivots")
+    require(g3ed["output"]["shape"] == [1239, 871], "G3ED output shape")
+    require(g3ed["output"]["finite_rank_at_p21817_gamma5"] == 861, "G3ED finite rank")
+    require(g3ed["output"]["finite_nullity"] == 10, "G3ED finite nullity")
+
+    padic = load_gzip(PADIC96)
+    require(padic["schema"] == "ust.g3ec.component12.padic-kernel-residue.v1", "p-adic schema")
+    require(padic["exponent"] == 96 and padic["modulus_bits"] == 1384, "p-adic precision")
+    require(padic["shape"] == [6, 956, 10], "p-adic shape")
+    padic_log = read_log(PADIC96_LOG)
+    require(len(re.findall(r"rank=946 .* residual=0", padic_log)) == 6, "six zero-residual embeddings")
+
+    recon64, recon96 = load_gzip(RECON64), load_gzip(RECON96)
+    map64, map96 = reconstruction_map(recon64), reconstruction_map(recon96)
+    common = set(map64) & set(map96)
+    stable = {index for index in common if map64[index] == map96[index]}
+    stable_zero = sum(map64[index][0] == 0 for index in stable)
+    stable_nonzero = len(stable) - stable_zero
+    require((len(stable), stable_zero, stable_nonzero) == (600, 590, 10), "normalized-basis stability audit")
+
+    lattice = load_gzip(G3EF)
+    require(lattice["schema"] == "ust.g3ef.h02.component12.six-embedding-lattice.v1", "G3EF schema")
+    rounds = lattice["rounds"]
+    residuals = [int(row["exact_replay_nonzero_slots"]) for row in rounds]
+    over_threshold = [int(row["coefficients_over_threshold"]) for row in rounds]
+    require(residuals == [10795, 9378, 7507, 3279], "adaptive exact residual trend")
+    require(over_threshold == [29465, 21344, 13619, 1843], "adaptive coefficient trend")
+    require(not lattice["exact_kernel_closed"], "G3EF remains open")
+    require(lattice["exact_replay_nonzero_slots"] == 3279, "G3EF final residual")
+
+    fraction_free_log = read_log(FRACTION_FREE_LOG)
+    checkpoints = [
+        tuple(map(int, match))
+        for match in re.findall(r"step=(\d+).* bits=(\d+)", fraction_free_log)
+    ]
+    require(checkpoints and checkpoints[-1] == (490, 104650), "fraction-free bounded wall")
+
+    packet = {
+        "schema": "mtt.unified-source.g3eg-h02-component12-adaptive-exactness-cutset.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3EG",
+        "status": "CLOSED_EXACT_COMPONENT12_REDUCTION_AND_ADAPTIVE_EXACTNESS_CUTSET_PROMOTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3EA": record(G3EA),
+            "G3EB": record(G3EB),
+        },
+        "exact_kernel_preserving_reductions": {
+            "G3EC_certificate": record(G3EC_CERT),
+            "G3EC_matrix": record(G3EC_MATRIX),
+            "post_G3DZ_shape": [42706, 2113],
+            "quotient_unit_pivots": 227,
+            "paired_v_pivots": 254,
+            "monic_w_square_pivots": 676,
+            "G3EC_shape": [1324, 956],
+            "G3ED_certificate": record(G3ED_CERT),
+            "G3ED_matrix": record(G3ED_MATRIX),
+            "literal_unit_pivots": 85,
+            "G3ED_shape": [1239, 871],
+            "kernel_dimension_preserved": True,
+        },
+        "high_precision_split_algebra": {
+            "residue": record(PADIC96),
+            "log": record(PADIC96_LOG),
+            "prime": 21817,
+            "exponent": 96,
+            "modulus_bits": 1384,
+            "embeddings": 6,
+            "rank_per_embedding": 946,
+            "nullity_per_embedding": 10,
+            "residual_per_embedding": 0,
+        },
+        "normalized_basis_reconstruction_nogo": {
+            "exponent64": record(RECON64),
+            "exponent96": record(RECON96),
+            "stable_coefficients": len(stable),
+            "stable_prescribed_zeros": stable_zero,
+            "stable_prescribed_units": stable_nonzero,
+            "stable_nontrivial_coefficients": 0,
+            "conclusion": "the unit-normalized kernel basis is determinant-sized at this precision",
+        },
+        "bounded_fraction_free_route": {
+            "log": record(FRACTION_FREE_LOG),
+            "completed_pivots": 490,
+            "target_pivots": 861,
+            "coefficient_bit_height": 104650,
+            "conclusion": "valid exact route but unsuitable as the current foreground executor",
+        },
+        "adaptive_six_embedding_lattice": {
+            "audit": record(G3EF),
+            "rounds": len(rounds),
+            "sample_counts": [len(row["samples"]) for row in rounds],
+            "lattice_dimensions": [int(row["lattice_dimension"]) for row in rounds],
+            "exact_replay_nonzero_slots": residuals,
+            "coefficients_over_500_bits": over_threshold,
+            "current_exact_replay_nonzero_slots": residuals[-1],
+            "exact_kernel_closed": False,
+        },
+        "rank_frontier": {
+            "component12_dimension": 81,
+            "finite_component12_rank": 71,
+            "finite_component12_nullity": 10,
+            "proven_characteristic_zero_component12_rank": None,
+            "proven_global_Q_rank_interval": [4748, 5112],
+            "conditional_interval_after_exact10_promotion": [4748, 5102],
+        },
+        "checks": {
+            "component12_source_cutset_is_exact": True,
+            "all_G3EC_and_G3ED_reductions_are_exact_and_kernel_preserving": True,
+            "six_padic_embeddings_have_rank946_and_zero_residual_at_1384_bits": True,
+            "unit_normalized_reconstruction_has_no_stable_nontrivial_coefficients": True,
+            "adaptive_six_embedding_residual_strictly_decreases": all(
+                right < left
+                for left, right in zip(residuals[:-1], residuals[1:], strict=True)
+            ),
+            "adaptive_large_coefficient_count_strictly_decreases": all(
+                right < left
+                for left, right in zip(
+                    over_threshold[:-1], over_threshold[1:], strict=True
+                )
+            ),
+            "exact_replay_is_still_nonzero": residuals[-1] > 0,
+            "global_interval_is_not_tightened": True,
+        },
+        "guardrails": {
+            "component12_rank71_claimed_over_Qgamma": False,
+            "global_upper5102_claimed": False,
+            "padic_consistency_promoted_without_exact_replay": False,
+            "partial_fraction_free_elimination_called_complete": False,
+            "failed_dimension240_LLL_called_a_result": False,
+        },
+        "theorem": {
+            "statement": (
+                "The exact component-12 cohomological presentation admits 1242 explicit "
+                "kernel-preserving contractions: 227 quotient units, 254 paired v-pivots, "
+                "676 monic w-square pivots and 85 literal unit pivots. The resulting exact "
+                "matrix is 1239 by 871 and retains finite nullity ten. A complete six-embedding "
+                "p-adic kernel exists to 1384 bits. Six-embedding lattice reduction lowers the "
+                "literal exact replay residual from10795 to3279 slots, but does not yet make it "
+                "zero. Therefore the exact reduction and adaptive-exactness cutset are closed, "
+                "while characteristic-zero component-12 promotion remains open."
+            ),
+            "tier": "CLOSED_EXACT_REDUCTION_AND_GUARDED_ADAPTIVE_PROMOTION_FRONTIER",
+        },
+        "frontier_delta": {
+            "before": "A 2113-column exact cohomological presentation had finite nullity ten but no practical characteristic-zero executor.",
+            "after": "The same kernel is reduced exactly to 871 columns, preserved at 1384 p-adic bits, and has a convergent six-embedding lattice replay with3279 exact residual slots.",
+        },
+        "next_required_object": (
+            "Run the six-embedding lattice at the next 30-sample, 240-dimensional stage "
+            "using a production LLL backend, add the current coordinates624,622,621,632,666, "
+            "and require ten Q(gamma)-independent vectors with literal zero replay in the "
+            "1324x956 exact matrix. Alternatively prove the same ten-dimensional boundary "
+            "class directly from the G3BI restriction right inverse and the truncated "
+            "Koszul complex. Do not alter the global interval until exact replay is zero."
+        ),
+    }
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3EG component12 adaptive exactness cutset: PASS")
+    print(f"exact_reductions=1242 G3ED=1239x871 finite_nullity=10")
+    print(f"adaptive_exact_residual={residuals[0]}->{residuals[-1]} global_interval=4748..5112")
+
+
+if __name__ == "__main__":
+    main()

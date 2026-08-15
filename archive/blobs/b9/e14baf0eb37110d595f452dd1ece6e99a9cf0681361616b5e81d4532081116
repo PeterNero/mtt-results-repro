@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+"""Close the full G3AP rank squeeze from an exact monotone submap witness."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_full_reuse as assembler
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_ordinary_top_lower_bound as lower
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import certify_ust_g3ap_selected_cayley_target_macaulay_base as base_certifier
+import certify_ust_g3ap_selected_cayley_target_macaulay_full as full_certifier
+import certify_ust_g3ap_selected_cayley_target_macaulay_incremental_givaro_map_rank as givaro_witness
+import certify_ust_g3ap_selected_cayley_target_macaulay_incremental_rank as witness_builder
+import run_ust_g3ap_selected_cayley_target_macaulay_minor as shared_runner
+import ust_f1016_sparse_minor as minor
+import verify_ust_g3ap_selected_cayley_target_macaulay_full_reused as source_verifier
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+PACKET = full_certifier.PACKET
+FULL_FUNCTIONAL_OUTPUT = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_full_reused."
+    "from-incremental-functional.givaro.out"
+)
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+MONOTONE_LEMMA = ROOT / "UST_G3AP_MONOTONE_FULL_SOURCE_RANK_SQUEEZE_LEMMA_v1.md"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def checked(item: dict[str, object], label: str) -> Path:
+    path = ROOT / str(item["path"])
+    require(
+        path.is_file()
+        and sha256(path) == item["sha256"]
+        and path.stat().st_size == item.get("bytes", path.stat().st_size),
+        label,
+    )
+    return path
+
+
+def packet_scope(
+    packet: dict[str, object],
+    schema_suffix: str,
+    status: str | tuple[str, ...],
+    label: str,
+) -> None:
+    accepted_statuses = (status,) if isinstance(status, str) else status
+    require(
+        packet["schema"].endswith(schema_suffix)
+        and packet["status"] in accepted_statuses
+        and all(packet["checks"].values())
+        and not any(packet["guardrails"].values()),
+        label,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--reuse-source-certificate", action="store_true")
+    parser.add_argument("--reuse-full-functional", action="store_true")
+    args = parser.parse_args()
+    full_certifier.run_prerequisite_verifiers(
+        args.timeout, args.reuse_source_certificate
+    )
+
+    lower_packet = json.loads(lower.OUT.read_text(encoding="ascii"))
+    require(
+        lower_packet["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_AT_LEAST_ONE"
+        and all(lower_packet["checks"].values())
+        and not any(lower_packet["guardrails"].values()),
+        "selected ordinary-top lower bound",
+    )
+    base_packet = json.loads(base_certifier.PACKET.read_text(encoding="ascii"))
+    packet_scope(
+        base_packet,
+        "base-certified.v1",
+        "CLOSED_EXACT_SELECTED_BASE_IDEAL_AND_LEADING_IDEAL_EQUALITY",
+        "selected base certificate",
+    )
+    source_packet = json.loads(source_verifier.OUT.read_text(encoding="ascii"))
+    packet_scope(
+        source_packet,
+        "full-source-certified.v1",
+        "CLOSED_EXACT_FULL_92979_ROW_SELECTED_MACAULAY_SOURCE_PROVENANCE_NOT_RANK",
+        "full-source certificate",
+    )
+    witness_locator = json.loads(witness_builder.LATEST.read_text(encoding="ascii"))
+    witness_path = checked(witness_locator["packet"], "incremental rank witness")
+    witness = json.loads(witness_path.read_text(encoding="ascii"))
+    packet_scope(
+        witness,
+        "incremental-rank-witness.v1",
+        (
+            "CLOSED_EXACT_RANK39725_MINOR_IN_SELECTED_FULL_MAP_SUBSET_NOT_YET_FULL_SOURCE_FUNCTIONAL_REPLAY",
+            "CLOSED_EXACT_RANK39725_SCC_FACTORS_IN_SELECTED_FULL_MAP_SUBSET_NOT_YET_FULL_SOURCE_FUNCTIONAL_REPLAY",
+            "CLOSED_EXACT_RANK39725_GIVARO_MAP_REPLAY_IN_SELECTED_FULL_MAP_SUBSET_NOT_YET_FULL_SOURCE_FUNCTIONAL_REPLAY",
+        ),
+        "incremental rank witness scope",
+    )
+
+    base_source = checked(base_packet["inputs"]["selected_source"], "base source")
+    full_source = checked(source_packet["inputs"]["selected_source"], "full source")
+    full_matrix = checked(source_packet["inputs"]["full_matrix"], "full matrix")
+    incremental_campaign_path = checked(
+        witness["inputs"]["incremental_campaign"], "incremental campaign"
+    )
+    incremental_matrix = checked(
+        witness["inputs"]["incremental_matrix"], "incremental matrix"
+    )
+    incremental_campaign = json.loads(
+        incremental_campaign_path.read_text(encoding="ascii")
+    )
+    require(
+        base_source == full_source == macaulay.SOURCE
+        and full_matrix == assembler.FULL_MATRIX
+        and incremental_campaign["selection"][
+            "selected_sources_are_a_subset_of_the_full_map"
+        ]
+        and incremental_campaign["matrix"]["path"] == relative(incremental_matrix),
+        "common selected source and submap",
+    )
+
+    assembly_path = checked(
+        source_packet["inputs"]["assembly_campaign"], "full assembly campaign"
+    )
+    assembly = json.loads(assembly_path.read_text(encoding="ascii"))
+    require(
+        assembly["schema"].endswith("full-reused.v1")
+        and assembly["matrix"]["sha256"] == sha256(full_matrix)
+        and assembly["selection"]["union_is_a_permutation_of_all_selected_sources"],
+        "full assembly scope",
+    )
+    full_chunk_records = {
+        (item["path"], item["sha256"])
+        for item in assembly["inputs"]["complement_packets"]
+    }
+    require(
+        all(
+            (item["path"], item["sha256"]) in full_chunk_records
+            for item in incremental_campaign["inputs"]["complement_packets"]
+        )
+        and incremental_campaign["inputs"]["balanced_matrix"]["sha256"]
+        == assembly["inputs"]["reused_balanced_matrix"]["sha256"],
+        "incremental rows included in full source certificate",
+    )
+
+    extraction_path = checked(
+        witness["inputs"]["minor_extraction"], "minor extraction"
+    )
+    selected_minor = checked(witness["inputs"]["selected_minor"], "selected minor")
+    extraction = json.loads(extraction_path.read_text(encoding="ascii"))
+    require(
+        selected_minor == ROOT / extraction["minor"]["path"]
+        and extraction["minor"]["size"] == TARGET_RANK,
+        "incremental selected minor",
+    )
+    custom = witness["engines"]["custom_sparse_column_elimination"]
+    custom_output = checked(custom["output"], "custom output")
+    checked(custom["source"], "custom source")
+    checked(custom["binary"], "custom binary")
+    checked(custom["log"], "custom log")
+    for index, dependency in enumerate(custom["source_dependencies"]):
+        checked(dependency, f"custom dependency {index}")
+    scalars, vectors = minor.parse_output(custom_output)
+    functional = vectors["QUOTIENT_FUNCTIONAL_PACKED"]
+    require(
+        int(scalars["SOURCE_ROWS"]) == 92979
+        and int(scalars["TARGET_COORDINATES"])
+        == macaulay.EXPECTED_TARGET_COORDINATES
+        and int(scalars["MATRIX_NONZEROS"])
+        == incremental_campaign["matrix"]["nonzeros"]
+        and int(scalars["MINOR_SIZE"]) == TARGET_RANK
+        and minor.determinant(
+            vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"],
+            vectors["PIVOT_COEFFICIENTS_PACKED"],
+        )
+        == int(scalars["MINOR_DETERMINANT_PACKED"])
+        != 0,
+        "incremental exact rank transcript",
+    )
+    if "linbox_givaro_sparse_elimination" in witness["engines"]:
+        linbox = witness["engines"]["linbox_givaro_sparse_elimination"]
+        linbox_output = checked(linbox["output"], "LinBox output")
+        checked(linbox["source"], "LinBox source")
+        checked(linbox["binary"], "LinBox binary")
+        linbox_shape = shared_runner.parse_linbox(
+            linbox_output.read_text(encoding="utf-8")
+        )
+        require(
+            linbox_shape[0] == linbox_shape[1] == linbox_shape[3] == TARGET_RANK
+            and linbox_shape[2] == extraction["minor"]["nonzeros"],
+            "independent exact incremental minor rank",
+        )
+        independent_rank_route = "monolithic_selected_minor"
+    elif "givaro_map_pivot_replay" in witness["engines"]:
+        checked(
+            witness["inputs"]["givaro_map_replay_lemma"],
+            "Givaro-map replay lemma",
+        )
+        replay = witness["engines"]["givaro_map_pivot_replay"]
+        replay_source = checked(replay["source"], "Givaro-map replay source")
+        checked(replay["binary"], "Givaro-map replay binary")
+        checked(replay["selftest_matrix"], "Givaro-map self-test matrix")
+        checked(replay["selftest_output"], "Givaro-map self-test output")
+        checked(replay["pivot_order_extraction"], "pivot-order extraction")
+        pivot_minor = checked(replay["pivot_order_minor"], "pivot-order minor")
+        replay_output = checked(replay["output"], "Givaro-map replay output")
+        replay_shape = givaro_witness.parse_replay(
+            givaro_witness.read_replay(replay_output)
+        )
+        require(
+            replay_shape[:5]
+            == (
+                TARGET_RANK,
+                TARGET_RANK,
+                extraction["minor"]["nonzeros"],
+                TARGET_RANK,
+                int(scalars["MINOR_DETERMINANT_PACKED"]),
+            )
+            and all(value > 0 for value in replay_shape[5:])
+            and replay_source != ROOT / custom["source"]["path"]
+            and pivot_minor.stat().st_size > 0,
+            "independent exact Givaro-map minor rank",
+        )
+        independent_rank_route = "Givaro_basis_map_pivot_replay"
+    else:
+        require(
+            "structural_scc_factorization" in witness["engines"]
+            and "linbox_givaro_scc_factor_elimination" in witness["engines"],
+            "independent SCC rank engines",
+        )
+        checked(
+            witness["inputs"]["structural_factorization_lemma"],
+            "structural factorization lemma",
+        )
+        structural = witness["engines"]["structural_scc_factorization"]
+        checked(structural["source"], "structural source")
+        checked(structural["binary"], "structural binary")
+        checked(structural["output"], "structural output")
+        largest_factor = checked(structural["largest_factor"], "largest SCC factor")
+        remainder_factor = checked(
+            structural["remainder_factor"], "remainder SCC factor"
+        )
+        linbox = witness["engines"]["linbox_givaro_scc_factor_elimination"]
+        checked(linbox["source"], "LinBox source")
+        checked(linbox["binary"], "LinBox binary")
+        largest_output = checked(linbox["largest_output"], "largest SCC LinBox output")
+        remainder_output = checked(
+            linbox["remainder_output"], "remainder SCC LinBox output"
+        )
+        largest_shape = shared_runner.parse_linbox(
+            largest_output.read_text(encoding="utf-8")
+        )
+        remainder_shape = shared_runner.parse_linbox(
+            remainder_output.read_text(encoding="utf-8")
+        )
+        with largest_factor.open("r", encoding="ascii") as stream:
+            largest_header = tuple(int(value) for value in stream.readline().split())
+        with remainder_factor.open("r", encoding="ascii") as stream:
+            remainder_header = tuple(int(value) for value in stream.readline().split())
+        require(
+            largest_shape[0] == largest_shape[1] == largest_shape[3]
+            and remainder_shape[0] == remainder_shape[1] == remainder_shape[3]
+            and largest_shape[0] + remainder_shape[0] == TARGET_RANK
+            and largest_shape[:3] == largest_header
+            and remainder_shape[:3] == remainder_header
+            and structural["perfect_matching_size"] == TARGET_RANK
+            and structural["scc_blocks"] >= 2,
+            "independent exact SCC-factor minor rank",
+        )
+        independent_rank_route = "perfect_matching_SCC_block_triangular_factors"
+    incremental_functional_engine = witness["engines"][
+        "givaro_incremental_matrix_functional_replay"
+    ]
+    functional_artifact = checked(
+        incremental_functional_engine["functional"], "functional artifact"
+    )
+    checked(incremental_functional_engine["output"], "incremental functional replay")
+    checked(incremental_functional_engine["source"], "functional source")
+    functional_binary = checked(
+        incremental_functional_engine["binary"], "functional binary"
+    )
+
+    if not args.reuse_full_functional:
+        full_raw = shared_runner.run_exact(
+            functional_binary,
+            [relative(full_matrix), relative(functional_artifact)],
+            FULL_FUNCTIONAL_OUTPUT,
+            args.timeout,
+        )
+    else:
+        require(FULL_FUNCTIONAL_OUTPUT.is_file(), "existing full functional replay")
+        full_raw = FULL_FUNCTIONAL_OUTPUT.read_text(encoding="utf-8")
+    full_functional_shape = shared_runner.parse_functional_replay(full_raw)
+    require(
+        full_functional_shape[:4]
+        == (
+            92979,
+            macaulay.EXPECTED_TARGET_COORDINATES,
+            source_packet["matrix"]["nonzeros"],
+            92979,
+        ),
+        "independent full-map functional replay",
+    )
+    for name, item in witness["field_self_test"].items():
+        if isinstance(item, dict) and "path" in item:
+            checked(item, f"field self-test {name}")
+    require(witness["field_self_test"]["exact_rank"] == 1, "field self-test rank")
+
+    base_coordinate_path = checked(
+        source_packet["inputs"]["base_coordinate_packet"], "base coordinates"
+    )
+    base_coordinates = json.loads(base_coordinate_path.read_text(encoding="ascii"))
+    leaders = [
+        tuple(int(value) for value in item)
+        for item in base_coordinates["base_leading_exponents"]
+    ]
+    targets, _ = macaulay.coordinate_data(leaders)
+    normalization = int(
+        scalars["QUOTIENT_NORMALIZATION_TARGET_COORDINATE_ZERO_BASED"]
+    )
+    require(
+        len(functional) == len(targets) == macaulay.EXPECTED_TARGET_COORDINATES
+        and functional[normalization] == 1,
+        "normalized full quotient functional",
+    )
+    component, exponent = targets[normalization]
+    functional_hash = hashlib.sha256(
+        json.dumps(functional, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    require(
+        functional_hash
+        == extraction["minor"]["quotient_functional"]["packed_coefficients_sha256"],
+        "quotient functional identity",
+    )
+
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "full-certified.v1"
+        ),
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AP.FULL-SOURCE-MACAULAY-RANK-SQUEEZE",
+        "status": (
+            "CLOSED_EXACT_SELECTED_F1016_FULL_SOURCE_ORDINARY_TOP_DIMENSION_ONE"
+        ),
+        "inputs": {
+            "selected_ordinary_top_lower_bound": record(lower.OUT),
+            "selected_base_certificate": record(base_certifier.PACKET),
+            "full_source_certificate": record(source_verifier.OUT),
+            "incremental_rank_witness": record(witness_path),
+            "selected_source": record(macaulay.SOURCE),
+            "base_coordinate_packet": record(base_coordinate_path),
+            "monotone_rank_squeeze_lemma": record(MONOTONE_LEMMA),
+        },
+        "base_quotient": {
+            "ideal": "(K,E,C)",
+            "cached_generators": base_packet["execution"]["cached_generators"],
+            "cached_ideal_equals_selected_ideal": True,
+            "cached_and_recomputed_leading_ideals_are_equal": True,
+            "certified_cache": base_packet["execution"]["certified_cache"],
+            "cache": base_packet["execution"]["certified_cache"],
+        },
+        "target_relation_map": {
+            "Cox_degree": [18, 2, 2],
+            "coordinates": macaulay.EXPECTED_TARGET_COORDINATES,
+            "selected_relation_rows": 92979,
+            "selected_relation_nonzeros": source_packet["matrix"]["nonzeros"],
+            "rank_witness_selected_rows": incremental_campaign["selection"][
+                "selected_nonzero_source_rows"
+            ],
+            "source_order": source_packet["matrix"]["source_order"],
+            "source_order_is_a_permutation_of_the_full_selected_map": True,
+            "exact_rank": TARGET_RANK,
+            "rank_lower_bound_from_incremental_minor": TARGET_RANK,
+            "rank_upper_bound_from_selected_nonzero_ordinary_top_class": TARGET_RANK,
+            "codimension": 1,
+            "custom_nonzero_minor_determinant_packed": int(
+                scalars["MINOR_DETERMINANT_PACKED"]
+            ),
+            "independent_exact_minor_rank": TARGET_RANK,
+            "independent_rank_route": independent_rank_route,
+        },
+        "quotient_functional": {
+            "coefficient_encoding": "sum_i coefficient_i*101^i in 1,g,...,g^5",
+            "packed_coefficients_sha256": functional_hash,
+            "packed_coefficients": functional,
+            "normalization_target_coordinate_zero_based": normalization,
+            "normalization_component": component,
+            "normalization_base_exponent": list(exponent),
+            "normalization_basis": full_certifier.monomial_label(component, exponent),
+            "normalization_value_packed": 1,
+            "annihilates_all_92979_selected_relation_rows": True,
+            "annihilates_every_campaign_relation_row": True,
+            "artifact": record(functional_artifact),
+            "independent_givaro_replay": record(FULL_FUNCTIONAL_OUTPUT),
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "Cox_monomials_enumerated": fiber2.EXPECTED_TOTAL,
+            "base_quotient_target_coordinates": len(targets),
+            "upper_bound_dimension": 1,
+            "lower_bound_dimension": 1,
+            "dimension": 1,
+            "basis": [full_certifier.monomial_label(component, exponent)],
+            "basis_component": component,
+            "basis_base_exponent": list(exponent),
+        },
+        "checks": {
+            "the_cached_base_ideal_is_exactly_the_selected_K_E_C_ideal": True,
+            "the_cached_and_recomputed_leading_monomial_ideals_are_equal": True,
+            "all_92979_rows_have_independently_replayed_selected_source_provenance": True,
+            "the_incremental_rank_witness_rows_are_in_the_full_source_map": True,
+            "the_incremental_submap_has_a_nonzero_rank39725_minor": True,
+            "the_custom_pivot_determinant_is_independently_recomputed": True,
+            "independent_exact_field_arithmetic_finds_minor_rank39725": True,
+            "rank_monotonicity_gives_full_map_rank_at_least39725": True,
+            "the_selected_nonzero_top_class_gives_full_map_rank_at_most39725": True,
+            "the_full_selected_relation_map_has_rank_exactly39725": True,
+            "the_unique_normalized_quotient_functional_annihilates_all_92979_rows": True,
+            "independent_Givaro_arithmetic_replays_the_functional_on_all_92979_rows": True,
+            "the_selected_ordinary_top_piece_has_dimension_exactly_one": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_a_full_unrestricted_standard_basis": False,
+            "claims_characteristic_zero_promotion": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_the_q79_Hull_Strominger_endpoint": False,
+        },
+        "theorem": {
+            "name": (
+                "selectedCayleyOrdinaryTopDimensionByMonotoneFullSourceExact"
+                "TargetMacaulayRankSqueezeTheorem"
+            ),
+            "tier": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_ONE",
+            "statement": (
+                "For the selected F_101^6 Cayley member, an exact selected-source "
+                "submap of the full 92,979-row target Macaulay map contains a "
+                "nonzero 39,725-minor. The independently selected toric R1 theorem "
+                "forces the full map rank to be at most 39,725, so its rank is "
+                "exactly 39,725 in 39,726 target coordinates. The independently "
+                "replayed normalized dual functional annihilates all 92,979 rows, "
+                "and the ordinary top quotient in Cox degree (18,2,2) is one-dimensional."
+            ),
+        },
+        "next_required_object": (
+            "Adopt this full-source quotient functional as canonical G3AP and "
+            "execute the same-carrier G3AM principal-response rank."
+        ),
+    }
+    require(all(packet["checks"].values()), "full incremental G3AP checks")
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP full-source monotone rank-squeeze certification: PASS "
+        f"rows=92979 witness_rows={incremental_campaign['selection']['selected_nonzero_source_rows']} "
+        f"rank={TARGET_RANK} dimension=1 basis={packet['ordinary_top_piece']['basis'][0]}"
+    )
+
+
+if __name__ == "__main__":
+    main()

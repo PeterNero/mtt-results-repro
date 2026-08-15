@@ -1,0 +1,62 @@
+# UST.G3DX H02 Prefix Structural-Gap Localization Theorem v1
+
+## Status
+
+`CLOSED_EXACT_H02_PREFIX_STRUCTURAL_GAP_LOCALIZATION`
+
+The selected H02 bordered matrix has the exact ordered form
+
+```text
+[[A_core, U],
+ [W,          0]],
+```
+
+with a `24,767`-dimensional invertible core followed by the 34 G3BZ update
+components of total dimension `6,022`. A native warm-start Hopcroft-Karp
+executor computes the exact support-matching rank after the core and after
+every component prefix. The already certified common finite pivot partition
+independently gives the coefficient rank at the same prefixes.
+
+At the full border the two ledgers end at
+
+```text
+support matching rank: 29,990 = 24,767 + 5,223
+finite coefficient rank: 29,515 = 24,767 + 4,748
+gap:                                      475.
+```
+
+The gap changes only at components
+
+```text
+0, 9, 12, 16, 20, 21, 22, 23, 24, 25, 26, 28, 29, 30, 31.
+```
+
+Components 23 and 25 partially recover earlier support overestimates; the
+other listed components increase the cumulative gap. Component 27 is wholly
+dependent at the finite place but is also structurally dependent, so it adds
+no support-to-coefficient gap.
+
+## Consequence
+
+The characteristic-zero proof no longer needs to treat the entire support
+graph as one undifferentiated `30,789`-square object. It can quotient the
+already certified prefixes and target only the 15 transitions where the gap
+changes. The first target is component 0, where support rank `190` falls to
+finite rank `162`, exposing 28 candidate relations in a ternary
+`190`-dimensional carrier.
+
+## Boundary
+
+Matching rank is an exact support upper bound, not the rank over
+`Q(gamma)`. The coefficient ledger is exact over the selected finite field,
+but no finite prefix is promoted to characteristic zero here. G3DX localizes
+the 475-rank problem; it does not close it.
+
+## Reproduction
+
+```powershell
+python build_ust_g3dx_h02_prefix_structural_gap_localization.py
+```
+
+The native source is `ust_h02_incremental_prefix_matching.cpp`. The packet and
+ledger arrays are under `state/` and `evidence/ust_g3dx/`.

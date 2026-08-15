@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Independently verify the selected H11 split-place B89 base action."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cw_h11_split_place_base_action.packet.json"
+PRIME = 21817
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, Any]) -> Path:
+    path = ROOT / item["path"]
+    require(path.stat().st_size == int(item["bytes"]), f"byte count {path}")
+    require(sha256(path) == item["sha256"], f"hash {path}")
+    return path
+
+
+def evaluate_sparse(matrices: list[sparse.csr_matrix], root: int) -> sparse.csr_matrix:
+    result = sparse.csr_matrix(matrices[0].shape, dtype=np.int64)
+    power = 1
+    for matrix in matrices:
+        result = result + matrix.astype(np.int64) * power
+        power = power * root % PRIME
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def evaluate_dense(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.uint64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value.astype(np.uint16)
+
+
+def dense_hash(values: np.ndarray) -> str:
+    canonical = np.asarray(values, dtype="<u2", order="C")
+    digest = hashlib.sha256()
+    digest.update(f"{canonical.shape[0]}x{canonical.shape[1]}\n".encode("ascii"))
+    digest.update(canonical.tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    g3cu_path = verify_record(packet["inputs"]["G3CU"])
+    g3cv_path = verify_record(packet["inputs"]["G3CV"])
+    g3cu = load(g3cu_path)
+    g3cv = load(g3cv_path)
+    require(all(g3cu["checks"].values()), "G3CU checks")
+    require(all(g3cv["checks"].values()), "G3CV checks")
+
+    action_path = verify_record(packet["base_action"]["coefficient_archive"])
+    kernel_path = verify_record(packet["reduced_kernel_action"]["coefficient_archive"])
+    p_coefficients = np.load(action_path, allow_pickle=False)["coefficients"]
+    q_coefficients = np.load(kernel_path, allow_pickle=False)["coefficients"]
+    require(p_coefficients.shape == (6, 4426, 988), "P coefficient shape")
+    require(q_coefficients.shape == (6, 988, 988), "Q coefficient shape")
+    require(p_coefficients.dtype == q_coefficients.dtype == np.uint16, "coefficient dtype")
+
+    update = g3cu["affine_path_update"]
+    arrays = np.load(ROOT / update["construction_arrays"]["path"], allow_pickle=False)
+    complement_rows = arrays["complement_rows"].astype(np.int32)
+    factorization = g3cv["factorization"]
+    u_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factorization["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factorization["W_gamma_coefficients"]
+    ]
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    action_residuals = 0
+    q_mismatches = 0
+    determinant_residuals = 0
+    nonzero_determinant_rows = 0
+    for item in packet["root_replays"]:
+        root = int(item["gamma_root"])
+        external = item["base_chart"]
+        require(external["repository"] == mld.name, "base chart repository")
+        chart_path = mld / external["repository_relative_path"]
+        require(chart_path.stat().st_size == int(external["bytes"]), "base chart bytes")
+        require(sha256(chart_path) == external["sha256"], "base chart hash")
+        base_chart, chart_prime, quotient, image = initializer.read_chart(chart_path)
+        require((chart_prime, quotient, image) == (PRIME, 1013, 4426), "chart typing")
+
+        p = evaluate_dense(p_coefficients, root)
+        q = evaluate_dense(q_coefficients, root)
+        require(dense_hash(p) == item["base_action_image_SHA256"], "P root hash")
+        require(dense_hash(q) == item["Q_equals_WP_SHA256"], "Q root hash")
+        u = evaluate_sparse(u_coefficients, root)
+        w = evaluate_sparse(w_coefficients, root)
+        residual = np.asarray(
+            base_chart[complement_rows, 1013:].astype(np.int64) @ p.astype(np.int64),
+            dtype=np.int64,
+        )
+        residual -= u.toarray().astype(np.int64)
+        residual %= PRIME
+        action_residuals += int(np.count_nonzero(residual))
+        replay_q = np.asarray(w.astype(np.int64) @ p.astype(np.int64), dtype=np.int64)
+        replay_q %= PRIME
+        q_mismatches += int(np.count_nonzero(replay_q.astype(np.uint16) != q))
+
+        for key in (
+            "base_action_solver_log",
+            "S_determinant_log",
+            "reduced_kernel_determinant_log",
+            "endpoint_determinant_log",
+        ):
+            verify_record(item[key])
+        det_a0 = int(item["base_determinant_mod21817"])
+        det_s = int(item["S_determinant_mod21817"])
+        det_k = int(item["reduced_kernel_determinant_mod21817"])
+        det_a1 = int(item["endpoint_determinant_mod21817"])
+        determinant_residuals += (det_a1 * det_s - det_a0 * det_k) % PRIME
+        if all(value != 0 for value in (det_a0, det_s, det_k, det_a1)):
+            nonzero_determinant_rows += 1
+
+    require(action_residuals == 0, "all A0 P residuals")
+    require(q_mismatches == 0, "all Q=W P replays")
+    require(determinant_residuals == 0, "all determinant identities")
+    require(nonzero_determinant_rows == 6, "all six determinants nonzero")
+    print("UST.G3CW selected H11 split-place base action verifier: PASS")
+    print(
+        "roots=6 action_residuals=0 Q_mismatches=0 "
+        "determinant_residuals=0 invertible_endpoints=6"
+    )
+
+
+if __name__ == "__main__":
+    main()

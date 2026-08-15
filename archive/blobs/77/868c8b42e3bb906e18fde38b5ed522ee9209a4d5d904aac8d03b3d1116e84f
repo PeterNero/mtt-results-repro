@@ -1,0 +1,98 @@
+# UST.G3BD Sparse Deligne Quotient Decision Theorem
+
+## Purpose
+
+G3BC replaces the selected pairing-one dual only modulo the integral period
+lattice. That is enough to decide the physical Deligne class directly, but it
+does not by itself license a coordinate-level G3AU normal-row substitution.
+G3BD makes the direct quotient route exact and executable.
+
+Write the normalized eta9 readout as
+
+```text
+beta_C = [R_B] in C^248 / Pi_C(V_Z).
+```
+
+## Exact zero certificate
+
+Let `p_1,...,p_m` be hash-bound columns of `Pi_C` coming from integrally
+normalized Betti cycles. If integers `n_1,...,n_m` satisfy
+
+```text
+R_B = sum_j n_j p_j
+```
+
+in all 248 exact coordinates, then `beta_C=0`. This implication does not need
+the supplied columns to span the full period lattice: one genuine lattice
+membership witness is sufficient.
+
+## Exact nonzero certificate
+
+Let `ell` be an exact complex-linear covector. Suppose a separate scope
+certificate proves that `ell` annihilates the full integral period lattice, or
+the corresponding certified saturated detecting quotient, and interval
+arithmetic proves
+
+```text
+0 not in ell(R_B).
+```
+
+Then `beta_C` is nonzero. Annihilating only an incomplete list of period
+columns is not enough for this branch.
+
+The more general and usually more useful certificate is a dual-lattice
+character. Let `chi:C^248 -> R` be exact real-linear and suppose
+
+```text
+chi(Pi_C(V_Z)) is contained in Z.
+```
+
+If an interval enclosure of `chi(R_B)` contains no integer, then `R_B` cannot
+be a period and `beta_C` is nonzero. The annihilator theorem is the special
+case in which `chi` is zero on every period. Unlike that special case, a
+dual-lattice character can exist when the period lattice spans all of
+`C^248`.
+
+## Consequence
+
+The two branches give an exact direct exit for the physical flat
+Deligne/Brauer value:
+
+```text
+integer period membership  -> beta_C = 0,
+dual-lattice separation    -> beta_C != 0.
+```
+
+None of these branches requires G3AU. That normal operator remains a useful early
+prefilter only after period descent or a same-lift G3AR binding has been
+proved. Thus G3BD avoids both an unnecessary `248 x 1509` period matrix and an
+invalid representative substitution.
+
+## Execution
+
+```powershell
+python build_ust_g3bd_sparse_deligne_quotient_decision.py
+python verify_ust_g3bd_sparse_deligne_quotient_decision.py
+```
+
+The builder executes one exact zero fixture, one annihilator fixture and one
+nonintegral dual-character fixture in 248 coordinates. All are explicitly
+nonphysical.
+
+## Status
+
+Closed exactly:
+
+- the zero-class integer-membership theorem;
+- the nonzero full-lattice-annihilator theorem;
+- the nonzero dual-lattice-character theorem;
+- hash, source, normalization and basis binding;
+- exact rational complex interval execution for both branches;
+- the separation between direct quotient decision and G3AU descent.
+
+Open production data:
+
+- 248 selected normalized B-sweep values;
+- a detecting set of integrally normalized period columns;
+- either an integer membership vector or a complete-scope annihilator;
+- the resulting physical `beta_C` decision.

@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Hensel-lift the ten post-G3DZ component-12 kernel directions."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import math
+import time
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+MATRIX = ROOT / "evidence/ust_g3eb_probe/H02.component12.after_component0_quotient.number_field.sms"
+PRIME = 21817
+ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+MINIMAL = (64, 16, 33, 44, 89, 24, 1)
+ROWS = 42706
+COLUMNS = 2113
+FREE_COLUMNS = tuple(range(531, 541))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def polynomial_value(coefficients: tuple[int, ...], value: int, modulus: int) -> int:
+    result = 0
+    for coefficient in reversed(coefficients):
+        result = (result * value + coefficient) % modulus
+    return result
+
+
+def derivative_value(coefficients: tuple[int, ...], value: int, modulus: int) -> int:
+    result = 0
+    for degree in reversed(range(1, len(coefficients))):
+        result = (result * value + degree * coefficients[degree]) % modulus
+    return result
+
+
+def hensel_root(root: int, exponent: int) -> tuple[int, int]:
+    modulus = PRIME
+    value = root
+    for _ in range(1, exponent):
+        target = modulus * PRIME
+        residual = polynomial_value(MINIMAL, value, target)
+        require(residual % modulus == 0, "Hensel residual divisibility")
+        digit = (
+            -(residual // modulus)
+            * pow(derivative_value(MINIMAL, value, PRIME), -1, PRIME)
+        ) % PRIME
+        value += digit * modulus
+        modulus = target
+    require(polynomial_value(MINIMAL, value, modulus) == 0, "lifted root")
+    return value, modulus
+
+
+def load_rows() -> list[list[tuple[int, tuple[int, ...]]]]:
+    with MATRIX.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require((rows, columns, degree, minimal) == (ROWS, COLUMNS, 6, MINIMAL), "matrix header")
+        result: list[list[tuple[int, tuple[int, ...]]]] = [[] for _ in range(ROWS)]
+        count = 0
+        for line in handle:
+            values = list(map(int, line.split()))
+            result[values[0] - 1].append((values[1] - 1, tuple(values[2:])))
+            count += 1
+    require(count == declared, "declared matrix entries")
+    return result
+
+
+def solve_root(
+    exact_rows: list[list[tuple[int, tuple[int, ...]]]],
+    gamma: int,
+    modulus: int,
+) -> list[list[int]]:
+    pivot_columns = [column for column in range(COLUMNS) if column not in FREE_COLUMNS]
+    pivot_count = len(pivot_columns)
+    relation_count = len(FREE_COLUMNS)
+    pivot_lookup = {column: index for index, column in enumerate(pivot_columns)}
+    free_lookup = {column: index for index, column in enumerate(FREE_COLUMNS)}
+    pivots: dict[int, tuple[dict[int, int], list[int]]] = {}
+    dependent = 0
+    eliminations = 0
+    for exact_row in exact_rows:
+        if not exact_row:
+            continue
+        row: dict[int, int] = {}
+        rhs = [0] * relation_count
+        for column, coefficients in exact_row:
+            value = polynomial_value(coefficients, gamma, modulus)
+            if not value:
+                continue
+            free = free_lookup.get(column)
+            if free is None:
+                row[pivot_lookup[column]] = value
+            else:
+                rhs[free] = value
+        while row:
+            column = min(row)
+            value = row[column]
+            prior = pivots.get(column)
+            if prior is None:
+                require(math.gcd(value, modulus) == 1, "unit p-adic pivot")
+                inverse = pow(value, -1, modulus)
+                row = {
+                    key: item * inverse % modulus for key, item in row.items() if item
+                }
+                rhs = [item * inverse % modulus for item in rhs]
+                pivots[column] = (row, rhs)
+                break
+            prior_row, prior_rhs = prior
+            for key, item in prior_row.items():
+                reduced = (row.get(key, 0) - value * item) % modulus
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+            rhs = [
+                (current - value * prior_value) % modulus
+                for current, prior_value in zip(rhs, prior_rhs, strict=True)
+            ]
+            eliminations += 1
+        else:
+            require(not any(rhs), "p-adic dependent-row consistency")
+            dependent += 1
+    require(
+        len(pivots) == pivot_count and sorted(pivots) == list(range(pivot_count)),
+        "p-adic pivot rank",
+    )
+
+    pivot_solution = [[0] * relation_count for _ in range(pivot_count)]
+    for column in reversed(range(pivot_count)):
+        row, free_coefficients = pivots[column]
+        value = [(-item) % modulus for item in free_coefficients]
+        for later, coefficient in row.items():
+            if later <= column:
+                continue
+            solved = pivot_solution[later]
+            value = [
+                (current - coefficient * item) % modulus
+                for current, item in zip(value, solved, strict=True)
+            ]
+        pivot_solution[column] = value
+
+    kernel = [[0] * relation_count for _ in range(COLUMNS)]
+    for old_column, pivot in pivot_lookup.items():
+        kernel[old_column] = pivot_solution[pivot]
+    for old_column, free in free_lookup.items():
+        kernel[old_column][free] = 1
+
+    residual_nonzeros = 0
+    for exact_row in exact_rows:
+        if not exact_row:
+            continue
+        residual = [0] * relation_count
+        for column, coefficients in exact_row:
+            scalar = polynomial_value(coefficients, gamma, modulus)
+            if scalar:
+                residual = [
+                    (current + scalar * item) % modulus
+                    for current, item in zip(residual, kernel[column], strict=True)
+                ]
+        residual_nonzeros += sum(bool(value) for value in residual)
+    require(residual_nonzeros == 0, "p-adic kernel replay")
+    print(
+        f"gamma={gamma} rank={pivot_count} dependent_rows={dependent} "
+        f"eliminations={eliminations} residual=0",
+        flush=True,
+    )
+    return kernel
+
+
+def invert_matrix_mod(matrix: list[list[int]], modulus: int) -> list[list[int]]:
+    size = len(matrix)
+    work = [
+        [value % modulus for value in row]
+        + [1 if row_index == column else 0 for column in range(size)]
+        for row_index, row in enumerate(matrix)
+    ]
+    for column in range(size):
+        pivot = next(
+            row for row in range(column, size)
+            if math.gcd(work[row][column], modulus) == 1
+        )
+        if pivot != column:
+            work[column], work[pivot] = work[pivot], work[column]
+        inverse = pow(work[column][column], -1, modulus)
+        work[column] = [value * inverse % modulus for value in work[column]]
+        for row in range(size):
+            if row == column:
+                continue
+            factor = work[row][column]
+            if factor:
+                work[row] = [
+                    (left - factor * right) % modulus
+                    for left, right in zip(work[row], work[column], strict=True)
+                ]
+    return [row[size:] for row in work]
+
+
+def rational_reconstruct(residue: int, modulus: int, bound: int) -> tuple[int, int] | None:
+    old_remainder, remainder = modulus, residue
+    old_denominator, denominator = 0, 1
+    while remainder > bound:
+        quotient = old_remainder // remainder
+        old_remainder, remainder = remainder, old_remainder - quotient * remainder
+        old_denominator, denominator = denominator, old_denominator - quotient * denominator
+    numerator = remainder
+    if denominator < 0:
+        numerator, denominator = -numerator, -denominator
+    if (
+        denominator <= 0
+        or denominator > bound
+        or abs(numerator) > bound
+        or math.gcd(numerator, denominator) != 1
+        or (residue * denominator - numerator) % modulus != 0
+    ):
+        return None
+    return numerator, denominator
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exponent", type=int, default=4)
+    parser.add_argument("--reconstruction-output", type=Path)
+    parser.add_argument("--residue-output", type=Path)
+    arguments = parser.parse_args()
+    require(arguments.exponent >= 1, "positive p-adic exponent")
+    started = time.monotonic()
+    exact_rows = load_rows()
+    lifted = [hensel_root(root, arguments.exponent) for root in ROOTS]
+    modulus = lifted[0][1]
+    require(all(item[1] == modulus for item in lifted), "common p-adic modulus")
+    print(
+        f"p={PRIME} exponent={arguments.exponent} modulus_bits={modulus.bit_length()} "
+        f"active_rows={sum(bool(row) for row in exact_rows)}",
+        flush=True,
+    )
+    root_kernels = [
+        solve_root(exact_rows, gamma, modulus) for gamma, _ in lifted
+    ]
+    if arguments.residue_output is not None:
+        destination = arguments.residue_output
+        if not destination.is_absolute():
+            destination = ROOT / destination
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema": "ust.g3ec.component12.padic-kernel-residue.v1",
+            "matrix": str(MATRIX.relative_to(ROOT)),
+            "prime": PRIME,
+            "exponent": arguments.exponent,
+            "modulus": str(modulus),
+            "modulus_bits": modulus.bit_length(),
+            "lifted_roots": [str(value) for value, _ in lifted],
+            "shape": [len(root_kernels), COLUMNS, len(FREE_COLUMNS)],
+            "free_columns": list(FREE_COLUMNS),
+            "kernels": root_kernels,
+        }
+        with gzip.open(destination, "wt", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+            handle.write("\n")
+        print(f"residue_output={destination} bytes={destination.stat().st_size}")
+    vandermonde = [
+        [pow(gamma, degree, modulus) for degree in range(6)]
+        for gamma, _ in lifted
+    ]
+    inverse = invert_matrix_mod(vandermonde, modulus)
+    bound = math.isqrt((modulus - 1) // 2)
+    candidates = 0
+    no_candidate = 0
+    max_numerator = 0
+    max_denominator = 0
+    total_coefficients = 6 * COLUMNS * len(FREE_COLUMNS)
+    reconstructed: list[list[int]] = []
+    for degree in range(6):
+        for column in range(COLUMNS):
+            for relation in range(len(FREE_COLUMNS)):
+                residue = sum(
+                    inverse[degree][root] * root_kernels[root][column][relation]
+                    for root in range(6)
+                ) % modulus
+                candidate = rational_reconstruct(residue, modulus, bound)
+                if candidate is None:
+                    no_candidate += 1
+                else:
+                    candidates += 1
+                    max_numerator = max(max_numerator, abs(candidate[0]))
+                    max_denominator = max(max_denominator, candidate[1])
+                    if arguments.reconstruction_output is not None:
+                        linear = (
+                            (degree * COLUMNS + column) * len(FREE_COLUMNS)
+                            + relation
+                        )
+                        reconstructed.append([linear, candidate[0], candidate[1]])
+    print(
+        f"PADIC_COMPONENT12 exponent={arguments.exponent} modulus_bits={modulus.bit_length()} "
+        f"candidates={candidates}/{total_coefficients} no_candidate={no_candidate} "
+        f"max_numerator={max_numerator} max_denominator={max_denominator} "
+        f"elapsed={time.monotonic()-started:.3f}"
+    )
+    if arguments.reconstruction_output is not None:
+        destination = arguments.reconstruction_output
+        if not destination.is_absolute():
+            destination = ROOT / destination
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema": "ust.g3ec.component12.padic-reconstruction.v1",
+            "matrix": str(MATRIX.relative_to(ROOT)),
+            "prime": PRIME,
+            "exponent": arguments.exponent,
+            "modulus": str(modulus),
+            "modulus_bits": modulus.bit_length(),
+            "shape": [ROWS, COLUMNS, len(FREE_COLUMNS), 6],
+            "free_columns": list(FREE_COLUMNS),
+            "candidate_count": candidates,
+            "missing_count": no_candidate,
+            "coefficients": reconstructed,
+        }
+        with gzip.open(destination, "wt", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+            handle.write("\n")
+        print(f"reconstruction_output={destination} bytes={destination.stat().st_size}")
+
+
+if __name__ == "__main__":
+    main()

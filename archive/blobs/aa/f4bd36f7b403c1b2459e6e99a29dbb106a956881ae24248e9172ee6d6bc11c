@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Search for compact apolar/catalecticant sources of the component-20 kernel."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+def falling(value: int, order: int) -> int:
+    if value < order:
+        return 0
+    return math.prod(range(value - order + 1, value + 1))
+
+
+def constant_order8_constraints(kernel: np.ndarray, prime: int) -> np.ndarray:
+    """Constraints for P(d)K=0 with P in Sym8 of constant derivatives."""
+    source = graded.homogeneous_exponents(15)
+    output = graded.homogeneous_exponents(7)
+    operators = graded.homogeneous_exponents(8)
+    operator_lookup = {exponent: index for index, exponent in enumerate(operators)}
+    equations = np.zeros((len(output) * kernel.shape[1], len(operators)), dtype=np.int64)
+    for source_row, beta in enumerate(source):
+        values = kernel[source_row] % prime
+        if not np.any(values):
+            continue
+        for output_row, delta in enumerate(output):
+            alpha = tuple(beta[index] - delta[index] for index in range(3))
+            if min(alpha) < 0 or sum(alpha) != 8:
+                continue
+            coefficient = math.prod(
+                falling(beta[index], alpha[index]) for index in range(3)
+            ) % prime
+            first = output_row * kernel.shape[1]
+            equations[first : first + kernel.shape[1], operator_lookup[alpha]] += (
+                coefficient * values
+            ) % prime
+    return equations % prime
+
+
+def degree22_catalecticant_constraints(kernel: np.ndarray, prime: int) -> np.ndarray:
+    """Constraints for Cat_h: Sym15 -> Sym7* with h in Sym22*."""
+    source = graded.homogeneous_exponents(15)
+    rows = graded.homogeneous_exponents(7)
+    moments = graded.homogeneous_exponents(22)
+    moment_lookup = {exponent: index for index, exponent in enumerate(moments)}
+    equations = np.zeros((len(rows) * kernel.shape[1], len(moments)), dtype=np.int64)
+    for row_index, alpha in enumerate(rows):
+        first = row_index * kernel.shape[1]
+        for source_row, beta in enumerate(source):
+            exponent = tuple(alpha[index] + beta[index] for index in range(3))
+            equations[first : first + kernel.shape[1], moment_lookup[exponent]] += (
+                kernel[source_row] % prime
+            )
+    return equations % prime
+
+
+def catalecticant(moment: np.ndarray, prime: int) -> np.ndarray:
+    source = graded.homogeneous_exponents(15)
+    rows = graded.homogeneous_exponents(7)
+    moments = graded.homogeneous_exponents(22)
+    lookup = {exponent: index for index, exponent in enumerate(moments)}
+    return np.asarray(
+        [
+            [moment[lookup[tuple(a[i] + b[i] for i in range(3))]] for b in source]
+            for a in rows
+        ],
+        dtype=np.int64,
+    ) % prime
+
+
+def main() -> None:
+    packet = conic.load(conic.SPLIT_PACKETS[0])
+    prime = int(packet["field"]["prime"])
+    row = packet["root_kernels"][0]
+    root = int(row["gamma_root"])
+    kernel = conic.component_kernel(row, prime)
+
+    order8 = constant_order8_constraints(kernel, prime)
+    order8_rank, _, order8_null = graded.rref(order8, prime, emit_nullspace=True)
+    assert order8_null is not None
+    print(
+        f"constant-order8 p={prime} gamma={root} equations={order8.shape[0]} "
+        f"rank={order8_rank} nullity={order8_null.shape[1]}",
+        flush=True,
+    )
+
+    constraints = degree22_catalecticant_constraints(kernel, prime)
+    rank, _, nullspace = graded.rref(constraints, prime, emit_nullspace=True)
+    assert nullspace is not None
+    print(
+        f"degree22-catalecticant p={prime} gamma={root} equations={constraints.shape[0]} "
+        f"rank={rank} nullity={nullspace.shape[1]}",
+        flush=True,
+    )
+    for index in range(nullspace.shape[1]):
+        matrix = catalecticant(nullspace[:, index], prime)
+        matrix_rank = graded.rref(matrix, prime)[0]
+        residual = matrix @ kernel % prime
+        print(
+            f"candidate={index} cat_rank={matrix_rank} residual_nnz={np.count_nonzero(residual)}",
+            flush=True,
+        )
+
+
+if __name__ == "__main__":
+    main()

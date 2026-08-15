@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""Compute the six-scalar H11 G3BI-endpoint determinant CRT channel."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3bp"
+OUT = ROOT / "state" / "ust_g3bp_h11_endpoint_determinant_crt.packet.json"
+PRIMES = [21817, 33863, 37493, 38113, 68213, 69011, 72271, 73673]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def signed(value: int, modulus: int) -> int:
+    value %= modulus
+    return value if value <= modulus // 2 else value - modulus
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_CRT_reconstruction_probe_v2 as crt
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bk_path = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+    g3bl_path = ROOT / "state" / "ust_g3bl_h11_proof_prime_initializer_nogo.packet.json"
+    g3bn_path = ROOT / "state" / "ust_g3bn_h11_alternate_split_prime_initializer.packet.json"
+    g3bi = load(g3bi_path)
+    g3bk = load(g3bk_path)
+    g3bl = load(g3bl_path)
+    g3bn = load(g3bn_path)
+    require(all(g3bi["checks"].values()) and all(g3bk["checks"].values()), "G3BI/G3BK checks")
+    require(all(g3bl["checks"].values()) and all(g3bn["checks"].values()), "G3BL/G3BN checks")
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H11.packet.json"
+    macaulay = load(macaulay_path)
+    factor = load(factor_path)
+    require(all(macaulay["checks"].values()) and all(factor["checks"].values()), "H11 checks")
+    minpoly = [
+        int(value)
+        for value in g3bk["correction_direction"][
+            "minimal_polynomial_coefficients_ascending"
+        ]
+    ]
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    prime_records = []
+    coefficient_residues: list[list[int]] = []
+    all_determinants = []
+    residue_packet_records = []
+    for prime in PRIMES:
+        residue_packet_path = (
+            mld
+            / "eta9_split_prime_H11_residues"
+            / f"H11.physical_H20_to_H11.p{prime}.packet.json"
+        )
+        residue_packet = load(residue_packet_path)
+        require(all(residue_packet["checks"].values()), f"split-prime packet p={prime}")
+        roots = [int(value) for value in residue_packet["field"]["roots_of_selected_sextic"]]
+        require(len(roots) == 6 and len(set(roots)) == 6, f"six roots p={prime}")
+        require(
+            all(arithmetic.evaluate(minpoly, root, prime) == 0 for root in roots),
+            f"selected roots p={prime}",
+        )
+        root_records = []
+        determinants = []
+        for root in roots:
+            base_record = next(
+                row for row in residue_packet["root_solves"] if int(row["gamma_root"]) == root
+            )
+            base_chart_path = mld / base_record["chart"]["path"]
+            rhs_path = mld / base_record["RHS"]["path"]
+            base_chart, chart_prime, quotient_units, image_rank = initializer.read_chart(
+                base_chart_path
+            )
+            require(chart_prime == prime and (quotient_units, image_rank) == (1013, 4426), "chart typing")
+            derivatives = initializer.correction_derivatives(g3bi, exporter, prime, root)
+            update = initializer.correction_update(macaulay, factor, derivatives, prime)
+            endpoint_chart = (
+                base_chart.astype(np.uint64)
+                + sparse.hstack(
+                    [
+                        sparse.csc_matrix((5439, quotient_units), dtype=np.uint64),
+                        update.astype(np.uint64),
+                    ],
+                    format="csc",
+                )
+            ).tocsc()
+            endpoint_chart.data %= prime
+            endpoint_chart.eliminate_zeros()
+            stem = f"H11.p{prime}.g{root}.G3BI_endpoint"
+            chart_path = EVIDENCE / f"{stem}.chart.bin"
+            log_path = EVIDENCE / f"{stem}.determinant.log"
+            exporter.write_chart(
+                chart_path,
+                prime,
+                5439,
+                quotient_units,
+                image_rank,
+                endpoint_chart.indptr.astype(np.uint64).tolist(),
+                endpoint_chart.indices.astype(np.uint32).tolist(),
+                endpoint_chart.data.astype(np.uint32).tolist(),
+            )
+            command = [
+                "wsl",
+                runtime.wsl_path(solver),
+                "--chart",
+                runtime.wsl_path(chart_path),
+                "--rhs",
+                runtime.wsl_path(rhs_path),
+                "--log",
+                runtime.wsl_path(log_path),
+                "--determinant-only",
+            ]
+            completed = subprocess.run(
+                command, cwd=mld, capture_output=True, text=True, check=False
+            )
+            require(completed.returncode == 0, completed.stdout + completed.stderr)
+            fields = initializer.parse_log(log_path)
+            require(fields.get("STATUS") == "SUCCESS", "determinant status")
+            determinant = int(fields["CHART_DETERMINANT"])
+            require(0 <= determinant < prime, "split determinant residue range")
+            determinants.append(determinant)
+            all_determinants.append(determinant)
+            if prime == 21817 and root == 5:
+                require(
+                    sha256(chart_path) == g3bn["endpoint_chart"]["binary"]["sha256"],
+                    "G3BN chart identity",
+                )
+            root_records.append(
+                {
+                    "gamma_root": root,
+                    "determinant": determinant,
+                    "base_chart": external_record(base_chart_path, mld),
+                    "determinant_RHS": external_record(rhs_path, mld),
+                    "endpoint_chart": record(chart_path),
+                    "factorization_log": record(log_path),
+                    "update_nonzeros": int(update.nnz),
+                }
+            )
+        coefficients = arithmetic.interpolate(roots, determinants, prime)
+        require(
+            all(arithmetic.evaluate(coefficients, root, prime) == value for root, value in zip(roots, determinants, strict=True)),
+            f"determinant interpolation p={prime}",
+        )
+        coefficient_residues.append(coefficients)
+        residue_packet_records.append(external_record(residue_packet_path, mld))
+        prime_records.append(
+            {
+                "prime": prime,
+                "roots": roots,
+                "determinants_at_roots": determinants,
+                "determinant_power_basis_coefficients_mod_prime": coefficients,
+                "root_factorizations": root_records,
+            }
+        )
+
+    prefix_primes = PRIMES[:-1]
+    holdout_prime = PRIMES[-1]
+    prefix_modulus = math.prod(prefix_primes)
+    full_modulus = prefix_modulus * holdout_prime
+    prefix_candidates = []
+    full_candidates = []
+    holdout_matches = []
+    for degree in range(6):
+        prefix_value, replay_prefix_modulus = crt.crt_scalar(
+            [row[degree] for row in coefficient_residues[:-1]], prefix_primes
+        )
+        full_value, replay_full_modulus = crt.crt_scalar(
+            [row[degree] for row in coefficient_residues], PRIMES
+        )
+        require(
+            replay_prefix_modulus == prefix_modulus and replay_full_modulus == full_modulus,
+            "CRT modulus",
+        )
+        prefix_candidate = signed(prefix_value, prefix_modulus)
+        full_candidate = signed(full_value, full_modulus)
+        prefix_candidates.append(prefix_candidate)
+        full_candidates.append(full_candidate)
+        holdout_matches.append(
+            prefix_candidate % holdout_prime == coefficient_residues[-1][degree]
+        )
+    gf11_evaluation = arithmetic.evaluate(full_candidates, 3, 11)
+    nonzero_determinants = sum(value != 0 for value in all_determinants)
+    checks = {
+        "all48_split_root_endpoint_determinants_were_computed": len(all_determinants) == 48,
+        "all_eight_degree_less_than_six_determinant_residues_are_interpolated_exactly": True,
+        "the_last_split_prime_is_reserved_as_a_coefficient_holdout": True,
+        "the_known_GF11_endpoint_determinant_zero_is_used_as_an_independent_screen": True,
+        "no_centered_CRT_candidate_is_promoted_without_holdout_stability_and_a_height_bound": True,
+    }
+    require(all(checks.values()), "G3BP checks")
+    packet = {
+        "schema": "mtt.unified-source.g3bp-h11-endpoint-determinant-crt.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_H11_G3BI_ENDPOINT_DETERMINANT_RESIDUES_AND_CRT_SCREEN_EMITTED_PROMOTION_CONDITIONAL",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BK": record(g3bk_path),
+            "G3BL": record(g3bl_path),
+            "G3BN": record(g3bn_path),
+            "H11_Macaulay": external_record(macaulay_path, mld),
+            "H11_factorization": external_record(factor_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+            "base_split_prime_packets": residue_packet_records,
+        },
+        "selected_chart": {
+            "dimension": 5439,
+            "coefficient_ring": "Z[gamma]",
+            "minimal_polynomial_coefficients_ascending": minpoly,
+        },
+        "prime_residues": prime_records,
+        "CRT": {
+            "prefix_primes": prefix_primes,
+            "holdout_prime": holdout_prime,
+            "prefix_modulus": prefix_modulus,
+            "full_modulus": full_modulus,
+            "prefix_signed_coefficient_candidates": prefix_candidates,
+            "full_signed_coefficient_candidates": full_candidates,
+            "prefix_candidates_predict_holdout": holdout_matches,
+            "holdout_matches": sum(holdout_matches),
+            "full_candidate_GF11_gamma3_evaluation": gf11_evaluation,
+            "known_GF11_gamma3_endpoint_determinant": 0,
+            "nonzero_split_root_determinants": nonzero_determinants,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_centered_CRT_candidate_is_the_exact_determinant": False,
+            "claims_a_proved_determinant_height_bound": False,
+            "claims_the_H11_Q_gamma_action_is_reconstructed": False,
+            "claims_integral_transport_or_terminal_readout": False,
+        },
+        "theorem": {
+            "name": "ustG3bpH11EndpointDeterminantCRTScreen",
+            "tier": "CLOSED_EXACT_SPLIT_PRIME_DETERMINANT_RESIDUES_PROMOTION_OPEN",
+            "statement": (
+                "The exact G3BI endpoint selected H11 chart determinant is computed at all 48 "
+                "roots of eight completely split primes. Each six-root tuple is interpolated to "
+                "one degree-less-than-six determinant residue and the resulting six scalar CRT "
+                "channels are screened by an independent holdout prime and the known GF(11) "
+                "endpoint value zero. Promotion requires stability plus a proved height bound."
+            ),
+        },
+        "next_required_object": (
+            "If the six determinant coefficients are not stable, add split primes only to this "
+            "six-scalar channel. Once stable under independent holdouts and a proved height bound, "
+            "multiply split-prime G3BO actions by the determinant and reconstruct the integral "
+            "adjugate-action tensor."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BP H11 endpoint determinant CRT screen: PASS")
+    print(
+        f"primes={len(PRIMES)} roots=48 nonzero={nonzero_determinants}/48 "
+        f"holdout_matches={sum(holdout_matches)}/6 "
+        f"GF11_candidate={gf11_evaluation} expected_GF11=0"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

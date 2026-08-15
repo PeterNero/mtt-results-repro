@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Independently replay the exact selected H11 affine path-update rank."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components, maximum_bipartite_matching
+
+import build_ust_g3bz_g3bi_h02_exact_path_update_rank as ranker
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as endpoint
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cu_h11_exact_path_update_rank.packet.json"
+PRIME = 21817
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load(path: Path):
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def rank_mod_prime(matrix: np.ndarray, prime: int) -> int:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    pivot_row = 0
+    for column in range(work.shape[1]):
+        choices = np.flatnonzero(work[pivot_row:, column])
+        if choices.size == 0:
+            continue
+        chosen = pivot_row + int(choices[0])
+        if chosen != pivot_row:
+            work[[pivot_row, chosen]] = work[[chosen, pivot_row]]
+        work[pivot_row] = (
+            work[pivot_row] * pow(int(work[pivot_row, column]), -1, prime)
+        ) % prime
+        factors = work[pivot_row + 1 :, column]
+        active = np.flatnonzero(factors)
+        if active.size:
+            rows = pivot_row + 1 + active
+            work[rows] = (
+                work[rows] - factors[active, None] * work[pivot_row]
+            ) % prime
+        pivot_row += 1
+        if pivot_row == work.shape[0]:
+            break
+    return pivot_row
+
+
+def component_ranks(matrix: sparse.csr_matrix) -> list[tuple[int, int, int, int]]:
+    coo = matrix.tocoo()
+    dimension = matrix.shape[0]
+    graph = sparse.csr_matrix(
+        (
+            np.ones(2 * coo.nnz, dtype=np.uint8),
+            (
+                np.concatenate((coo.row, dimension + coo.col)),
+                np.concatenate((dimension + coo.col, coo.row)),
+            ),
+        ),
+        shape=(2 * dimension, 2 * dimension),
+    )
+    _, labels = connected_components(graph, directed=False, return_labels=True)
+    result = []
+    for component in np.unique(labels[coo.row]).tolist():
+        rows = np.flatnonzero(labels[:dimension] == component)
+        columns = np.flatnonzero(labels[dimension:] == component)
+        block = matrix[rows, :][:, columns]
+        pattern = block.copy()
+        pattern.data = np.ones(pattern.nnz, dtype=np.uint8)
+        structural = int(
+            np.count_nonzero(
+                maximum_bipartite_matching(pattern, perm_type="column") >= 0
+            )
+        )
+        rank = rank_mod_prime(block.toarray(), PRIME)
+        result.append((int(rows.size), int(columns.size), structural, rank))
+    return sorted(result)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["theorem_id"] == "UST.G3CU", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    for value in packet["inputs"].values():
+        if "path" in value:
+            path = ROOT / value["path"]
+        elif "repository_relative_path" in value:
+            path = runtime.resolve_mld() / value["repository_relative_path"]
+        else:
+            continue
+        require(path.is_file(), f"input exists {path.name}")
+        require(sha256(path) == value["sha256"], f"input hash {path.name}")
+
+    update = packet["affine_path_update"]
+    coefficient_matrices = []
+    for value in update["exact_gamma_coefficient_matrices"]:
+        path = ROOT / value["path"]
+        require(sha256(path) == value["sha256"], f"coefficient hash {path.name}")
+        coefficient_matrices.append(sparse.load_npz(path).tocsr())
+    require(all(matrix.shape == (4426, 4426) for matrix in coefficient_matrices), "coefficient shapes")
+
+    arrays_path = ROOT / update["construction_arrays"]["path"]
+    require(sha256(arrays_path) == update["construction_arrays"]["sha256"], "array hash")
+    arrays = np.load(arrays_path, allow_pickle=False)
+    roots = [int(value) for value in arrays["gamma_roots"]]
+    require(len(roots) == 6 and len(set(roots)) == 6, "six roots")
+
+    exact_pattern = sum(
+        (matrix.copy().astype(np.int64) for matrix in coefficient_matrices),
+        start=sparse.csr_matrix((4426, 4426), dtype=np.int64),
+    )
+    exact_pattern.data = np.ones(exact_pattern.nnz, dtype=np.uint8)
+    exact_pattern.eliminate_zeros()
+    structural = int(
+        np.count_nonzero(
+            maximum_bipartite_matching(exact_pattern, perm_type="column") >= 0
+        )
+    )
+    require(structural == 1006, "structural upper")
+
+    root_ranks = []
+    selected_components = None
+    for root in roots:
+        evaluated = sparse.csr_matrix((4426, 4426), dtype=np.int64)
+        power = 1
+        for matrix in coefficient_matrices:
+            evaluated = evaluated + matrix.astype(np.int64) * power
+            power = power * root % PRIME
+        evaluated.data %= PRIME
+        evaluated.eliminate_zeros()
+        ranks = component_ranks(evaluated)
+        root_ranks.append(sum(row[3] for row in ranks))
+        if root == int(update["selected_rank_place"]["gamma_root"]):
+            selected_components = ranks
+    require(root_ranks == [988] * 6, "six split-root ranks")
+    require(selected_components is not None, "selected components")
+
+    packet_components = sorted(
+        (
+            int(row["rows"]),
+            int(row["columns"]),
+            int(row["structural_rank"]),
+            int(row["split_place_rank"]),
+        )
+        for row in update["exact_number_field_defective_components"]
+    )
+    require(
+        packet_components
+        == sorted([(162, 198, 150, 147)] * 3 + [(108, 108, 96, 93)] * 3),
+        "exact defective component table",
+    )
+    require(
+        all(int(row["exact_Q_gamma_rank"]) == int(row["split_place_rank"])
+            for row in update["exact_number_field_defective_components"]),
+        "exact ranks meet split lower bounds",
+    )
+    exact_defect = sum(
+        int(row["algebraic_defect_from_matching"])
+        for row in update["exact_number_field_defective_components"]
+    )
+    require(structural - exact_defect == 988, "exact rank arithmetic")
+
+    g3bi = load(ROOT / packet["inputs"]["G3BI"]["path"])
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay = load(mld / packet["inputs"]["H11_Macaulay"]["repository_relative_path"])
+    csc = load(mld / packet["inputs"]["H11_CSC"]["repository_relative_path"])
+    factor = load(mld / packet["inputs"]["H11_factorization"]["repository_relative_path"])
+    target = [tuple(int(value) for value in row) for row in macaulay["target_monomial_basis"]["exponent_vectors"]]
+    lookup = {row: index for index, row in enumerate(target)}
+    quotient = {int(value) for value in csc["binary"]["quotient_unit_rows"]}
+    complement = [row for row in range(len(target)) if row not in quotient]
+    complement_lookup = {ambient: local for local, ambient in enumerate(complement)}
+    selected = [int(value) for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]]
+    descriptors = family_update.selected_column_data(macaulay, selected)
+    corrections = endpoint.correction_derivatives_exact(g3bi)
+    replay_coefficients = ranker.exact_coefficient_matrices(
+        descriptors, corrections, lookup, complement_lookup
+    )
+    require(
+        all((left != right).nnz == 0 for left, right in zip(replay_coefficients, coefficient_matrices, strict=True)),
+        "independent exact coefficient reconstruction",
+    )
+
+    g3bn_update = sparse.load_npz(ROOT / packet["inputs"]["G3BN_update"]["path"]).tocsr()[complement, :]
+    reference = sparse.csr_matrix((4426, 4426), dtype=np.int64)
+    power = 1
+    for matrix in coefficient_matrices:
+        reference = reference + matrix.astype(np.int64) * power
+        power = power * 5 % PRIME
+    reference.data %= PRIME
+    reference.eliminate_zeros()
+    require((reference != g3bn_update).nnz == 0, "G3BN update replay")
+
+    print("UST.G3CU selected H11 affine path update rank verifier: PASS")
+    print("structural=1006 exact_Qgamma=988 split_roots=6 defective_components=6")
+
+
+if __name__ == "__main__":
+    main()

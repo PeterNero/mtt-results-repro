@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Freeze the exact component-12 cohomological source-promotion cutset."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3eb"
+OUT = ROOT / "state/ust_g3eb_h02_component12_cohomological_source_cutset.packet.json"
+INPUTS = {
+    "G3DE": ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json",
+    "G3DI": ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json",
+    "G3DU": ROOT / "state/ust_g3du_h02_eighth_prime_holdout_kernel.packet.json",
+    "G3DV": ROOT / "state/ust_g3dv_h02_seven_prime_reconstruction_holdout.packet.json",
+    "G3DX": ROOT / "state/ust_g3dx_h02_prefix_structural_gap_localization.packet.json",
+    "G3DZ": ROOT / "state/ust_g3dz_h02_component0_cayley_lift.packet.json",
+    "G3EA": ROOT / "state/ust_g3ea_h02_component9_gradient_elliptic_lift.packet.json",
+    "G3EB_A": ROOT / "state/ust_g3eb_a_h02_component12_simple_two_level_nogo.packet.json",
+}
+BOUNDARY_PROBE = ROOT / "probe_ust_g3eb_component12_boundary_koszul.py"
+ZERO_QUOTIENT_PROBE = ROOT / "probe_ust_g3eb_general_two_level_source.py"
+COHOMOLOGICAL_PROBE = ROOT / "probe_ust_g3eb_restricted_cohomological_presentation.py"
+ZERO_QUOTIENT_MATRIX = ROOT / "evidence/ust_g3eb_probe/H02.component12.general_two_level.number_field.sms"
+COHOMOLOGICAL_MATRIX = ROOT / "evidence/ust_g3eb_probe/H02.component12.restricted_cohomological.number_field.sms"
+QUOTIENT_MATRIX = ROOT / "evidence/ust_g3eb_probe/H02.component12.after_component0_quotient.number_field.sms"
+BASE_CHART = ROOT / "evidence/ust_g3eb_probe/H02.p21817.g5.base_chart.bin"
+BOUNDARY_SOLUTION = ROOT / "evidence/ust_g3eb_probe/H02.component12.raw_boundary_base_columns.solution.bin"
+LIFT_SOLUTION = ROOT / "evidence/ust_g3eb_probe/H02.component12.observed_action.solution.bin"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def run_probe(path: Path, *arguments: str, timeout: int = 180) -> str:
+    completed = subprocess.run(
+        [sys.executable, str(path), *arguments],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    require(completed.returncode == 0, f"{path.name}: {completed.stdout[-3000:]}")
+    return completed.stdout.strip()
+
+
+def sms_header(path: Path) -> tuple[int, int, int, int]:
+    with path.open("r", encoding="ascii") as handle:
+        return tuple(map(int, handle.readline().split()))
+
+
+def main() -> None:
+    packets = {name: load(path) for name, path in INPUTS.items()}
+    require(all(all(packet["checks"].values()) for packet in packets.values()), "input checks")
+    component0 = packets["G3DX"]["prefix_gap_localization"]["component_rows"][0]
+    component12 = packets["G3DX"]["prefix_gap_localization"]["component_rows"][12]
+    require(
+        (
+            component0["dimension"], component0["dependent_coordinates"],
+            component12["dimension"], component12["dependent_coordinates"],
+            component12["finite_rank_increment"],
+        ) == (190, 28, 81, 10, 71),
+        "G3DX component0/component12 ledger",
+    )
+    require(
+        packets["G3EA"]["rank_promotion"]["promoted_global_Q_rank_interval"]
+        == [4748, 5112],
+        "G3EA frontier interval",
+    )
+
+    boundary_output = run_probe(BOUNDARY_PROBE, "--chart-reduction")
+    zero_quotient_output = run_probe(ZERO_QUOTIENT_PROBE)
+    cohomological_output = run_probe(COHOMOLOGICAL_PROBE)
+    require("corrected_rank=0" in boundary_output, "raw boundary chart reduction is trivial")
+    require("actual_lift_generators={7: 837, 5: 254, 6: 254}" in boundary_output, "actual lift generators")
+    require("quotient_nnz=2270" in boundary_output and "W_lift_nnz=0" in boundary_output, "quotient/W lift facts")
+    require("root=5 rank=895 nullity=0" in zero_quotient_output, "zero-quotient full column rank")
+    match = re.search(
+        r"presentation=42706x2141 active_rows=2481 nonzeros=71050 .*structural_rank=2141",
+        cohomological_output,
+    )
+    require(match is not None, "cohomological exact support dimensions")
+    require("root=5 rank=2103 nullity=38" in cohomological_output, "cohomological finite rank")
+    require(
+        "component0_quotient_columns=2113 removed_exact_relations=28 "
+        "G3DZ_lift_support_subset=317 structural_rank=2113 finite_rank=2103 nullity=10"
+        in cohomological_output,
+        "exact component0 quotient and finite ten-kernel",
+    )
+
+    require(sms_header(ZERO_QUOTIENT_MATRIX) == (1462, 895, 6, 74511), "zero-quotient SMS header")
+    require(sms_header(COHOMOLOGICAL_MATRIX) == (42706, 2141, 6, 71050), "cohomological SMS header")
+    quotient_header = sms_header(QUOTIENT_MATRIX)
+    require(quotient_header[:3] == (42706, 2113, 6), "component0 quotient SMS header")
+    for path in (BASE_CHART, BOUNDARY_SOLUTION, LIFT_SOLUTION):
+        require(path.is_file(), f"missing selected chart evidence {path}")
+
+    selection = np.load(
+        ROOT / packets["G3DI"]["split_algebra_kernel"]["selection"]["path"],
+        allow_pickle=False,
+    )
+    dependent = selection["dependent_update_columns"].astype(np.int32)
+    relation_columns = np.flatnonzero((dependent >= 3177) & (dependent < 3187))
+    require(relation_columns.size == 10, "ten normalized component12 relation columns")
+    first = np.load(
+        ROOT / packets["G3DI"]["split_algebra_kernel"]["power_basis_coefficients"]["path"],
+        allow_pickle=False,
+    )["coefficients"]
+    eighth = np.load(
+        ROOT / packets["G3DU"]["eighth_split_algebra_kernel"]["power_basis_coefficients"]["path"],
+        allow_pickle=False,
+    )["coefficients"]
+    pass_mask = np.fromfile(
+        ROOT / packets["G3DV"]["evidence"]["holdout_pass_mask"]["path"], dtype=np.uint8
+    ).reshape(6, -1)
+    candidate_mask = np.fromfile(
+        ROOT / packets["G3DV"]["evidence"]["candidate_mask"]["path"], dtype=np.uint8
+    ).reshape(6, -1)
+    entries_per_degree = 6022 * 1274
+    passed = np.unpackbits(pass_mask, axis=1, bitorder="little")[:, :entries_per_degree]
+    candidates = np.unpackbits(candidate_mask, axis=1, bitorder="little")[:, :entries_per_degree]
+    global_indices = np.arange(6022)[:, None] * 1274 + relation_columns[None, :]
+    passed_slice = passed[:, global_indices]
+    candidate_slice = candidates[:, global_indices]
+    nonzero_slice = (first[:, :, relation_columns] != 0) | (eighth[:, :, relation_columns] != 0)
+    multiprime = {
+        "slice_entries": int(passed_slice.size),
+        "nonzero_at_first_or_eighth_prime": int(nonzero_slice.sum()),
+        "seven_prime_candidates_among_nonzero": int(candidate_slice[nonzero_slice].sum()),
+        "eighth_prime_passes_among_nonzero": int(passed_slice[nonzero_slice].sum()),
+        "aliases_among_nonzero": int((candidate_slice & ~passed_slice & nonzero_slice).sum()),
+        "no_candidate_among_nonzero": int((~candidate_slice & nonzero_slice).sum()),
+    }
+    require(
+        multiprime
+        == {
+            "slice_entries": 361320,
+            "nonzero_at_first_or_eighth_prime": 31870,
+            "seven_prime_candidates_among_nonzero": 19249,
+            "eighth_prime_passes_among_nonzero": 10,
+            "aliases_among_nonzero": 19239,
+            "no_candidate_among_nonzero": 12621,
+        },
+        "targeted eight-prime reconstruction audit",
+    )
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    multiprime_path = EVIDENCE / "H02.component12.eight_prime_slice.audit.json"
+    multiprime_path.write_text(
+        json.dumps(multiprime, indent=2) + "\n", encoding="ascii", newline="\n"
+    )
+
+    checks = {
+        "G3DE_G3DI_G3DU_G3DV_G3DX_G3DZ_G3EA_and_G3EB_A_are_hash_bound": True,
+        "the_simple83_dimensional_two_level_ansatz_is_exactly_excluded": True,
+        "the_unrestricted_zero_quotient_presentation_has_full_column_rank895_at_a_good_reduction_and_therefore_over_Q_gamma": True,
+        "quotient_coordinates_are_indispensable_for_component12": True,
+        "the_selected_finite_lift_uses_only_u_t1_t2_and_is_annihilated_by_W": True,
+        "the_quotient_retaining_exact_presentation_has2141_columns_and2481_active_rows": True,
+        "its_support_rank_is2141_but_its_selected_good_reduction_rank_is2103": True,
+        "the_finite_kernel_dimension38_matches28_earlier_plus10_current_dependent_coordinates": True,
+        "the_exact_G3DZ_lift_support_is_contained_and_quotienting_its28_relations_leaves_finite_nullity10": True,
+        "eight_prime_reconstruction_does_not_supply_the_missing_nontrivial_exact_coefficients": True,
+        "no_characteristic_zero_component12_rank_or_global_upper_improvement_is_inferred": True,
+    }
+    require(all(checks.values()), "G3EB checks")
+    packet = {
+        "schema": "mtt.unified-source.g3eb-h02-component12-cohomological-source-cutset.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3EB",
+        "status": "CLOSED_EXACT_COMPONENT12_COHOMOLOGICAL_SOURCE_CUTSET_PROMOTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {name: record(path) for name, path in INPUTS.items()},
+        "source_cutset": {
+            "source_components": [0, 2, 10, 12],
+            "source_dimension": 569,
+            "component12_dimension": 81,
+            "component12_finite_increment": 71,
+            "simple_two_level_nogo": record(INPUTS["G3EB_A"]),
+            "zero_quotient_presentation": {
+                "equation": "C0*(P_i+w*R_i)+(H0+w*H1)*(A_i+w*B_i)=0 modulo w^2-F6",
+                "shape": [1462, 895],
+                "good_reduction_rank": 895,
+                "exact_consequence": "Full column rank at a good reduction proves full column rank over Q(gamma); no zero-quotient source exists in this ansatz.",
+                "matrix": record(ZERO_QUOTIENT_MATRIX),
+            },
+            "necessary_cohomological_presentation": {
+                "equation": "Delta_source*N + A0_(u,t1,t2)*L + Q_unit*q = 0 with W*L=0",
+                "shape": [42706, 2141],
+                "active_rows": 2481,
+                "exact_nonzero_entries": 71050,
+                "columns": {"source": 569, "lift_u_t1_t2": 1345, "quotient_units": 227},
+                "structural_rank": 2141,
+                "selected_good_reduction": {"prime": 21817, "gamma_root": 5, "rank": 2103, "nullity": 38},
+                "finite_nullity_partition": {"already_promoted_component0": 28, "current_component12": 10},
+                "matrix": record(COHOMOLOGICAL_MATRIX),
+                "base_chart": record(BASE_CHART),
+                "boundary_chart_solution": record(BOUNDARY_SOLUTION),
+                "observed_lift_solution": record(LIFT_SOLUTION),
+            },
+            "after_exact_component0_quotient": {
+                "justification": "The G3DZ source map has28 independent component0 pivots and all317 coordinates of its exact lift lie in the selected1345-coordinate lift support.",
+                "shape": [42706, 2113],
+                "structural_rank": 2113,
+                "selected_good_reduction": {"prime": 21817, "gamma_root": 5, "rank": 2103, "nullity": 10},
+                "matrix": record(QUOTIENT_MATRIX),
+            },
+            "eight_prime_targeted_audit": {**multiprime, "evidence": record(multiprime_path)},
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_finite38_dimensional_kernel_lifts_to_Q_gamma": False,
+            "claims_component12_rank_over_Q_gamma_is71": False,
+            "claims_the_global_Q_gamma_upper_bound_is5102": False,
+            "claims_more_split_primes_will_by_themselves_prove_exactness": False,
+            "claims_a_selected_source_path_or_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3ebH02Component12CohomologicalSourceCutset",
+            "tier": "CLOSED_EXACT_SOURCE_LOCALIZATION_AND_CANDIDATE_EXCLUSION",
+            "statement": "Component12 cannot be promoted by either the simple H=h0+w h1 boundary ansatz or the unrestricted zero-quotient polynomial presentation. The selected finite relations require quotient cohomology. Freezing their exact source, u/t1/t2 lift and quotient-unit support gives a2141-column presentation over Q(gamma), with structural rank2141 and selected good-reduction rank2103. The exact G3DZ lift is contained in this support; quotienting its28 proven component0 relations leaves an exact2113-column presentation whose good reduction has rank2103 and nullity10. Promoting component12 is now exactly the rank-upper statement rank_Q(gamma)<=2103 for this quotient, or equivalently the construction of its ten exact kernel vectors. This theorem does not assert that promotion.",
+        },
+        "frontier_delta": {
+            "before": "Component12 had a10-unit finite-versus-structural defect, but no correct source category; a tempting boundary-Koszul interpretation was untested.",
+            "after": "Two zero-quotient source classes are excluded, quotient cohomology is proved necessary, and the exact component0 family is removed. The remaining object is a2113-column presentation with a ten-dimensional finite defect: one explicit rank upper or ten exact cohomological relations, not another source search.",
+        },
+        "rank_frontier": {
+            "current_global_Q_gamma_interval": [4748, 5112],
+            "remaining_gap": 364,
+            "conditional_after_component12_promotion": [4748, 5102],
+            "conditional_remaining_gap": 354,
+        },
+        "next_required_object": "Prove rank_Q(gamma) of the emitted2113-column post-G3DZ quotient presentation is at most2103, or emit its ten exact quotient-retaining kernel vectors and verify them directly. Do not return to a zero-quotient Koszul ansatz and do not launch another blind split-prime campaign.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii", newline="\n")
+    print("UST.G3EB component12 cohomological source cutset: PASS")
+    print("exact_zero_quotient_nogo=895/895 post_G3DZ_finite_rank=2103/2113 exact10_open")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

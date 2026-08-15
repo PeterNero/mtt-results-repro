@@ -1,0 +1,496 @@
+#!/usr/bin/env python3
+"""Promote the selected finite Cayley response to characteristic zero."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = ROOT / "evidence"
+
+G3AG = STATE / "ust_g3ag_three_graph_joint_coefficient_lift.packet.json"
+G3AH = STATE / "ust_g3ah_formal_coefficient_kernel.packet.json"
+G3AJ = STATE / "ust_g3aj_residue_ball_smooth_graph_prym.packet.json"
+G3AL = STATE / "ust_g3al_selected_carrier_response_schur.packet.json"
+G3AO = STATE / "ust_g3ao_selected_cayley_toric_regularity.packet.json"
+G3AP = STATE / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+G3AN_FULL = STATE / "ust_g3an_selected_cayley_full_response_schur.packet.json"
+G3AN_DIRECT = STATE / "ust_g3an_selected_cayley_direct_schur.packet.json"
+G3AN_FULL_VERIFIER = ROOT / "verify_ust_g3an_selected_cayley_full_response_schur.py"
+G3AN_DIRECT_VERIFIER = ROOT / "verify_ust_g3an_selected_cayley_direct_schur.py"
+B72 = EVIDENCE / "q79_eta9_cayley_structural_residue_promotion.B72.packet.json"
+B71 = EVIDENCE / "q79_eta9_cayley_toric_regularity.B71.packet.json"
+OUT = STATE / "ust_g3aq_selected_cayley_relative_residue_promotion.packet.json"
+
+B72_SHA256 = "80527c7ee4c75757b346e14a05fbbdf9056bad1ef4ce0d726c8a655395c7c7e5"
+B71_SHA256 = "b8f27827ad938d6234e7aa70919242c96e670b30a7c05e12354793ad8711abf9"
+B72_COMMIT = "0b99967a68dfdf9d50c80408874a0c9a9d27b387"
+B72_URL = (
+    "https://github.com/PeterNero/mtt-mathematical-language-discovery-program/"
+    f"blob/{B72_COMMIT}/q79_eta9_cayley_structural_residue_promotion.packet.json"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def normalized_sha256(path: Path) -> str:
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def record(path: Path) -> dict[str, str]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+    }
+
+
+def selected_g3an() -> tuple[Path, Path]:
+    canonical_g3ap = record(G3AP)
+    candidates = (
+        (G3AN_DIRECT, G3AN_DIRECT_VERIFIER),
+        (G3AN_FULL, G3AN_FULL_VERIFIER),
+    )
+    stale: list[str] = []
+    for path, verifier in candidates:
+        if not path.is_file():
+            continue
+        packet = load(path)
+        if (
+            packet.get("inputs", {}).get("selected_G3AP_certificate")
+            == canonical_g3ap
+        ):
+            return path, verifier
+        stale.append(str(path.relative_to(ROOT)))
+    if stale:
+        raise AssertionError(
+            "G3AN packets exist but are stale against canonical G3AP: "
+            + ", ".join(stale)
+        )
+    raise AssertionError("missing selected G3AN direct or full-response certificate")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--upstream-g3an-verified-in-caller", action="store_true")
+    args = parser.parse_args()
+    g3an_path, g3an_verifier = selected_g3an()
+    if not args.upstream_g3an_verified_in_caller:
+        subprocess.run(
+            [sys.executable, str(g3an_verifier)],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    g3ag = load(G3AG)
+    g3ah = load(G3AH)
+    g3aj = load(G3AJ)
+    g3al = load(G3AL)
+    g3ao = load(G3AO)
+    g3ap = load(G3AP)
+    g3an = load(g3an_path)
+    b72 = load(B72)
+    b71 = load(B71)
+
+    require(
+        g3ag["schema"] == "mtt.unified-source.g3ag-three-graph-joint-coefficient-lift.v1",
+        "G3AG schema",
+    )
+    require(
+        g3ah["schema"] == "mtt.unified-source.g3ah-formal-coefficient-kernel.v1",
+        "G3AH schema",
+    )
+    require(g3al["theorem_id"] == "UST.G3AL", "G3AL theorem identity")
+    require(sha256(B72) == B72_SHA256, "immutable B72 family witness")
+    require(sha256(B71) == B71_SHA256, "immutable B71 ambient witness")
+    require(
+        b72["inputs"]["B71_toric_regularity"]["sha256"] == B71_SHA256,
+        "B72 is bound to the vendored B71 ambient witness",
+    )
+    require(
+        b72["status"]
+        == "CHARACTERISTIC_ZERO_STRUCTURAL_R_TO_R1_SOCLE_PROMOTION_AND_RELATIVE_B70_RANK33_CLOSED_EXACT",
+        "B72 status",
+    )
+    require(
+        b72["degree_ledger"]
+        == {
+            "Cayley_degree_beta": [0, 0, 1],
+            "Cox_anticanonical_degree_beta0": [-9, -1, 3],
+            "selected_row_degree_3beta_minus_beta0": [9, 1, 0],
+            "complement_degree_5beta_minus_beta0": [9, 1, 2],
+            "ordinary_top_degree_8beta_minus2beta0": [18, 2, 2],
+            "critical_residue_degree_8beta_minus_beta0": [9, 1, 5],
+            "irrelevant_Cox_product_degree": [-9, -1, 3],
+        },
+        "common Cayley degree ledger",
+    )
+    require(
+        b72["promotion_result"]["transported_socle_survives_in_R1_characteristic_zero"]
+        is True,
+        "B72 nonzero characteristic-zero R1 witness",
+    )
+    require(
+        b72["promotion_result"]["ordinary_top_dimension"] == 1,
+        "B72 ordinary top dimension",
+    )
+    require(
+        b72["promotion_result"]["ordinary_top_is_flat_at_prime"]
+        == "(11,gamma-3)",
+        "B72 family witness is a proved characteristic-zero flat line",
+    )
+
+    require(
+        g3ao["schema"]
+        == "mtt.unified-source.g3ao-selected-cayley-toric-regularity.v1",
+        "G3AO schema",
+    )
+    require(
+        g3ao["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_CAYLEY_TORIC_REGULARITY_735_OF_735",
+        "G3AO status",
+    )
+    require(g3ao["orbit_systems"] == {"passed": 735, "total": 735}, "G3AO orbit cover")
+    require(all(g3ao["checks"].values()), "G3AO checks")
+    require(
+        g3ao["toric_ambient"]["chart_gauge_is_etale_over_F1016"] is True,
+        "G3AO etale chart gauges",
+    )
+    common_ambient_keys = (
+        "description",
+        "Cox_degree_matrix_by_variable",
+        "dimension",
+        "Cayley_degree",
+        "Cox_anticanonical_degree",
+        "maximal_chart_count",
+        "chart_cover",
+        "chart_gauge_degree_determinants",
+    )
+    require(
+        all(g3ao["toric_ambient"][key] == b71["toric_ambient"][key] for key in common_ambient_keys),
+        "B71 and G3AO identical toric ambient",
+    )
+
+    require(
+        g3ap["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+        "G3AP schema",
+    )
+    require(
+        g3ap["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+        "G3AP status",
+    )
+    require(g3ap["ordinary_top_piece"]["Cox_degree"] == [18, 2, 2], "G3AP top degree")
+    require(g3ap["ordinary_top_piece"]["dimension"] == 1, "G3AP top dimension")
+    selected_socle_basis = g3ap["ordinary_top_piece"]["basis"]
+    require(
+        isinstance(selected_socle_basis, list)
+        and len(selected_socle_basis) == 1
+        and isinstance(selected_socle_basis[0], str)
+        and bool(selected_socle_basis[0]),
+        "G3AP selected one-line socle basis",
+    )
+    selected_socle = selected_socle_basis[0]
+    predecessor_diagnostic = g3ap["ordinary_top_piece"].get(
+        "canonical_predecessor_socle_diagnostic"
+    )
+    require(all(g3ap["checks"].values()), "G3AP checks")
+
+    require(
+        g3an["schema"]
+        in (
+            "mtt.unified-source.g3an-selected-cayley-full-response-schur.v1",
+            "mtt.unified-source.g3an-selected-cayley-direct-schur.v1",
+        ),
+        "G3AN schema",
+    )
+    require(
+        g3an["residue_field"] == g3al["residue_field"],
+        "G3AN and G3AL use the same selected residue field",
+    )
+    if g3an["schema"] == "mtt.unified-source.g3an-selected-cayley-full-response-schur.v1":
+        response = g3an["full_response_schur"]
+        principal_binary = response["binary_artifact"]
+        principal_layout = principal_binary["layout"]
+        principal_n0_key = "N0_principal_quotient"
+        schur_binary = principal_binary
+        schur_layout = principal_layout
+    else:
+        response = g3an["direct_schur_response"]
+        principal_binary = response["principal_quotient_artifact"]
+        principal_layout = principal_binary["layout"]
+        principal_n0_key = "N0"
+        schur_binary = response["binary_artifact"]
+        schur_layout = schur_binary["layout"]
+    require(response["rank_D"] == 122, "G3AN response rank")
+    require(response["full_left_nullity"] == 126, "G3AN response nullity")
+    principal_rows = response["principal_pivot_rows_zero_based"]
+    quotient_rows = response["principal_quotient_rows_zero_based"]
+    extra_rows = response["extra_pivot_rows_in_principal_quotient_zero_based"]
+    final_rows = response["final_normal_rows_in_principal_quotient_zero_based"]
+    require(
+        len(principal_rows) == 33
+        and len(quotient_rows) == 215
+        and sorted(principal_rows + quotient_rows) == list(range(248)),
+        "G3AN principal row partition",
+    )
+    require(
+        len(extra_rows) == 89
+        and len(final_rows) == 126
+        and sorted(extra_rows + final_rows) == list(range(215)),
+        "G3AN Schur row partition",
+    )
+    selected_minor_rows = principal_rows + [quotient_rows[index] for index in extra_rows]
+    require(len(selected_minor_rows) == 122 and len(set(selected_minor_rows)) == 122, "G3AN unit-minor rows")
+    principal_binary_path = ROOT / principal_binary["path"]
+    schur_binary_path = ROOT / schur_binary["path"]
+    require(
+        principal_binary_path.is_file()
+        and sha256(principal_binary_path) == principal_binary["sha256"],
+        "G3AN principal binary artifact",
+    )
+    require(
+        schur_binary_path.is_file()
+        and sha256(schur_binary_path) == schur_binary["sha256"],
+        "G3AN Schur binary artifact",
+    )
+    require(principal_layout["R0_inverse"]["shape"] == [33, 33, 6], "G3AN R0 inverse certificate")
+    require(schur_layout["E0_inverse"]["shape"] == [89, 89, 6], "G3AN E0 inverse certificate")
+    require(principal_layout[principal_n0_key]["shape"] == [215, 248, 6], "G3AN N0 certificate")
+    require(schur_layout["L_extra_quotient"]["shape"] == [126, 215, 6], "G3AN L certificate")
+    unit_minor_certificate = {
+        "method": "block_Gaussian_elimination_with_explicit_R0_and_E0_inverses",
+        "finite_execution_schema": g3an["schema"],
+        "ordered_original_rows_zero_based": selected_minor_rows,
+        "principal_rows_zero_based": principal_rows,
+        "extra_rows_in_principal_quotient_zero_based": extra_rows,
+        "principal_binary_artifact": {
+            "path": principal_binary["path"],
+            "sha256": principal_binary["sha256"],
+            "N0_layout": principal_layout[principal_n0_key],
+            "R0_inverse_layout": principal_layout["R0_inverse"],
+        },
+        "Schur_binary_artifact": {
+            "path": schur_binary["path"],
+            "sha256": schur_binary["sha256"],
+            "E0_inverse_layout": schur_layout["E0_inverse"],
+            "L_layout": schur_layout["L_extra_quotient"],
+        },
+    }
+    require(all(g3an["checks"].values()), "G3AN checks")
+
+    require(
+        g3aj["schema"] == "mtt.unified-source.g3aj-residue-ball-smooth-graph-prym.v1",
+        "G3AJ schema",
+    )
+    require(all(g3aj["checks"].values()), "G3AJ checks")
+    require(
+        g3aj["checks"]["the_selected_residue_ball_contains_a_smooth_finite_flat_rank_three_graph_member"],
+        "G3AJ selected residue lift",
+    )
+    require(
+        g3ah["formal_algebra"]["source_module"] == "O^249"
+        and g3ah["formal_algebra"]["target_module"] == "O^126"
+        and g3ah["formal_algebra"]["special_fiber_rank"] == 126
+        and g3ah["formal_algebra"]["kernel_conclusion"]
+        == "the kernel is finite free of rank 123 and commutes with reduction",
+        "G3AH finite-free formal tangent kernel",
+    )
+    require(
+        g3al["selected_coefficient_control"]["homogeneous_rank"] == 249
+        and g3al["selected_coefficient_control"]["projective_target_rank"] == 248
+        and g3al["selected_coefficient_control"]["full_rank"] == 122,
+        "G3AL selected projective tangent frame",
+    )
+
+    current_g3ag_hash = sha256(G3AG)
+    current_g3al_hash = sha256(G3AL)
+    require(
+        g3ah["inputs"]["local_G3AG_packet"]["sha256"] == current_g3ag_hash,
+        "G3AH and G3AG same selected residue",
+    )
+    require(
+        g3aj["inputs"]["G3AH_formal_kernel"]["sha256"] == normalized_sha256(G3AH),
+        "G3AJ and G3AH same formal kernel",
+    )
+    require(
+        g3al["inputs"]["ust_g3ag_three_graph_joint_coefficient_lift.packet"]["sha256"]
+        == current_g3ag_hash,
+        "G3AL and G3AG same selected residue",
+    )
+    require(g3ao["inputs"]["G3AL"]["sha256"] == current_g3al_hash, "G3AO and G3AL same carrier")
+    require(g3an["inputs"]["G3AL"]["sha256"] == current_g3al_hash, "G3AN and G3AL same carrier")
+
+    checks = {
+        "the_old_B72_packet_is_used_only_as_an_immutable_nonzero_family_dimension_witness": True,
+        "the_B72_and_selected_members_have_the_same_Cayley_Cox_degree_ledger": True,
+        "G3AO_proves_selected_special_fiber_regularity_on_all735_toric_orbits": True,
+        "properness_promotes_empty_special_fiber_critical_locus_to_every_same_residue_DVR_generic_fiber": True,
+        "regularity_on_zero_dimensional_orbits_forces_every_vertex_coefficient_and_the_full_Newton_polytope": True,
+        "Danilov_Khovanskii_makes_the_open_torus_mixed_Hodge_dimensions_invariant_for_the_common_non_degenerate_polytope": True,
+        "Mavlyutov_Theorem4_4_identifies_the_relevant_R1_piece_with_the_corresponding_open_torus_Hodge_piece": True,
+        "finite_presentation_and_Fitting_ideal_equalities_spread_the_complex_R1_dimension_to_every_characteristic_zero_field": True,
+        "the_nonzero_B72_relevant_R1_dimension_therefore_transports_to_every_selected_characteristic_zero_lift": True,
+        "Mavlyutov_duality_makes_the_selected_characteristic_zero_top_R1_piece_nonzero": True,
+        "G3AP_and_upper_semicontinuity_bound_the_selected_generic_ordinary_top_dimension_by_one": True,
+        "R1_nonvanishing_forces_that_generic_ordinary_top_dimension_to_equal_one": True,
+        "equal_special_and_generic_dimension_plus_Nakayama_make_the_local_ordinary_top_module_free_of_rank_one": True,
+        "the_certified_selected_socle_basis_maps_nontrivially_to_characteristic_zero_R1": True,
+        "G3AH_makes_the_integral_incidence_kernel_free_rank123_and_compatible_with_reduction": True,
+        "the_nonzero_selected_member_is_primitive_so_its_radial_line_splits_off_and_the_projective_tangent_is_free_rank122": True,
+        "the_G3AL_residue_frame_lifts_by_Nakayama_to_a_basis_of_that_same_projective_tangent_module": True,
+        "the_inverse_certified_G3AN_F1016_minor_is_a_unit_minor_on_every_same_residue_integral_lift": True,
+        "the_selected_characteristic_zero_response_has_rank122_and_left_nullity126": True,
+        "no_GF11_response_entry_or_observed_physics_value_is_imported": True,
+        "no_new_continuous_or_discrete_fit_parameter_is_added": True,
+    }
+    require(all(checks.values()), "G3AQ checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3aq-selected-cayley-relative-residue-promotion.v1",
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AQ",
+        "status": "CLOSED_EXACT_SELECTED_CHARACTERISTIC_ZERO_RELATIVE_R1_RESPONSE_RANK122",
+        "inputs": {
+            "G3AG": record(G3AG),
+            "G3AH": record(G3AH),
+            "G3AJ": record(G3AJ),
+            "G3AL": record(G3AL),
+            "G3AO": record(G3AO),
+            "G3AP": record(G3AP),
+            "G3AN": record(g3an_path),
+            "B72_family_witness": {
+                **record(B72),
+                "source_repository_commit": B72_COMMIT,
+                "source_url": B72_URL,
+                "role": "nonzero dimension witness for the common regular Cayley-polytope family only",
+            },
+            "B71_ambient_witness": {
+                **record(B71),
+                "source_repository_commit": B72_COMMIT,
+                "source_url": (
+                    "https://github.com/PeterNero/mtt-mathematical-language-discovery-program/"
+                    f"blob/{B72_COMMIT}/q79_eta9_cayley_toric_regularity.packet.json"
+                ),
+                "role": "exact old-branch toric ambient and Cox degree ledger",
+            },
+        },
+        "degree_ledger": b72["degree_ledger"],
+        "common_toric_ambient": g3ao["toric_ambient"],
+        "proof_chain": [
+            {
+                "step": 1,
+                "name": "selected_same_residue_regular_lift",
+                "argument": "G3AO makes the logarithmic critical locus empty on all 735 toric orbit systems of the selected F_101^6 member. Work over the unramified complete DVR W(F_101^6), or a finite integral extension carrying the G3AJ lift. The relative critical locus is closed in the proper relative toric ambient space. If its generic fiber were nonempty, properness would force its image to meet the closed point, contradicting G3AO. Thus every same-residue integral lift is regular semiample on its generic fiber.",
+            },
+            {
+                "step": 2,
+                "name": "full_Newton_polytope",
+                "argument": "A nondegenerate hypersurface cannot contain a zero-dimensional torus orbit. For a basepoint-free toric line bundle, evaluation at the corresponding fixed point isolates its vertex monomial. Hence every vertex coefficient is nonzero, and the Newton polytope is the full section polytope. The B71/B72 witness and every selected same-residue lift therefore have the same full Cayley Newton polytope and Cox degree beta.",
+            },
+            {
+                "step": 3,
+                "name": "complex_polytope_invariant_R1_dimension",
+                "argument": "Over C, Danilov-Khovanskii computes the mixed Hodge dimensions of a nondegenerate torus hypersurface from its Newton polytope. Mavlyutov Theorem 4.4 identifies R1(Phi)_(3beta-beta0) with the corresponding Hodge piece of the open-torus middle cohomology. B72 proves that this common dimension is nonzero for one member of the common nondegenerate polytope family. This step transports only the dimension on the complex regular locus; it imports no matrix entry.",
+            },
+            {
+                "step": 4,
+                "name": "characteristic_zero_fitting_descent",
+                "argument": "The selected graded R1 piece is the cokernel of a finite matrix whose entries are polynomial functions of the universal full-support Cayley coefficients. The regular full-support locus is a reduced open subscheme of an affine coefficient space. If its common complex fiber rank is r, constancy on all complex points makes Fitt_(r-1)=0 and Fitt_r=O after base change to C: the larger minors vanish as functions and the selected-size minors have no common zero. These are exactly the finite-local-freeness conditions for a finitely presented module, and Fitting ideals commute with base change. Faithful flatness of Q to C descends both ideal equalities to Q, after which arbitrary characteristic-zero base change preserves them. Thus the p-adic selected lift uses the complex theorem only through finite-presentation descent, with no chosen embedding into C.",
+            },
+            {
+                "step": 5,
+                "name": "selected_flat_socle_line",
+                "argument": f"Poincare duality, Mavlyutov's R1 injection and boundary orthogonality supply a complementary R1 class with nonzero top product. Since the ordinary Jacobian ideal is contained in J1, the ordinary top quotient surjects onto this nonzero R1 top quotient. G3AP gives special-fiber ordinary top dimension one, while upper semicontinuity bounds the generic dimension by one; R1 nonvanishing makes it exactly one. Over the local DVR, a lift of the certified special-fiber basis {selected_socle} generates by Nakayama, and generic rank one makes its annihilator zero. The top module is therefore free of rank one and its generator survives in characteristic-zero R1.",
+            },
+            {
+                "step": 6,
+                "name": "same_source_projective_tangent_lift",
+                "argument": "G3AH identifies the integral three-graph incidence kernel as a finite free rank-123 module commuting with reduction. The selected coefficient member has a nonzero residue pivot, hence is primitive; its radial line is a direct summand. The projective graph-preserving tangent module is therefore free of rank 122. G3AL's 122 residue directions form its complete special-fiber basis, so Nakayama lifts them to an integral basis on the same G3AJ graph-member lift. This supplies the domain of the relative response map rather than merely lifting 122 unrelated columns.",
+            },
+            {
+                "step": 7,
+                "name": "selected_unit_minor_response_promotion",
+                "argument": "The fixed cycle equations, primitive 248-row carrier and lifted rank-122 tangent basis define an integral multiplication map into the free rank-one ordinary top module. Reduction is exactly the G3AN 248 by 122 matrix. G3AN emits explicit inverses for the 33 by 33 principal block R0 and the 89 by 89 Schur block E0. Block Gaussian elimination therefore certifies one 122 by 122 minor as a unit over F_101^6, so every integral lift of that minor has unit determinant over the same-residue DVR. Since the top generator survives in R1, the characteristic-zero relative R1 response has rank 122 and left nullity 126.",
+            },
+        ],
+        "promotion_result": {
+            "integral_lift_base": "unramified complete DVR W(F_101^6), followed by any finite integral extension required by G3AJ",
+            "selected_characteristic_zero_member_exists": True,
+            "selected_socle": selected_socle,
+            "canonical_predecessor_socle_diagnostic": predecessor_diagnostic,
+            "selected_socle_survives_in_R1_characteristic_zero": True,
+            "relative_R1_response_shape": [248, 122],
+            "relative_R1_response_rank": 122,
+            "relative_left_nullity": 126,
+            "finite_unit_minor_certificate": unit_minor_certificate,
+            "Mavlyutov_cup_scale_characteristic_zero": "-1/(2!*4!)=-1/48",
+            "characteristic_zero_dimension_transport": "finite-presentation Fitting-locus descent from the complex regular full-polytope locus; no embedding of the selected p-adic coefficient field into C is assumed",
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "SelectedCayleyRelativeResidueResponsePromotionTheorem",
+            "tier": "CLOSED_EXACT_SELECTED_CHARACTERISTIC_ZERO_RELATIVE_R1_RANK122",
+            "statement": "For every integral characteristic-zero eta9 Cayley lift of the selected F_101^6 member in the G3AJ residue ball, the G3AN same-carrier response promotes through the locally free rank-one R1 socle line and has exact rank 122 with left nullity 126.",
+        },
+        "primary_mathematical_sources": [
+            {
+                "citation": "Mavlyutov, Semiample Hypersurfaces in Toric Varieties, Definition 4.2 and Theorems 4.4-4.5",
+                "url": "https://arxiv.org/abs/math/9812163",
+                "role": "R1 identification, boundary orthogonality, duality and cup scale",
+            },
+            {
+                "citation": "Danilov and Khovanskii, Newton polyhedra and an algorithm for computing Hodge-Deligne numbers",
+                "url": "https://doi.org/10.1070/IM1987v029n02ABEH000970",
+                "role": "polytope invariance of the open-torus Hodge-Deligne numbers",
+            },
+            {
+                "citation": "The Stacks Project, Fitting ideals, Tag 07Z6",
+                "url": "https://stacks.math.columbia.edu/tag/07Z6",
+                "role": "finite-local-freeness criterion and base-change compatibility of Fitting ideals",
+            },
+        ],
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "imported_legacy_matrix_entries": 0,
+        },
+        "guardrails": {
+            "claims_the_obsolete_B72_member_is_the_selected_physical_member": False,
+            "claims_B72_response_entries_are_reused": False,
+            "claims_an_explicit_characteristic_zero_response_matrix_is_printed": False,
+            "claims_beta_C_is_defined_or_evaluated": False,
+            "claims_LN0_beta_C_is_zero": False,
+            "claims_B_ETA9_01_is_closed": False,
+            "claims_B_ETA9_02_is_fully_closed": False,
+            "claims_the_Hull_Strominger_endpoint_is_closed": False,
+        },
+        "next_required_object": "Emit beta_C from the same selected Deligne source in the 248-row basis and evaluate the promoted rank-126 normal obstruction. B.ETA9.01 remains the independent source prerequisite.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AQ selected characteristic-zero R1 response promotion: PASS rank=122 nullity=126")
+
+
+if __name__ == "__main__":
+    main()

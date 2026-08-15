@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Compute G3AP fiber degree two over the exact base quotient ring."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_qring.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_qring.singular.out"
+BASE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_qring_base.ssi"
+MODULE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_qring_module_degree44.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_qring.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def derivative_generators() -> list[str]:
+    generators = []
+    for variable in ("x", "y", "z", "w"):
+        dk = f"dK_{variable}"
+        dc = f"dC_{variable}"
+        generators.extend(
+            (
+                f"{dk}*gen(1)+{dc}*gen(3)",
+                f"{dk}*gen(2)+{dc}*gen(5)",
+                f"{dk}*gen(3)+{dc}*gen(6)",
+            )
+        )
+    for variable in ("t0", "t1", "t2"):
+        de = f"dE_{variable}"
+        dc = f"dC_{variable}"
+        generators.extend(
+            (
+                f"{de}*gen(2)+{dc}*gen(3)",
+                f"{de}*gen(4)+{dc}*gen(5)",
+                f"{de}*gen(5)+{dc}*gen(6)",
+            )
+        )
+    require(len(generators) == 21, "21 derivative generators")
+    return generators
+
+
+def derivative_representatives() -> tuple[str, str]:
+    before = []
+    after = []
+    for equation, variables in (
+        ("K", ("x", "y", "z", "w")),
+        ("E", ("t0", "t1", "t2")),
+        ("C", ("x", "y", "z", "w", "t0", "t1", "t2")),
+    ):
+        for variable in variables:
+            name = f"d{equation}_{variable}"
+            source_name = f"r_{name}"
+            before.append(f"poly {source_name}=diff({equation},{variable});")
+            after.append(f"poly {name}=imap(r,{source_name});")
+    return "\n".join(before), "\n".join(after)
+
+
+def qring_script(source: str) -> str:
+    generators = ",\n  ".join(derivative_generators())
+    representatives_before, representatives_after = derivative_representatives()
+    return fiber2.selected_base_prefix(source) + f'''option(noredTail);
+{representatives_before}
+ideal I0=K,E,C;
+ideal GI=std(I0);
+int i;
+print("G3AP_F2_QRING_BASE_GB_SIZE="+string(size(GI)));
+for (i=1;i<=size(GI);i++)
+{{ print("G3AP_F2_QRING_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GI[i]))); }}
+attrib(GI,"isSB",0);
+write("ssi:w state/ust_g3ap_selected_cayley_fiber2_qring_base.ssi",GI);
+attrib(GI,"isSB",1);
+qring q=GI;
+{representatives_after}
+module M=
+  {generators};
+intvec componentShifts=12,15,8,18,11,4;
+attrib(M,"isHomog",componentShifts);
+degBound=44;
+module G=std(M);
+print("G3AP_F2_QRING_BOUND="+string(degBound));
+print("G3AP_F2_QRING_MODULE_GENERATORS="+string(size(M)));
+print("G3AP_F2_QRING_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("G3AP_F2_QRING_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("G3AP_F2_QRING_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w state/ust_g3ap_selected_cayley_fiber2_qring_module_degree44.ssi",G);
+print("G3AP_F2_QRING_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_leaders(output: str) -> tuple[list[tuple[int, ...]], list[tuple[int, tuple[int, ...]]]]:
+    base_count = re.search(r"^G3AP_F2_QRING_BASE_GB_SIZE=(\d+)$", output, re.MULTILINE)
+    module_count = re.search(r"^G3AP_F2_QRING_MODULE_GB_SIZE=(\d+)$", output, re.MULTILINE)
+    require(base_count is not None and module_count is not None, "qring basis counts")
+    base = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(r"^G3AP_F2_QRING_BASE_LEADER_(\d+)_EXP=([0-9,]+)$", output, re.MULTILINE)
+    }
+    components = {
+        int(match.group(1)): int(match.group(2))
+        for match in re.finditer(r"^G3AP_F2_QRING_MODULE_LEADER_(\d+)_COMP=(\d+)$", output, re.MULTILINE)
+    }
+    exponents = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(r"^G3AP_F2_QRING_MODULE_LEADER_(\d+)_EXP=([0-9,]+)$", output, re.MULTILINE)
+    }
+    base_size = int(base_count.group(1))
+    module_size = int(module_count.group(1))
+    require(set(base) == set(range(1, base_size + 1)), "all base leaders")
+    require(set(components) == set(exponents) == set(range(1, module_size + 1)), "all quotient-module leaders")
+    base_leaders = [base[index] for index in range(1, base_size + 1)]
+    module_leaders = [(components[index], exponents[index]) for index in range(1, module_size + 1)]
+    require(all(len(value) == 7 for value in base_leaders), "base leader widths")
+    require(all(1 <= component <= 6 and len(value) == 7 for component, value in module_leaders), "module leader types")
+    return base_leaders, module_leaders
+
+
+def combined_leaders(
+    base: list[tuple[int, ...]], module: list[tuple[int, tuple[int, ...]]]
+) -> list[tuple[int, tuple[int, ...]]]:
+    return module + [(component, exponent) for component in range(1, 7) for exponent in base]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    source = SOURCE.read_text(encoding="ascii")
+    SCRIPT.write_text(qring_script(source), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)}")
+        return
+    BASE_CACHE.unlink(missing_ok=True)
+    MODULE_CACHE.unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "fiber-two qring execution")
+    require("G3AP_F2_QRING_LEADER_EXPORT_PASS" in completed.stdout, "qring pass")
+    require(BASE_CACHE.is_file() and BASE_CACHE.stat().st_size > 0, "base cache")
+    require(MODULE_CACHE.is_file() and MODULE_CACHE.stat().st_size > 0, "module cache")
+    base, module = parse_leaders(completed.stdout)
+    standards, sectors = fiber2.enumerate_target(combined_leaders(base, module))
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(standards == [fiber2.EXPECTED_STANDARD], "unique qring top standard")
+    checks = {
+        "selected_F101e6_source_is_hash_bound": True,
+        "base_quotient_is_exactly_B_mod_K_E_C": True,
+        "the_21_module_generators_are_the_remaining_fiber_degree_two_derivative_relations": True,
+        "base_and_module_leaders_together_present_the_same_ordinary_Jacobian_piece": True,
+        "bounded_quotient_module_basis_reaches_the_conservative_base_degree_44": True,
+        "all_174865_target_Cox_monomials_are_enumerated": True,
+        "ordinary_top_piece_has_dimension_one": True,
+        "selected_top_representative_is_w12_t2_4_s2": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.FIBER2.QRING",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_QRING_TOP_DIMENSION_ONE",
+        "inputs": {"selected_source": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SOURCE)}},
+        "execution": {
+            "script": {"path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SCRIPT)},
+            "output": {"path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(OUTPUT)},
+            "returncode": completed.returncode,
+            "elapsed_seconds": time.time() - started,
+            "base_basis_size": len(base),
+            "module_generator_count": 21,
+            "module_basis_size_through_bound": len(module),
+            "scalar_degree_bound": 44,
+            "base_cache": {"path": str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(BASE_CACHE), "bytes": BASE_CACHE.stat().st_size, "isSB_trust_attribute_stored": False},
+            "bounded_module_cache": {"path": str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(MODULE_CACHE), "bytes": MODULE_CACHE.stat().st_size, "valid_through_base_scalar_degree": 44, "isSB_trust_attribute_stored": False},
+        },
+        "fiber_degree_two_module": {
+            "base_ring_variables": ["x", "y", "z", "w", "t0", "t1", "t2"],
+            "base_quotient": "B/(K,E,C)",
+            "components": [name for _, name, _, _ in fiber2.COMPONENTS],
+            "component_scalar_shifts": [shift for _, _, _, shift in fiber2.COMPONENTS],
+            "sectors": sectors,
+        },
+        "ordinary_top_piece": {"Cox_degree": [18, 2, 2], "scalar_weight": 44, "enumerated_monomials": total, "dimension": 1, "basis": ["w^12*t2^4*s^2"], "basis_component": "s2", "basis_base_exponent": list(fiber2.EXPECTED_STANDARD[1])},
+        "checks": checks,
+        "guardrails": {
+            "claims_the_ordinary_Jacobian_was_replaced_by_a_different_ideal": False,
+            "claims_the_bounded_module_cache_is_a_full_unrestricted_basis": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_promotion": False,
+        },
+        "next_required_object": "Independently reconstruct and reload both quotient-ring caches before canonical adoption.",
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AP.FIBER2.QRING top: PASS "
+        f"base={len(base)} module={len(module)} monomials={total}"
+    )
+
+
+if __name__ == "__main__":
+    main()

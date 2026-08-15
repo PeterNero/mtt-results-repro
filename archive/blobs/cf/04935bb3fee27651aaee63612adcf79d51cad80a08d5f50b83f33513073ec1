@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Sparse deterministic rank over Q[gamma]/(m) using python-flint polynomials."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from pathlib import Path
+
+from flint import fmpq_poly
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("matrix", type=Path)
+    parser.add_argument("--certificate", type=Path)
+    parser.add_argument("--progress", type=Path)
+    arguments = parser.parse_args()
+    started = time.monotonic()
+
+    with arguments.matrix.open("r", encoding="ascii") as handle:
+        rows_count, columns_count, degree, declared = map(
+            int, handle.readline().split()
+        )
+        minimal = list(map(int, handle.readline().split()))
+        require(len(minimal) == degree + 1 and minimal[-1] == 1, "monic field polynomial")
+        raw = []
+        for line in handle:
+            values = list(map(int, line.split()))
+            require(len(values) == degree + 2, "number-field entry")
+            raw.append((values[0] - 1, values[1] - 1, tuple(values[2:])))
+    require(len(raw) == declared, "declared nonzeros")
+    modulus = fmpq_poly(minimal)
+    cache: dict[tuple[int, ...], fmpq_poly] = {}
+
+    def element(coefficients: tuple[int, ...]) -> fmpq_poly:
+        value = cache.get(coefficients)
+        if value is None:
+            value = fmpq_poly(list(coefficients))
+            require(bool(value), "nonzero declared entry")
+            cache[coefficients] = value
+        return value
+
+    def inverse(value: fmpq_poly) -> fmpq_poly:
+        gcd, bezout, _ = value.xgcd(modulus)
+        require(gcd.degree() == 0 and bool(gcd), "invertible number-field pivot")
+        return (bezout / gcd[0]) % modulus
+
+    rows: list[dict[int, fmpq_poly]] = [{} for _ in range(rows_count)]
+    for row, column, coefficients in raw:
+        require(column not in rows[row], "duplicate entry")
+        rows[row][column] = element(coefficients)
+
+    pivots: dict[int, dict[int, fmpq_poly]] = {}
+    dependent_rows: list[int] = []
+    eliminations = 0
+
+    def report(row_index: int) -> None:
+        if arguments.progress is None:
+            return
+        arguments.progress.write_text(
+            f"row={row_index}/{rows_count} rank={len(pivots)} "
+            f"dependent={len(dependent_rows)} eliminations={eliminations} "
+            f"elapsed={time.monotonic()-started:.3f}\n",
+            encoding="ascii",
+        )
+
+    for original_row, row in enumerate(rows):
+        while row:
+            pivot_column = min(row)
+            pivot_value = row[pivot_column]
+            pivot_row = pivots.get(pivot_column)
+            if pivot_row is None:
+                scale = inverse(pivot_value)
+                normalized = {}
+                for column, value in row.items():
+                    reduced = (value * scale) % modulus
+                    if reduced:
+                        normalized[column] = reduced
+                pivots[pivot_column] = normalized
+                break
+            for column, value in pivot_row.items():
+                current = row.get(column)
+                reduced = (
+                    -pivot_value * value
+                    if current is None
+                    else current - pivot_value * value
+                ) % modulus
+                if reduced:
+                    row[column] = reduced
+                else:
+                    row.pop(column, None)
+            eliminations += 1
+        else:
+            dependent_rows.append(original_row)
+        if original_row % 25 == 0:
+            report(original_row)
+    report(rows_count)
+
+    rank = len(pivots)
+    result = {
+        "schema": "mtt.unified-source.flint-exact-number-field-sparse-rank.v1",
+        "status": "PASS_DETERMINISTIC_FLINT_EXACT_NUMBER_FIELD_SPARSE_ELIMINATION",
+        "matrix": {
+            "path": str(arguments.matrix),
+            "rows": rows_count,
+            "columns": columns_count,
+            "degree": degree,
+            "declared_nonzeros": declared,
+            "minimal_polynomial_coefficients_ascending": minimal,
+        },
+        "algorithm": {
+            "coefficient_representation": "python-flint fmpq_poly reduced modulo the declared monic polynomial",
+            "row_order": "input order",
+            "pivot_rule": "least available column",
+            "probabilistic_steps": 0,
+        },
+        "result": {
+            "rank": rank,
+            "nullity": columns_count - rank,
+            "row_dependency_dimension": rows_count - rank,
+            "pivot_columns_zero_based": sorted(pivots),
+            "dependent_rows_zero_based": dependent_rows,
+            "row_eliminations": eliminations,
+            "elapsed_seconds": time.monotonic() - started,
+        },
+        "checks": {
+            "all_input_coefficients_are_exact_rationals": True,
+            "every_product_is_reduced_modulo_the_declared_polynomial": True,
+            "every_pivot_inverse_is_certified_by_polynomial_extended_gcd": True,
+            "the_algorithm_is_deterministic": True,
+            "no_modular_or_floating_point_rank_inference_is_used": True,
+        },
+    }
+    if arguments.certificate is not None:
+        arguments.certificate.write_text(
+            json.dumps(result, indent=2) + "\n", encoding="ascii", newline="\n"
+        )
+    print(
+        f"FLINT_EXACT_NUMBER_FIELD_SPARSE_RANK rows={rows_count} columns={columns_count} "
+        f"rank={rank} nullity={columns_count-rank} eliminations={eliminations} "
+        f"elapsed={time.monotonic()-started:.3f}"
+    )
+
+
+if __name__ == "__main__":
+    main()

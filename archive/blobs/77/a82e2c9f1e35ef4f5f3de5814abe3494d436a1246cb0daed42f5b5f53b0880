@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+"""Promote the G3FZ second-jet source with an adaptive exact-prime campaign."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bt_h02_endpoint_action_one_split_prime as endpoint_action
+import build_ust_g3dg_h02_split_place_full_coupling_rank as rank_runtime
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as interpolation
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fn_component20_hilbert_burch_source as hilbert_burch
+import build_ust_g3ft_component20_full_relation_height_campaign as height_campaign
+import build_ust_g3fz_component20_second_jet_o8_source as second_jet
+import probe_ust_g3bl_endpoint_chart_unit as codex_runtime
+import probe_ust_g3fy_selected_degree21_source_span as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3ga"
+SCRATCH = ROOT / "state/ust_g3ga_scratch"
+ARRAYS = EVIDENCE / "H02.component20.second_jet_qgamma_promotion.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.second_jet_qgamma_promotion.json"
+FRESH_PRIMES = (79903,)
+UPDATE_START = 24767
+UPDATE_DIMENSION = 6022
+EXPECTED_KERNEL_DIMENSION = 1274
+EXPECTED_COUPLING_RANK = 4748
+ARITHMETIC_SCHEMA = "prime_parameterized_v2"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def evaluate_at_prime(
+    records: list[dict[str, object]], gamma: int, prime: int
+) -> sparse.csr_matrix:
+    """Evaluate a Z[gamma] sparse matrix at the requested finite place."""
+    result: sparse.csr_matrix | None = None
+    power = 1
+    for row in records:
+        matrix = sparse.load_npz(ROOT / str(row["path"])).tocsr().astype(np.int64)
+        result = matrix * power if result is None else result + matrix * power
+        power = power * gamma % prime
+    require(result is not None, "nonempty coefficient record")
+    result.data %= prime
+    result.eliminate_zeros()
+    return result
+
+
+def normalize_at_prime(matrix: sparse.spmatrix, prime: int) -> sparse.csc_matrix:
+    """Canonicalize a sparse matrix without importing another fiber's modulus."""
+    value = matrix.tocsc().astype(np.int64)
+    value.sum_duplicates()
+    value.data %= prime
+    value.eliminate_zeros()
+    return value.astype(np.uint32)
+
+
+def full_kernel_context(g3bi: dict[str, object]) -> dict[str, object]:
+    mld = codex_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    paths = {
+        "G3BW": ROOT / "state/ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json",
+        "G3BZ": ROOT / "state/ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json",
+        "G3DE": ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json",
+        "G3DI": ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json",
+    }
+    packets = {label: load(path) for label, path in paths.items()}
+    require(
+        all(all(packet["checks"].values()) for packet in packets.values()),
+        "full-kernel input checks",
+    )
+    macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json")
+    csc = load(mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json")
+    factor = load(
+        mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    )
+    base_packet = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, _, _ = oracle.exact_generators(base_packet, global_f0, b89)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = [int(value) for value in csc["binary"]["quotient_unit_rows"]]
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"][
+            "selected_original_Jacobian_columns"
+        ]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+
+    dm = np.load(
+        ROOT / packets["G3BW"]["DM_reduction"]["arrays"]["path"],
+        allow_pickle=False,
+    )
+    core_rows = np.flatnonzero(dm["component_by_row"] == 17597).astype(np.int32)
+    core_columns = np.flatnonzero(dm["component_by_column"] == 17597).astype(
+        np.int32
+    )
+    require(core_rows.size == core_columns.size == UPDATE_START, "core dimensions")
+    selection = np.load(
+        ROOT
+        / packets["G3DI"]["split_algebra_kernel"]["selection"]["path"],
+        allow_pickle=False,
+    )
+    executable = ROOT / packets["G3DI"]["inputs"]["kernel_tool_executable"]["path"]
+    require(executable.is_file(), "full-kernel executable")
+    return {
+        "mld": mld,
+        "oracle": oracle,
+        "exporter": exporter,
+        "g3bi": g3bi,
+        "macaulay": macaulay,
+        "factor": factor,
+        "quotient_rows": quotient_rows,
+        "descriptors": descriptors,
+        "generators0": generators0,
+        "target_lookup": target_lookup,
+        "dm": dm,
+        "core_rows": core_rows,
+        "core_columns": core_columns,
+        "delta_records": packets["G3BZ"]["affine_path_update"][
+            "exact_gamma_coefficient_matrices"
+        ],
+        "u_records": packets["G3DE"]["factorization"]["U_gamma_coefficients"],
+        "w_records": packets["G3DE"]["factorization"]["W_gamma_coefficients"],
+        "selected_reference": selection["selected_update_columns"].astype(np.int32),
+        "dependent_reference": selection["dependent_update_columns"].astype(np.int32),
+        "executable": executable,
+    }
+
+
+def cache_paths(prime: int) -> tuple[Path, Path]:
+    return (
+        EVIDENCE / f"H02.component20.p{prime}.second_jet_source.npz",
+        EVIDENCE / f"H02.component20.p{prime}.second_jet_source.json",
+    )
+
+
+def read_cache(
+    prime: int, roots: tuple[int, ...]
+) -> tuple[np.ndarray, np.ndarray, dict[str, object]] | None:
+    arrays_path, metadata_path = cache_paths(prime)
+    if not (arrays_path.is_file() and metadata_path.is_file()):
+        return None
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("arithmetic_schema") != ARITHMETIC_SCHEMA:
+        return None
+    require(metadata["artifact"]["sha256"] == sha256(arrays_path), "cache hash")
+    arrays = np.load(arrays_path, allow_pickle=False)
+    require(int(arrays["prime"][0]) == prime, "cache prime")
+    require(tuple(int(value) for value in arrays["roots"]) == roots, "cache roots")
+    values = arrays["second_jet_source_coefficients"].astype(np.uint32)
+    residues = arrays["second_jet_source_power_basis_residues"].astype(np.uint32)
+    require(values.shape == (6, 132) and residues.shape == (6, 132), "cache shapes")
+    return values, residues, metadata
+
+
+def cleanup(*paths: Path) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
+
+
+def build_prime(
+    prime: int,
+    roots: tuple[int, ...],
+    context: dict[str, object],
+    coefficient_vectors: list[list[int]],
+    d7_coordinates: np.ndarray,
+    b6_coordinates: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
+    cached = read_cache(prime, roots)
+    if cached is not None:
+        return cached
+    values: list[np.ndarray] = []
+    fibers: list[dict[str, object]] = []
+    for gamma in roots:
+        root_cache = EVIDENCE / f"H02.component20.p{prime}.g{gamma}.second_jet_source.npz"
+        root_metadata = EVIDENCE / f"H02.component20.p{prime}.g{gamma}.second_jet_source.json"
+        if root_cache.is_file() and root_metadata.is_file():
+            metadata = json.loads(root_metadata.read_text(encoding="utf-8"))
+            if metadata.get("arithmetic_schema") != ARITHMETIC_SCHEMA:
+                metadata = None
+            if metadata is not None:
+                require(metadata["artifact"]["sha256"] == sha256(root_cache), "root cache hash")
+                cached = np.load(root_cache, allow_pickle=False)
+                require(
+                    (int(cached["prime"][0]), int(cached["gamma"][0]))
+                    == (prime, gamma),
+                    "root cache field",
+                )
+                values.append(cached["source_coefficient"].astype(np.uint32))
+                fibers.append(metadata["fiber"])
+                print(f"G3GA p={prime} gamma={gamma}: reused root cache", flush=True)
+                continue
+        endpoint, construction = endpoint_action.endpoint_chart(
+            prime,
+            gamma,
+            context["g3bi"],
+            context["macaulay"],
+            context["factor"],
+            context["quotient_rows"],
+            context["descriptors"],
+            context["generators0"],
+            context["target_lookup"],
+            context["oracle"],
+            context["exporter"],
+        )
+        dm = context["dm"]
+        core_rows = context["core_rows"]
+        core_columns = context["core_columns"]
+        delta = evaluate_at_prime(context["delta_records"], gamma, prime)
+        u = evaluate_at_prime(context["u_records"], gamma, prime)
+        w = evaluate_at_prime(context["w_records"], gamma, prime)
+        base = normalize_at_prime(
+            endpoint[dm["complement_rows"], :][:, 248:] - delta, prime
+        )
+        a_core = normalize_at_prime(base[core_rows, :][:, core_columns], prime)
+        u_core = normalize_at_prime(u[core_rows, :], prime)
+        w_core = normalize_at_prime(w[:, core_columns], prime)
+        outside = np.ones(u.shape[0], dtype=bool)
+        outside[core_rows] = False
+        require(u[outside, :].nnz == 0, "U core support")
+        border = normalize_at_prime(
+            sparse.bmat(
+                [
+                    [a_core, u_core],
+                    [
+                        w_core,
+                        sparse.csc_matrix(
+                            (UPDATE_DIMENSION, UPDATE_DIMENSION), dtype=np.uint32
+                        ),
+                    ],
+                ],
+                format="csc",
+            ),
+            prime,
+        )
+        stem = f"p{prime}.g{gamma}"
+        chart = SCRATCH / f"{stem}.border.bin"
+        kernel = SCRATCH / f"{stem}.kernel.bin"
+        kernel_log = SCRATCH / f"{stem}.kernel.log"
+        context["exporter"].write_chart(
+            chart,
+            prime,
+            border.shape[0],
+            0,
+            border.shape[0],
+            border.indptr.astype(np.uint64).tolist(),
+            border.indices.astype(np.uint32).tolist(),
+            border.data.astype(np.uint32).tolist(),
+        )
+        prior_fields = (
+            rank_runtime.initializer.parse_log(kernel_log)
+            if kernel.is_file() and kernel_log.is_file()
+            else {}
+        )
+        if (
+            prior_fields.get("STATUS") == "SUCCESS"
+            and prior_fields.get("PRIME") == str(prime)
+            and prior_fields.get("ROWS") == str(border.shape[0])
+        ):
+            solver_stdout = "reused exact full-kernel checkpoint"
+        else:
+            completed = subprocess.run(
+                [
+                    "wsl",
+                    codex_runtime.wsl_path(context["executable"]),
+                    "--chart",
+                    codex_runtime.wsl_path(chart),
+                    "--kernel",
+                    codex_runtime.wsl_path(kernel),
+                    "--log",
+                    codex_runtime.wsl_path(kernel_log),
+                    "--update-start",
+                    str(UPDATE_START),
+                    "--progress-seconds",
+                    "20",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            require(completed.returncode == 0, completed.stdout + completed.stderr)
+            solver_stdout = completed.stdout.strip()
+        fields = rank_runtime.initializer.parse_log(kernel_log)
+        coupling_rank = int(fields["RANK"]) - UPDATE_START
+        kernel_dimension = int(fields["VERIFIED_RELATIONS"])
+        require(
+            coupling_rank + kernel_dimension == UPDATE_DIMENSION,
+            "full rank-nullity",
+        )
+        payload = kernel_io.read_kernel(kernel)
+        require(
+            payload["matrix"].shape == (UPDATE_DIMENSION, kernel_dimension),
+            "full kernel shape",
+        )
+
+        generators, syzygy_block, _ = interpolation.extract_fiber(kernel, prime)
+        o8, _, _, _ = hilbert_burch.canonical_degree8_syzygy(
+            generators[11], syzygy_block[:12], syzygy_block[12:], prime
+        )
+        forms9 = tuple(
+            source_runtime.evaluate_selected_form(
+                coefficient_vectors, theta, gamma, prime
+            )
+            for theta in range(3)
+        )
+        _, source_coefficient, profile, source_profile = second_jet.fiber_source(
+            generators[11],
+            syzygy_block,
+            second_jet.evaluate_coordinates(d7_coordinates, gamma, prime),
+            second_jet.evaluate_coordinates(b6_coordinates, gamma, prime),
+            forms9,
+            o8,
+            prime,
+        )
+        values.append(source_coefficient.astype(np.uint32))
+        fiber_record = {
+            "gamma_root": gamma,
+            "arithmetic_schema": ARITHMETIC_SCHEMA,
+            "coupling_rank": coupling_rank,
+            "kernel_dimension": kernel_dimension,
+            "second_jet_profile": list(profile),
+            "source_normalization_profile_sha256": hashlib.sha256(
+                np.asarray(source_profile, dtype="<i2").tobytes()
+            ).hexdigest(),
+            "endpoint_construction": construction,
+            "border_nonzero_entries": int(border.nnz),
+            "kernel_nonzero_entries": int(payload["matrix"].nnz),
+            "kernel_elapsed_seconds": float(fields["ELAPSED_SECONDS"]),
+            "ephemeral_kernel_sha256": sha256(kernel),
+            "solver_stdout": solver_stdout,
+        }
+        fibers.append(fiber_record)
+        np.savez_compressed(
+            root_cache,
+            prime=np.asarray([prime], dtype=np.uint32),
+            gamma=np.asarray([gamma], dtype=np.uint32),
+            source_coefficient=source_coefficient.astype(np.uint32),
+        )
+        root_metadata.write_text(
+            json.dumps(
+                {
+                    "arithmetic_schema": ARITHMETIC_SCHEMA,
+                    "fiber": fiber_record,
+                    "artifact": record(root_cache),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        cleanup(chart, kernel, kernel_log)
+        print(
+            f"G3GA p={prime} gamma={gamma}: rank={coupling_rank} "
+            f"kernel={kernel_dimension} "
+            "second_jet=1",
+            flush=True,
+        )
+    value_array = np.stack(values)
+    residues = interpolation.interpolate(value_array.astype(np.int64), roots, prime)
+    require(value_array.shape == residues.shape == (6, 132), "prime source shapes")
+    arrays_path, metadata_path = cache_paths(prime)
+    np.savez_compressed(
+        arrays_path,
+        prime=np.asarray([prime], dtype=np.uint32),
+        roots=np.asarray(roots, dtype=np.uint32),
+        second_jet_source_coefficients=value_array,
+        second_jet_source_power_basis_residues=residues.astype(np.uint32),
+    )
+    metadata = {
+        "arithmetic_schema": ARITHMETIC_SCHEMA,
+        "prime": prime,
+        "roots": list(roots),
+        "fibers": fibers,
+        "artifact": record(arrays_path),
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return value_array, residues.astype(np.uint32), metadata
+
+
+def reconstruction_audit(
+    values: np.ndarray, primes: tuple[int, ...], prefix: int
+) -> tuple[dict[str, object], np.ndarray, np.ndarray, np.ndarray]:
+    require(values.shape == (len(primes), 792), "reconstruction matrix")
+    require(2 <= prefix <= len(primes), "prefix")
+    modulus = math.prod(primes[: prefix - 1])
+    bound = math.isqrt((modulus - 1) // 2)
+    combined = [int(value) for value in values[0]]
+    running = primes[0]
+    for prime, row in zip(
+        primes[1 : prefix - 1], values[1 : prefix - 1], strict=True
+    ):
+        inverse = pow(running % prime, -1, prime)
+        combined = [
+            value
+            + running * (((int(target) - value % prime) * inverse) % prime)
+            for value, target in zip(combined, row, strict=True)
+        ]
+        running *= prime
+    require(running == modulus, "CRT modulus")
+    holdout_prime = primes[prefix - 1]
+    holdout = values[prefix - 1]
+    numerators = np.zeros(792, dtype=object)
+    denominators = np.zeros(792, dtype=object)
+    valid = np.zeros(792, dtype=bool)
+    passed = np.zeros(792, dtype=bool)
+    for index, (residue, target) in enumerate(zip(combined, holdout, strict=True)):
+        numerator, denominator, candidate = height_campaign.rational_reconstruct(
+            residue, modulus, bound
+        )
+        if not candidate:
+            continue
+        numerators[index] = numerator
+        denominators[index] = denominator
+        valid[index] = True
+        passed[index] = (numerator - int(target) * denominator) % holdout_prime == 0
+    zeros = passed & np.asarray([int(value) == 0 for value in numerators])
+    units = passed & np.asarray(
+        [abs(int(value)) == 1 for value in numerators]
+    ) & np.asarray([int(value) == 1 for value in denominators])
+    integers = passed & np.asarray([int(value) == 1 for value in denominators])
+    result = {
+        "prefix_primes": prefix,
+        "construction_primes": prefix - 1,
+        "holdout_prime": holdout_prime,
+        "modulus": str(modulus),
+        "modulus_bits": modulus.bit_length(),
+        "uniqueness_bound": str(bound),
+        "coefficients": 792,
+        "valid_candidates": int(np.count_nonzero(valid)),
+        "holdout_passes": int(np.count_nonzero(passed)),
+        "holdout_aliases": int(np.count_nonzero(valid & ~passed)),
+        "outside_uniqueness_range": int(np.count_nonzero(~valid)),
+        "passing_zeros": int(np.count_nonzero(zeros)),
+        "passing_units": int(np.count_nonzero(units)),
+        "passing_integers": int(np.count_nonzero(integers)),
+        "passing_nontrivial_coefficients": int(np.count_nonzero(passed & ~zeros & ~units)),
+        "complete": bool(np.all(passed)),
+    }
+    return result, numerators, denominators, passed
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    prior = np.load(second_jet.ARRAYS, allow_pickle=False)
+    g3bi = second_jet.load(second_jet.G3BI)
+    g3fx = np.load(second_jet.G3FX, allow_pickle=False)
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+
+    context = full_kernel_context(g3bi)
+    residues = [
+        prior["second_jet_source_power_basis_residues"][index]
+        .reshape(-1)
+        .astype(np.uint32)
+        for index in range(8)
+    ]
+    campaign_rows: list[dict[str, object]] = []
+    for prime in FRESH_PRIMES:
+        roots = height_campaign.FIBERS[prime]
+        _, prime_residues, metadata = build_prime(
+            prime,
+            roots,
+            context,
+            coefficient_vectors,
+            g3fx["D7_gamma_coordinates"],
+            g3fx["B6_gamma_coordinates"],
+        )
+        residues.append(prime_residues.reshape(-1).astype(np.uint32))
+        campaign_rows.append(metadata)
+        print(f"G3GA prime={prime}: second-jet payload=6x132", flush=True)
+
+    primes = tuple(list(height_campaign.FIBERS)[:8]) + FRESH_PRIMES
+    residue_matrix = np.stack(residues)
+    require(
+        residue_matrix.shape == (len(primes), 792),
+        "adaptive-prime residue matrix",
+    )
+    audits: list[dict[str, object]] = []
+    final_numerators = final_denominators = final_passed = None
+    for prefix in (8, len(primes)):
+        audit, numerators, denominators, passed = reconstruction_audit(
+            residue_matrix, primes, prefix
+        )
+        audits.append(audit)
+        if prefix == len(primes):
+            final_numerators, final_denominators, final_passed = (
+                numerators,
+                denominators,
+                passed,
+            )
+        print(
+            f"G3GA reconstruct prefix={prefix}: "
+            f"passes={audit['holdout_passes']}/792 "
+            f"nontrivial={audit['passing_nontrivial_coefficients']}",
+            flush=True,
+        )
+    require(
+        final_numerators is not None
+        and final_denominators is not None
+        and final_passed is not None,
+        "final reconstruction",
+    )
+    complete = bool(audits[-1]["complete"])
+    np.savez_compressed(
+        ARRAYS,
+        primes=np.asarray(primes, dtype=np.uint32),
+        roots=np.asarray(
+            [height_campaign.FIBERS[prime] for prime in primes], dtype=np.uint32
+        ),
+        second_jet_source_power_basis_residues=residue_matrix,
+        reconstructed_numerators=np.asarray(
+            [str(value) for value in final_numerators], dtype="U80"
+        ),
+        reconstructed_denominators=np.asarray(
+            [str(value) for value in final_denominators], dtype="U80"
+        ),
+        reconstruction_pass=final_passed.astype(np.uint8),
+    )
+    packet = {
+        "schema": "ust.g3ga.h02.component20.second-jet-qgamma-promotion.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GA",
+        "status": (
+            "CLOSED_EXACT_SECOND_JET_QGAMMA_SOURCE_PROMOTION"
+            if complete
+            else "CLOSED_EXACT_ADAPTIVE_SECOND_JET_HEIGHT_AUDIT_QGAMMA_PROMOTION_OPEN"
+        ),
+        "inputs": {
+            "G3FZ": record(second_jet.CERTIFICATE),
+            "G3FZ_arrays": record(second_jet.ARRAYS),
+            "G3FT": record(height_campaign.CERTIFICATE),
+            "full_kernel_tool": record(
+                ROOT
+                / load(ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json")[
+                    "inputs"
+                ]["kernel_tool_source"]["path"]
+            ),
+        },
+        "campaign": {
+            "arithmetic_schema": ARITHMETIC_SCHEMA,
+            "primes": list(primes),
+            "fibers": 6 * len(primes),
+            "archived_fibers": 48,
+            "fresh_fibers": 6 * len(FRESH_PRIMES),
+            "source_coordinates_per_fiber": 132,
+            "power_basis_slots_per_prime": 792,
+            "fresh_prime_artifacts": campaign_rows,
+            "combined_artifact": record(ARRAYS),
+        },
+        "progressive_reconstruction": audits,
+        "promotion": {
+            "complete": complete,
+            "number_field": "Q(gamma)",
+            "minimal_polynomial_coefficients_ascending": [64, 16, 33, 44, 89, 24, 1],
+            "coefficient_order": "gamma power first, then the132-coordinate second-jet source chart",
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "checks": {
+            "all_adaptive_split_primes_are_consumed": True,
+            "all_fresh_fibers_use_the_requested_prime_for_every_sparse_operation": True,
+            "all_fresh_fibers_have_coupling_rank4748_and_kernel1274": all(
+                fiber["coupling_rank"] == EXPECTED_COUPLING_RANK
+                and fiber["kernel_dimension"] == EXPECTED_KERNEL_DIMENSION
+                for row in campaign_rows
+                for fiber in row["fibers"]
+            ),
+            "all_fresh_fibers_replay_the_unique_second_jet_O8_class": True,
+            "the_combined_payload_has_one792_row_per_prime": True,
+            "the_final_prime_is_reserved_as_an_independent_holdout": True,
+            "the_final_promotion_status_matches_the792_coefficient_holdout_result": (
+                complete == bool(np.all(final_passed))
+            ),
+        },
+        "guardrails": {
+            "claims_complete_Qgamma_promotion_when_any_holdout_slot_fails": False,
+            "claims_the_second_jet_rule_is_derived_from_the_continuum_connection": False,
+            "claims_the_full_G3FN_matrix_is_identified_with_G3FV_over_Qgamma": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3gaComponent20SecondJetQgammaPromotion",
+            "tier": (
+                "CLOSED_EXACT_QGAMMA_SECOND_JET_SOURCE"
+                if complete
+                else "CLOSED_EXACT_ADAPTIVE_HEIGHT_AUDIT"
+            ),
+            "statement": (
+                "The canonical 132-coordinate second-jet source is evaluated at "
+                f"{6 * len(primes)} exact split fibers over{len(primes)} primes. "
+                f"{len(primes)-1}-prime rational reconstruction followed by an independent "
+                "final-prime holdout "
+                f"passes {audits[-1]['holdout_passes']} of792 number-field slots."
+            ),
+        },
+        "next_required_object": (
+            "If promotion is complete, replay the rational Q(gamma) source directly "
+            "and derive its connection formula. Otherwise factor the remaining "
+            "symbolic quotient determinant; G3GE exhausts the useful finite-height "
+            "extension of this campaign."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3GA second-jet Qgamma promotion: "
+        f"{'PASS' if complete else 'PARTIAL'} "
+        f"holdout={audits[-1]['holdout_passes']}/792"
+    )
+
+
+if __name__ == "__main__":
+    main()

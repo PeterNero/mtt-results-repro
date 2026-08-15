@@ -1,0 +1,722 @@
+#!/usr/bin/env python3
+"""Propagate G3CZ through the full H11 corridor and emit Q on embeddings 4/5."""
+
+from __future__ import annotations
+
+import argparse
+import gc
+import hashlib
+import json
+import math
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_mat, acb_poly, arb, ctx
+from scipy import sparse
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3CV = ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json"
+G3CX = ROOT / "state" / "ust_g3cx_h11_dm_source_observation_corridor.packet.json"
+G3CY = ROOT / "state" / "ust_g3cy_h11_exact_base_resolvent_coupling_rank.packet.json"
+G3CZ = ROOT / "state" / "ust_g3cz_h11_core221_archimedean_action.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3da"
+OUT = ROOT / "state" / "ust_g3da_h11_archimedean_reduced_coupling.packet.json"
+MINPOLY = [64, 16, 33, 44, 89, 24, 1]
+CORE221 = 221
+CORE449 = 449
+CORE221_DIMENSION = 1710
+CORE449_DIMENSION = 684
+SINGLETONS = 392
+ACTIVE_COLUMNS = 740
+KERNEL_DIMENSION = 988
+SECOND_REDUCTION = 710
+EMBEDDING_INDEX = 4
+CONJUGATE_INDEX = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def union_pattern(matrices: list[sparse.csr_matrix]) -> sparse.csr_matrix:
+    result = sparse.csr_matrix(matrices[0].shape, dtype=np.uint8)
+    for matrix in matrices:
+        current = matrix.copy().tocsr()
+        current.data = np.ones(current.nnz, dtype=np.uint8)
+        result = result + current
+    result.data[:] = 1
+    result.eliminate_zeros()
+    return result
+
+
+def isolated_roots(root_bits: int, maxprec: int) -> list[acb]:
+    roots = acb_poly(MINPOLY).roots(
+        tol=arb(2) ** (-root_bits),
+        maxprec=maxprec,
+    )
+    require(len(roots) == 6, "six roots")
+    roots = sorted(
+        roots,
+        key=lambda value: (float(value.real.mid()), float(value.imag.mid())),
+    )
+    polynomial = acb_poly(MINPOLY)
+    require(all(polynomial(root).contains(0) for root in roots), "root residuals")
+    require(
+        all(
+            not roots[left].overlaps(roots[right])
+            for left in range(6)
+            for right in range(left + 1, 6)
+        ),
+        "disjoint roots",
+    )
+    require(roots[CONJUGATE_INDEX].overlaps(roots[EMBEDDING_INDEX].conjugate()), "conjugate roots")
+    return roots
+
+
+def evaluate_submatrix(
+    coefficients: list[sparse.csr_matrix],
+    rows: np.ndarray,
+    columns: np.ndarray,
+    gamma: acb,
+) -> tuple[acb_mat, int]:
+    result = acb_mat(int(rows.size), int(columns.size))
+    powers = [acb(1)]
+    for _ in range(len(coefficients) - 1):
+        powers.append(powers[-1] * gamma)
+    support: set[tuple[int, int]] = set()
+    for power, matrix in enumerate(coefficients):
+        submatrix = matrix[rows, :][:, columns].tocoo()
+        for row, column, coefficient in zip(
+            submatrix.row.tolist(),
+            submatrix.col.tolist(),
+            submatrix.data.tolist(),
+            strict=True,
+        ):
+            result[row, column] = (
+                result[row, column] + int(coefficient) * powers[power]
+            )
+            support.add((int(row), int(column)))
+    return result, len(support)
+
+
+def matrix_accuracy(matrix: acb_mat) -> dict[str, Any]:
+    entries = matrix.entries()
+    require(all(value.is_finite() for value in entries), "finite matrix")
+    accuracies = [int(value.rel_accuracy_bits()) for value in entries if not value.contains(0)]
+    return {
+        "entries": len(entries),
+        "entries_containing_zero": sum(value.contains(0) for value in entries),
+        "minimum_relative_accuracy_bits_away_from_zero": min(accuracies) if accuracies else 0,
+        "maximum_real_radius": str(max((value.real.rad() for value in entries), default=arb(0))),
+        "maximum_imaginary_radius": str(max((value.imag.rad() for value in entries), default=arb(0))),
+    }
+
+
+def reconstructed_scalar(arrays: Any, row: int, column: int) -> acb:
+    real = (
+        arb(float(arrays["real_high"][row, column]))
+        + arb(float(arrays["real_low"][row, column]))
+        + arb(0, float(arrays["real_radius"][row, column]))
+    )
+    imag = (
+        arb(float(arrays["imag_high"][row, column]))
+        + arb(float(arrays["imag_low"][row, column]))
+        + arb(0, float(arrays["imag_radius"][row, column]))
+    )
+    return acb(real, imag)
+
+
+def widened_double_double(value: arb) -> tuple[float, float, float, arb]:
+    midpoint = value.mid()
+    high = float(midpoint)
+    low = float((midpoint - arb(high)).mid())
+    center = arb(high) + arb(low)
+    radius_bound = abs(midpoint - center) + value.rad()
+    radius = math.nextafter(float(radius_bound), math.inf)
+    enclosure = center + arb(0, radius)
+    while not enclosure.contains(value):
+        radius = math.nextafter(radius, math.inf)
+        enclosure = center + arb(0, radius)
+    return high, low, radius, enclosure
+
+
+def persist_matrix(
+    path: Path,
+    matrix: acb_mat,
+    active_columns: np.ndarray,
+    minor_rows: np.ndarray,
+    minor_columns: np.ndarray,
+) -> dict[str, Any]:
+    rows, columns = matrix.nrows(), matrix.ncols()
+    shape = (rows, columns)
+    arrays = {
+        "real_high": np.empty(shape, dtype=np.float64),
+        "real_low": np.empty(shape, dtype=np.float64),
+        "real_radius": np.empty(shape, dtype=np.float64),
+        "imag_high": np.empty(shape, dtype=np.float64),
+        "imag_low": np.empty(shape, dtype=np.float64),
+        "imag_radius": np.empty(shape, dtype=np.float64),
+    }
+    contained = 0
+    minimum_accuracy: int | None = None
+    for index, value in enumerate(matrix.entries()):
+        row, column = divmod(index, columns)
+        rh, rl, rr, real = widened_double_double(value.real)
+        ih, il, ir, imag = widened_double_double(value.imag)
+        arrays["real_high"][row, column] = rh
+        arrays["real_low"][row, column] = rl
+        arrays["real_radius"][row, column] = rr
+        arrays["imag_high"][row, column] = ih
+        arrays["imag_low"][row, column] = il
+        arrays["imag_radius"][row, column] = ir
+        enclosure = acb(real, imag)
+        if enclosure.real.contains(value.real) and enclosure.imag.contains(value.imag):
+            contained += 1
+        if not enclosure.contains(0):
+            accuracy = int(enclosure.rel_accuracy_bits())
+            minimum_accuracy = accuracy if minimum_accuracy is None else min(minimum_accuracy, accuracy)
+    require(contained == rows * columns, "persisted Q enclosure")
+    np.savez_compressed(
+        path,
+        active_kernel_columns=active_columns.astype(np.int32),
+        selected_minor_rows=minor_rows.astype(np.int32),
+        selected_minor_columns=minor_columns.astype(np.int32),
+        **arrays,
+    )
+    return {
+        "shape": list(shape),
+        "contained_entries": contained,
+        "minimum_relative_accuracy_bits_away_from_zero": minimum_accuracy or 0,
+        "format": "real/imag double-double centers plus outward float64 radii",
+        "archive": record(path),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--precision", type=int, default=192)
+    parser.add_argument("--root-bits", type=int, default=160)
+    parser.add_argument("--maxprec", type=int, default=1024)
+    args = parser.parse_args()
+    require(args.precision == 192, "G3CZ archive precision")
+    require(args.root_bits >= 128, "root isolation bits")
+    require(args.maxprec >= args.precision, "root maximum precision")
+    ctx.prec = args.precision
+    started = time.perf_counter()
+
+    g3cv = load(G3CV)
+    g3cx = load(G3CX)
+    g3cy = load(G3CY)
+    g3cz = load(G3CZ)
+    for packet, label in (
+        (g3cv, "G3CV"),
+        (g3cx, "G3CX"),
+        (g3cy, "G3CY"),
+        (g3cz, "G3CZ"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    roots = isolated_roots(args.root_bits, args.maxprec)
+    gamma = roots[EMBEDDING_INDEX]
+    require(str(gamma) == g3cz["field"]["evaluated_gamma_ball"], "same G3CZ root ball")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    dm_path = mld / "q79_eta9_H11_Dulmage_Mendelsohn_decomposition.packet.json"
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H11.packet.json"
+    dm = load(dm_path)
+    macaulay = load(macaulay_path)
+    factor = load(factor_path)
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    for packet, label in (
+        (dm, "DM"),
+        (macaulay, "Macaulay"),
+        (factor, "factor"),
+        (base, "base"),
+        (global_f0, "global F0"),
+        (b89, "B89"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+    dm_arrays_path = mld / dm["Dulmage_Mendelsohn"]["arrays"]["path"]
+    dm_arrays = np.load(dm_arrays_path, allow_pickle=False)
+    complement_rows = dm_arrays["complement_ambient_rows"].astype(np.int32)
+    component_by_row = dm_arrays["component_by_complement_row"].astype(np.int32)
+    component_by_column = dm_arrays["component_by_image_column"].astype(np.int32)
+    component_sizes = dm_arrays["component_sizes"].astype(np.int32)
+    rows221 = np.flatnonzero(component_by_row == CORE221).astype(np.int32)
+    columns221 = np.flatnonzero(component_by_column == CORE221).astype(np.int32)
+    rows449 = np.flatnonzero(component_by_row == CORE449).astype(np.int32)
+    columns449 = np.flatnonzero(component_by_column == CORE449).astype(np.int32)
+    require(rows221.size == columns221.size == CORE221_DIMENSION, "core221")
+    require(rows449.size == columns449.size == CORE449_DIMENSION, "core449")
+
+    corridor_archive = np.load(
+        ROOT / g3cx["exact_component_DAG"]["arrays"]["path"], allow_pickle=False
+    )
+    corridor_components = corridor_archive["corridor_components"].astype(np.int32)
+    singleton_components = np.asarray(
+        sorted(
+            int(component)
+            for component in corridor_components.tolist()
+            if int(component_sizes[component]) == 1
+        ),
+        dtype=np.int32,
+    )
+    require(singleton_components.size == SINGLETONS, "392 singleton components")
+    singleton_rows = np.asarray(
+        [int(np.flatnonzero(component_by_row == component)[0]) for component in singleton_components],
+        dtype=np.int32,
+    )
+    singleton_columns = np.asarray(
+        [
+            int(np.flatnonzero(component_by_column == component)[0])
+            for component in singleton_components
+        ],
+        dtype=np.int32,
+    )
+    active_columns = corridor_archive["active_kernel_columns"].astype(np.int32)
+    require(active_columns.size == ACTIVE_COLUMNS, "740 active columns")
+    active_lookup = {int(column): position for position, column in enumerate(active_columns.tolist())}
+
+    rank_archive = np.load(
+        ROOT / g3cy["rank_identity"]["certificate"]["path"], allow_pickle=False
+    )
+    minor_rows = rank_archive["Q_minor_rows"].astype(np.int32)
+    minor_columns = rank_archive["Q_minor_columns"].astype(np.int32)
+    require(minor_rows.size == minor_columns.size == SECOND_REDUCTION, "710 minor")
+    require(all(int(column) in active_lookup for column in minor_columns), "minor columns active")
+
+    exact_started = time.perf_counter()
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    original_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, original_columns)
+    complement_lookup = {
+        int(ambient_row): local_row
+        for local_row, ambient_row in enumerate(complement_rows.tolist())
+    }
+    coefficient_rows = [[] for _ in range(6)]
+    coefficient_columns = [[] for _ in range(6)]
+    coefficient_data = [[] for _ in range(6)]
+    for column, descriptor in enumerate(descriptors):
+        exact_column = oracle.exact_column(descriptor, generators0, target_lookup)
+        for ambient_row, coefficients in exact_column.items():
+            row = complement_lookup.get(int(ambient_row))
+            if row is None:
+                continue
+            for power, coefficient in enumerate(coefficients):
+                coefficient = int(coefficient)
+                if coefficient:
+                    coefficient_rows[power].append(row)
+                    coefficient_columns[power].append(column)
+                    coefficient_data[power].append(coefficient)
+    a_coefficients: list[sparse.csr_matrix] = []
+    for power in range(6):
+        matrix = sparse.csr_matrix(
+            (
+                np.asarray(coefficient_data[power], dtype=np.int64),
+                (
+                    np.asarray(coefficient_rows[power], dtype=np.int32),
+                    np.asarray(coefficient_columns[power], dtype=np.int32),
+                ),
+            ),
+            shape=(4426, 4426),
+        )
+        matrix.sum_duplicates()
+        matrix.eliminate_zeros()
+        a_coefficients.append(matrix)
+    exact_seconds = time.perf_counter() - exact_started
+
+    u_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr()
+        for item in g3cv["factorization"]["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr()
+        for item in g3cv["factorization"]["W_gamma_coefficients"]
+    ]
+    pattern = union_pattern(a_coefficients)
+    require(pattern[singleton_rows, :][:, columns221].nnz == 392, "singleton-to-core221 support")
+    require(pattern[rows449, :][:, singleton_columns].nnz == 10803, "core449-to-singleton support")
+    require(pattern[rows449, :][:, columns221].nnz == 17077, "core449-to-core221 support")
+    singleton_diagonal_pattern = pattern[singleton_rows, :][:, singleton_columns]
+    require(singleton_diagonal_pattern.nnz == SINGLETONS, "singleton diagonal support")
+    require(
+        np.array_equal(
+            singleton_diagonal_pattern.nonzero()[0],
+            singleton_diagonal_pattern.nonzero()[1],
+        ),
+        "singleton block is diagonal",
+    )
+    print(
+        f"G3DA exact corridor compiled: singleton={SINGLETONS} active={ACTIVE_COLUMNS} "
+        f"seconds={exact_seconds:.3f}",
+        flush=True,
+    )
+
+    core221_archive_path = ROOT / g3cz["selected_action"]["persisted_enclosure"]["archive"]["path"]
+    require(sha256(core221_archive_path) == g3cz["selected_action"]["persisted_enclosure"]["archive"]["sha256"], "G3CZ archive hash")
+    core221_npz = np.load(core221_archive_path, allow_pickle=False)
+    core221_archive = {key: core221_npz[key] for key in core221_npz.files}
+    core221_npz.close()
+    x221 = acb_mat(CORE221_DIMENSION, ACTIVE_COLUMNS)
+    for compact_column, kernel_column in enumerate(
+        core221_archive["selected_kernel_columns"].astype(np.int32).tolist()
+    ):
+        active_column = active_lookup[int(kernel_column)]
+        for row in range(CORE221_DIMENSION):
+            x221[row, active_column] = reconstructed_scalar(
+                core221_archive, row, compact_column
+            )
+    x221_accuracy = matrix_accuracy(x221)
+    require(
+        int(x221_accuracy["minimum_relative_accuracy_bits_away_from_zero"]) >= 80,
+        "loaded core221 accuracy",
+    )
+    del core221_archive
+    gc.collect()
+
+    singleton_started = time.perf_counter()
+    edge_singleton221, edge_singleton221_support = evaluate_submatrix(
+        a_coefficients, singleton_rows, columns221, gamma
+    )
+    diagonal_singletons, diagonal_support = evaluate_submatrix(
+        a_coefficients, singleton_rows, singleton_columns, gamma
+    )
+    u_singletons, u_singleton_support = evaluate_submatrix(
+        u_coefficients, singleton_rows, active_columns, gamma
+    )
+    require(edge_singleton221_support == 392, "evaluated singleton-to-core221")
+    require(diagonal_support == SINGLETONS, "evaluated singleton diagonal")
+    singleton_rhs = u_singletons - edge_singleton221 * x221
+    x_singletons = acb_mat(SINGLETONS, ACTIVE_COLUMNS)
+    for row in range(SINGLETONS):
+        divisor = diagonal_singletons[row, row]
+        require(not divisor.contains(0), "singleton divisor excludes zero")
+        for column in range(ACTIVE_COLUMNS):
+            x_singletons[row, column] = singleton_rhs[row, column] / divisor
+    singleton_residual = (
+        diagonal_singletons * x_singletons
+        + edge_singleton221 * x221
+        - u_singletons
+    )
+    singleton_residual_zero = sum(
+        value.contains(0) for value in singleton_residual.entries()
+    )
+    require(
+        singleton_residual_zero == SINGLETONS * ACTIVE_COLUMNS,
+        "singleton residuals",
+    )
+    singleton_accuracy = matrix_accuracy(x_singletons)
+    singleton_seconds = time.perf_counter() - singleton_started
+    del edge_singleton221, diagonal_singletons, u_singletons, singleton_rhs, singleton_residual
+    gc.collect()
+    print(
+        f"G3DA singleton propagation: residual={singleton_residual_zero} "
+        f"accuracy={singleton_accuracy['minimum_relative_accuracy_bits_away_from_zero']} "
+        f"seconds={singleton_seconds:.3f}",
+        flush=True,
+    )
+
+    core449_started = time.perf_counter()
+    a449, a449_support = evaluate_submatrix(a_coefficients, rows449, columns449, gamma)
+    edge449221, edge449221_support = evaluate_submatrix(
+        a_coefficients, rows449, columns221, gamma
+    )
+    edge449single, edge449single_support = evaluate_submatrix(
+        a_coefficients, rows449, singleton_columns, gamma
+    )
+    u449, u449_support = evaluate_submatrix(
+        u_coefficients, rows449, active_columns, gamma
+    )
+    require(a449_support == 32848, "core449 diagonal support")
+    require(edge449221_support == 17077, "core449-core221 support")
+    require(edge449single_support == 10803, "core449-singleton support")
+    rhs449 = u449 - edge449221 * x221 - edge449single * x_singletons
+    solve_started = time.perf_counter()
+    x449 = a449.solve(rhs449, algorithm="precond")
+    solve449_seconds = time.perf_counter() - solve_started
+    core449_accuracy = matrix_accuracy(x449)
+    require(
+        int(core449_accuracy["minimum_relative_accuracy_bits_away_from_zero"]) >= 64,
+        "core449 accuracy",
+    )
+    residual449 = a449 * x449 + edge449221 * x221 + edge449single * x_singletons - u449
+    residual449_zero = sum(value.contains(0) for value in residual449.entries())
+    require(
+        residual449_zero == CORE449_DIMENSION * ACTIVE_COLUMNS,
+        "core449 residuals",
+    )
+    core449_seconds = time.perf_counter() - core449_started
+    del a449, edge449221, edge449single, u449, rhs449, residual449
+    gc.collect()
+    print(
+        f"G3DA core449 action: residual={residual449_zero} "
+        f"accuracy={core449_accuracy['minimum_relative_accuracy_bits_away_from_zero']} "
+        f"solve_seconds={solve449_seconds:.3f} total_seconds={core449_seconds:.3f}",
+        flush=True,
+    )
+
+    contraction_started = time.perf_counter()
+    all_kernel_rows = np.arange(KERNEL_DIMENSION, dtype=np.int32)
+    w221, w221_support = evaluate_submatrix(
+        w_coefficients, all_kernel_rows, columns221, gamma
+    )
+    w449, w449_support = evaluate_submatrix(
+        w_coefficients, all_kernel_rows, columns449, gamma
+    )
+    w_singletons, w_singleton_support = evaluate_submatrix(
+        w_coefficients, all_kernel_rows, singleton_columns, gamma
+    )
+    q_active = w221 * x221 + w449 * x449 + w_singletons * x_singletons
+    q_accuracy = matrix_accuracy(q_active)
+    require(
+        int(q_accuracy["minimum_relative_accuracy_bits_away_from_zero"]) >= 48,
+        "Q accuracy",
+    )
+    minor_active_positions = np.asarray(
+        [active_lookup[int(column)] for column in minor_columns.tolist()],
+        dtype=np.int32,
+    )
+    t_q = acb_mat(
+        SECOND_REDUCTION,
+        SECOND_REDUCTION,
+        [
+            q_active[int(row), int(column)]
+            for row in minor_rows.tolist()
+            for column in minor_active_positions.tolist()
+        ],
+    )
+    t_q_accuracy = matrix_accuracy(t_q)
+    determinant_started = time.perf_counter()
+    t_q_determinant = t_q.det()
+    determinant_seconds = time.perf_counter() - determinant_started
+    contraction_seconds = time.perf_counter() - contraction_started
+    print(
+        f"G3DA Q contraction: shape={KERNEL_DIMENSION}x{ACTIVE_COLUMNS} "
+        f"accuracy={q_accuracy['minimum_relative_accuracy_bits_away_from_zero']} "
+        f"T_det_excludes_zero={not t_q_determinant.contains(0)} "
+        f"seconds={contraction_seconds:.3f}",
+        flush=True,
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    q_path = EVIDENCE / "H11.Q_active.embedding4.p192.ddball.npz"
+    persist_started = time.perf_counter()
+    persisted_q = persist_matrix(
+        q_path, q_active, active_columns, minor_rows, minor_columns
+    )
+    persist_seconds = time.perf_counter() - persist_started
+    require(
+        int(persisted_q["minimum_relative_accuracy_bits_away_from_zero"]) >= 40,
+        "persisted Q accuracy",
+    )
+    q_entries = q_active.entries()
+    sample_indices = sorted(
+        {
+            0,
+            ACTIVE_COLUMNS - 1,
+            (KERNEL_DIMENSION // 2) * ACTIVE_COLUMNS,
+            KERNEL_DIMENSION * ACTIVE_COLUMNS - 1,
+        }
+    )
+    samples = [
+        {
+            "flat_index": index,
+            "kernel_row": index // ACTIVE_COLUMNS,
+            "active_column_position": index % ACTIVE_COLUMNS,
+            "kernel_column": int(active_columns[index % ACTIVE_COLUMNS]),
+            "real_ball": q_entries[index].real.str(60, more=True),
+            "imag_ball": q_entries[index].imag.str(60, more=True),
+        }
+        for index in sample_indices
+    ]
+    checks = {
+        "G3CV_through_G3CZ_are_hash_bound_and_passing": True,
+        "the_exact_corridor_is_two_cores_plus392_singletons": singleton_components.size
+        == SINGLETONS,
+        "the_only_cross_blocks_have_support392_10803_and17077": edge_singleton221_support
+        == 392
+        and edge449single_support == 10803
+        and edge449221_support == 17077,
+        "all290080_singleton_residual_balls_contain_zero": singleton_residual_zero
+        == SINGLETONS * ACTIVE_COLUMNS,
+        "all506160_core449_residual_balls_contain_zero": residual449_zero
+        == CORE449_DIMENSION * ACTIVE_COLUMNS,
+        "the_full988_by740_nonzero_column_coupling_is_emitted": q_active.nrows()
+        == KERNEL_DIMENSION
+        and q_active.ncols() == ACTIVE_COLUMNS,
+        "the_selected710_square_TQ_is_extracted_from_the_exact_G3CY_minor": t_q.nrows()
+        == SECOND_REDUCTION
+        and t_q.ncols() == SECOND_REDUCTION,
+        "the_persisted_Q_balls_contain_every_computed_Q_entry": int(
+            persisted_q["contained_entries"]
+        )
+        == KERNEL_DIMENSION * ACTIVE_COLUMNS,
+        "the_conjugate_embedding_action_follows_by_exact_field_conjugation": roots[
+            CONJUGATE_INDEX
+        ].overlaps(gamma.conjugate()),
+        "no_embedding_is_promoted_as_physical": True,
+        "no_observed_value_floating_point_or_fitted_parameter_is_used": True,
+    }
+    require(all(checks.values()), "G3DA checks")
+    packet = {
+        "schema": "mtt.unified-source.g3da-h11-archimedean-reduced-coupling.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3DA",
+        "status": "CLOSED_CERTIFIED_FULL_H11_REDUCED_COUPLING_ON_ONE_CONJUGATE_ARCHIMEDEAN_PAIR",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3CV": record(G3CV),
+            "G3CX": record(G3CX),
+            "G3CY": record(G3CY),
+            "G3CZ": record(G3CZ),
+            "G3CZ_core221_enclosure": record(core221_archive_path),
+            "H11_DM": external_record(dm_path, mld),
+            "H11_DM_arrays": external_record(dm_arrays_path, mld),
+            "H11_Macaulay": external_record(macaulay_path, mld),
+            "H11_factorization": external_record(factor_path, mld),
+            "B89_oracle": external_record(Path(oracle.__file__).resolve(), mld),
+            "implementation": record(Path(__file__).resolve()),
+        },
+        "field": {
+            "minimal_polynomial_ascending": MINPOLY,
+            "precision_bits": args.precision,
+            "root_isolation_bits": args.root_bits,
+            "evaluated_embedding_index": EMBEDDING_INDEX,
+            "evaluated_gamma_ball": str(gamma),
+            "conjugate_embedding_index": CONJUGATE_INDEX,
+            "conjugate_gamma_ball": str(roots[CONJUGATE_INDEX]),
+        },
+        "corridor_action": {
+            "active_kernel_columns": ACTIVE_COLUMNS,
+            "structurally_zero_kernel_columns": KERNEL_DIMENSION - ACTIVE_COLUMNS,
+            "singleton_components": SINGLETONS,
+            "singleton_action_shape": [SINGLETONS, ACTIVE_COLUMNS],
+            "singleton_solution_accuracy": singleton_accuracy,
+            "singleton_residual_entries_containing_zero": singleton_residual_zero,
+            "core449_action_shape": [CORE449_DIMENSION, ACTIVE_COLUMNS],
+            "core449_solution_accuracy": core449_accuracy,
+            "core449_residual_entries_containing_zero": residual449_zero,
+            "support": {
+                "singleton_to_core221": edge_singleton221_support,
+                "core449_to_singleton": edge449single_support,
+                "core449_to_core221": edge449221_support,
+                "core449_diagonal": a449_support,
+                "U_singleton": u_singleton_support,
+                "U_core449": u449_support,
+                "W_core221": w221_support,
+                "W_singleton": w_singleton_support,
+                "W_core449": w449_support,
+            },
+        },
+        "reduced_coupling": {
+            "definition": "Q_active=W*A0^-1*U restricted to the 740 exact nonzero columns",
+            "shape": [KERNEL_DIMENSION, ACTIVE_COLUMNS],
+            "accuracy": q_accuracy,
+            "persisted_enclosure": persisted_q,
+            "selected_second_Woodbury_data": {
+                "U_Q": "Q[:,C], reconstructed from the archive and the 710 selected columns C",
+                "T_Q": "Q[R,C]",
+                "W_Q": "Q[R,:], with the 248 omitted archive columns identically zero by G3CX",
+                "T_Q_shape": [SECOND_REDUCTION, SECOND_REDUCTION],
+                "T_Q_accuracy": t_q_accuracy,
+                "T_Q_determinant_ball": str(t_q_determinant),
+                "T_Q_determinant_ball_excludes_zero": not t_q_determinant.contains(0),
+                "T_Q_exact_invertibility_source": "G3CY nonzero characteristic-zero 710-minor and injectivity of every field embedding",
+            },
+            "samples": samples,
+        },
+        "timing_seconds": {
+            "exact_coefficient_compilation": exact_seconds,
+            "singleton_propagation_and_residual": singleton_seconds,
+            "core449_total": core449_seconds,
+            "core449_certified_solve": solve449_seconds,
+            "Q_contraction_and_TQ": contraction_seconds,
+            "TQ_determinant": determinant_seconds,
+            "portable_Q_serialization": persist_seconds,
+            "total": time.perf_counter() - started,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_remaining_four_embeddings_are_executed": False,
+            "claims_an_Archimedean_embedding_is_physically_selected": False,
+            "claims_the_path_dependent_710_kernel_is_solved": False,
+            "claims_the_evolving_source_x0_is_evaluated": False,
+            "claims_path_integration_integral_marking_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3daH11ArchimedeanReducedCoupling",
+            "tier": "CLOSED_CERTIFIED_FULL_REDUCED_COUPLING_ON_A_CONJUGATE_PAIR",
+            "statement": "On canonical embedding 4, the persisted G3CZ largest-core action propagates through all 392 exact scalar DM components and the 684-dimensional core with directed-rounding complex balls. Every one of the 290080 scalar and 506160 core-449 residual balls contains zero. Contracting with W emits the full 988-by-740 nonzero-column coupling Q; the other 248 columns vanish exactly by G3CX. The G3CY rows and columns extract the selected 710-square second-Woodbury data. Rational-polynomial coefficients carry the result to conjugate embedding 5 by exact field conjugation.",
+        },
+        "frontier_delta": {
+            "before": "G3CZ certified only the largest-core action for 499 selected columns on embeddings 4 and 5.",
+            "after": "The complete characteristic-zero H11 reduced coupling Q and all selected 710-dimensional second-Woodbury data are now certified and persisted on embeddings 4 and 5. The H11 value evaluation on this conjugate pair is no longer open; remaining H11 work is the other embeddings, the path-dependent reduced solve, and the evolving source.",
+        },
+        "next_required_object": "Evaluate S and the selected evolving source on embeddings 4 and 5, solve the 710-dimensional path kernel with balls, and validate its base/first jet against G3CT; in parallel repeat G3CZ/G3DA on the other two embedding orbits.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DA H11 Archimedean reduced coupling: PASS")
+    print(
+        f"embedding_pair={EMBEDDING_INDEX},{CONJUGATE_INDEX} "
+        f"Q={KERNEL_DIMENSION}x{ACTIVE_COLUMNS} TQ={SECOND_REDUCTION}x{SECOND_REDUCTION} "
+        f"T_det_excludes_zero={not t_q_determinant.contains(0)}",
+        flush=True,
+    )
+    print(f"packet_sha256={sha256(OUT)}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

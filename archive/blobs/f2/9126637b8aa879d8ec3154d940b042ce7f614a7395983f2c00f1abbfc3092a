@@ -1,0 +1,92 @@
+# UST.G3DG H02 Split-Place Coupling Rank Interval Theorem v1
+
+## Status
+
+`CLOSED_EXACT_H02_BASE_RESOLVENT_COUPLING_RANK_INTERVAL_4748_5223`
+
+G3DE reduced the selected H02 affine update to 6,022 Woodbury coordinates,
+and G3DF selected the unique 24,767-dimensional B89 core through which its
+base-resolvent coupling can pass. G3DG performs the first exact coefficient
+rank calculation on that complete core.
+
+## Exact bordered calculation
+
+At the hash-bound split place `(p,gamma)=(21817,5)`, reconstruct the B89 chart
+as the G3BR endpoint chart minus its exact correction. Every one of the 17,691
+singleton DM diagonal entries is a unit, and the selected core has
+
+```text
+det(A_core) = 349 mod 21817.
+```
+
+For
+
+```text
+Q = W A_core^-1 U,
+```
+
+form the sparse border
+
+```text
+M = [[A_core, U],
+     [W,        0]].
+```
+
+Exact modular elimination gives
+
+```text
+rank_F21817(M) = 29,515,
+rank_F21817(Q) = 29,515 - 24,767 = 4,748.
+```
+
+The independently replayed border has 30,789 rows and columns and 1,990,851
+nonzero entries.
+
+## Characteristic-zero bounds
+
+Good specialization cannot increase rank, so the nonzero finite minor proves
+
+```text
+rank_Q(gamma)(Q) >= 4,748.
+```
+
+Exact maximum matching on the same bordered support has size 29,990. The
+support bound and Schur rank identity therefore give
+
+```text
+rank_Q(gamma)(Q) <= 29,990 - 24,767 = 5,223.
+```
+
+Consequently
+
+```text
+4,748 <= rank_Q(gamma)(Q) <= 5,223.
+```
+
+This proves a genuine second H02 reduction: at least 799 of the 6,022 G3DE
+coordinates are redundant. The selected finite fiber exhibits 1,274
+redundancies.
+
+## Boundary
+
+One specialization does not prove that the generic rank is 4,748. The exact
+characteristic-zero rank remains in a 475-wide interval. G3DG does not
+materialize `Q`, evaluate the evolving source, solve the path, construct the
+rank-1,509 integral start representative, or decide `beta_C`.
+
+The next calculation is to repeat the bordered elimination at the other five
+roots of the same completely split prime. If rank 4,748 persists, the remaining
+proof target is an exact number-field upper certificate, such as 1,274
+polynomial kernel relations or an equivalent fraction-free factorization.
+
+## Reproduction
+
+```powershell
+python build_ust_g3dg_h02_split_place_full_coupling_rank.py
+python verify_ust_g3dg_h02_split_place_full_coupling_rank.py
+```
+
+The packet is
+`state/ust_g3dg_h02_split_place_full_coupling_rank.packet.json`; the exact core
+and bordered charts, determinant transcript and complete rank transcript are
+under `evidence/ust_g3dg/`.

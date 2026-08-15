@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""Build the G3BD direct sparse Deligne quotient decision theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+import run_ust_g3bd_sparse_deligne_quotient_decision as runner
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+CERTIFICATES = STATE / "ust_g3bd_synthetic_certificates"
+G3BC = STATE / "ust_g3bc_pairing_one_dual_replacement.packet.json"
+G3AR = ROOT / "UST_G3AR_SAME_MEMBER_BETA_C_SOURCE_AND_NORMAL_DECISION_CONTRACT_v1.md"
+NORMALIZED = ROOT / "evidence" / "ust_g3bc" / "q79_eta9_normalized_B_sweep_readout.packet.json.blob"
+OUT = STATE / "ust_g3bd_sparse_deligne_quotient.packet.json"
+TEMPLATE = STATE / "ust_g3bd_sparse_deligne_quotient.template.json"
+ZERO_INPUT = STATE / "ust_g3bd_zero_membership.test-only.json"
+ZERO_OUTPUT = STATE / "ust_g3bd_zero_membership.test-only.packet.json"
+NONZERO_INPUT = STATE / "ust_g3bd_nonzero_annihilator.test-only.json"
+NONZERO_OUTPUT = STATE / "ust_g3bd_nonzero_annihilator.test-only.packet.json"
+CHARACTER_INPUT = STATE / "ust_g3bd_nonzero_character.test-only.json"
+CHARACTER_OUTPUT = STATE / "ust_g3bd_nonzero_character.test-only.packet.json"
+DIMENSION = 248
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def payload_record(path: Path) -> dict[str, str]:
+    return {
+        "path": path.relative_to(STATE).as_posix(),
+        "sha256": sha256(path),
+    }
+
+
+def dump(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+
+def rational(value: Fraction | int) -> list[int]:
+    value = Fraction(value)
+    return [value.numerator, value.denominator]
+
+
+def point(real: Fraction | int = 0, imag: Fraction | int = 0) -> dict[str, Any]:
+    return {
+        "real": {"lower": rational(real), "upper": rational(real)},
+        "imag": {"lower": rational(imag), "upper": rational(imag)},
+    }
+
+
+def exact_complex(real: Fraction | int = 0, imag: Fraction | int = 0) -> dict[str, Any]:
+    return {"real": rational(real), "imag": rational(imag)}
+
+
+def vector(entries: dict[int, Fraction | int]) -> list[dict[str, Any]]:
+    return [point(entries.get(index, 0)) for index in range(DIMENSION)]
+
+
+def linear_combination(columns, coefficients):
+    result: dict[int, Fraction] = {}
+    for coefficient, column in zip(coefficients, columns, strict=True):
+        for index, value in column.items():
+            result[index] = result.get(index, Fraction(0)) + coefficient * Fraction(value)
+    return vector(result)
+
+
+def write_certificate(path: Path, value: dict[str, Any]) -> Path:
+    dump(path, value)
+    return path
+
+
+def main() -> None:
+    for path in (G3BC, G3AR, NORMALIZED):
+        require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    bindings = {
+        "source_orbit_id": "TEST_ONLY_G3BD_TWO_COLUMN_PERIOD_LATTICE",
+        "B89_pencil_sha256": hashlib.sha256(b"g3bd-test-pencil").hexdigest(),
+        "B103_ordered_basis_sha256": hashlib.sha256(b"g3bd-test-b103-basis").hexdigest(),
+        "normalized_source_sha256": hashlib.sha256(b"g3bd-test-source").hexdigest(),
+    }
+    p0_entries = {0: 1, 3: 2}
+    p1_entries = {1: 1, 3: -1}
+    period_entries = [p0_entries, p1_entries]
+    period_paths = []
+    for index, entries in enumerate(period_entries):
+        period_paths.append(
+            write_certificate(
+                CERTIFICATES / f"p{index}.test-only.certificate.json",
+                {
+                    "schema": runner.PERIOD_SCHEMA,
+                    "test_only": True,
+                    "period_id": f"test-period-{index}",
+                    "normalization_tier": "INTEGRAL_BETTI_PERIOD_COLUMN",
+                    "bindings": bindings,
+                    "complex_interval_coordinates": vector(entries),
+                    "checks": {
+                        "the_cycle_is_integral_and_primitive_in_the_declared_test_lattice": True,
+                        "the_column_is_in_the_ordered_B103_test_basis": True,
+                    },
+                },
+            )
+        )
+
+    zero_b = write_certificate(
+        CERTIFICATES / "zero-b-sweep.test-only.certificate.json",
+        {
+            "schema": runner.B_SWEEP_SCHEMA,
+            "test_only": True,
+            "normalization_tier": "SELECTED_NORMALIZED_B_SWEEP_B103_H02",
+            "bindings": bindings,
+            "complex_interval_coordinates": linear_combination(period_entries, [3, -2]),
+            "checks": {
+                "all_248_test_values_are_exact_rational_points": True,
+                "the_test_readout_uses_the_declared_ordered_basis": True,
+            },
+        },
+    )
+    zero_decision = write_certificate(
+        CERTIFICATES / "zero-decision.test-only.certificate.json",
+        {
+            "schema": runner.DECISION_SCHEMA,
+            "test_only": True,
+            "branch": runner.ZERO_BRANCH,
+            "bindings": bindings,
+            "period_ids": ["test-period-0", "test-period-1"],
+            "integer_coefficients": [3, -2],
+            "checks": {
+                "coefficients_are_fixed_before_execution": True,
+                "no_observed_or_target_value_is_used": True,
+            },
+        },
+    )
+    zero_payload = {
+        "schema": runner.INPUT_SCHEMA,
+        "status": runner.TEST_STATUS,
+        "bindings": bindings,
+        "B_sweep": payload_record(zero_b),
+        "period_columns": [payload_record(path) for path in period_paths],
+        "decision_certificate": payload_record(zero_decision),
+    }
+    dump(ZERO_INPUT, zero_payload)
+    runner.execute(ZERO_INPUT, ZERO_OUTPUT, allow_test_only=True)
+
+    nonzero_b = write_certificate(
+        CERTIFICATES / "nonzero-b-sweep.test-only.certificate.json",
+        {
+            "schema": runner.B_SWEEP_SCHEMA,
+            "test_only": True,
+            "normalization_tier": "SELECTED_NORMALIZED_B_SWEEP_B103_H02",
+            "bindings": bindings,
+            "complex_interval_coordinates": vector({2: 1}),
+            "checks": {
+                "all_248_test_values_are_exact_rational_points": True,
+                "the_test_readout_uses_the_declared_ordered_basis": True,
+            },
+        },
+    )
+    scope = write_certificate(
+        CERTIFICATES / "nonzero-scope.test-only.certificate.json",
+        {
+            "schema": runner.SCOPE_SCHEMA,
+            "test_only": True,
+            "coverage_tier": "FULL_INTEGRAL_PERIOD_LATTICE",
+            "bindings": bindings,
+            "period_ids": ["test-period-0", "test-period-1"],
+            "complete_period_lattice_rank": 2,
+            "checks": {
+                "the_declared_test_period_lattice_is_generated_by_exactly_these_columns": True,
+                "the_ordered_column_inventory_is_complete": True,
+            },
+        },
+    )
+    covector = [exact_complex(1 if index == 2 else 0) for index in range(DIMENSION)]
+    nonzero_decision = write_certificate(
+        CERTIFICATES / "nonzero-decision.test-only.certificate.json",
+        {
+            "schema": runner.DECISION_SCHEMA,
+            "test_only": True,
+            "branch": runner.NONZERO_BRANCH,
+            "bindings": bindings,
+            "period_ids": ["test-period-0", "test-period-1"],
+            "annihilating_covector_248": covector,
+            "scope_certificate": payload_record(scope),
+            "checks": {
+                "the_covector_is_fixed_before_execution": True,
+                "no_observed_or_target_value_is_used": True,
+            },
+        },
+    )
+    nonzero_payload = {
+        "schema": runner.INPUT_SCHEMA,
+        "status": runner.TEST_STATUS,
+        "bindings": bindings,
+        "B_sweep": payload_record(nonzero_b),
+        "period_columns": [payload_record(path) for path in period_paths],
+        "decision_certificate": payload_record(nonzero_decision),
+    }
+    dump(NONZERO_INPUT, nonzero_payload)
+    runner.execute(NONZERO_INPUT, NONZERO_OUTPUT, allow_test_only=True)
+
+    character_b = write_certificate(
+        CERTIFICATES / "character-b-sweep.test-only.certificate.json",
+        {
+            "schema": runner.B_SWEEP_SCHEMA,
+            "test_only": True,
+            "normalization_tier": "SELECTED_NORMALIZED_B_SWEEP_B103_H02",
+            "bindings": bindings,
+            "complex_interval_coordinates": vector({0: Fraction(1, 2)}),
+            "checks": {
+                "all_248_test_values_are_exact_rational_points": True,
+                "the_test_readout_uses_the_declared_ordered_basis": True,
+            },
+        },
+    )
+    character = [exact_complex(1 if index == 0 else 0) for index in range(DIMENSION)]
+    character_decision = write_certificate(
+        CERTIFICATES / "character-decision.test-only.certificate.json",
+        {
+            "schema": runner.DECISION_SCHEMA,
+            "test_only": True,
+            "branch": runner.CHARACTER_BRANCH,
+            "bindings": bindings,
+            "period_ids": ["test-period-0", "test-period-1"],
+            "dual_lattice_character_248": character,
+            "scope_certificate": payload_record(scope),
+            "checks": {
+                "the_character_is_fixed_before_execution": True,
+                "no_observed_or_target_value_is_used": True,
+            },
+        },
+    )
+    character_payload = {
+        "schema": runner.INPUT_SCHEMA,
+        "status": runner.TEST_STATUS,
+        "bindings": bindings,
+        "B_sweep": payload_record(character_b),
+        "period_columns": [payload_record(path) for path in period_paths],
+        "decision_certificate": payload_record(character_decision),
+    }
+    dump(CHARACTER_INPUT, character_payload)
+    runner.execute(CHARACTER_INPUT, CHARACTER_OUTPUT, allow_test_only=True)
+
+    dump(
+        TEMPLATE,
+        {
+            "schema": runner.INPUT_SCHEMA,
+            "status": runner.PRODUCTION_STATUS,
+            "bindings": {
+                "source_orbit_id": "FILL_SAME_G3AJ_B89_SOURCE_ORBIT",
+                "B89_pencil_sha256": "FILL_64_HEX",
+                "B103_ordered_basis_sha256": "FILL_64_HEX",
+                "normalized_source_sha256": "FILL_64_HEX",
+            },
+            "B_sweep": {"path": "FILL", "sha256": "FILL_64_HEX"},
+            "period_columns": [{"path": "FILL", "sha256": "FILL_64_HEX"}],
+            "decision_certificate": {"path": "FILL", "sha256": "FILL_64_HEX"},
+            "nonpromotable_until_filled": True,
+        },
+    )
+
+    checks = {
+        "G3BC_pairing_one_replacement_is_hash_bound": True,
+        "the_normalized_eta9_readout_defines_beta_C_as_R_B_modulo_integral_periods": True,
+        "an_exact_integer_period_membership_witness_proves_beta_C_zero": True,
+        "a_full_lattice_annihilator_separated_on_R_B_proves_beta_C_nonzero": True,
+        "a_dual_lattice_character_integral_on_periods_and_nonintegral_on_R_B_proves_beta_C_nonzero": True,
+        "zero_membership_needs_no_complete_period_basis": True,
+        "nonzero_separation_requires_full_lattice_or_saturated_quotient_scope": True,
+        "the_direct_quotient_route_does_not_require_G3AU_period_descent": True,
+        "all_three_exact_decision_branches_are_executed_on_nonphysical_fixtures": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3bd-sparse-deligne-quotient-decision.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BD",
+        "status": "CLOSED_EXACT_TWO_SIDED_SPARSE_DELIGNE_QUOTIENT_COMPILER_PRODUCTION_VALUES_OPEN",
+        "inputs": {
+            "G3BC": record(G3BC),
+            "G3AR_contract": record(G3AR),
+            "normalized_B_sweep_theorem": record(NORMALIZED),
+        },
+        "theorem": {
+            "zero_branch": "If R_B is an exact integer combination of certified integral period columns, then [R_B]=0 in C^248/Pi_C(V_Z). Completeness of the supplied period subsystem is unnecessary for this implication.",
+            "nonzero_annihilator_branch": "If an exact complex-linear covector annihilates the full integral period lattice (or a certified saturated detecting quotient) and its interval pairing with R_B excludes zero, then [R_B] is nonzero.",
+            "nonzero_character_branch": "More generally, if an exact real-linear dual-lattice character is integral on the full period lattice and its interval pairing with R_B contains no integer, then [R_B] is nonzero. This remains useful when the periods span C^248 and no nonzero annihilator exists.",
+            "exhaustive_when_certificate_found": "Either certificate decides the physical Deligne quotient directly; G3AU remains an optional normal prefilter and requires its own period-descent or same-lift premise.",
+        },
+        "computational_reduction": {
+            "full_period_matrix_entries_not_required": 248 * 1509,
+            "zero_route": "248 B-sweep values plus any certified integral period columns exhibiting one exact integer equality",
+            "nonzero_route": "248 B-sweep values plus either a full-lattice annihilator or a dual-lattice character, with complete/saturated period scope",
+            "normal_operator_route": "independent optional prefilter; not a prerequisite for the direct quotient certificate",
+        },
+        "checks": checks,
+        "readiness_effect": {
+            "two_sided_exact_Deligne_decision_logic": "CLOSED_EXACT",
+            "selected_B_sweep_values": "OPEN_0_OF_248",
+            "production_integral_period_columns": "OPEN",
+            "production_zero_or_nonzero_certificate": "OPEN",
+            "B_ETA9_02": "OPEN_ON_PRODUCTION_VALUES_ONLY",
+        },
+        "artifacts": {
+            "production_template": record(TEMPLATE),
+            "zero_test_input": record(ZERO_INPUT),
+            "zero_test_output": record(ZERO_OUTPUT),
+            "nonzero_test_input": record(NONZERO_INPUT),
+            "nonzero_test_output": record(NONZERO_OUTPUT),
+            "character_test_input": record(CHARACTER_INPUT),
+            "character_test_output": record(CHARACTER_OUTPUT),
+        },
+        "parameter_ledger": {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+        },
+        "guardrails": {
+            "claims_a_production_B_sweep_value_is_emitted": False,
+            "claims_a_production_period_column_is_emitted": False,
+            "claims_beta_C_is_decided": False,
+            "claims_G3AU_period_descent": False,
+            "claims_B_ETA9_01_or_B_ETA9_02_is_closed": False,
+            "claims_a_test_fixture_is_physical": False,
+        },
+        "next_required_object": "Emit the same-source normalized B-sweep intervals and detecting integral period columns. Search first for an exact integer membership witness. For a nonzero decision, prefer a dual-lattice character certified integral on the full period lattice and prove its B-sweep pairing is nonintegral; a full-lattice annihilator is the special zero-period-character case.",
+    }
+    require(all(checks.values()), "G3BD checks")
+    require(not any(packet["guardrails"].values()), "G3BD guardrails")
+    dump(OUT, packet)
+    print("UST.G3BD sparse Deligne quotient compiler: PASS membership, annihilator and dual-character branches")
+
+
+if __name__ == "__main__":
+    main()

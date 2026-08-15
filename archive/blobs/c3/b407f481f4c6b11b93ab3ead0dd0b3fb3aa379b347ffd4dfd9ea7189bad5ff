@@ -1,0 +1,95 @@
+# UST.G3CG Schur-Riccati Transport Cutset Theorem v1
+
+Date: 2026-08-13
+Status: `CLOSED_EXACT_GF11_STATIC_SCHUR_TRANSPORT_NO_SHORTCUT_AND_RICCATI_JET_TARGETS_ACTUAL_FAMILY_JETS_OPEN`
+
+## Why this theorem is needed
+
+G3CE performs exact block row elimination on the terminal affine connection
+matrix. That preserves its static rank, kernel, cokernel and selected-source
+obstruction. It does not automatically preserve the differential equation
+
+```text
+dz/da=K_C(a)z+b_C(a).
+```
+
+A time-dependent connection changes under a differentiable gauge, not under
+bare row elimination. G3CG makes that boundary exact.
+
+## Terminal static graph
+
+At the G3CE good fiber, put
+
+```text
+X=J^-1L,
+y=J^-1b_lower,
+z_lower=-X z_H20-y.
+```
+
+The static lower equation vanishes on this graph, and the upper equation is
+
+```text
+z_H20'=S_C z_H20+b_eff.
+```
+
+For the frozen graph to be dynamically invariant, its lower derivative would
+also have to equal `-X(S_C z_H20+b_eff)`. Exact computation gives
+
+```text
+rank(X)                  = 248,
+rank(X S_C)              = 247,
+rank([X S_C | X b_eff])  = 248,
+nnz(X b_eff)             = 1,132.
+```
+
+The static graph is therefore not invariant. The selected source adds one
+independent affine defect direction beyond the homogeneous rank-247 defect.
+Simple lower-coordinate back-substitution cannot reduce transport.
+
+## Dynamic Riccati cutset
+
+Let the same graph vary rationally with `a`. Under the explicit G3CD plus-sign
+convention, differentiating
+
+```text
+z_lower=-X(a)z_H20-y(a)
+```
+
+shows that it is invariant only if
+
+```text
+X'(a)+X(a)S_C(a)=0,
+y'(a)+X(a)b_eff(a)=0.
+```
+
+At `a=0`, G3CG emits the exact necessary derivative targets
+
+```text
+X'(0)=-X S_C,
+y'(0)=-X b_eff
+```
+
+over `GF(11)`. The first target has rank 247; the second has 1,132 nonzero
+entries. Computing the actual family derivatives and finding one mismatch is
+a rigorous no-go for this particular 249-variable transport reduction.
+Agreement at the endpoint is necessary but not sufficient: the identities
+must then be certified along the selected path.
+
+## Claim boundary
+
+G3CG does not compute the actual derivatives of the rational family, prove or
+exclude every possible dynamic gauge, or integrate the selected path. Until a
+Riccati/invariant-graph theorem passes, the affine Gauss-Manin transport remains
+1,510-dimensional. G3CE and G3CF remain useful exact static obstruction and
+domain theorems.
+
+## Reproduction
+
+```text
+python build_ust_g3cg_schur_riccati_transport_cutset.py
+python verify_ust_g3cg_schur_riccati_transport_cutset.py
+```
+
+The canonical packet is
+`state/ust_g3cg_schur_riccati_transport_cutset.packet.json`; the required jets
+and affine graph defect are under `evidence/ust_g3cg/`.

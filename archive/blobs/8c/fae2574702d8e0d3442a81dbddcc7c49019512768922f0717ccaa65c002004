@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Emit split-fiber component-20 kernels and test the protected projection."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import struct
+import subprocess
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+RANK_CAMPAIGN = ROOT / "evidence/ust_g3fa/H02.component20.two_split_prime_rank_campaign.json"
+REDUCTION = ROOT / "evidence/ust_g3ez/H02.component20.unit_leaf_reduction.json"
+KERNEL_SOURCE = ROOT / "ust_split_prime_sparse_kernel.cpp"
+KERNEL_EXECUTABLE = ROOT / "state/ust_split_prime_sparse_kernel"
+EVIDENCE = ROOT / "evidence/ust_g3fb"
+CERTIFICATE = EVIDENCE / "H02.component20.split_kernel_projection_campaign.json"
+
+ROWS = 5376
+COLUMNS = 5411
+RANK = 5025
+NULLITY = 386
+TARGET = 100
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def compile_kernel_tool() -> None:
+    require(KERNEL_SOURCE.is_file(), "kernel source")
+    if KERNEL_EXECUTABLE.is_file() and KERNEL_EXECUTABLE.stat().st_mtime_ns >= KERNEL_SOURCE.stat().st_mtime_ns:
+        return
+    command = [
+        "g++",
+        "-O3",
+        "-std=c++17",
+        runtime.wsl_path(KERNEL_SOURCE),
+        "-o",
+        runtime.wsl_path(KERNEL_EXECUTABLE),
+    ]
+    if os.name == "nt":
+        command = ["wsl", *command]
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    require(KERNEL_EXECUTABLE.is_file(), "compiled kernel tool")
+
+
+def parse_log(path: Path) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for line in path.read_text(encoding="ascii").splitlines():
+        if line == "END_CERTIFICATE":
+            break
+        key, _, value = line.partition(" ")
+        fields[key] = value
+    return fields
+
+
+def run_kernel(chart: Path, kernel: Path, log: Path) -> tuple[dict[str, str], str]:
+    command = [
+        str(KERNEL_EXECUTABLE),
+        "--chart",
+        str(chart),
+        "--kernel",
+        str(kernel),
+        "--log",
+        str(log),
+        "--update-start",
+        "0",
+        "--progress-seconds",
+        "10",
+    ]
+    if os.name == "nt":
+        command = [
+            "wsl",
+            runtime.wsl_path(KERNEL_EXECUTABLE),
+            "--chart",
+            runtime.wsl_path(chart),
+            "--kernel",
+            runtime.wsl_path(kernel),
+            "--log",
+            runtime.wsl_path(log),
+            "--update-start",
+            "0",
+            "--progress-seconds",
+            "10",
+        ]
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = parse_log(log)
+    require(fields.get("STATUS") == "SUCCESS", "kernel status")
+    return fields, completed.stdout.strip()
+
+
+def read_kernel(path: Path) -> tuple[int, sparse.csc_matrix, np.ndarray, np.ndarray]:
+    with path.open("rb") as handle:
+        require(handle.read(8) == b"MTTKER1\0", "kernel magic")
+        prime, dimension, relations, nonzeros, rows, rank, update_start, selected = struct.unpack(
+            "<8Q", handle.read(64)
+        )
+        require((dimension, relations, rows, rank, update_start) == (COLUMNS, NULLITY, ROWS, RANK, 0), "kernel header")
+        indptr = np.fromfile(handle, dtype="<u8", count=relations + 1)
+        indices = np.fromfile(handle, dtype="<u4", count=nonzeros)
+        data = np.fromfile(handle, dtype="<u4", count=nonzeros)
+        dependent = np.fromfile(handle, dtype="<u4", count=relations)
+        selected_columns = np.fromfile(handle, dtype="<u4", count=selected)
+        require(handle.read(1) == b"", "kernel trailing bytes")
+    matrix = sparse.csc_matrix(
+        (data.astype(np.int64), indices.astype(np.int32), indptr.astype(np.int64)),
+        shape=(COLUMNS, NULLITY),
+    )
+    return int(prime), matrix, dependent, selected_columns
+
+
+def independent_columns(matrix: np.ndarray, prime: int) -> list[int]:
+    basis: dict[int, dict[int, int]] = {}
+    chosen: list[int] = []
+    for column in range(matrix.shape[1]):
+        vector = {
+            row: int(value)
+            for row, value in enumerate(matrix[:, column])
+            if value % prime
+        }
+        while vector:
+            row = min(vector)
+            coefficient = vector[row]
+            pivot = basis.get(row)
+            if pivot is None:
+                inverse = pow(coefficient, -1, prime)
+                basis[row] = {
+                    key: value * inverse % prime for key, value in vector.items()
+                }
+                chosen.append(column)
+                break
+            for key, value in pivot.items():
+                reduced = (vector.get(key, 0) - coefficient * value) % prime
+                if reduced:
+                    vector[key] = reduced
+                else:
+                    vector.pop(key, None)
+    return chosen
+
+
+def main() -> None:
+    rank_campaign = load(RANK_CAMPAIGN)
+    reduction = load(REDUCTION)
+    require(all(rank_campaign["checks"].values()), "rank campaign checks")
+    require(all(reduction["checks"].values()), "reduction checks")
+    protected = np.asarray(reduction["output"]["protected_target_columns"], dtype=np.int32)
+    require(protected.shape == (TARGET,), "protected target")
+    require(rank_campaign["campaign"]["rank_profile"] == [RANK] * 12, "rank profile")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    compile_kernel_tool()
+    results: list[dict[str, object]] = []
+    dependent_profiles: list[tuple[int, ...]] = []
+    selected_profiles: list[tuple[int, ...]] = []
+    projection_charts: list[tuple[int, ...]] = []
+
+    for fiber in rank_campaign["campaign"]["results"]:
+        prime = int(fiber["prime"])
+        gamma = int(fiber["gamma_root"])
+        chart = ROOT / fiber["chart"]["path"]
+        require(sha256(chart) == fiber["chart"]["sha256"], "chart hash")
+        stem = f"H02.component20.p{prime}.g{gamma}"
+        kernel = EVIDENCE / f"{stem}.kernel.bin"
+        log = EVIDENCE / f"{stem}.kernel.log"
+        fields, stdout = run_kernel(chart, kernel, log)
+        stored_prime, kernel_matrix, dependent, selected = read_kernel(kernel)
+        require(stored_prime == prime, "kernel prime")
+        require(int(fields["RANK"]) == RANK, "kernel rank")
+        require(int(fields["NULLITY"]) == NULLITY, "kernel nullity")
+        require(int(fields["VERIFIED_RELATIONS"]) == NULLITY, "literal relation replay")
+        projection = kernel_matrix[protected, :].toarray() % prime
+        chosen = independent_columns(projection, prime)
+        projection_rank = len(chosen)
+        dependent_profiles.append(tuple(int(value) for value in dependent))
+        selected_profiles.append(tuple(int(value) for value in selected))
+        projection_charts.append(tuple(chosen))
+        results.append(
+            {
+                "prime": prime,
+                "gamma_root": gamma,
+                "rank": RANK,
+                "nullity": NULLITY,
+                "kernel_nonzeros": int(kernel_matrix.nnz),
+                "verified_relations": int(fields["VERIFIED_RELATIONS"]),
+                "protected_projection_nonzeros": int(np.count_nonzero(projection)),
+                "protected_projection_rank": projection_rank,
+                "selected_relation_indices": chosen,
+                "selected_dependent_columns": [int(dependent[index]) for index in chosen],
+                "elapsed_seconds": float(fields["ELAPSED_SECONDS"]),
+                "kernel": record(kernel),
+                "kernel_log": record(log),
+                "stdout": stdout,
+            }
+        )
+        print(
+            f"G3FB p={prime} gamma={gamma}: kernel={NULLITY} "
+            f"protected_rank={projection_rank} elapsed={fields['ELAPSED_SECONDS']}s",
+            flush=True,
+        )
+
+    common_dependent = len(set(dependent_profiles)) == 1
+    common_selected = len(set(selected_profiles)) == 1
+    common_projection_chart = len(set(projection_charts)) == 1
+    all_target_rank = all(row["protected_projection_rank"] == TARGET for row in results)
+    certificate = {
+        "schema": "ust.g3fb.h02.component20.split-kernel-projection-campaign.v1",
+        "date": "2026-08-15",
+        "status": "CLOSED_EXACT_COMPONENT20_SPLIT_KERNEL_PROJECTION_RANK100_CHARZERO_OPEN",
+        "rank_campaign": record(RANK_CAMPAIGN),
+        "reduction": record(REDUCTION),
+        "kernel_tool_source": record(KERNEL_SOURCE),
+        "kernel_tool_executable": record(KERNEL_EXECUTABLE),
+        "campaign": {
+            "fibers": len(results),
+            "kernel_dimension": NULLITY,
+            "protected_dimension": TARGET,
+            "results": results,
+            "common_dependent_column_chart": common_dependent,
+            "common_selected_column_chart": common_selected,
+            "common_rank100_projection_chart": common_projection_chart,
+            "canonical_relation_indices": list(projection_charts[0]) if common_projection_chart else [],
+            "canonical_dependent_columns": list(dependent_profiles[0]) if common_dependent else [],
+        },
+        "proved_at_the_split_fiber_tier": {
+            "all386_relations_are_replayed_with_zero_residual_at_each_fiber": True,
+            "the_protected_projection_has_rank100_at_each_fiber": all_target_rank,
+            "one_common_relation_chart_normalizes_the_projection_at_all_fibers": common_projection_chart,
+        },
+        "checks": {
+            "all_twelve_fiber_kernels_are_emitted": len(results) == 12,
+            "all4632_relations_are_internally_replayed": sum(row["verified_relations"] for row in results) == 12 * NULLITY,
+            "the386_dimensional_kernel_chart_is_common": common_dependent and common_selected,
+            "the_protected_projection_has_rank100_at_all_twelve_fibers": all_target_rank,
+            "one_common_100_relation_minor_works_at_all_twelve_fibers": common_projection_chart,
+        },
+        "guardrails": {
+            "claims_split_fiber_kernel_vectors_are_Qgamma_vectors": False,
+            "claims_the_rank100_projection_is_promoted_to_characteristic_zero": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Normalize the common 100-relation minor to identity on the protected rows, "
+            "interpolate its coefficients across the six roots of each prime, reconstruct "
+            "the Q(gamma) coefficients with certified bounds, and replay the resulting "
+            "5411x100 kernel literally against the exact G3EZ matrix."
+        ),
+    }
+    require(all(certificate["checks"].values()), "checks")
+    require(not any(certificate["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(certificate, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3FB component20 split kernel projection: PASS "
+        f"fibers={len(results)} kernel={NULLITY} protected_rank={TARGET} "
+        f"common_chart={common_projection_chart}"
+    )
+
+
+if __name__ == "__main__":
+    main()

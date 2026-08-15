@@ -1,0 +1,192 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <flint/flint.h>
+#include <flint/fmpq.h>
+#include <flint/fmpq_poly.h>
+#include <flint/fmpz.h>
+#include <flint/fmpz_poly.h>
+#include <flint/gr.h>
+#include <flint/gr_mat.h>
+#include <flint/nf.h>
+#include <flint/nf_elem.h>
+
+typedef struct
+{
+    nf_struct *nf;
+    char *var;
+} ust_gr_nf_ctx_struct;
+
+static nf_struct *ust_nf_ctx(gr_ctx_t ctx)
+{
+    return ((ust_gr_nf_ctx_struct *) ctx)->nf;
+}
+
+static void die(const char *message)
+{
+    fprintf(stderr, "ust_nf_kernel: %s\n", message);
+    exit(EXIT_FAILURE);
+}
+
+static slong read_slong(FILE *input, fmpz_t value, const char *label)
+{
+    if (!fmpz_fread(input, value))
+        die(label);
+    if (!fmpz_fits_si(value))
+        die("integer does not fit slong");
+    return fmpz_get_si(value);
+}
+
+static void set_nf_entry(
+    gr_ptr entry,
+    fmpq_poly_t polynomial,
+    fmpz_t coefficient,
+    slong degree,
+    FILE *input,
+    nf_struct *nf)
+{
+    slong k;
+    fmpq_poly_zero(polynomial);
+    for (k = 0; k < degree; k++)
+    {
+        if (!fmpz_fread(input, coefficient))
+            die("truncated matrix coefficient");
+        fmpq_poly_set_coeff_fmpz(polynomial, k, coefficient);
+    }
+    nf_elem_set_fmpq_poly((nf_elem_struct *) entry, polynomial, nf);
+}
+
+static void write_kernel(
+    FILE *output,
+    const gr_mat_t kernel,
+    slong degree,
+    gr_ctx_t ctx)
+{
+    slong i, j, k;
+    fmpq_poly_t polynomial;
+    fmpq_t coefficient;
+    nf_struct *nf = ust_nf_ctx(ctx);
+
+    fmpq_poly_init(polynomial);
+    fmpq_init(coefficient);
+    fprintf(
+        output,
+        "%ld %ld %ld\n",
+        (long) gr_mat_nrows(kernel, ctx),
+        (long) gr_mat_ncols(kernel, ctx),
+        (long) degree);
+    for (i = 0; i < gr_mat_nrows(kernel, ctx); i++)
+    {
+        for (j = 0; j < gr_mat_ncols(kernel, ctx); j++)
+        {
+            fprintf(output, "%ld %ld", (long) (i + 1), (long) (j + 1));
+            nf_elem_get_fmpq_poly(
+                polynomial,
+                (const nf_elem_struct *) gr_mat_entry_srcptr(kernel, i, j, ctx),
+                nf);
+            for (k = 0; k < degree; k++)
+            {
+                fmpq_poly_get_coeff_fmpq(coefficient, polynomial, k);
+                fputc(' ', output);
+                fmpz_fprint(output, fmpq_numref(coefficient));
+                fputc('/', output);
+                fmpz_fprint(output, fmpq_denref(coefficient));
+            }
+            fputc('\n', output);
+        }
+        if ((i + 1) % 100 == 0)
+            fprintf(stderr, "ust_nf_kernel: wrote %ld kernel rows\n", (long) (i + 1));
+    }
+    fmpq_clear(coefficient);
+    fmpq_poly_clear(polynomial);
+}
+
+int main(int argc, char **argv)
+{
+    FILE *input;
+    FILE *output;
+    slong rows, columns, degree, entries, row, column, index, k;
+    int status;
+    fmpz_t integer;
+    fmpz_poly_t minimal;
+    fmpq_poly_t coefficient_polynomial;
+    gr_ctx_t ctx;
+    gr_mat_t matrix;
+    gr_mat_t kernel;
+
+    if (argc != 3)
+        die("usage: ust_nf_kernel INPUT.sms OUTPUT.nfk");
+    input = fopen(argv[1], "r");
+    if (input == NULL)
+        die("cannot open input");
+    output = fopen(argv[2], "w");
+    if (output == NULL)
+        die("cannot open output");
+
+    fmpz_init(integer);
+    rows = read_slong(input, integer, "missing row count");
+    columns = read_slong(input, integer, "missing column count");
+    degree = read_slong(input, integer, "missing field degree");
+    entries = read_slong(input, integer, "missing entry count");
+    if (rows < 0 || columns < 0 || degree <= 0 || entries < 0)
+        die("invalid matrix dimensions");
+
+    fmpz_poly_init(minimal);
+    for (k = 0; k <= degree; k++)
+    {
+        if (!fmpz_fread(input, integer))
+            die("truncated minimal polynomial");
+        fmpz_poly_set_coeff_fmpz(minimal, k, integer);
+    }
+    if (fmpz_poly_degree(minimal) != degree)
+        die("minimal polynomial degree mismatch");
+
+    gr_ctx_init_nf_fmpz_poly(ctx, minimal);
+    gr_mat_init(matrix, rows, columns, ctx);
+    gr_mat_init(kernel, 0, 0, ctx);
+    fmpq_poly_init(coefficient_polynomial);
+
+    fprintf(
+        stderr,
+        "ust_nf_kernel: loading %ldx%ld degree-%ld matrix with %ld entries\n",
+        (long) rows,
+        (long) columns,
+        (long) degree,
+        (long) entries);
+    for (index = 0; index < entries; index++)
+    {
+        row = read_slong(input, integer, "truncated entry row") - 1;
+        column = read_slong(input, integer, "truncated entry column") - 1;
+        if (row < 0 || row >= rows || column < 0 || column >= columns)
+            die("matrix index out of range");
+        set_nf_entry(
+            gr_mat_entry_ptr(matrix, row, column, ctx),
+            coefficient_polynomial,
+            integer,
+            degree,
+            input,
+            ust_nf_ctx(ctx));
+    }
+    fclose(input);
+    fmpq_poly_clear(coefficient_polynomial);
+
+    fprintf(stderr, "ust_nf_kernel: starting exact number-field nullspace\n");
+    status = gr_mat_nullspace(kernel, matrix, ctx);
+    if (status != GR_SUCCESS)
+        die("FLINT number-field nullspace failed");
+    fprintf(
+        stderr,
+        "ust_nf_kernel: exact nullspace complete, shape %ldx%ld\n",
+        (long) gr_mat_nrows(kernel, ctx),
+        (long) gr_mat_ncols(kernel, ctx));
+    write_kernel(output, kernel, degree, ctx);
+    fclose(output);
+
+    gr_mat_clear(kernel, ctx);
+    gr_mat_clear(matrix, ctx);
+    gr_ctx_clear(ctx);
+    fmpz_poly_clear(minimal);
+    fmpz_clear(integer);
+    flint_cleanup_master();
+    return EXIT_SUCCESS;
+}

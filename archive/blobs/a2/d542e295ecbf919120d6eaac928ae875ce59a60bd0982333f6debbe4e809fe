@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Verify UST.G3K determinant, Schur typing and Yoneda reduction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3k_derived_schur_yoneda_reduction.packet.json"
+SCHEMA_PATH = ROOT / "state" / "ust_g3k_yoneda_mc.schema.json"
+TEMPLATE_PATH = ROOT / "state" / "ust_g3k_yoneda_mc_candidate.template.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+G3G_PATH = ROOT / "state" / "ust_g3g_two_fiber_stable_recombination.packet.json"
+G3H_PATH = ROOT / "state" / "ust_g3h_qutrit_determinantal_torsion.packet.json"
+G3I_PATH = ROOT / "state" / "ust_g3i_bidirectional_ext.packet.json"
+G3J_PATH = ROOT / "state" / "ust_g3j_reverse_ext_representation_nogo.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def reduce_omega(expression: sp.Expr, omega: sp.Symbol) -> sp.Expr:
+    polynomial = sp.Poly(sp.expand(expression), omega)
+    modulus = sp.Poly(omega**2 + omega + 1, omega)
+    return sp.expand(sp.rem(polynomial, modulus).as_expr())
+
+
+def verify_sources(packet: dict, lock: dict) -> tuple[dict, dict, dict, dict]:
+    paths = {
+        "g3g_stable_recombination": G3G_PATH,
+        "g3h_qutrit_determinant": G3H_PATH,
+        "g3i_bidirectional_ext": G3I_PATH,
+        "g3j_reverse_ext": G3J_PATH,
+    }
+    for key, path in paths.items():
+        source = packet["inputs"][key]
+        require(source["path"] == str(path.relative_to(ROOT)).replace("\\", "/"), f"{key} path")
+        require(source["sha256"] == sha256(path), f"{key} hash")
+
+    cohesive = packet["inputs"]["twisted_cohesive_superconnection"]
+    repository = next(
+        item for item in lock["repositories"] if item["id"] == cohesive["repository_id"]
+    )
+    locked = next(
+        item for item in repository["sources"] if item["path"] == cohesive["path"]
+    )
+    require(cohesive["sha256"] == locked["sha256"], "cohesive source hash")
+
+    return load(G3G_PATH), load(G3H_PATH), load(G3I_PATH), load(G3J_PATH)
+
+
+def verify_determinant(packet: dict, g3g: dict, g3h: dict) -> None:
+    cutset = packet["determinant_cutset"]
+    require(cutset["line_degree"] == 2, "A_H degree")
+    require(cutset["inverse_line_degree"] == -2, "inverse degree")
+    require(cutset["h0_inverse_line"] == 0, "negative-degree section")
+    require(cutset["ordinary_scalar_zero_length"] == 2, "scalar zero divisor")
+    require(cutset["weyl_determinant_degree"] == 3 * cutset["line_degree"] == 6, "Weyl degree")
+    require(cutset["nonzero_weyl_determinant_zero_length"] == 6, "Weyl divisor")
+    require(not cutset["ordinary_scalar_uniform_repair_exists"], "scalar repair promoted")
+    require(not cutset["ordinary_qutrit_matrix_uniform_repair_exists"], "matrix repair promoted")
+    require(
+        g3g["ordinary_determinant_cutset"]["degree"] == cutset["line_degree"],
+        "G3G degree regression",
+    )
+
+    omega, u, v, w = sp.symbols("omega u v w")
+    identity = sp.eye(3)
+    shift = sp.Matrix(((0, 1, 0), (0, 0, 1), (1, 0, 0)))
+    clock = sp.diag(1, omega, omega**2)
+    matrix = u * identity + v * shift + w * clock
+    determinant = reduce_omega(matrix.det(), omega)
+    require(sp.expand(determinant - (u**3 + v**3 + w**3)) == 0, "Weyl determinant")
+    require(
+        g3h["determinantal_slice"]["determinant"] == "u^3+v^3+w^3",
+        "G3H determinant regression",
+    )
+
+
+def verify_projective_and_schur(packet: dict) -> None:
+    projective = packet["projective_descent_cutset"]
+    require(projective["underlying_holomorphic_rank_locus_unchanged"], "rank locus")
+    require(projective["rank_is_atlas_local"], "atlas locality")
+    require(projective["same_order3_twist_rank"] == 3, "twist-rank match")
+    require(projective["determinant_twist_cancels"], "determinant twist")
+    require(projective["determinant_line_degree_unchanged"], "determinant degree")
+    require(not projective["finite_sigma_alone_removes_zeros"], "finite twist overclaim")
+    require(not projective["analytic_alpha_identified_with_finite_sigma"], "twists conflated")
+
+    schur = packet["schur_typing"]
+    a11, a12, a21, a22 = sp.symbols("a11 a12 a21 a22")
+    d11, d12, d21, d22 = sp.symbols("d11 d12 d21 d22")
+    r, t = sp.symbols("r t")
+    A = sp.Matrix(((a11, a12), (a21, a22)))
+    D = sp.Matrix(((d11, d12), (d21, d22)))
+    block = A.row_join(r * sp.eye(2)).col_join((-t * sp.eye(2)).row_join(D))
+    require(sp.expand(block.det() - (A * D + r * t * sp.eye(2)).det()) == 0, "Schur identity")
+    require(schur["identity_is_exact"], "Schur identity status")
+    require(schur["ordinary_inverse_weight_section_dimension"] == 0, "inverse Hom slot")
+    require(not schur["ordinary_constant_carrier_schur_completion_exists"], "ordinary Schur promoted")
+    require(not schur["excludes_all_six_by_six_presentations"], "overbroad 6x6 no-go")
+    require(not schur["excludes_unrelated_H3x3_presentations"], "overbroad H3x3 no-go")
+
+
+def verify_derived_and_yoneda(packet: dict, g3i: dict, g3j: dict) -> None:
+    derived = packet["derived_inverse_block"]
+    reverse = g3j["reverse_ext"]
+    require(derived["forward_dimension"] == g3i["forward_ext"]["dimension"] == 1, "forward Ext")
+    require(derived["reverse_dimension"] == reverse["dimension"] == 9, "reverse Ext")
+    require(
+        derived["reverse_character_multiplicities"] == reverse["character_multiplicities"],
+        "reverse character type",
+    )
+    nontrivial = (
+        derived["reverse_character_multiplicities"]["chi"]
+        + derived["reverse_character_multiplicities"]["chi2"]
+    )
+    require(derived["reverse_nontrivial_character_dimension"] == nontrivial == 6, "nontrivial sector")
+    require(derived["reverse_classes_are_degree_one_derived_entries"], "derived inverse slot")
+    require(not derived["reverse_classes_are_ordinary_Hom_sections"], "Ext mistyped as Hom")
+    require(not derived["standalone_reverse_middle_locally_free"], "G3J no-go lost")
+    require(derived["cohesive_superconnection_accepts_degree_one_entries"], "cohesive slot")
+    require(
+        derived["cohesive_endomorphism_defect_rank_zero_means_scalar_twist_cancellation_only"],
+        "rank-zero interpretation",
+    )
+    require(
+        not derived["cohesive_endomorphism_defect_rank_zero_repairs_WIT_defects"],
+        "rank-zero WIT overclaim",
+    )
+
+    yoneda = packet["yoneda_reduction"]
+    require(len(yoneda["square_diagonal"]) == 2, "Yoneda diagonal")
+    require(yoneda["strict_MC_requires_both_classes_zero"], "strict MC condition")
+    require(yoneda["general_cohesive_MC_requires_both_classes_cohomologically_zero"], "MC obstruction")
+    require(yoneda["mu_L_is_clock_equivariant"], "mu_L equivariance")
+    require(yoneda["Ext2_L_L_is_clock_trivial"], "scalar target character")
+    require(yoneda["mu_L_kills_nontrivial_characters"], "character kernel")
+    require(yoneda["principal_elliptic_R0_pi_O"] == "O_S", "R0 pi_* O")
+    require(yoneda["principal_elliptic_R1_pi_O"] == "O_S", "R1 pi_* O")
+    require(yoneda["base_h1_O"] == 0, "K3 h1(O)")
+    require(yoneda["h1_OX_dimension_upper_bound"] == 1, "Leray h1 upper bound")
+    require(yoneda["canonical_bundle_trivial"] == g3i["geometry"]["canonical_bundle_trivial"], "K_X")
+    require(yoneda["Ext2_L_L_dimension_upper_bound"] == 1, "Serre Ext2 bound")
+    require(yoneda["mu_L_rank_upper_bound"] == 1, "mu_L rank bound")
+    require(
+        yoneda["automatic_mu_L_kernel_dimension_lower_bound"]
+        == derived["reverse_dimension"] - yoneda["mu_L_rank_upper_bound"]
+        == 8,
+        "Leray-Serre kernel bound",
+    )
+    require(
+        yoneda["automatic_mu_L_invariant_kernel_dimension_lower_bound"]
+        == derived["reverse_character_multiplicities"]["trivial"] - yoneda["mu_L_rank_upper_bound"]
+        == 2,
+        "invariant kernel bound",
+    )
+    require(yoneda["derived_trace_relation"] == "tr_E(rho f)=-tr_L(f rho)", "trace cyclicity")
+    require(yoneda["trace_L_is_Ext2_L_L_to_H2_O_identification"], "line trace")
+    require(yoneda["mu_E_zero_implies_mu_L_zero"], "dependent scalar equation")
+    require(yoneda["independent_yoneda_obstruction_map_count"] == 1, "obstruction-map count")
+    require(yoneda["independent_yoneda_obstruction_map"] == "mu_E", "independent map")
+    require(not yoneda["independent_mu_L_table_required"], "redundant mu_L table")
+    require(not yoneda["mu_L_invariant_three_coordinates_computed"], "mu_L silently complete")
+    require(not yoneda["mu_E_computed"], "mu_E silently complete")
+    require(not yoneda["global_shift_orbit_common_zero_constructed"], "orbit silently complete")
+
+
+def verify_next_contract() -> None:
+    schema = load(SCHEMA_PATH)
+    template = load(TEMPLATE_PATH)
+    expected = "mtt.unified-source.q79-yoneda-mc-certificate.v1"
+    require(schema["$id"] == expected, "next schema id")
+    require(schema["properties"]["schema"]["const"] == expected, "next schema const")
+    require(template["schema"] == expected, "template schema")
+    require(len(template["orbit_members"]) == 3, "three orbit members")
+    require([item["index"] for item in template["orbit_members"]] == [0, 1, 2], "orbit order")
+    require(not any(item["reverse_class_nonzero"] for item in template["orbit_members"]), "template promoted")
+    require(not template["yoneda_products"]["f_rho_zero_all_members"], "template mu_L promoted")
+    require(not template["yoneda_products"]["rho_f_zero_all_members"], "template mu_E promoted")
+    require(not template["yoneda_products"]["mu_L_follows_from_mu_E"], "template trace promoted")
+    require(not template["cohesive_mc"]["mc_square_zero"], "template MC promoted")
+    require(template["relations"]["commutator"] == "open", "template commutator")
+    require(template["empirical_inputs"] == [], "template empirical inputs")
+    require(not template["physical_promotion_requested"], "template physical promotion")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    require(
+        packet["schema"] == "mtt.unified-source.q79-derived-schur-yoneda-reduction.v1",
+        "bad G3K schema",
+    )
+    require(packet["theorem_id"] == "UST.G3K", "bad theorem id")
+    g3g, g3h, g3i, g3j = verify_sources(packet, lock)
+    verify_determinant(packet, g3g, g3h)
+    verify_projective_and_schur(packet)
+    verify_derived_and_yoneda(packet, g3i, g3j)
+    verify_next_contract()
+
+    frontier = packet["frontier"]
+    require(frontier["ordinary_coefficient_search_retired"], "coefficient search not retired")
+    require(frontier["finite_projective_only_repair_retired"], "finite-only route not retired")
+    require(frontier["ordinary_constant_carrier_schur_route_retired"], "ordinary Schur not retired")
+    require(frontier["derived_cohesive_yoneda_route_forced_within_locked_HS_carrier"], "derived route")
+    require(not frontier["global_repaired_alpha_twisted_object_constructed"], "global object promoted")
+    require(not frontier["physical_hidden_W9_constructed"], "W9 promoted")
+    require(not frontier["B_HS_01_closed"], "B.HS.01 promoted")
+    require(packet["continuous_fit_parameters"] == 0, "fit parameter introduced")
+    require(packet["observed_inputs"] == 0, "observed input introduced")
+
+    print("UST.G3K derived Schur/Yoneda reduction theorem: PASS")
+    print("ordinary scalar and qutrit coefficient repairs: excluded by degrees 2 and 6")
+    print("finite sigma preserves the determinant rank locus")
+    print("inverse block: Ext1 dimension 9; automatic scalar-Yoneda kernel dimension >= 8")
+    print("derived trace reduces the independent Yoneda obstruction to mu_E")
+    print("downstream G3N: selected invariant column is nonzero; locked route retired")
+
+
+if __name__ == "__main__":
+    main()

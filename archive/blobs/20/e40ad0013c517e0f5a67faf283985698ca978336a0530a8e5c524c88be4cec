@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Verify the persisted G3DA reduced coupling and selected 710 minor."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_mat, acb_poly, arb, ctx
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3da_h11_archimedean_reduced_coupling.packet.json"
+G3CX = ROOT / "state" / "ust_g3cx_h11_dm_source_observation_corridor.packet.json"
+G3CY = ROOT / "state" / "ust_g3cy_h11_exact_base_resolvent_coupling_rank.packet.json"
+MINPOLY = [64, 16, 33, 44, 89, 24, 1]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, Any], repository: Path) -> Path:
+    key = "path" if "path" in item else "repository_relative_path"
+    path = repository / item[key]
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size: {path}")
+    require(sha256(path) == item["sha256"], f"record hash: {path}")
+    return path
+
+
+def reconstructed_ball(arrays: dict[str, np.ndarray], row: int, column: int) -> acb:
+    real = (
+        arb(float(arrays["real_high"][row, column]))
+        + arb(float(arrays["real_low"][row, column]))
+        + arb(0, float(arrays["real_radius"][row, column]))
+    )
+    imag = (
+        arb(float(arrays["imag_high"][row, column]))
+        + arb(float(arrays["imag_low"][row, column]))
+        + arb(0, float(arrays["imag_radius"][row, column]))
+    )
+    return acb(real, imag)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["theorem_id"] == "UST.G3DA", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_CERTIFIED_FULL_H11_REDUCED_COUPLING_ON_ONE_CONJUGATE_ARCHIMEDEAN_PAIR",
+        "status",
+    )
+    require(all(packet["checks"].values()), "checks")
+    require(
+        not any(bool(value) for value in packet["guardrails"].values()),
+        "guardrails remain false",
+    )
+    mld = runtime.resolve_mld()
+    for label in (
+        "G3CV",
+        "G3CX",
+        "G3CY",
+        "G3CZ",
+        "G3CZ_core221_enclosure",
+        "implementation",
+    ):
+        verify_record(packet["inputs"][label], ROOT)
+    for label in (
+        "H11_DM",
+        "H11_DM_arrays",
+        "H11_Macaulay",
+        "H11_factorization",
+        "B89_oracle",
+    ):
+        verify_record(packet["inputs"][label], mld)
+
+    coupling = packet["reduced_coupling"]
+    archive_path = verify_record(coupling["persisted_enclosure"]["archive"], ROOT)
+    npz = np.load(archive_path, allow_pickle=False)
+    arrays = {key: npz[key] for key in npz.files}
+    npz.close()
+    expected_shape = (988, 740)
+    for key in (
+        "real_high",
+        "real_low",
+        "real_radius",
+        "imag_high",
+        "imag_low",
+        "imag_radius",
+    ):
+        require(arrays[key].shape == expected_shape, f"shape {key}")
+        require(bool(np.all(np.isfinite(arrays[key]))), f"finite {key}")
+    require(bool(np.all(arrays["real_radius"] >= 0)), "real radii")
+    require(bool(np.all(arrays["imag_radius"] >= 0)), "imag radii")
+
+    g3cx = load(G3CX)
+    g3cy = load(G3CY)
+    corridor = np.load(
+        ROOT / g3cx["exact_component_DAG"]["arrays"]["path"], allow_pickle=False
+    )
+    require(
+        np.array_equal(
+            arrays["active_kernel_columns"], corridor["active_kernel_columns"]
+        ),
+        "active columns replay",
+    )
+    require(
+        corridor["structurally_zero_kernel_columns"].size == 248,
+        "248 exact zero columns",
+    )
+    rank = np.load(
+        ROOT / g3cy["rank_identity"]["certificate"]["path"], allow_pickle=False
+    )
+    require(
+        np.array_equal(arrays["selected_minor_rows"], rank["Q_minor_rows"]),
+        "minor rows replay",
+    )
+    require(
+        np.array_equal(arrays["selected_minor_columns"], rank["Q_minor_columns"]),
+        "minor columns replay",
+    )
+
+    ctx.prec = int(packet["field"]["precision_bits"])
+    roots = acb_poly(MINPOLY).roots(
+        tol=arb(2) ** (-int(packet["field"]["root_isolation_bits"])),
+        maxprec=1024,
+    )
+    roots = sorted(
+        roots,
+        key=lambda value: (float(value.real.mid()), float(value.imag.mid())),
+    )
+    require(acb_poly(MINPOLY)(roots[4]).contains(0), "root residual")
+    require(roots[5].overlaps(roots[4].conjugate()), "conjugate roots")
+    require(
+        str(roots[4]) == packet["field"]["evaluated_gamma_ball"],
+        "root replay",
+    )
+
+    for item in coupling["samples"]:
+        index = int(item["flat_index"])
+        row, column = divmod(index, 740)
+        value = reconstructed_ball(arrays, row, column)
+        require(value.real.overlaps(arb(item["real_ball"])), "sample real")
+        require(value.imag.overlaps(arb(item["imag_ball"])), "sample imag")
+
+    active_lookup = {
+        int(column): position
+        for position, column in enumerate(arrays["active_kernel_columns"].tolist())
+    }
+    minor_active_positions = [
+        active_lookup[int(column)]
+        for column in arrays["selected_minor_columns"].tolist()
+    ]
+    minor_rows = arrays["selected_minor_rows"].astype(np.int32)
+    t_q = acb_mat(
+        710,
+        710,
+        [
+            reconstructed_ball(arrays, int(row), int(column))
+            for row in minor_rows.tolist()
+            for column in minor_active_positions
+        ],
+    )
+    determinant = t_q.det()
+    require(not determinant.contains(0), "persisted T_Q determinant excludes zero")
+    builder_determinant = packet["reduced_coupling"]["selected_second_Woodbury_data"]
+    require(
+        bool(builder_determinant["T_Q_determinant_ball_excludes_zero"]),
+        "builder determinant flag",
+    )
+    print("UST.G3DA independent verifier: PASS")
+    print(
+        "Q_active=988x740 exact_zero_columns=248 T_Q=710x710 "
+        "persisted_TQ_determinant_excludes_zero=true"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,132 @@
+# UST.G3BK Correction-Pencil Operator Compiler Theorem
+
+## Result
+
+G3BI emits the exact root-containing start and G3BJ selects a smooth path to
+the fixed B89 endpoint. G3BK compiles that specific deformation into the
+already frozen eta9 residue/Macaulay language. It does not substitute a new
+family or a proxy connection.
+
+Write
+
+```text
+F_a = F_B89 + a C,
+C   = F_G3BI - F_B89.
+```
+
+The correction `C` has 19 nonzero coefficients in `Q(gamma)`, all in the
+`t0` lane. Eighteen remain nonzero at the good-reduction place
+`(11,gamma-3)`. The complete pole-derivative source blocks are therefore
+
+```text
+H20 -> H11:  R_P = -3 P sC,   4,712 exact Q(gamma) entries,
+H11 -> H02:  R_P = -4 P sC,  19,247 exact Q(gamma) entries.
+H02 -> pole6: R_P = -5 P sC,   4,712 exact Q(gamma) entries.
+```
+
+Their canonical coefficient streams and reductions are emitted and replayed
+independently.
+
+## Exact H20 resolvent
+
+In the frozen H20 augmented chart, only the `dPhi/ds` image column changes.
+Consequently
+
+```text
+K_C = C0^-1 C1_C = x_C e_F0^T
+```
+
+has rank one. With
+
+```text
+N_C(gamma) = 3261 + 1627 gamma - 611 gamma^2
+             - 3170 gamma^3 - 827 gamma^4 + 2917 gamma^5,
+
+D(gamma)   = -335 + 547 gamma + 1304 gamma^2
+             + 627 gamma^3 + 443 gamma^4 - 407 gamma^5,
+```
+
+the exact identities are
+
+```text
+alpha_C = N_C/D,
+K_C^2   = alpha_C K_C,
+det(C0+a C1_C)/det(C0) = (D+a N_C)/D.
+```
+
+The sole chart pole `a_*=-D/N_C` is algebraic. Every interior point of the
+G3BJ arc
+
+```text
+a(t)=1-t+i*pi*t*(1-t)
+```
+
+is transcendental, so no interior point can meet this pole in any
+Archimedean embedding. Both endpoints are units as well. At
+`(11,gamma-3)`, `D=8`, `N_C=9`, and `D+N_C=6`, all nonzero in `GF(11)`.
+Thus one H20 chart covers the entire selected path.
+
+For H11 and H02, the determinant of each frozen affine chart is likewise a
+nonzero polynomial in `a` over `Q(gamma)`, because its value at `a=0` is the
+already certified B89 unit. Every chart pole is therefore algebraic. The
+transcendental G3BJ interior avoids all of them automatically. Only the
+initial endpoint `a=1` may need an H11/H02 initializer transition; no interior
+chart subdivision is needed.
+
+## Finite update sizes
+
+The three exact good-reduction update matrices have the following certified
+sizes:
+
+| block | shape | nonzero entries | active columns | rank over GF(11) | structural upper bound |
+|---|---:|---:|---:|---:|---:|
+| H20 | `282 x 34` | 18 | 1 | 1 | 1 |
+| H11 | `5439 x 4426` | 17,868 | 1,186 | 982 | 1,006 |
+| H02 | `42706 x 42458` | 113,312 | 7,379 | 6,016 | 6,037 |
+
+The algebraic ranks are computed by exact componentwise Gaussian elimination
+over `GF(11)`. Matching and equal-cardinality vertex-cover certificates prove
+the displayed structural upper bounds. The finite ranks also give rigorous
+lower bounds for the corresponding characteristic-zero update ranks.
+
+## What changed
+
+Before G3BK, "construct the correction-pencil connection" still included an
+unfixed source-direction problem. Raw source construction is now closed. The
+deformation, all three raw derivative blocks, all three finite chart updates,
+and the full H20 path resolvent are selected and executable.
+
+The remaining wall is narrower:
+
+1. execute the targeted toric Griffiths-Dwork return of the H02 pole-six
+   block;
+2. evaluate the H11 and H02 inverse actions over characteristic zero, with
+   at most an initializer transition at `a=1`;
+3. use those actions to continue only the G3BG vector
+   `z4=(-e2+2f2) tensor u_B`;
+4. emit its terminal integral B89 coordinates or meridian word;
+5. compute the normalized 248-row readout and apply G3BD.
+
+G3BK does not claim a full `1509 x 1509` characteristic-zero matrix, integral
+transport of `z4`, a terminal readout, or closure of `B.ETA9.01` or
+`B.ETA9.02`.
+
+## Successor Status
+
+G3BL subsequently proved that `(11,gamma-3)` is a corank-one H11 endpoint
+presentation even after all unused columns are restored. G3BN then found the
+correct replacement: the selected endpoint determinant is `276 mod 21817`,
+which proves H11 chart invertibility over `Q(gamma)`. G3BO has executed the
+full 248-column endpoint correction action at that split prime. These results
+close H11 endpoint chart existence, but characteristic-zero reconstruction of
+the action, H02 return/action and integral path transport remain open.
+
+## Reproduction
+
+```powershell
+python build_ust_g3bk_correction_pencil_operator_compiler.py
+python verify_ust_g3bk_correction_pencil_operator_compiler.py
+```
+
+Set `MTT_MLD_REPO` only when the sibling Mathematical Language Discovery
+repository is not in its usual location.

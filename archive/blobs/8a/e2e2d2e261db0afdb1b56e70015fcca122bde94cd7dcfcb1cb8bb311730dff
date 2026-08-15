@@ -1,0 +1,63 @@
+# UST.G3DF H02 DM Source-Observation Corridor Theorem v1
+
+## Status
+
+`CLOSED_EXACT_H02_DM_SOURCE_OBSERVATION_CORE_AND_NO_STRUCTURAL_KERNEL_ZERO`
+
+UST.G3DE emits the exact rank-`6,022` H02 factorization
+
+```text
+Delta_C = U S^-1 W.
+```
+
+UST.G3DF now locates the corresponding B89 inverse action inside the exact
+H02 Dulmage-Mendelsohn condensation graph.
+
+## Theorem
+
+The `6,022` columns of `U` enter one DM component. The `6,022` rows of `W`
+observe nineteen components. Intersecting the complete source-ancestor and
+observation-descendant closures leaves exactly one component:
+
+```text
+the unique nontrivial H02 core, dimension 24,767.
+```
+
+Therefore the reduced coupling
+
+```text
+Q = W A0^-1 U
+```
+
+can be computed without traversing the full `42,458`-dimensional complement.
+After a reduced vector is known, recovery of `A0^-1 U z` needs the core plus
+`94` singleton ancestors, of total dimension `24,861`.
+
+Unlike the H11 corridor, this graph has no structurally zero kernel rows or
+columns. All `6,022` rows and all `6,022` columns of `Q` are source-observable.
+Thus support alone cannot justify a smaller Woodbury kernel.
+
+## Consequence
+
+This result removes `17,691` complement directions from the H02 coupling
+calculation and fixes the only large block that must be evaluated. It also
+prevents an unproductive repeat of the H11 zero-column search: any further
+reduction below `6,022` must come from coefficient rank or selected-state
+reachability, not structural separation.
+
+## Boundary
+
+G3DF does not evaluate `A0^-1 U`, determine the rank of `Q`, construct the
+source-dependent right-hand side, or integrate the path. It does not emit the
+pairing-one rank-1,509 start class, the 248-row readout, or `beta_C`.
+
+## Reproduction
+
+```powershell
+python build_ust_g3df_h02_dm_source_observation_corridor.py
+python verify_ust_g3df_h02_dm_source_observation_corridor.py
+```
+
+The packet is
+`state/ust_g3df_h02_dm_source_observation_corridor.packet.json`; its selected
+component sets are under `evidence/ust_g3df/`.

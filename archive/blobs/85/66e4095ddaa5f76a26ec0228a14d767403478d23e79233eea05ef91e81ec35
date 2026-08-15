@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Independently verify the G3AT polarized primal-only transport theorem."""
+
+from __future__ import annotations
+
+from fractions import Fraction
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+PACKET = STATE / "ust_g3at_polarized_primal_transport.packet.json"
+LOCK = STATE / "upstream-lock.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def transpose(matrix: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [list(row) for row in zip(*matrix)]
+
+
+def add(left: list[list[Fraction]], right: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [[a + b for a, b in zip(x, y)] for x, y in zip(left, right)]
+
+
+def scale(value: Fraction, matrix: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [[value * item for item in row] for row in matrix]
+
+
+def multiply(left: list[list[Fraction]], right: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [
+        [sum((left[i][k] * right[k][j] for k in range(len(right))), Fraction(0)) for j in range(len(right[0]))]
+        for i in range(len(left))
+    ]
+
+
+def identity(size: int) -> list[list[Fraction]]:
+    return [[Fraction(int(i == j)) for j in range(size)] for i in range(size)]
+
+
+def trace(matrix: list[list[Fraction]]) -> Fraction:
+    return sum((matrix[i][i] for i in range(len(matrix))), Fraction(0))
+
+
+def exact_identity_test() -> None:
+    # Qdot is nonzero here, so this test exercises a genuinely moving algebraic frame.
+    q = [[Fraction(2), Fraction(1), Fraction(0)],
+         [Fraction(1), Fraction(-3), Fraction(2)],
+         [Fraction(0), Fraction(2), Fraction(5)]]
+    a = [[Fraction(1), Fraction(2), Fraction(-1)],
+         [Fraction(0), Fraction(-2), Fraction(3)],
+         [Fraction(4), Fraction(1), Fraction(0)]]
+    e = [[Fraction(1)], [Fraction(2)], [Fraction(-1)]]
+    at = transpose(a)
+    qdot = scale(Fraction(-1), add(multiply(at, q), multiply(q, a)))
+    require(any(value for row in qdot for value in row), "nonconstant-frame witness")
+    edot = multiply(a, e)
+    et = transpose(e)
+    numerator = multiply(et, q)
+    self_pairing = multiply(numerator, e)[0][0]
+    require(self_pairing != 0, "nonisotropic vanishing line")
+    ell = scale(Fraction(1, 1) / self_pairing, numerator)
+
+    numerator_dot = add(multiply(transpose(edot), q), multiply(et, qdot))
+    self_pairing_dot = (
+        multiply(numerator_dot, e)[0][0] + multiply(numerator, edot)[0][0]
+    )
+    require(self_pairing_dot == 0, "polarization preserves self pairing")
+    ell_dot = scale(Fraction(1, 1) / self_pairing, numerator_dot)
+    require(ell_dot == scale(Fraction(-1), multiply(ell, a)), "dual equation")
+    require(multiply(ell, e) == [[Fraction(1)]], "dual normalization")
+
+    projector = multiply(e, ell)
+    projector_dot = add(multiply(edot, ell), multiply(e, ell_dot))
+    commutator = add(multiply(a, projector), scale(Fraction(-1), multiply(projector, a)))
+    require(projector_dot == commutator, "projector commutator equation")
+    require(multiply(projector, projector) == projector, "projector idempotence")
+    require(trace(projector) == 1, "projector trace")
+    require(multiply(transpose(projector), q) == multiply(q, projector), "Q self-adjoint projector")
+    reflection = add(identity(3), scale(Fraction(-2), projector))
+    require(multiply(multiply(transpose(reflection), q), reflection) == q, "Q-orthogonal reflection")
+
+    q_minus_two = [[Fraction(-2), Fraction(0)], [Fraction(0), Fraction(3)]]
+    e_minus_two = [[Fraction(1)], [Fraction(0)]]
+    ell_general = scale(
+        Fraction(-1, 2),
+        multiply(transpose(e_minus_two), q_minus_two),
+    )
+    require(ell_general == [[Fraction(1), Fraction(0)]], "minus-two specialization")
+
+
+def main() -> None:
+    packet = load(PACKET)
+    lock = load(LOCK)
+    require(packet["schema"] == "mtt.unified-source.g3at-polarized-primal-transport.v1", "schema")
+    require(packet["theorem_id"] == "UST.G3AT", "theorem id")
+    require(
+        packet["status"] == "CLOSED_EXACT_POLARIZED_PRIMAL_ONLY_TRANSPORT_REDUCTION_THREE_ODES",
+        "status",
+    )
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    for name in ("upstream_lock", "G3AS", "G3AR_contract"):
+        item = packet["inputs"][name]
+        path = ROOT / item["path"]
+        require(path.is_file() and sha256(path) == item["sha256"], f"input {name}")
+        require(path.stat().st_size == item["bytes"], f"input bytes {name}")
+
+    locked = packet["inputs"]["locked_B89_residue_theorem"]
+    repository = next(item for item in lock["repositories"] if item["id"] == locked["repository_id"])
+    source = next(item for item in repository["sources"] if item["path"] == locked["path"])
+    require(repository["commit"] == locked["commit"], "locked commit")
+    require(source["sha256"] == locked["sha256"], "locked residue theorem hash")
+
+    reduction = packet["execution_reduction"]
+    require(reduction["rank"] == 1509 and reduction["selected_paths"] == 3, "selected dimensions")
+    require(reduction["previous_primal_and_adjoint_terminal_ODEs"] == 6, "old ODE count")
+    require(reduction["required_primal_terminal_ODEs"] == 3, "new ODE count")
+    require(reduction["previous_scalar_ODE_unknowns"] == 9054, "old scalar count")
+    require(reduction["required_scalar_ODE_unknowns"] == 4527, "new scalar count")
+    require(reduction["three_dense_fundamental_matrix_scalar_unknowns"] == 6831243, "dense count")
+    exact_identity_test()
+    print("UST.G3AT polarized primal-only transport: PASS 6 ODEs -> 3 ODEs")
+    print("remaining numeric input: three primal transports plus three polarization applications")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Certify the hardest full-support G3AO uvs chart by bidual elimination.
+
+The elliptic critical equations put the C-coefficient covector on the dual
+sextic of the transformed Fermat cubic.  At smooth dual points, biduality
+recovers the same elliptic contact point as the gradient of that sextic; this
+makes the base proportionality equations live entirely over the base.  The
+nine singular dual covectors are checked by a separate cusp ideal.  Unit
+ideals for both loci certify the original multiplier critical locus empty.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "uvs_dual"
+LABEL = "B_xyzw__T_t0t1t2__I_uvs"
+ITEM = (direct.BASE, direct.ELLIPTIC, ("u", "v", "s"))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_script(polynomials: dict[str, str], algorithm: str) -> str:
+    return f'''// UST.G3AO full-support uvs base/dual elimination certificate.
+// The smooth bidual and singular-dual loci cover every elliptic contact.
+ring source=(101,g),(x,y,z,w),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly Ap0=A0;
+poly Ap1=A0+A1+3*A2;
+poly Ap2=A0+7*A1+7*A2;
+// If ell=L*t and A is a t-covector, adj(L)^T*A is a scalar multiple
+// of the corresponding ell-covector.  det(L)=-14 is a unit modulo 101.
+poly dual0=-14*Ap0;
+poly dual1=-4*Ap0+7*Ap1-3*Ap2;
+poly dual2=6*Ap0-7*Ap1+Ap2;
+poly dualSextic=dual0^6+dual1^6+dual2^6
+  -2*(dual0^3*dual1^3+dual0^3*dual2^3+dual1^3*dual2^3);
+// The qi are one sixth of d(dualSextic)/d(duali); 6 is a unit mod 101.
+poly q0=dual0^2*(dual0^3-dual1^3-dual2^3);
+poly q1=dual1^2*(dual1^3-dual0^3-dual2^3);
+poly q2=dual2^2*(dual2^3-dual0^3-dual1^3);
+// Chain rule through adj(L)^T.  On the smooth dual these are the primal
+// t-coordinates, up to one irrelevant nonzero projective scalar.
+poly contact0=-14*q0-4*q1+6*q2;
+poly contact1=7*q1-7*q2;
+poly contact2=-3*q1+q2;
+poly baseResponseY=contact0*diff(Ap0,y)+contact1*diff(Ap1,y)+contact2*diff(Ap2,y);
+poly baseResponseZ=contact0*diff(Ap0,z)+contact1*diff(Ap1,z)+contact2*diff(Ap2,z);
+poly baseResponseW=contact0*diff(Ap0,w)+contact1*diff(Ap1,w)+contact2*diff(Ap2,w);
+poly baseMinorYZ=diff(K,y)*baseResponseZ-diff(K,z)*baseResponseY;
+poly baseMinorYW=diff(K,y)*baseResponseW-diff(K,w)*baseResponseY;
+poly baseMinorZW=diff(K,z)*baseResponseW-diff(K,w)*baseResponseZ;
+ideal smoothDualLocus=K,dualSextic,baseMinorYZ,baseMinorYW,baseMinorZW;
+ideal singularDualLocus=K,dualSextic,contact0,contact1,contact2;
+ring orbit=(101,g),(y,z,w,orbitInv),dp;
+minpoly={polynomials["minpoly"]};
+map orbitMap=source,1,y,z,w;
+ideal smoothRestricted=orbitMap(smoothDualLocus),orbitInv*(y*z*w)-1;
+ideal singularRestricted=orbitMap(singularDualLocus),orbitInv*(y*z*w)-1;
+ideal smoothBasis={algorithm}(smoothRestricted);
+ideal singularBasis={algorithm}(singularRestricted);
+int smoothEmpty=(size(smoothBasis)==1 && smoothBasis[1]==1);
+int singularEmpty=(size(singularBasis)==1 && singularBasis[1]==1);
+print("G3AO_UVS_BIDUAL_SMOOTH_EMPTY="+string(smoothEmpty));
+print("G3AO_UVS_BIDUAL_SINGULAR_EMPTY="+string(singularEmpty));
+if (smoothEmpty==1 && singularEmpty==1)
+{{ print("G3AO_UVS_DUAL_ELIMINATION_PASS {LABEL}"); }}
+else
+{{ print("G3AO_UVS_DUAL_ELIMINATION_INCONCLUSIVE {LABEL}"); }}
+quit;
+'''
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=3600)
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="std")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    require(direct.label(*ITEM) == LABEL, "selected full-support label")
+    polynomials = direct.selected_polynomials()
+    source_hash = sha256(direct.SOURCE)
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    script = CAMPAIGN / f"{LABEL}.{args.algorithm}.sing"
+    output = CAMPAIGN / f"{LABEL}.{args.algorithm}.singular.out"
+    packet_path = CAMPAIGN / f"{LABEL}.{args.algorithm}.packet.json"
+    script.write_text(make_script(polynomials, args.algorithm), encoding="ascii")
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            singular_command(ROOT, script),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        captured = error.stdout or b""
+        raw = (
+            captured.decode("utf-8", errors="replace")
+            if isinstance(captured, bytes)
+            else captured
+        )
+        returncode = 124
+    output.write_text(raw, encoding="utf-8")
+    elapsed = time.time() - started
+    passed = (
+        not timed_out
+        and returncode == 0
+        and f"G3AO_UVS_DUAL_ELIMINATION_PASS {LABEL}" in raw
+    )
+    packet = {
+        "schema": "mtt.unified-source.g3ao-selected-cayley-toric-orbit-uvs-dual.v1",
+        "label": LABEL,
+        "source_sha256": source_hash,
+        "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+        "supports": {
+            "base": list(direct.BASE),
+            "elliptic": list(direct.ELLIPTIC),
+            "Cayley_fiber": ["u", "v", "s"],
+        },
+        "script": {
+            "path": str(script.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(script),
+        },
+        "output": {
+            "path": str(output.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(output),
+        },
+        "algorithm": f"uvs_dual_{args.algorithm}",
+        "certificate_method": "uvs_elliptic_bidual_contact_and_cusp_necessary_loci",
+        "proof_scope": {
+            "on_K_zero_the_triangular_C_shift_preserves_the_base_proportionality_locus": True,
+            "the_elliptic_multiplier_equations_force_the_transformed_Fermat_dual_sextic": True,
+            "biduality_recovers_the_same_primal_contact_point_at_every_smooth_dual_covector": True,
+            "the_singular_dual_ideal_separately_covers_all_cusp_covectors": True,
+            "the_original_full_support_critical_locus_maps_into_the_union_of_the_two_displayed_base_loci": True,
+            "unit_saturated_smooth_and_singular_ideals_prove_the_original_orbit_locus_empty": passed,
+            "a_nonunit_smooth_or_singular_ideal_would_be_inconclusive": True,
+        },
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "passed": passed,
+    }
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(f"{LABEL}: {'PASS' if passed else 'INCONCLUSIVE'} ({elapsed:.1f}s)")
+    if not passed:
+        raise SystemExit(returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

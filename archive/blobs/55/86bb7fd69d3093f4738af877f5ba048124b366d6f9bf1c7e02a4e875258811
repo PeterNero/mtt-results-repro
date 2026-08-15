@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Build the exact Hilbert--Burch complex carried by the G3FK source matrix."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3FK = ROOT / "evidence/ust_g3fk/selected_four_normal_cayley_source.json"
+EVIDENCE = ROOT / "evidence/ust_g3fv"
+CERTIFICATE = EVIDENCE / "selected_cox_hilbert_burch_source.json"
+
+PRIME = 21817
+GAMMA = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def field_value(row: list[int]) -> int:
+    return sum(
+        int(coefficient) * pow(GAMMA, degree, PRIME)
+        for degree, coefficient in enumerate(row)
+    ) % PRIME
+
+
+def restricted_source(
+    coefficients: list[list[int]], theta: int
+) -> sp.Poly:
+    """Restrict a weighted degree-nine source form to one binary test curve."""
+    s, t = sp.symbols("s t")
+    x = s
+    y = t
+    z = s + 2 * t
+    w = s**3 + 2 * s * t**2 + t**3
+    offset = 83 * theta
+    expression = sum(
+        field_value(coefficients[offset + local])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(conic.source_monomials(9))
+    )
+    expression += w * sum(
+        field_value(coefficients[offset + 55 + local])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(conic.source_monomials(6))
+    )
+    return sp.Poly(sp.expand(expression.subs(s, 1)), t, modulus=PRIME)
+
+
+def centered_coefficients(polynomial: sp.Poly) -> list[int]:
+    coefficients = [
+        int(polynomial.nth(degree)) % PRIME
+        for degree in range(polynomial.degree() + 1)
+    ]
+    return [value if value <= PRIME // 2 else value - PRIME for value in coefficients]
+
+
+def main() -> None:
+    g3bi = load(G3BI)
+    g3fk = load(G3FK)
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3fk["checks"].values()), "G3FK checks")
+
+    # Work universally in the coefficient ring. G3FK supplies the displayed
+    # symbols as exact Q(gamma)-polynomials with the stated bidegrees.
+    h4, rbar, qe, t2sq, a1, a2, b6, d7, t0 = sp.symbols(
+        "H4 rbar qe t2sq A1 A2 B6 D7 t0"
+    )
+    source = sp.Matrix(
+        [
+            [h4, 0, t0 * d7],
+            [rbar, 0, t0 * b6],
+            [0, qe, a1],
+            [0, t2sq, a2],
+        ]
+    )
+    signed_minors = []
+    for omitted in range(4):
+        minor = source.copy()
+        minor.row_del(omitted)
+        signed_minors.append(sp.expand((-1) ** omitted * minor.det()))
+    elliptic_cofactor = qe * a2 - t2sq * a1
+    k3_cofactor = t0 * (h4 * b6 - rbar * d7)
+    expected = [
+        rbar * elliptic_cofactor,
+        -h4 * elliptic_cofactor,
+        -t2sq * k3_cofactor,
+        qe * k3_cofactor,
+    ]
+    require(
+        all(sp.expand(left - right) == 0 for left, right in zip(signed_minors, expected, strict=True)),
+        "maximal-minor factorization",
+    )
+    require(
+        all(sp.expand(value) == 0 for value in source.T * sp.Matrix(signed_minors)),
+        "Hilbert-Burch syzygy identity",
+    )
+
+    coefficients = g3bi["selected_source"]["coefficient_vectors"]
+    require(len(coefficients) == 249, "three selected source forms")
+    restricted_a1 = restricted_source(coefficients, 1)
+    restricted_a2 = restricted_source(coefficients, 2)
+    restriction_gcd = sp.gcd(restricted_a1, restricted_a2)
+    require(restricted_a1.degree() == restricted_a2.degree() == 9, "weighted restriction degrees")
+    require(restriction_gcd.degree() == 0, "restricted source gcd")
+    require(restriction_gcd.monic() == sp.Poly(1, *restriction_gcd.gens, modulus=PRIME), "unit gcd")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    packet = {
+        "schema": "ust.g3fv.selected-cox-hilbert-burch-source.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FV",
+        "status": "CLOSED_EXACT_SELECTED_COX_HILBERT_BURCH_SOURCE_APOLAR_COMPARISON_OPEN",
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3FK": record(G3FK),
+        },
+        "source_matrix": {
+            "ring": "Q(gamma)[x,y,z,w,t0,t1,t2] with the frozen Cox bidegrees",
+            "shape": [4, 3],
+            "rows": ["q", "r", "ell", "t2"],
+            "columns": ["K3", "E", "F_selected"],
+            "entries": [
+                ["H4", "0", "t0*D7"],
+                ["rbar", "0", "t0*B6"],
+                ["0", "qe", "A1"],
+                ["0", "t2^2", "A2"],
+            ],
+            "origin": "transpose of the exact G3FK three-equation/four-normal coefficient matrix",
+        },
+        "maximal_minors": {
+            "C_E": "qe*A2-t2^2*A1",
+            "C_K": "t0*(H4*B6-rbar*D7)",
+            "signed_vector": ["rbar*C_E", "-H4*C_E", "-t2^2*C_K", "qe*C_K"],
+            "syzygy_identity": "S^T*Delta=0",
+        },
+        "grade_two_certificate": {
+            "proof": (
+                "H4 and rbar=w-G3 are coprime, while qe and t2^2 are coprime. "
+                "A common divisor of C_E and C_K would therefore either be t0, "
+                "which does not divide C_E, or a base-variable divisor of both A1 "
+                "and A2. The displayed good-reduction weighted restriction has gcd1, "
+                "so A1 and A2 are coprime over Q(gamma). Thus the four maximal minors "
+                "have gcd1. Their proper determinantal ideal has height at most2 and "
+                "no height-one prime, hence height exactly2. Hilbert-Burch applies."
+            ),
+            "good_reduction": {"prime": PRIME, "gamma_root": GAMMA},
+            "weighted_restriction": {
+                "map": "x=s,y=t,z=s+2t,w=s^3+2*s*t^2+t^3; then s=1",
+                "A1_degree": restricted_a1.degree(),
+                "A2_degree": restricted_a2.degree(),
+                "A1_coefficients_ascending_centered": centered_coefficients(restricted_a1),
+                "A2_coefficients_ascending_centered": centered_coefficients(restricted_a2),
+                "gcd": "1",
+            },
+            "height": 2,
+        },
+        "exact_complex": {
+            "sequence": "0 -> R^3 --S--> R^4 --Delta^T--> I_3(S) -> 0",
+            "kind": "Cox-homogeneous Hilbert-Burch complex",
+            "source_parameters_added": 0,
+        },
+        "comparison_with_finite_component20": {
+            "common_architecture": "four generators, three first syzygy columns",
+            "finite_G3FN_column_degrees": [1, 2, 8],
+            "status": "OPEN_COX_TO_APOLAR_INTERTWINER",
+            "required_equality": (
+                "Apply the selected Cox/H02 residue and divided-power duality functor "
+                "to this exact complex and prove that its image is the G3FN complex, "
+                "equivalently the G3FR 18@15+1@16+1@19 inverse source."
+            ),
+        },
+        "checks": {
+            "the_G3FK_source_transposes_to_one_4x3_Cox_matrix": True,
+            "all_four_signed_maximal_minors_are_emitted_exactly": True,
+            "the_matrix_annihilates_its_signed_minor_vector": True,
+            "the_selected_A1_A2_forms_have_a_unit_good_reduction_gcd": True,
+            "the_maximal_minor_ideal_has_height_two": True,
+            "the_Hilbert_Burch_complex_is_exact_over_Qgamma": True,
+        },
+        "guardrails": {
+            "claims_entrywise_equality_with_the_G3FN_RREF_matrix": False,
+            "claims_the_Cox_complex_has_already_been_projected_to_the_apolar_ring": False,
+            "claims_the_G3FR_inverse_primitives_are_derived": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fvSelectedCoxHilbertBurchSource",
+            "tier": "CLOSED_EXACT_SELECTED_COX_HILBERT_BURCH_SOURCE",
+            "statement": (
+                "The transpose of the selected G3FK three-equation/four-normal "
+                "coefficient matrix has a height-two ideal of maximal minors over "
+                "Q(gamma). It therefore defines an exact Cox-homogeneous Hilbert-"
+                "Burch complex. This derives the determinantal architecture from "
+                "the selected source, while the Cox-to-apolar comparison with G3FN "
+                "and G3FR remains a separate open theorem."
+            ),
+        },
+        "next_required_object": (
+            "Construct the Cox-residue/divided-power functor on this displayed "
+            "complex. Its image must have column degrees1,2,8, reproduce the G3FN "
+            "maximal-minor ideal at all archived fibers and emit the G3FR mixed-"
+            "degree inverse primitives over Q(gamma)."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FV selected Cox Hilbert-Burch source: PASS "
+        "matrix=4x3 height=2 complex=exact apolar_comparison=open"
+    )
+
+
+if __name__ == "__main__":
+    main()

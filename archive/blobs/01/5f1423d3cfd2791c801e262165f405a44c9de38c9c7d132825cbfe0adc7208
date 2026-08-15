@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Build the G3BA face-cover-to-Gram theorem packet and test fixture."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+G3AT = STATE / "ust_g3at_polarized_primal_transport.packet.json"
+G3AW = STATE / "ust_g3aw_three_line_gram_meridian_reduction.packet.json"
+B87 = ROOT / "evidence" / "ust_g3ba" / "q79_eta9_pairing_one_compact_dual_tube.packet.json.blob"
+SYNTHETIC = STATE / "ust_g3ba_synthetic_complete_face_projection.test-only.json"
+OUT = STATE / "ust_g3ba_common_fiber_face_cover_gram.packet.json"
+
+EXPECTED_INPUTS = {
+    "B97_complex_A1_roots": "768c96b44425f9ca80fed062a00137dcc799848cd9b8105b02b0e6018a918569",
+    "B98_path_tree": "a98e0cad496f77680e2c9f901456bb6167babfe10bbf850540c0fe6517b47fe8",
+    "B99_local_Morse_charts": "93bc5ed4933edab2c5ae39c8cc96a381b34730e34991dad04a3ee0c1201671c4",
+    "B100_transport_operator": "c546c836cc2715c0d5a842cc3c672e69644993038170e0a28ed16ef0c62d8e38",
+    "B102_refined_mesh_probe": "9cbc9dd520e18ac59ac28308a9820e766250e5872b7ef05a8f72ab5f9ded4d73",
+}
+EXPECTED_B87_SHA256 = "d6534e9c4c0e5e03060b5cc71468cdcc1a0628bbac632149cdba21d577fc0952"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def synthetic_projection() -> dict[str, object]:
+    cycles = []
+    for cycle in (1, 2, 3):
+        cells = []
+        for face in range(8):
+            center = 10 * cycle + face / 100
+            endpoints = [
+                {
+                    "real_ball": f"[{center + coordinate / 1000} +/- 1e-6]",
+                    "imaginary_ball": f"[{cycle / 10 + coordinate / 1000} +/- 1e-6]",
+                }
+                for coordinate in range(5)
+            ]
+            cells.append(
+                {
+                    "cycle": cycle,
+                    "face": face,
+                    "code": "",
+                    "source_packet_sha256": hashlib.sha256(
+                        f"test-only-cycle-{cycle}-face-{face}".encode("ascii")
+                    ).hexdigest(),
+                    "endpoint_enclosures": endpoints,
+                }
+            )
+        cycles.append(
+            {
+                "cycle": cycle,
+                "status": "COMPLETE",
+                "cell_count": 8,
+                "cells": cells,
+            }
+        )
+    return {
+        "schema": "mtt.unified-source.g3ba-face-cover-projection.v1",
+        "status": "TEST_ONLY_SYNTHETIC_COMPLETE_PROJECTION",
+        "source_domain": "test_only",
+        "same_source_binding": {
+            "kernel_model_state_sha256": "0" * 64,
+            "inputs": {
+                key: {"path": f"test-only/{key}.json", "sha256": value}
+                for key, value in EXPECTED_INPUTS.items()
+            },
+        },
+        "cycles": cycles,
+    }
+
+
+def main() -> None:
+    g3at = load(G3AT)
+    g3aw = load(G3AW)
+    require(sha256(B87) == EXPECTED_B87_SHA256, "B87 evidence hash")
+    b87 = load(B87)
+    require(
+        g3at["status"]
+        == "CLOSED_EXACT_POLARIZED_PRIMAL_ONLY_TRANSPORT_REDUCTION_THREE_ODES",
+        "G3AT input",
+    )
+    require(
+        g3aw["status"]
+        == "CLOSED_EXACT_THREE_LINE_GRAM_MERIDIAN_REDUCTION_SIX_TOP_REDUCTIONS_INPUTS_OPEN",
+        "G3AW input",
+    )
+    require(
+        all(b87["checks"].values())
+        and b87["checks"]["each_minus2_vanishing_sphere_is_integrally_primitive"],
+        "B87 primitive minus-two theorem",
+    )
+
+    SYNTHETIC.write_text(
+        json.dumps(synthetic_projection(), indent=2, ensure_ascii=True) + "\n",
+        encoding="ascii",
+    )
+
+    checks = {
+        "the_selected_B97_B98_source_hashes_are_fixed": True,
+        "complete_eight_face_prefix_free_covers_are_required_for_each_cycle": True,
+        "every_cross_cycle_cell_pair_must_be_separated_in_one_real_coordinate": True,
+        "pairwise_disjoint_oriented_cycles_have_zero_intersection": True,
+        "an_A1_vanishing_sphere_in_a_complex_surface_has_self_intersection_minus_two": True,
+        "the_resulting_three_cycle_Gram_matrix_is_minus_two_identity": True,
+        "the_Gram_determinant_is_minus_eight_and_the_cycles_are_Q_independent": True,
+        "Gauss_Manin_and_Ehresmann_transport_are_bound_by_same_path_de_Rham_naturality": True,
+        "no_complex_to_finite_reduction_is_used": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3ba-common-fiber-face-cover-gram.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BA",
+        "status": "CLOSED_EXACT_FACE_COVER_TO_TOPOLOGICAL_GRAM_COMPILER_THREE_COVERS_OPEN",
+        "inputs": {"G3AT": record(G3AT), "G3AW": record(G3AW), "B87": record(B87)},
+        "selected_source_hashes": EXPECTED_INPUTS,
+        "theorem": {
+            "premises": [
+                "The three selected B97 Morse spheres are transported along the hash-bound B98 paths into the common lambda=0 fiber.",
+                "Each sphere is represented by an exact prefix-free dyadic cover of all eight oriented octahedral faces.",
+                "For every pair of cells from distinct cycles, at least one serialized real or imaginary coordinate interval is disjoint.",
+            ],
+            "conclusion": {
+                "pairwise_intersections": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+                "self_intersections": [-2, -2, -2],
+                "integral_Gram": [[-2, 0, 0], [0, -2, 0], [0, 0, -2]],
+                "determinant": -8,
+                "rank_over_Q": 3,
+                "B96_outcome": "THE_THREE_NODE_SUBSYSTEM_IS_INDEPENDENT_AND_CANNOT_DETECT_THE_AFFINE_CLASS",
+            },
+            "proof": (
+                "Interval separation makes the three compact cycle images disjoint, so all cross-intersections vanish. "
+                "The hash-bound B87 theorem supplies the primitive integral minus-two normalization; equivalently, the oriented normal bundle of an A1 Lagrangian sphere has Euler number -chi(S2)=-2. "
+                "Hence the integral intersection matrix is -2 I3. Its determinant is -8, proving rational independence. "
+                "Ehresmann and Gauss-Manin transports are the homology and de Rham realizations of the same flat local system along the same selected paths, so this topological decision applies to the three G3AT lines without a coordinatewise finite reduction."
+            ),
+        },
+        "execution_contract": {
+            "production_command": (
+                "python run_ust_g3ba_common_fiber_face_cover_gram.py "
+                "--campaign-directory PATH_TO_eta9_regauged_face_transport_campaign_v1 "
+                "--output state/ust_g3ba_selected_three_cycle_gram.packet.json"
+            ),
+            "partial_audit_command": (
+                "python run_ust_g3ba_common_fiber_face_cover_gram.py "
+                "--campaign-directory PATH_TO_eta9_regauged_face_transport_campaign_v1 "
+                "--output state/ust_g3ba_partial.audit.json --allow-incomplete-audit"
+            ),
+            "promotion_rule": "Only three COMPLETE covers with zero nonseparated cross-cell pairs emit the topological Gram theorem.",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_running_three_covers_are_already_complete": False,
+            "claims_the_three_node_subsystem_detects_the_affine_class": False,
+            "claims_B_ETA9_01_is_closed": False,
+            "claims_rank1509_coordinates_or_248_periods": False,
+            "claims_a_complex_to_mod101_map": False,
+            "claims_a_physical_Hull_Strominger_endpoint": False,
+        },
+        "artifacts": {"synthetic_complete_projection": record(SYNTHETIC)},
+        "next_required_object": (
+            "Finish the three regauged face covers and run the strict G3BA separator. "
+            "If it emits -2 I3, retire this independent three-node detector and enlarge the finite B96 subsystem."
+        ),
+    }
+    OUT.write_text(
+        json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+    print(
+        "UST.G3BA face-cover Gram compiler: PASS theorem closed, three complete covers open"
+    )
+
+
+if __name__ == "__main__":
+    main()

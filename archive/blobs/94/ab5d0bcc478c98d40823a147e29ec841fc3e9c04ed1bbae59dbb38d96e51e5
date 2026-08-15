@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Verify UST.G3AA shared-line/theta product and typing claims."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from itertools import product
+from math import gcd
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3aa_equivariant_shared_line_theta.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def add(g: tuple[int, int], h: tuple[int, int]) -> tuple[int, int]:
+    return ((g[0] + h[0]) % 3, (g[1] + h[1]) % 3)
+
+
+def sigma_exponent(g: tuple[int, int], h: tuple[int, int]) -> int:
+    _, b = g
+    c, _ = h
+    return (-c * b) % 3
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    require(packet["theorem_id"] == "UST.G3AA", "theorem id")
+
+    for key in ("local_G3T_packet", "local_G3W_packet"):
+        source = packet["inputs"][key]
+        path = ROOT / source["path"]
+        require(path.is_file(), f"missing local source {key}")
+        require(sha256(path) == source["sha256"], f"stale local source {key}")
+
+    groups = packet["finite_groups"]
+    require(groups["product_order"] == 64 * 3 * 3 == 576, "product order")
+    require(gcd(64, 3) == groups["gcd_64_3"] == 1, "coprime factors")
+
+    f3x2 = list(product(range(3), repeat=2))
+    normalized = all(
+        sigma_exponent((0, 0), g) == 0
+        and sigma_exponent(g, (0, 0)) == 0
+        for g in f3x2
+    )
+    require(normalized, "normalized cocycle")
+
+    cocycle_count = 0
+    for g, h, k in product(f3x2, repeat=3):
+        residual = (
+            sigma_exponent(g, h)
+            + sigma_exponent(add(g, h), k)
+            - sigma_exponent(h, k)
+            - sigma_exponent(g, add(h, k))
+        ) % 3
+        require(residual == 0, f"cocycle identity at {g},{h},{k}")
+        cocycle_count += 1
+    require(cocycle_count == packet["theta_multiplier"]["cocycle_identities"] == 729, "cocycle count")
+
+    def commutator(g: tuple[int, int], h: tuple[int, int]) -> int:
+        return (sigma_exponent(g, h) - sigma_exponent(h, g)) % 3
+
+    require(commutator((1, 0), (0, 1)) == 1, "selected orientation")
+    for g in f3x2[1:]:
+        require(any(commutator(g, h) != 0 for h in f3x2), f"degenerate at {g}")
+
+    # A scalar coboundary on an abelian group is symmetric, so its commutator
+    # vanishes. It cannot cancel the nondegenerate commutator above.
+    module = packet["combined_module"]
+    require(module["ordinary_line_cancels_sigma"] is False, "ordinary-line no-go")
+    require(module["strict_ordinary_E3_vector_linearization_from_shared_line"] is False, "strict lift no-go")
+    require(module["minimum_inverse_multiplier_module_rank"] == 3, "inverse module rank")
+
+    cohomology = packet["product_cohomology"]
+    require(cohomology["H2_C64_U1"] == "0", "cyclic Schur multiplier")
+    require(cohomology["H2_F3xF3_U1"] == "Z3", "theta Schur multiplier")
+    require(cohomology["mixed_Hom_C64_tensor_F3xF3_U1"] == "0", "mixed multiplier")
+    require(cohomology["H2_product_U1"] == "Z3", "product multiplier")
+    require(cohomology["new_mixed_cocycle_choices"] == 0, "no mixed choice")
+
+    hom_images = [value for value in range(64) if (6 * value) % 64 == 0]
+    require(hom_images == [0, 32], "Hom(Z6,Z64)")
+
+    determinant = packet["determinant_bridge"]
+    require(determinant["hidden_rank"] == 9, "hidden rank")
+    require(all((9 * exponent) % 3 == 0 for exponent in range(3)), "central determinant")
+    require(determinant["qutrit_generator_determinants"] == [1, 1], "generator determinants")
+    require(determinant["selected_sheet_image_mod64"] == [0, 32], "sheet image")
+    require(9 % 2 == 1 and determinant["ninth_power_equals_first_power_on_sheet"], "odd power sign line")
+    require(determinant["flat_SpinC_determinant_identification"], "SpinC determinant bridge")
+    require(determinant["full_Z64_L9_equals_L_claimed"] is False, "full-Z64 guard")
+    require(determinant["nonflat_HYM_connection_identification_claimed"] is False, "HYM guard")
+
+    topology = packet["ordinary_topology"]
+    require(topology["H3_integral_rank"] == 42, "H3 rank")
+    require(topology["H3_integral_torsion"] == [], "H3 torsion-free")
+    require(topology["ordinary_nonzero_order3_H3_class_exists"] is False, "ordinary order-three no-go")
+
+    differential = packet["equivariant_differential_typing"]
+    require(differential["restriction_to_atlas_X"] == 0, "equivariant class restriction")
+    require(differential["eta9_ambient_Brauer_value"] == 0, "eta9 ambient Brauer normalization")
+    require(differential["eta9_primitive_normal_rank"] == 248, "eta9 primitive normal rank")
+    require(
+        differential["discrete_theta_class_predicts_primitive_248_rows"] is False,
+        "theta/normal-row type guard",
+    )
+    require(
+        differential["eta9_equivariant_background_comparison_closed"] is False,
+        "eta9 equivariant background boundary",
+    )
+    require(differential["eta9_primitive_normal_zero_closed"] is False, "eta9 normal-row boundary")
+    require(differential["physical_Green_Schwarz_trivialization_closed"] is False, "string boundary")
+
+    scope = packet["scope"]
+    require(scope["correctly_typed_shared_line_theta_module_closed"], "typed lift")
+    require(scope["strict_ordinary_line_lift_closed_nogo"], "strict no-go state")
+    require(scope["B_ETA9_02_closed"] is False, "B.ETA9.02 boundary")
+    require(scope["B_HS_01_closed"] is False, "B.HS.01 boundary")
+    require(scope["UST_G3_closed"] is False, "UST.G3 boundary")
+
+    print("UST.G3AA equivariant shared-line/theta product: PASS")
+    print("729 theta cocycle identities and nondegenerate commutator: PASS")
+    print("C64-E[3] mixed multiplier: EXACTLY TRIVIAL")
+    print("ordinary shared-line cancellation of sigma: EXACT NO-GO")
+    print("rank-nine flat SpinC determinant bridge: CLOSED")
+    print("ordinary order-three H3(X,Z) class: EXACT NO-GO")
+    print("eta9 theta background: open at G3AA, closed downstream by G3AB; rank-248 beta_C: OPEN")
+    print("physical differential string trivialization: OPEN")
+
+
+if __name__ == "__main__":
+    main()

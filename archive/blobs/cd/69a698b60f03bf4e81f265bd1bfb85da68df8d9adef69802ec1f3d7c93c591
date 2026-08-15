@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Build a non-authoritative fiber-two Hilbert hint from the old exact basis."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass, field
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+DEFAULT_SOURCE = (
+    ROOT / "evidence" / "q79_eta9_cayley_jacobian_leading_exponents.singular.out"
+)
+SOURCE_SHA256 = "c601d55c6df41c73f80189d80700fb287483e434bb7f2eeca5ffcd3a71c0beb9"
+SOURCE_COMMIT = "bc0c9f9e852b41bae9d26a9ac0a17b6cd9de2692"
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_predecessor_hilbert.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_predecessor_hilbert.singular.out"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_predecessor_hilbert.packet.json"
+LEADER_PATTERN = re.compile(r"^CAYLEY_LEADING_EXPONENT_\d+=([0-9,]+)$")
+FIBER_COMPONENTS = (
+    (2, 0, 0),
+    (1, 1, 0),
+    (1, 0, 1),
+    (0, 2, 0),
+    (0, 1, 1),
+    (0, 0, 2),
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@dataclass
+class Trie:
+    children: dict[int, "Trie"] = field(default_factory=dict)
+    terminal: bool = False
+
+    def add(self, exponent: tuple[int, ...], depth: int = 0) -> None:
+        if depth == len(exponent):
+            self.terminal = True
+        else:
+            self.children.setdefault(exponent[depth], Trie()).add(exponent, depth + 1)
+
+    def divides(self, exponent: tuple[int, ...], depth: int = 0) -> bool:
+        if self.terminal:
+            return True
+        return depth < len(exponent) and any(
+            child.divides(exponent, depth + 1)
+            for power, child in self.children.items()
+            if power <= exponent[depth]
+        )
+
+
+def minimal_points(points: set[tuple[int, ...]]) -> list[tuple[int, ...]]:
+    trie = Trie()
+    result = []
+    for point in sorted(points, key=lambda value: (sum(value), value)):
+        if not trie.divides(point):
+            trie.add(point)
+            result.append(point)
+    return result
+
+
+def parse_source(path: Path) -> list[tuple[int, ...]]:
+    leaders = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = LEADER_PATTERN.match(line)
+        if match:
+            leaders.append(tuple(int(value) for value in match.group(1).split(",")))
+    require(len(leaders) == 26883, "predecessor leader count")
+    require(all(len(exponent) == 10 for exponent in leaders), "predecessor leader width")
+    return leaders
+
+
+def induced_module_leaders(
+    leaders: list[tuple[int, ...]],
+) -> list[tuple[int, tuple[int, ...]]]:
+    result = []
+    for component, fiber_exponent in enumerate(FIBER_COMPONENTS, start=1):
+        points = {
+            exponent[:7]
+            for exponent in leaders
+            if all(
+                fiber_exponent[index] >= exponent[7 + index]
+                for index in range(3)
+            )
+        }
+        result.extend((component, point) for point in minimal_points(points))
+    require(
+        [sum(1 for component, _ in result if component == index) for index in range(1, 7)]
+        == [45, 45, 57, 330, 4850, 12156],
+        "induced component leader counts",
+    )
+    return result
+
+
+def monomial(exponent: tuple[int, ...]) -> str:
+    factors = []
+    for variable, power in zip(("x", "y", "z", "w", "t0", "t1", "t2"), exponent):
+        if power == 1:
+            factors.append(variable)
+        elif power > 1:
+            factors.append(f"{variable}^{power}")
+    return "*".join(factors) if factors else "1"
+
+
+def hint_script(leaders: list[tuple[int, tuple[int, ...]]]) -> str:
+    generators = ",\n  ".join(
+        f"{monomial(exponent)}*gen({component})" for component, exponent in leaders
+    )
+    return f'''ring r=101,(x,y,z,w,t0,t1,t2),(wp(1,1,1,3,1,1,1),C);
+module H=
+  {generators};
+intvec componentShifts=12,15,8,18,11,4;
+attrib(H,"isHomog",componentShifts);
+attrib(H,"isSB",1);
+intvec selectedWeights=1,1,1,3,1,1,1;
+bigintvec predecessorHilbert=hilb(H,1);
+print("G3AP_F2_PREDECESSOR_MODULE_LEADERS="+string(size(H)));
+print("G3AP_F2_PREDECESSOR_HILBERT="+string(predecessorHilbert));
+print("G3AP_F2_PREDECESSOR_HILBERT_HINT_PASS");
+quit;
+'''
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    source = Path(os.environ.get("MTT_PREDECESSOR_CAYLEY_LEADERS", DEFAULT_SOURCE))
+    require(source.is_file() and sha256(source) == SOURCE_SHA256, "predecessor source hash")
+    leaders = induced_module_leaders(parse_source(source))
+    SCRIPT.write_text(hint_script(leaders), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)} leaders={len(leaders)}")
+        return
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "Hilbert hint execution")
+    require("G3AP_F2_PREDECESSOR_HILBERT_HINT_PASS" in completed.stdout, "hint pass")
+    match = re.search(
+        r"^G3AP_F2_PREDECESSOR_HILBERT=([0-9, -]+)$",
+        completed.stdout,
+        re.MULTILINE,
+    )
+    require(match is not None, "Hilbert numerator export")
+    hilbert = [int(value.strip()) for value in match.group(1).split(",")]
+    require(hilbert and hilbert[0] == 1, "normalized module Hilbert numerator")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-fiber2-predecessor-hilbert-hint.v1",
+        "date": "2026-08-10",
+        "status": "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE",
+        "predecessor": {
+            "sha256": SOURCE_SHA256,
+            "source_repository_commit": SOURCE_COMMIT,
+            "source_url": (
+                "https://github.com/PeterNero/mtt-mathematical-language-discovery-program/"
+                f"blob/{SOURCE_COMMIT}/q79_eta9_cayley_jacobian_leading_exponents.singular.out"
+            ),
+            "ordinary_basis_leaders": 26883,
+        },
+        "execution": {
+            "script": {"path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SCRIPT)},
+            "output": {"path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(OUTPUT)},
+            "returncode": completed.returncode,
+        },
+        "fiber_degree_two": {
+            "components": [name for _, name, _, _ in fiber2.COMPONENTS],
+            "component_shifts": [shift for _, _, _, shift in fiber2.COMPONENTS],
+            "minimal_leaders_by_component": [45, 45, 57, 330, 4850, 12156],
+            "minimal_leaders_total": len(leaders),
+            "hilbert_numerator": hilbert,
+        },
+        "guardrails": {
+            "claims_selected_F1016_flatness": False,
+            "claims_selected_G3AP_dimension": False,
+            "may_be_used_without_independent_selected_source_certification": False,
+        },
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP predecessor fiber2 Hilbert hint: PASS "
+        f"leaders={len(leaders)} numerator_terms={len(hilbert)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

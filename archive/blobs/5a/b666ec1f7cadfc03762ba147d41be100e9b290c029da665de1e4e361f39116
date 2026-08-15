@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""Certify the selected G3AP minor by an independent Givaro-map replay."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_incremental_full_submap as incremental
+import build_ust_f1016_native_tools as native_tools
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import certify_ust_g3ap_selected_cayley_target_macaulay_incremental_rank as base
+import run_ust_g3ap_selected_cayley_target_macaulay_full_minor as full_runner
+import run_ust_g3ap_selected_cayley_target_macaulay_minor as shared_runner
+import ust_f1016_sparse_minor as minor
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+THEOREM = ROOT / "UST_G3AP_GIVARO_MAP_PIVOT_REPLAY_CERTIFICATE_LEMMA_v1.md"
+SOURCE = ROOT / "ust_f1016_givaro_map_pivot_replay.cpp"
+BINARY = STATE / "ust_f1016_givaro_map_pivot_replay"
+SELFTEST_MATRIX = STATE / "ust_f1016_givaro_map_pivot_replay.selftest.packed-sms"
+SELFTEST_OUTPUT = STATE / "ust_f1016_givaro_map_pivot_replay.selftest.out"
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def paths(matrix: Path) -> dict[str, Path]:
+    result = base.artifact_paths(matrix)
+    stem = matrix.name[: -len(".packed-sms")]
+    result.update(
+        {
+            "pivot_matrix": STATE / f"{stem}.minor-pivot-order.packed-sms",
+            "pivot_packet": STATE / f"{stem}.minor-pivot-order.packet.json",
+            "replay_log": STATE / f"{stem}.minor-pivot-order.givaro-map-replay.log",
+            "packet": STATE / f"{stem}.rank-witness-givaro-map.packet.json",
+        }
+    )
+    return result
+
+
+def run_wsl(arguments: list[str], timeout: int) -> str:
+    completed = subprocess.run(
+        ["wsl", "-e", *arguments],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    require(completed.returncode == 0, f"Givaro-map execution:\n{completed.stdout[-4000:]}")
+    return completed.stdout
+
+
+def parse_replay(raw: str) -> tuple[int, ...]:
+    matches = re.findall(
+        r"EXACT_F1016_GIVARO_MAP_PIVOT_REPLAY rows=(\d+) columns=(\d+) "
+        r"nonzeros=(\d+) rank=(\d+) determinant_packed=(\d+) "
+        r"reductions=(\d+) coefficient_updates=(\d+) basis_terms=(\d+)",
+        raw,
+    )
+    require(len(matches) == 1, "unique Givaro-map replay result")
+    return tuple(int(value) for value in matches[0])
+
+
+def read_replay(path: Path) -> str:
+    data = path.read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8")
+
+
+def verify_column_permutation(
+    natural_matrix: Path,
+    pivot_matrix: Path,
+    pivot_columns: list[int],
+) -> None:
+    natural_columns = sorted(pivot_columns)
+    with natural_matrix.open("r", encoding="ascii") as natural, pivot_matrix.open(
+        "r", encoding="ascii"
+    ) as pivot:
+        require(natural.readline() == pivot.readline(), "permuted minor header")
+        for index, (natural_line, pivot_line) in enumerate(zip(natural, pivot, strict=True)):
+            natural_row, natural_column, natural_value = natural_line.split()
+            pivot_row, pivot_column, pivot_value = pivot_line.split()
+            require(
+                natural_row == pivot_row
+                and natural_value == pivot_value
+                and natural_columns[int(natural_column) - 1]
+                == pivot_columns[int(pivot_column) - 1],
+                f"column permutation entry {index}",
+            )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--reuse-large-replay", action="store_true")
+    parser.add_argument("--reuse-functional", action="store_true")
+    args = parser.parse_args()
+
+    locator = json.loads(incremental.LATEST.read_text(encoding="ascii"))
+    campaign_path = base.checked(locator["packet"], "incremental campaign")
+    matrix_path = base.checked(locator["matrix"], "incremental matrix")
+    campaign = json.loads(campaign_path.read_text(encoding="ascii"))
+    require(
+        campaign["schema"].endswith("incremental-full-submap.v1")
+        and all(campaign["checks"].values())
+        and not any(campaign["guardrails"].values()),
+        "incremental exact submap",
+    )
+    artifact = paths(matrix_path)
+    extraction = json.loads(artifact["extraction_packet"].read_text(encoding="ascii"))
+    pivot_extraction = json.loads(artifact["pivot_packet"].read_text(encoding="ascii"))
+    require(
+        extraction["minor"]["size"] == TARGET_RANK
+        and pivot_extraction["minor"]["size"] == TARGET_RANK
+        and extraction["minor"]["nonzeros"] == pivot_extraction["minor"]["nonzeros"]
+        and pivot_extraction["minor"]["displayed_target_coordinate_order"] == "pivot"
+        and extraction["minor"]["selected_source_rows_sha256"]
+        == pivot_extraction["minor"]["selected_source_rows_sha256"]
+        and pivot_extraction["inputs"] == extraction["inputs"],
+        "natural and pivot minor extraction binding",
+    )
+
+    custom_scalars, custom_vectors = minor.parse_output(artifact["custom_output"])
+    verify_column_permutation(
+        artifact["minor_matrix"],
+        artifact["pivot_matrix"],
+        custom_vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"],
+    )
+    selected_determinant = int(custom_scalars["MINOR_DETERMINANT_PACKED"])
+    require(
+        minor.determinant(
+            custom_vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"],
+            custom_vectors["PIVOT_COEFFICIENTS_PACKED"],
+        )
+        == selected_determinant
+        != 0,
+        "selected determinant replay",
+    )
+
+    subprocess.run(
+        [sys.executable, str(ROOT / "build_ust_f1016_native_tools.py")],
+        cwd=ROOT,
+        check=True,
+    )
+    require(native_tools.current(), "hash-current native exact engines")
+    field_selftest = full_runner.run_field_selftests()
+    require(BINARY.is_file(), "built Givaro-map replay")
+    selftest_raw = run_wsl(
+        [f"./{base.relative(BINARY)}", base.relative(SELFTEST_MATRIX)], args.timeout
+    )
+    SELFTEST_OUTPUT.write_text(selftest_raw, encoding="utf-8")
+    require(
+        parse_replay(selftest_raw) == (2, 2, 4, 2, 1, 1, 2, 3),
+        "Givaro-map self-test",
+    )
+
+    if args.reuse_large_replay:
+        require(artifact["replay_log"].is_file(), "existing Givaro-map replay")
+        replay_raw = read_replay(artifact["replay_log"])
+    else:
+        replay_raw = run_wsl(
+            [f"./{base.relative(BINARY)}", base.relative(artifact["pivot_matrix"])],
+            args.timeout,
+        )
+        artifact["replay_log"].write_text(replay_raw, encoding="utf-8")
+    replay_shape = parse_replay(replay_raw)
+    require(
+        replay_shape[:5]
+        == (
+            TARGET_RANK,
+            TARGET_RANK,
+            extraction["minor"]["nonzeros"],
+            TARGET_RANK,
+            selected_determinant,
+        )
+        and all(value > 0 for value in replay_shape[5:]),
+        "independent exact Givaro-map minor rank",
+    )
+
+    if args.reuse_functional:
+        require(artifact["functional_output"].is_file(), "existing functional replay")
+        functional_raw = artifact["functional_output"].read_text(encoding="utf-8")
+    else:
+        functional_raw = shared_runner.run_exact(
+            shared_runner.FUNCTIONAL_BINARY,
+            [base.relative(matrix_path), base.relative(artifact["functional"])],
+            artifact["functional_output"],
+            args.timeout,
+        )
+    functional_shape = shared_runner.parse_functional_replay(functional_raw)
+    require(
+        functional_shape
+        == (
+            campaign["matrix"]["rows"],
+            campaign["matrix"]["columns"],
+            campaign["matrix"]["nonzeros"],
+            campaign["matrix"]["rows"],
+            macaulay.EXPECTED_TARGET_COORDINATES,
+        ),
+        "independent incremental functional replay",
+    )
+
+    selected_rows = custom_vectors["SELECTED_SOURCE_ROWS_ZERO_BASED"]
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "incremental-rank-witness.v1"
+        ),
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AP.INCREMENTAL-FULL-MAP-RANK-WITNESS.GIVARO-MAP",
+        "status": (
+            "CLOSED_EXACT_RANK39725_GIVARO_MAP_REPLAY_IN_SELECTED_FULL_MAP_"
+            "SUBSET_NOT_YET_FULL_SOURCE_FUNCTIONAL_REPLAY"
+        ),
+        "inputs": {
+            "native_tools_build": base.record(native_tools.RECEIPT),
+            "incremental_campaign": base.record(campaign_path),
+            "incremental_matrix": base.record(matrix_path),
+            "minor_extraction": base.record(artifact["extraction_packet"]),
+            "selected_minor": base.record(artifact["minor_matrix"]),
+            "pivot_order_extraction": base.record(artifact["pivot_packet"]),
+            "pivot_order_minor": base.record(artifact["pivot_matrix"]),
+            "givaro_map_replay_lemma": base.record(THEOREM),
+        },
+        "engines": {
+            "custom_sparse_column_elimination": {
+                "scheduler": "weighted-free-fast",
+                "source": base.record(shared_runner.WEIGHTED_FREE_FAST_SOURCE),
+                "source_dependencies": [
+                    base.record(shared_runner.CUSTOM_SOURCE),
+                    base.record(shared_runner.GREEDY_SOURCE),
+                    base.record(shared_runner.WEIGHTED_FREE_SOURCE),
+                ],
+                "binary": base.record(shared_runner.WEIGHTED_FREE_FAST_BINARY),
+                "output": base.record(artifact["custom_output"]),
+                "log": base.record(artifact["custom_log"]),
+            },
+            "givaro_map_pivot_replay": {
+                "source": base.record(SOURCE),
+                "binary": base.record(BINARY),
+                "selftest_matrix": base.record(SELFTEST_MATRIX),
+                "selftest_output": base.record(SELFTEST_OUTPUT),
+                "pivot_order_extraction": base.record(artifact["pivot_packet"]),
+                "pivot_order_minor": base.record(artifact["pivot_matrix"]),
+                "output": base.record(artifact["replay_log"]),
+                "rank": replay_shape[3],
+                "determinant_packed": replay_shape[4],
+                "reductions": replay_shape[5],
+                "coefficient_updates": replay_shape[6],
+                "basis_terms": replay_shape[7],
+            },
+            "givaro_incremental_matrix_functional_replay": {
+                "source": base.record(shared_runner.FUNCTIONAL_SOURCE),
+                "binary": base.record(shared_runner.FUNCTIONAL_BINARY),
+                "functional": base.record(artifact["functional"]),
+                "output": base.record(artifact["functional_output"]),
+            },
+        },
+        "field_self_test": field_selftest,
+        "rank": {
+            "ambient_target_coordinates": macaulay.EXPECTED_TARGET_COORDINATES,
+            "selected_minor_size": TARGET_RANK,
+            "independent_givaro_map_rank": TARGET_RANK,
+            "independent_route": "Givaro_basis_map_pivot_replay",
+            "selected_source_rows_zero_based_sha256": hashlib.sha256(
+                json.dumps(selected_rows, separators=(",", ":")).encode("ascii")
+            ).hexdigest(),
+            "quotient_functional": extraction["minor"]["quotient_functional"],
+        },
+        "checks": {
+            "the_incremental_rows_are_an_exact_subset_of_the_full_selected_map": True,
+            "the_custom_engine_emits_a_nonzero_rank39725_minor": True,
+            "the_pivot_determinant_is_independently_recomputed": True,
+            "the_replay_matrix_is_a_pure_column_permutation_of_the_selected_minor": True,
+            "Givaro_supplies_every_inverse_and_multiplication_basis_map": True,
+            "the_source_distinct_replay_emits_39725_nonzero_pivots": True,
+            "the_independent_determinant_equals_the_selected_nonzero_determinant": True,
+            "therefore_the_selected_minor_has_rank39725": True,
+            "independent_Givaro_arithmetic_replays_the_incremental_functional": True,
+            "therefore_the_full_selected_map_has_rank_at_least39725": True,
+        },
+        "guardrails": {
+            "claims_every_incremental_raw_source_stream_is_independently_replayed": False,
+            "claims_the_functional_annihilates_all_92979_rows": False,
+            "claims_the_full_map_rank_is_at_most39725": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Combine this exact lower-rank witness with the selected ordinary-top "
+            "lower theorem, full source certificate, and full functional replay."
+        ),
+    }
+    require(all(packet["checks"].values()), "Givaro-map rank witness checks")
+    artifact["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    base.LATEST.write_text(
+        json.dumps({"packet": base.record(artifact["packet"])}, indent=2) + "\n",
+        encoding="ascii",
+    )
+    print(
+        "G3AP incremental Givaro-map rank witness: PASS "
+        f"minor={TARGET_RANK} determinant={selected_determinant} "
+        "full_functional_replay=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

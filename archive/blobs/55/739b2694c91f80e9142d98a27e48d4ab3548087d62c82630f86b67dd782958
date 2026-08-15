@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Independent checks for the G3BG sparse root and period-shift theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3bg_root_primitive_projection as builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bg_root_primitive_projection.packet.json"
+TEMPLATE = ROOT / "state" / "ust_g3bg_root_transport.template.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bg-root-primitive-projection.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_ROOT_PRIMITIVE_TWO_SPARSE_SOURCE_AND_EXPLICIT_PERIOD_SHIFT_B89_TRANSPORT_AND_READOUT_OPEN",
+        "G3BG packet",
+    )
+    require(all(packet["checks"].values()), "G3BG checks")
+    require(not any(packet["guardrails"].values()), "G3BG guardrails")
+
+    evidence = load(builder.EVIDENCE)
+    require(
+        {name: item["sha256"] for name, item in evidence["source_packets"].items()}
+        == builder.EXPECTED_HASHES,
+        "source packet locks",
+    )
+    require(sha256(builder.G3BB) == builder.EXPECTED_HASHES["UST_G3BB_selected_gamma_target"], "G3BB lock")
+    require(sha256(builder.G3BF) == builder.EXPECTED_HASHES["UST_G3BF_index_four"], "G3BF lock")
+
+    delta = (1, -2)
+    gamma = (0, 1)
+    root = (-1, 2)
+    shift = (-1, -2)
+    require(builder.u_pair(delta, delta) == -4, "delta square")
+    require(builder.u_pair(delta, gamma) == 1, "pairing-one dual")
+    require(root == builder.scale(-1, delta), "root equals minus delta")
+    require(shift == builder.add(root, builder.scale(-4, gamma)), "explicit shift")
+    require(builder.u_pair(delta, root) == 4, "root pairing four")
+    require(builder.u_pair(delta, shift) == 0, "shift in kernel")
+
+    primitive = packet["primitive_projection_theorem"]
+    period = packet["explicit_period_shift_theorem"]
+    require(
+        primitive["local_sparse_coordinates_in_e2_f2_uB"] == [-1, 2]
+        and period["local_sparse_coordinates_in_e2_f2_uB"] == [-1, -2]
+        and "Pi_C(T_Z(k))" in period["readout_identity"],
+        "serialized sparse identities",
+    )
+    template = load(TEMPLATE)
+    require(template["schema"] == "mtt.unified-source.g3bg-root-transport-input.v1", "transport template")
+    require(
+        template["ambient_primitive_input"]["sparse_coordinates"]
+        == {"e2_tensor_uB": -1, "f2_tensor_uB": 2}
+        and template["optional_exact_period_shift_test"]["sparse_coordinates"]
+        == {"e2_tensor_uB": -1, "f2_tensor_uB": -2},
+        "template sparse rows",
+    )
+    require(
+        template["required_output"]["integral_B89_coordinates_or_meridian_word"] == []
+        and template["required_output"]["normalized_readout_248"] == [],
+        "production outputs remain open",
+    )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BG"]["state"]
+        == "closed_exact_root_primitive_two_sparse_input_and_period_shift"
+        and gates["UST.G3BG"]["depends_on"] == ["UST.G3BB", "UST.G3BF"],
+        "G3BG frontier gate",
+    )
+    require(
+        "two-sparse" in frontier["frontier_delta_g3bg"]
+        and "rank-1509" in frontier["frontier_delta_g3bg"]
+        and "(-e2+2f2)" in frontier["next_action"],
+        "G3BG frontier delta",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BG" in document.read_text(encoding="utf-8"), f"G3BG integration {document.name}")
+    theorem_text = (
+        ROOT / "UST_G3BG_ROOT_TUBE_PRIMITIVE_PROJECTION_AND_EXPLICIT_PERIOD_SHIFT_THEOREM_v1.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "does not identify a rank-42 source coordinate with a rank-1509 B89" in theorem_text
+        and "(-e2-2f2) tensor u_B" in theorem_text,
+        "G3BG theorem guardrails",
+    )
+    print("UST.G3BG root primitive projection: PASS sparse root and period shift replay")
+
+
+if __name__ == "__main__":
+    main()

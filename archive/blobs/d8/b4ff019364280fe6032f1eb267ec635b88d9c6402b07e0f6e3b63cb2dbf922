@@ -1,0 +1,827 @@
+#!/usr/bin/env python3
+"""Select a canonical, hash-certified G3AP fiber-two reduction module."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_std_hedge as hmajor
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_hilbert_hedge as hmajor_direct
+import run_ust_g3ap_selected_cayley_fiber2_honly_direct_ltrunc_hedge as honly_direct
+import run_ust_g3ap_selected_cayley_fiber2_honly_ltrunc_hedge as honly
+
+
+ROOT = Path(__file__).resolve().parent
+CANONICAL = ROOT / "state" / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+BASE_NAMES = ("x", "y", "z", "w", "t0", "t1", "t2")
+PHYSICAL_COMPONENTS = ("u2", "uv", "us", "v2", "vs", "s2")
+DEFAULT_TOP_EXPONENT = (0, 0, 0, 12, 0, 0, 4)
+TARGET_RESPONSE_COX_DEGREE = [18, 2, 2]
+TARGET_RESPONSE_H_PLUS_L_DEGREE = 44
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    if not path.is_file() or sha256(path) != record["sha256"]:
+        raise AssertionError(f"{label} hash")
+    return path
+
+
+def scalar_monomial(exponent: list[int] | tuple[int, ...]) -> str:
+    if len(exponent) != len(BASE_NAMES) or any(int(value) < 0 for value in exponent):
+        raise AssertionError("fiber-two scalar monomial exponent")
+    factors: list[str] = []
+    for name, value in zip(BASE_NAMES, exponent):
+        power = int(value)
+        if power == 1:
+            factors.append(name)
+        elif power > 1:
+            factors.append(f"{name}^{power}")
+    return "*".join(factors) or "1"
+
+
+def fiber2_coordinates_from_canonical(canonical: dict) -> dict[str, object]:
+    """Extract and validate physical-to-module coordinates from a G3AP packet."""
+    if (
+        canonical.get("schema")
+        != "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1"
+        or canonical.get("status")
+        != "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE"
+        or not all(canonical.get("checks", {}).values())
+        or any(canonical.get("guardrails", {}).values())
+    ):
+        raise AssertionError("canonical G3AP coordinate source is not closed")
+
+    permutation = canonical.get("leading_ideal", {}).get("permutation")
+    if permutation is None:
+        order = list(range(1, 7))
+        old_to_new = {value: value for value in order}
+        new_to_old = dict(old_to_new)
+        label = "identity"
+    else:
+        order = [int(value) for value in permutation["old_components_in_new_position_order"]]
+        old_to_new = {
+            int(key): int(value) for key, value in permutation["old_to_new"].items()
+        }
+        new_to_old = {
+            int(key): int(value) for key, value in permutation["new_to_old"].items()
+        }
+        label = str(permutation["label"])
+    if (
+        sorted(order) != list(range(1, 7))
+        or old_to_new != {old: new for new, old in enumerate(order, start=1)}
+        or new_to_old != {new: old for old, new in old_to_new.items()}
+    ):
+        raise AssertionError("canonical G3AP component permutation")
+
+    top = canonical["ordinary_top_piece"]
+    if "basis_base_exponent" in top:
+        exponent = [int(value) for value in top["basis_base_exponent"]]
+        normalization_old = int(top.get("basis_old_component", 6))
+    else:
+        if top.get("basis") != ["w^12*t2^4*s^2"]:
+            raise AssertionError("legacy canonical G3AP top basis")
+        exponent = list(DEFAULT_TOP_EXPONENT)
+        normalization_old = 6
+    if len(exponent) != 7 or not 1 <= normalization_old <= 6:
+        raise AssertionError("canonical G3AP normalization basis")
+    normalization_new = old_to_new[normalization_old]
+    if (
+        "basis_new_component" in top
+        and int(top["basis_new_component"]) != normalization_new
+    ):
+        raise AssertionError("canonical G3AP normalization component map")
+
+    initial_old = 2
+    return {
+        "permutation_label": label,
+        "old_components_in_module_position_order": order,
+        "old_to_module_position": [old_to_new[value] for value in range(1, 7)],
+        "module_position_to_old": [new_to_old[value] for value in range(1, 7)],
+        "physical_components_in_old_order": list(PHYSICAL_COMPONENTS),
+        "initial_physical_component": PHYSICAL_COMPONENTS[initial_old - 1],
+        "initial_old_component": initial_old,
+        "initial_module_position": old_to_new[initial_old],
+        "normalization_physical_component": PHYSICAL_COMPONENTS[
+            normalization_old - 1
+        ],
+        "normalization_old_component": normalization_old,
+        "normalization_module_position": normalization_new,
+        "normalization_base_exponent": exponent,
+        "normalization_scalar_monomial": scalar_monomial(exponent),
+    }
+
+
+def selected_fiber2_coordinates() -> dict[str, object]:
+    """Return physical-to-module coordinates bound by the canonical G3AP packet."""
+    if not CANONICAL.is_file():
+        raise AssertionError("canonical G3AP certificate is absent")
+    canonical = json.loads(CANONICAL.read_text(encoding="ascii"))
+    return fiber2_coordinates_from_canonical(canonical)
+
+
+def _selected_fiber2_reduction() -> dict[str, object]:
+    if not CANONICAL.is_file():
+        raise AssertionError("canonical G3AP certificate is absent")
+    canonical = json.loads(CANONICAL.read_text(encoding="ascii"))
+    if (
+        canonical.get("schema")
+        != "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1"
+        or canonical.get("status")
+        != "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE"
+        or not all(canonical.get("checks", {}).values())
+        or any(canonical.get("guardrails", {}).values())
+    ):
+        raise AssertionError("canonical G3AP certificate is not closed at its declared tier")
+    certificate = {
+        "path": str(CANONICAL.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(CANONICAL),
+    }
+    if "target_macaulay_rank_squeeze_certified_top" in canonical["inputs"]:
+        source_record = canonical["inputs"][
+            "target_macaulay_rank_squeeze_certified_top"
+        ]
+        source_path = checked(source_record, "target Macaulay rank-squeeze packet")
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            not in (
+                "mtt.unified-source.g3ap-selected-cayley-target-macaulay-certified.v1",
+                "mtt.unified-source.g3ap-selected-cayley-target-macaulay-full-certified.v1",
+            )
+            or source.get("status")
+            not in (
+                "CLOSED_EXACT_SELECTED_F1016_TARGET_MACAULAY_RANK_SQUEEZE_TOP_DIMENSION_ONE",
+                "CLOSED_EXACT_SELECTED_F1016_FULL_SOURCE_ORDINARY_TOP_DIMENSION_ONE",
+            )
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("target Macaulay rank-squeeze source is not closed")
+        base_record = source["base_quotient"]["cache"]
+        functional_record = source["quotient_functional"]["artifact"]
+        base_cache = checked(base_record, "target Macaulay certified base cache")
+        quotient_functional = checked(
+            functional_record, "target Macaulay quotient functional"
+        )
+        if (
+            source["target_relation_map"].get("coordinates") != 39726
+            or source["target_relation_map"].get("exact_rank") != 39725
+            or source["ordinary_top_piece"].get("dimension") != 1
+            or source["quotient_functional"].get(
+                "annihilates_every_campaign_relation_row"
+            )
+            is not True
+        ):
+            raise AssertionError("target Macaulay quotient-functional scope")
+        return {
+            "kind": "fiber2_exact_target_quotient_functional_over_B_mod_K_E_C_at_Cox_18_2_2",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": None,
+            "module_cache_record": None,
+            "quotient_functional": quotient_functional,
+            "quotient_functional_record": functional_record,
+            "base_coordinate_packet_record": source["inputs"][
+                "base_coordinate_packet"
+            ],
+            "certificate": certificate,
+            "source_certificate": source_record,
+            "valid_through_scalar_degree": None,
+            "maximum_target_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+            "ring_declaration": weighted.WEIGHTED_MODULE_RING,
+            "Cox_functional": "(H,L)",
+            "coverage": {
+                "kind": "exact_Cox_target",
+                "Cox_degree": TARGET_RESPONSE_COX_DEGREE,
+                "H_plus_L_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+                "base_quotient_target_coordinates": 39726,
+                "exact_quotient_rank": 1,
+                "functional_replay_is_proof_premise": True,
+            },
+            "is_full_standard_basis": False,
+        }
+    if "fiber2_hmajor_direct_ltrunc_leading_squeeze_certified_top" in canonical["inputs"]:
+        source_record = canonical["inputs"][
+            "fiber2_hmajor_direct_ltrunc_leading_squeeze_certified_top"
+        ]
+        source_path = checked(
+            source_record,
+            "fiber2 direct H-major/L-truncated leading-squeeze packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-leading-squeeze-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_HMAJOR_DIRECT_LTRUNC_LEADING_SQUEEZE_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 direct H-major/L-truncated source is not closed")
+        permutation = canonical.get("leading_ideal", {}).get("permutation")
+        if permutation is None or source.get("permutation") != permutation:
+            raise AssertionError("fiber2 direct H-major/L-truncated coordinate binding")
+        candidate_engine = canonical["leading_ideal"].get("candidate_engine")
+        if (
+            candidate_engine not in ("hilbert", "sba", "sba_warm_hilbert")
+            or source.get("candidate_engine") != candidate_engine
+        ):
+            raise AssertionError("fiber2 direct H-major/L-truncated engine binding")
+        module_record = source["execution"]["certified_module_cache"]
+        module_cache = checked(module_record, "fiber2 direct H-major certified module cache")
+        regrading = source.get("regrading", {})
+        truncation = source.get("truncation", {})
+        if (
+            source["execution"].get("original_module_generator_count") != 39
+            or module_record.get("computational_scalar_bound")
+            != hmajor_direct.TARGET_SCALAR_DEGREE
+            or module_record["valid_for_Cox_degree"] != TARGET_RESPONSE_COX_DEGREE
+            or module_record["is_full_standard_basis"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+            or regrading.get("Cox_functional") != "9H+L"
+            or truncation.get("target_Cox_piece_of_boundary_submodule_is_zero")
+            is not True
+        ):
+            raise AssertionError("fiber2 direct H-major/L-truncated cache scope")
+        return {
+            "kind": "fiber2_target_reduction_set_in_polynomial_module_Hmajor_9HplusL_at_Cox_18_2_2",
+            "base_cache": None,
+            "base_cache_record": None,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": source_record,
+            "valid_through_scalar_degree": None,
+            "maximum_target_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+            "ring_declaration": hmajor_direct.MODULE_RING,
+            "Cox_functional": "9H+L",
+            "coverage": {
+                "kind": "exact_Cox_target",
+                "Cox_degree": TARGET_RESPONSE_COX_DEGREE,
+                "H_plus_L_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+                "computational_Cox_functional": "9H+L",
+                "computational_scalar_degree": hmajor_direct.TARGET_SCALAR_DEGREE,
+                "Hilbert_hint_is_proof_premise": False,
+            },
+            "candidate_engine": candidate_engine,
+            "permutation": permutation,
+            "is_full_standard_basis": False,
+        }
+    if "fiber2_honly_direct_ltrunc_leading_squeeze_certified_top" in canonical["inputs"]:
+        source_record = canonical["inputs"][
+            "fiber2_honly_direct_ltrunc_leading_squeeze_certified_top"
+        ]
+        source_path = checked(
+            source_record,
+            "fiber2 direct H-only/L-truncated leading-squeeze packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-honly-direct-ltrunc-leading-squeeze-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_HONLY_DIRECT_LTRUNC_LEADING_SQUEEZE_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 direct H-only/L-truncated source is not closed")
+        permutation = canonical.get("leading_ideal", {}).get("permutation")
+        if permutation is None or source.get("permutation") != permutation:
+            raise AssertionError("fiber2 direct H-only/L-truncated coordinate binding")
+        candidate_engine = canonical["leading_ideal"].get("candidate_engine")
+        if (
+            candidate_engine not in honly_direct.ENGINES
+            or source.get("candidate_engine") != candidate_engine
+        ):
+            raise AssertionError("fiber2 direct H-only/L-truncated engine binding")
+        module_record = source["execution"]["certified_module_cache"]
+        module_cache = checked(module_record, "fiber2 direct H-only certified module cache")
+        order = source.get("computational_order", {})
+        truncation = source.get("truncation", {})
+        if (
+            source["execution"].get("original_module_generator_count") != 39
+            or module_record["valid_through_computational_H_degree"]
+            != honly_direct.TARGET_H_DEGREE
+            or module_record["valid_for_Cox_degree"] != TARGET_RESPONSE_COX_DEGREE
+            or module_record["is_full_standard_basis"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+            or order.get("H_weights_with_zero_L") != list(honly.BASE_WEIGHTS)
+            or order.get("zero_L_weights_are_acceleration_only") is not True
+            or truncation.get("target_Cox_piece_of_boundary_submodule_is_zero")
+            is not True
+        ):
+            raise AssertionError("fiber2 direct H-only/L-truncated cache scope")
+        return {
+            "kind": "fiber2_target_reduction_set_in_polynomial_module_Honly_at_Cox_18_2_2",
+            "base_cache": None,
+            "base_cache_record": None,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": source_record,
+            "valid_through_scalar_degree": None,
+            "maximum_target_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+            "ring_declaration": honly_direct.DIRECT_MODULE_RING,
+            "Cox_functional": "(H,L)",
+            "coverage": {
+                "kind": "exact_Cox_target",
+                "Cox_degree": TARGET_RESPONSE_COX_DEGREE,
+                "H_plus_L_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+                "computational_H_degree": honly_direct.TARGET_H_DEGREE,
+                "zero_L_weights_are_proof_premise": False,
+            },
+            "candidate_engine": candidate_engine,
+            "permutation": permutation,
+            "is_full_standard_basis": False,
+        }
+    if "fiber2_honly_ltrunc_leading_squeeze_certified_top" in canonical["inputs"]:
+        source_record = canonical["inputs"][
+            "fiber2_honly_ltrunc_leading_squeeze_certified_top"
+        ]
+        source_path = checked(
+            source_record,
+            "fiber2 H-only/L-truncated leading-squeeze packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-honly-ltrunc-leading-squeeze-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_HONLY_LTRUNC_LEADING_SQUEEZE_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 H-only/L-truncated source is not closed")
+        permutation = canonical.get("leading_ideal", {}).get("permutation")
+        if permutation is None or source.get("permutation") != permutation:
+            raise AssertionError("fiber2 H-only/L-truncated coordinate binding")
+        candidate_engine = canonical["leading_ideal"].get("candidate_engine")
+        if (
+            candidate_engine not in honly.ENGINES
+            or source.get("candidate_engine") != candidate_engine
+        ):
+            raise AssertionError("fiber2 H-only/L-truncated engine binding")
+        base_record = source["execution"]["certified_base_cache"]
+        module_record = source["execution"]["certified_module_cache"]
+        base_cache = checked(base_record, "fiber2 H-only certified base cache")
+        module_cache = checked(module_record, "fiber2 H-only certified module cache")
+        order = source.get("computational_order", {})
+        truncation = source.get("truncation", {})
+        if (
+            module_record["valid_through_computational_H_degree"]
+            != honly.TARGET_H_DEGREE
+            or module_record["valid_for_Cox_degree"] != TARGET_RESPONSE_COX_DEGREE
+            or module_record["is_full_standard_basis"] is not False
+            or base_record["isSB_trust_attribute_stored"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+            or order.get("H_weights_with_zero_L") != list(honly.BASE_WEIGHTS)
+            or order.get("zero_L_weights_are_acceleration_only") is not True
+            or truncation.get("target_Cox_piece_of_boundary_submodule_is_zero")
+            is not True
+        ):
+            raise AssertionError("fiber2 H-only/L-truncated cache scope")
+        return {
+            "kind": "fiber2_target_reduction_set_over_B_mod_K_E_C_Honly_at_Cox_18_2_2",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": source_record,
+            "valid_through_scalar_degree": None,
+            "maximum_target_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+            "ring_declaration": honly.HONLY_MODULE_RING,
+            "Cox_functional": "(H,L)",
+            "coverage": {
+                "kind": "exact_Cox_target",
+                "Cox_degree": TARGET_RESPONSE_COX_DEGREE,
+                "H_plus_L_scalar_degree": TARGET_RESPONSE_H_PLUS_L_DEGREE,
+                "computational_H_degree": honly.TARGET_H_DEGREE,
+                "zero_L_weights_are_proof_premise": False,
+            },
+            "candidate_engine": candidate_engine,
+            "permutation": permutation,
+            "is_full_standard_basis": False,
+        }
+    if "fiber2_hmajor_ltrunc_leading_squeeze_certified_top" in canonical["inputs"]:
+        source_record = canonical["inputs"][
+            "fiber2_hmajor_ltrunc_leading_squeeze_certified_top"
+        ]
+        source_path = checked(
+            source_record,
+            "fiber2 H-major/L-truncated leading-squeeze packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-ltrunc-leading-squeeze-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_HMAJOR_LTRUNC_LEADING_SQUEEZE_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 H-major/L-truncated source is not closed")
+        permutation = canonical.get("leading_ideal", {}).get("permutation")
+        if permutation is None or source.get("permutation") != permutation:
+            raise AssertionError("fiber2 H-major/L-truncated coordinate binding")
+        candidate_engine = canonical["leading_ideal"].get("candidate_engine")
+        if (
+            candidate_engine not in hmajor.ENGINES
+            or source.get("candidate_engine") != candidate_engine
+        ):
+            raise AssertionError("fiber2 H-major/L-truncated engine binding")
+        base_record = source["execution"]["certified_base_cache"]
+        module_record = source["execution"]["certified_module_cache"]
+        base_cache = checked(base_record, "fiber2 H-major certified base cache")
+        module_cache = checked(module_record, "fiber2 H-major certified module cache")
+        if (
+            module_record["valid_through_weighted_scalar_degree"]
+            != hmajor.TARGET_SCALAR_DEGREE
+            or module_record["valid_for_Cox_degree"] != [18, 2, 2]
+            or module_record["is_full_standard_basis"] is not False
+            or base_record["isSB_trust_attribute_stored"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+            or source.get("regrading", {}).get("Cox_functional") != "9H+L"
+        ):
+            raise AssertionError("fiber2 H-major/L-truncated cache scope")
+        return {
+            "kind": "fiber2_target_reduction_set_over_B_mod_K_E_C_Hmajor_9HplusL_at_degree_328",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": source_record,
+            "valid_through_scalar_degree": hmajor.TARGET_SCALAR_DEGREE,
+            "maximum_target_scalar_degree": hmajor.TARGET_SCALAR_DEGREE,
+            "ring_declaration": hmajor.HMAJOR_MODULE_RING,
+            "Cox_functional": "9H+L",
+            "candidate_engine": candidate_engine,
+            "permutation": permutation,
+            "is_full_standard_basis": False,
+        }
+    if "fiber2_qring_weighted_leading_squeeze_certified_top" in canonical["inputs"]:
+        source_path = checked(
+            canonical["inputs"][
+                "fiber2_qring_weighted_leading_squeeze_certified_top"
+            ],
+            "fiber2 weighted quotient-ring leading-squeeze packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-weighted-leading-squeeze-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_QRING_WEIGHTED_LEADING_SQUEEZE_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError(
+                "fiber2 weighted quotient-ring leading-squeeze source is not closed"
+            )
+        base_record = source["execution"]["certified_base_cache"]
+        module_record = source["execution"]["certified_module_cache"]
+        base_cache = checked(base_record, "fiber2 weighted certified base cache")
+        module_cache = checked(
+            module_record, "fiber2 weighted certified quotient module cache"
+        )
+        if (
+            module_record["valid_through_weighted_scalar_degree"]
+            != weighted.TARGET_SCALAR_DEGREE
+            or module_record["valid_for_Cox_degree"] != [18, 2, 2]
+            or module_record["is_full_standard_basis"] is not False
+            or base_record["isSB_trust_attribute_stored"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+            or source.get("grading", {}).get("Cox_functional") != "5H+18L"
+        ):
+            raise AssertionError(
+                "fiber2 weighted quotient-ring leading-squeeze cache scope"
+            )
+        return {
+            "kind": "fiber2_target_reduction_set_over_B_mod_K_E_C_weighted_5H18L_at_degree_254",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": canonical["inputs"][
+                "fiber2_qring_weighted_leading_squeeze_certified_top"
+            ],
+            "valid_through_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "maximum_target_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "ring_declaration": weighted.WEIGHTED_MODULE_RING,
+            "Cox_functional": "5H+18L",
+            "is_full_standard_basis": False,
+        }
+    if "fiber2_weighted_permuted_leading_squeeze_certified_top" in canonical["inputs"]:
+        source_record = canonical["inputs"][
+            "fiber2_weighted_permuted_leading_squeeze_certified_top"
+        ]
+        source_path = checked(
+            source_record,
+            "fiber2 weighted permuted leading-squeeze packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        candidate_engine = source.get("candidate_engine", "hilbert")
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-permuted-leading-squeeze-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_WEIGHTED_PERMUTED_LEADING_SQUEEZE_TOP_DIMENSION_ONE"
+            or candidate_engine not in ("hilbert", "qslimgb", "std")
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError(
+                "fiber2 weighted permuted leading-squeeze source is not closed"
+            )
+        permutation = canonical.get("leading_ideal", {}).get("permutation")
+        if permutation is None or source.get("permutation") != permutation:
+            raise AssertionError(
+                "fiber2 weighted permuted leading-squeeze coordinate binding"
+            )
+        if canonical["leading_ideal"].get(
+            "candidate_engine", "hilbert"
+        ) != candidate_engine:
+            raise AssertionError(
+                "fiber2 weighted permuted leading-squeeze engine binding"
+            )
+        base_record = source["execution"]["certified_base_cache"]
+        module_record = source["execution"]["certified_module_cache"]
+        base_cache = checked(base_record, "fiber2 permuted certified base cache")
+        module_cache = checked(
+            module_record, "fiber2 permuted certified quotient module cache"
+        )
+        if (
+            module_record["valid_through_weighted_scalar_degree"]
+            != weighted.TARGET_SCALAR_DEGREE
+            or module_record["valid_for_Cox_degree"] != [18, 2, 2]
+            or module_record["is_full_standard_basis"] is not False
+            or base_record["isSB_trust_attribute_stored"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+        ):
+            raise AssertionError(
+                "fiber2 weighted permuted leading-squeeze cache scope"
+            )
+        return {
+            "kind": "fiber2_target_reduction_set_over_B_mod_K_E_C_weighted_5H18L_at_degree_254",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": source_record,
+            "valid_through_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "maximum_target_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "ring_declaration": weighted.WEIGHTED_MODULE_RING,
+            "Cox_functional": "5H+18L",
+            "candidate_engine": candidate_engine,
+            "permutation": permutation,
+            "is_full_standard_basis": False,
+        }
+    if "fiber2_qring_hilbert_certified_top" in canonical["inputs"]:
+        source_path = checked(
+            canonical["inputs"]["fiber2_qring_hilbert_certified_top"],
+            "fiber2 quotient-ring Hilbert-certified packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-hilbert-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_QRING_HILBERT_CERTIFIED_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 quotient-ring Hilbert-certified source is not closed")
+        base_record = source["execution"]["certified_base_cache"]
+        module_record = source["execution"]["certified_module_cache"]
+        base_cache = checked(base_record, "fiber2 certified base cache")
+        module_cache = checked(module_record, "fiber2 certified quotient module cache")
+        if (
+            module_record["valid_through_base_scalar_degree"] != 44
+            or base_record["isSB_trust_attribute_stored"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+        ):
+            raise AssertionError("fiber2 quotient-ring Hilbert-certified cache scope")
+        return {
+            "kind": "fiber2_module_over_B_mod_K_E_C_through_degree_44",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": canonical["inputs"][
+                "fiber2_qring_hilbert_certified_top"
+            ],
+            "valid_through_scalar_degree": 44,
+        }
+    if "fiber2_hilbert_certified_top" in canonical["inputs"]:
+        source_path = checked(
+            canonical["inputs"]["fiber2_hilbert_certified_top"],
+            "fiber2 Hilbert-certified packet",
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-hilbert-certified-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_HILBERT_CERTIFIED_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 Hilbert-certified source is not closed")
+        module_record = source["execution"]["certified_cache"]
+        module_cache = checked(module_record, "fiber2 Hilbert-certified module cache")
+        if (
+            module_record["valid_through_total_scalar_degree"] != 44
+            or module_record["isSB_trust_attribute_stored"] is not False
+        ):
+            raise AssertionError("fiber2 Hilbert-certified cache scope")
+        return {
+            "kind": "fiber2_polynomial_module_through_degree_44",
+            "base_cache": None,
+            "base_cache_record": None,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": canonical["inputs"]["fiber2_hilbert_certified_top"],
+            "valid_through_scalar_degree": 44,
+        }
+    if "fiber2_qslimgb_top" in canonical["inputs"]:
+        source_path = checked(
+            canonical["inputs"]["fiber2_qslimgb_top"], "fiber2 qslimgb packet"
+        )
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-qslimgb-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_QSLIMGB_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 qslimgb source is not closed")
+        base_record = source["inputs"]["base_cache"]
+        module_record = source["execution"]["bounded_module_cache"]
+        base_cache = checked(base_record, "fiber2 qslimgb base cache")
+        module_cache = checked(module_record, "fiber2 qslimgb module cache")
+        if (
+            module_record["valid_through_base_scalar_degree"] != 44
+            or base_record["isSB_trust_attribute_stored"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+        ):
+            raise AssertionError("fiber2 qslimgb cache scope")
+        return {
+            "kind": "fiber2_module_over_B_mod_K_E_C_through_degree_44",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": canonical["inputs"]["fiber2_qslimgb_top"],
+            "valid_through_scalar_degree": 44,
+        }
+    if "fiber2_qring_top" in canonical["inputs"]:
+        source_path = checked(canonical["inputs"]["fiber2_qring_top"], "fiber2 qring packet")
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_QRING_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 qring source is not closed")
+        base_record = source["execution"]["base_cache"]
+        module_record = source["execution"]["bounded_module_cache"]
+        base_cache = checked(base_record, "fiber2 base cache")
+        module_cache = checked(module_record, "fiber2 quotient module cache")
+        if (
+            module_record["valid_through_base_scalar_degree"] != 44
+            or base_record["isSB_trust_attribute_stored"] is not False
+            or module_record["isSB_trust_attribute_stored"] is not False
+        ):
+            raise AssertionError("fiber2 qring cache scope")
+        return {
+            "kind": "fiber2_module_over_B_mod_K_E_C_through_degree_44",
+            "base_cache": base_cache,
+            "base_cache_record": base_record,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": canonical["inputs"]["fiber2_qring_top"],
+            "valid_through_scalar_degree": 44,
+        }
+    if "fiber2_module_top" in canonical["inputs"]:
+        source_path = checked(canonical["inputs"]["fiber2_module_top"], "fiber2 module packet")
+        source = json.loads(source_path.read_text(encoding="ascii"))
+        if (
+            source.get("schema")
+            != "mtt.unified-source.g3ap-selected-cayley-fiber2-module-top.v1"
+            or source.get("status")
+            != "CLOSED_EXACT_SELECTED_F1016_FIBER2_MODULE_TOP_DIMENSION_ONE"
+            or not all(source.get("checks", {}).values())
+            or any(source.get("guardrails", {}).values())
+        ):
+            raise AssertionError("fiber2 module source is not closed")
+        module_record = source["execution"]["bounded_module_cache"]
+        module_cache = checked(module_record, "fiber2 module cache")
+        if (
+            module_record["valid_through_total_scalar_degree"] != 44
+            or module_record["isSB_trust_attribute_stored"] is not False
+        ):
+            raise AssertionError("fiber2 module cache scope")
+        return {
+            "kind": "fiber2_polynomial_module_through_degree_44",
+            "base_cache": None,
+            "base_cache_record": None,
+            "module_cache": module_cache,
+            "module_cache_record": module_record,
+            "certificate": certificate,
+            "source_certificate": canonical["inputs"]["fiber2_module_top"],
+            "valid_through_scalar_degree": 44,
+        }
+    raise AssertionError("canonical G3AP packet has no fiber-two reduction source")
+
+
+def selected_fiber2_reduction() -> dict[str, object]:
+    reduction = _selected_fiber2_reduction()
+    if "coverage" not in reduction:
+        reduction["coverage"] = {
+            "kind": "scalar_prefix",
+            "Cox_functional": reduction.get("Cox_functional", "H+L"),
+            "valid_through_scalar_degree": reduction["valid_through_scalar_degree"],
+        }
+    reduction["fiber_coordinates"] = selected_fiber2_coordinates()
+    return reduction
+
+
+def require_response_target_coverage(reduction: dict[str, object]) -> None:
+    """Reject a cache that does not cover every G3AM/G3AN target product."""
+    coverage = reduction["coverage"]
+    if coverage["kind"] == "scalar_prefix":
+        if int(coverage["valid_through_scalar_degree"]) < int(
+            reduction.get(
+                "maximum_target_scalar_degree",
+                TARGET_RESPONSE_H_PLUS_L_DEGREE,
+            )
+        ):
+            raise AssertionError("reduction scalar prefix misses response target")
+        return
+    if (
+        coverage.get("kind") != "exact_Cox_target"
+        or coverage.get("Cox_degree") != TARGET_RESPONSE_COX_DEGREE
+        or coverage.get("H_plus_L_scalar_degree")
+        != TARGET_RESPONSE_H_PLUS_L_DEGREE
+    ):
+        raise AssertionError("reduction exact Cox target scope")
+    honly_scope = {
+        "computational_H_degree": honly.TARGET_H_DEGREE,
+        "zero_L_weights_are_proof_premise": False,
+    }
+    hmajor_direct_scope = {
+        "computational_Cox_functional": "9H+L",
+        "computational_scalar_degree": hmajor_direct.TARGET_SCALAR_DEGREE,
+        "Hilbert_hint_is_proof_premise": False,
+    }
+    functional_scope = {
+        "base_quotient_target_coordinates": 39726,
+        "exact_quotient_rank": 1,
+        "functional_replay_is_proof_premise": True,
+    }
+    detail = {
+        key: value
+        for key, value in coverage.items()
+        if key not in ("kind", "Cox_degree", "H_plus_L_scalar_degree")
+    }
+    if detail not in (honly_scope, hmajor_direct_scope, functional_scope):
+        raise AssertionError("reduction exact Cox target execution scope")
+
+
+def response_reduction_basis(reduction: dict[str, object]) -> dict[str, object]:
+    """Return the canonical packet record for a response reduction cache."""
+    require_response_target_coverage(reduction)
+    return {
+        "kind": reduction["kind"],
+        "coverage": reduction["coverage"],
+        "valid_through_scalar_degree": reduction["valid_through_scalar_degree"],
+        "maximum_reduced_scalar_degree": int(
+            reduction.get(
+                "maximum_target_scalar_degree",
+                TARGET_RESPONSE_H_PLUS_L_DEGREE,
+            )
+        ),
+        "Cox_functional": reduction.get("Cox_functional", "H+L"),
+        "is_full_standard_basis": reduction.get("is_full_standard_basis", True),
+        "component_coordinates": reduction["fiber_coordinates"],
+    }

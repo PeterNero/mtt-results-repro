@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Independent checks for the G3BB selected transgression target."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from math import gcd
+from pathlib import Path
+
+import build_ust_g3bb_selected_gamma_unit_defect_target as builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bb_selected_gamma_unit_defect_target.packet.json"
+TEMPLATE = ROOT / "state" / "ust_g3bb_selected_gamma_transgression.template.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = load(PACKET)
+    template = load(TEMPLATE)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bb-selected-gamma-unit-defect-target.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_SELECTED_PAIRING_ONE_TRANSGRESSION_TARGET_COORDINATES_OPEN",
+        "G3BB packet",
+    )
+    require(all(packet["checks"].values()), "G3BB checks")
+    require(not any(packet["guardrails"].values()), "G3BB guardrails")
+    for name, path in (
+        ("B87", builder.B87),
+        ("selected_gamma", builder.SELECTED),
+        ("gamma_product", builder.PRODUCT),
+    ):
+        require(
+            sha256(path) == builder.EXPECTED_HASHES[name]
+            and packet["inputs"][name]["sha256"] == builder.EXPECTED_HASHES[name],
+            f"{name} evidence lock",
+        )
+
+    selected = load(builder.SELECTED)
+    product = load(builder.PRODUCT)
+    b87 = load(builder.B87)
+    require(all(selected["checks"].values()) and all(product["checks"].values()) and all(b87["checks"].values()), "source checks")
+    support = selected["selected_chain"]["support"]
+    require(support == builder.EXPECTED_SUPPORT == product["ambient_product_chain"]["support"], "same selected support")
+    coefficients = [row["coefficient"] for row in support]
+    require(coefficients == [-1, 1, -1, 1] and gcd(*map(abs, coefficients)) == 1, "primitive coefficients")
+    require(product["K3_chain"]["boundary_in_fibre_H1"] == [0, 0, 0, 0], "closed K3 chain")
+    pairing = product["pairing_certificate"]
+    require(pairing["delta_dot_gamma"] * pairing["u_A_dot_u_B"] == pairing["product_pairing"] == 1, "pairing replay")
+    require(
+        product["compact_dual_consequence"]["finite_integral_eta9_tube_combination_exists"]
+        and product["compact_dual_consequence"]["selected_transgression_index"] == 1,
+        "finite index-one transgression",
+    )
+    require(packet["selected_target"]["forced_relation_defect"] == 1, "forced unit defect")
+    require("G3BA" not in packet["inputs"], "G3BB is independent of G3BA execution")
+    require(
+        template["status"] == "TEMPLATE_NOT_AN_EXECUTED_TRANSGRESSION"
+        and not any(template["acceptance"].values())
+        and template["required_output"]["relation_defect"]
+        == "MUST_EQUAL_1_WITH_SELECTED_ORIENTATION",
+        "strict execution template",
+    )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BB"]["state"]
+        == "closed_exact_selected_gamma_pairing_one_transgression_target_coordinates_open"
+        and gates["UST.G3BB"]["depends_on"] == ["B.ETA9.01"],
+        "G3BB frontier gate",
+    )
+    require(
+        "Z_phys" in frontier["frontier_delta_g3bb"]
+        and "unit" in frontier["frontier_delta_g3bb"]
+        and "G3BB-selected Z_phys" in frontier["next_action"]
+        and "G3BC" in frontier["next_action"],
+        "G3BB frontier",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BB" in document.read_text(encoding="utf-8"), f"G3BB integration {document.name}")
+    print("UST.G3BB selected gamma target: PASS pairing-one transgression fixed, coordinate execution open")
+
+
+if __name__ == "__main__":
+    main()

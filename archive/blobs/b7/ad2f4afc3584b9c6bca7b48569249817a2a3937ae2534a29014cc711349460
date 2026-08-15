@@ -1,0 +1,100 @@
+# UST.G3AP Target-Macaulay Subcampaign Lemma
+
+## Status
+
+`CLOSED_EXACT_LINEAR_ALGEBRA_REDUCTION_NOT_G3AP_NUMERICAL_CLOSURE`
+
+This lemma proves that a certified subset of the deterministic relation
+schedule is sufficient for the G3AP upper bound if its exact rank is 39,725.
+It does not assert that the current campaign has attained that rank.
+
+## Setup
+
+Let `T` be the selected target coordinate space over `F_101^6`, with
+
+```text
+dim(T) = 39,726.
+```
+
+Let `r_1,...,r_N` be selected-source relation rows in `T`, and write
+
+```text
+R_full = span(r_1,...,r_N).
+```
+
+For any subset `S` of row labels, define
+
+```text
+R_S = span(r_i : i in S).
+```
+
+Every accepted row must be reconstructed from the selected source and replayed
+from a complete raw Singular transcript. Missing schedule positions are zero
+rows in the sparse computational carrier; they are not asserted to be source
+relations and do not contribute to `R_S`.
+
+## Lemma
+
+If an exact certificate proves
+
+```text
+rank(R_S) = 39,725,
+```
+
+then
+
+```text
+dim(T / R_full) <= 1.
+```
+
+If, independently, `UST.G3AP.LOWER` proves
+
+```text
+dim(T / R_full) >= 1,
+```
+
+then
+
+```text
+dim(T / R_full) = 1.
+```
+
+## Proof
+
+Because every row indexed by `S` is one of the selected-source relations,
+`R_S` is a subspace of `R_full`. Therefore
+
+```text
+dim(R_full) >= dim(R_S) = 39,725.
+```
+
+Since `dim(T)=39,726`, rank-nullity for the quotient gives
+
+```text
+dim(T / R_full)
+  = dim(T) - dim(R_full)
+  <= 39,726 - 39,725
+  = 1.
+```
+
+The independent lower bound then squeezes the quotient dimension to one.
+Neither contiguity of the row labels nor execution of relations outside `S`
+appears in the argument. Explicit zero-padding only preserves the global row
+numbering used by the sparse engines and leaves `R_S` unchanged. QED.
+
+## Certification Consequences
+
+The numerical promotion remains fail-closed. It requires all of the following:
+
+1. at least 39,725 complete, disjoint selected-source row packets;
+2. source-script reconstruction for every packet;
+3. raw-term replay against the normalized packed triples using a coefficient
+   parser independent of the exporter packer;
+4. an emitted nonzero 39,725-minor over the selected `F_101^6` field;
+5. independent LinBox/Givaro rank replay of that minor;
+6. independent replay of the normalized quotient functional on the whole
+   sparse subcampaign carrier;
+7. the independent `UST.G3AP.LOWER` theorem.
+
+The lemma permits less computation. It does not permit sampled ranks,
+interrupted rows, probabilistic certificates or promotion from process exit.

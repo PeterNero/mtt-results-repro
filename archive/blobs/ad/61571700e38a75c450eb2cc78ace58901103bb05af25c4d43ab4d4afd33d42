@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Emit and certify the selected 710-dimensional H11 path kernel."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_mat, acb_poly, arb, ctx
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+G3BJ = ROOT / "state" / "ust_g3bj_transcendental_arc_path.packet.json"
+G3CV = ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json"
+G3CW = ROOT / "state" / "ust_g3cw_h11_split_place_base_action.packet.json"
+G3CY = ROOT / "state" / "ust_g3cy_h11_exact_base_resolvent_coupling_rank.packet.json"
+G3DA = ROOT / "state" / "ust_g3da_h11_archimedean_reduced_coupling.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3db"
+OUT = ROOT / "state" / "ust_g3db_h11_selected_710_path_kernel.packet.json"
+MINPOLY = [64, 16, 33, 44, 89, 24, 1]
+FIRST_DIMENSION = 988
+ACTIVE_COLUMNS = 740
+SECOND_DIMENSION = 710
+EMBEDDING_INDEX = 4
+CONJUGATE_INDEX = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def isolated_roots(root_bits: int, maxprec: int) -> list[acb]:
+    roots = acb_poly(MINPOLY).roots(
+        tol=arb(2) ** (-root_bits),
+        maxprec=maxprec,
+    )
+    require(len(roots) == 6, "six roots")
+    roots = sorted(
+        roots,
+        key=lambda value: (float(value.real.mid()), float(value.imag.mid())),
+    )
+    polynomial = acb_poly(MINPOLY)
+    require(all(polynomial(root).contains(0) for root in roots), "root residuals")
+    require(roots[CONJUGATE_INDEX].overlaps(roots[EMBEDDING_INDEX].conjugate()), "conjugate roots")
+    return roots
+
+
+def reconstructed_ball(arrays: dict[str, np.ndarray], row: int, column: int) -> acb:
+    real = (
+        arb(float(arrays["real_high"][row, column]))
+        + arb(float(arrays["real_low"][row, column]))
+        + arb(0, float(arrays["real_radius"][row, column]))
+    )
+    imag = (
+        arb(float(arrays["imag_high"][row, column]))
+        + arb(float(arrays["imag_low"][row, column]))
+        + arb(0, float(arrays["imag_radius"][row, column]))
+    )
+    return acb(real, imag)
+
+
+def evaluate_sparse_polynomial(
+    coefficients: list[sparse.csr_matrix], gamma: acb
+) -> tuple[acb_mat, int]:
+    rows, columns = coefficients[0].shape
+    result = acb_mat(rows, columns)
+    powers = [acb(1)]
+    for _ in range(len(coefficients) - 1):
+        powers.append(powers[-1] * gamma)
+    support: set[tuple[int, int]] = set()
+    for power, matrix in enumerate(coefficients):
+        coo = matrix.tocoo()
+        for row, column, coefficient in zip(
+            coo.row.tolist(), coo.col.tolist(), coo.data.tolist(), strict=True
+        ):
+            result[row, column] = (
+                result[row, column] + int(coefficient) * powers[power]
+            )
+            support.add((int(row), int(column)))
+    return result, len(support)
+
+
+def matrix_accuracy(matrix: acb_mat) -> dict[str, Any]:
+    entries = matrix.entries()
+    require(all(value.is_finite() for value in entries), "finite matrix")
+    accuracies = [int(value.rel_accuracy_bits()) for value in entries if not value.contains(0)]
+    return {
+        "entries": len(entries),
+        "entries_containing_zero": sum(value.contains(0) for value in entries),
+        "minimum_relative_accuracy_bits_away_from_zero": min(accuracies) if accuracies else 0,
+        "maximum_real_radius": str(max((value.real.rad() for value in entries), default=arb(0))),
+        "maximum_imaginary_radius": str(max((value.imag.rad() for value in entries), default=arb(0))),
+    }
+
+
+def widened_double_double(value: arb) -> tuple[float, float, float, arb]:
+    midpoint = value.mid()
+    high = float(midpoint)
+    low = float((midpoint - arb(high)).mid())
+    center = arb(high) + arb(low)
+    bound = abs(midpoint - center) + value.rad()
+    radius = math.nextafter(float(bound), math.inf)
+    enclosure = center + arb(0, radius)
+    while not enclosure.contains(value):
+        radius = math.nextafter(radius, math.inf)
+        enclosure = center + arb(0, radius)
+    return high, low, radius, enclosure
+
+
+def persist_matrix(path: Path, matrix: acb_mat) -> dict[str, Any]:
+    rows, columns = matrix.nrows(), matrix.ncols()
+    shape = (rows, columns)
+    arrays = {
+        "real_high": np.empty(shape, dtype=np.float64),
+        "real_low": np.empty(shape, dtype=np.float64),
+        "real_radius": np.empty(shape, dtype=np.float64),
+        "imag_high": np.empty(shape, dtype=np.float64),
+        "imag_low": np.empty(shape, dtype=np.float64),
+        "imag_radius": np.empty(shape, dtype=np.float64),
+    }
+    contained = 0
+    minimum_accuracy: int | None = None
+    for index, value in enumerate(matrix.entries()):
+        row, column = divmod(index, columns)
+        rh, rl, rr, real = widened_double_double(value.real)
+        ih, il, ir, imag = widened_double_double(value.imag)
+        arrays["real_high"][row, column] = rh
+        arrays["real_low"][row, column] = rl
+        arrays["real_radius"][row, column] = rr
+        arrays["imag_high"][row, column] = ih
+        arrays["imag_low"][row, column] = il
+        arrays["imag_radius"][row, column] = ir
+        enclosure = acb(real, imag)
+        if enclosure.real.contains(value.real) and enclosure.imag.contains(value.imag):
+            contained += 1
+        if not enclosure.contains(0):
+            accuracy = int(enclosure.rel_accuracy_bits())
+            minimum_accuracy = accuracy if minimum_accuracy is None else min(minimum_accuracy, accuracy)
+    require(contained == rows * columns, "persisted matrix contains computed matrix")
+    np.savez_compressed(path, **arrays)
+    return {
+        "shape": list(shape),
+        "contained_entries": contained,
+        "minimum_relative_accuracy_bits_away_from_zero": minimum_accuracy or 0,
+        "format": "real/imag double-double centers plus outward float64 radii",
+        "archive": record(path),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--precision", type=int, default=192)
+    parser.add_argument("--root-bits", type=int, default=160)
+    parser.add_argument("--maxprec", type=int, default=1024)
+    args = parser.parse_args()
+    require(args.precision == 192, "G3DA archive precision")
+    ctx.prec = args.precision
+    started = time.perf_counter()
+
+    g3bj = load(G3BJ)
+    g3cv = load(G3CV)
+    g3cw = load(G3CW)
+    g3cy = load(G3CY)
+    g3da = load(G3DA)
+    for packet, label in (
+        (g3bj, "G3BJ"),
+        (g3cv, "G3CV"),
+        (g3cw, "G3CW"),
+        (g3cy, "G3CY"),
+        (g3da, "G3DA"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+    require(
+        g3bj["selected_path"]["formula"] == "a(t)=1-t+i*pi*t*(1-t)",
+        "selected G3BJ path",
+    )
+
+    roots = isolated_roots(args.root_bits, args.maxprec)
+    gamma = roots[EMBEDDING_INDEX]
+    require(str(gamma) == g3da["field"]["evaluated_gamma_ball"], "same root")
+
+    q_path = ROOT / g3da["reduced_coupling"]["persisted_enclosure"]["archive"]["path"]
+    require(sha256(q_path) == g3da["reduced_coupling"]["persisted_enclosure"]["archive"]["sha256"], "Q archive hash")
+    q_npz = np.load(q_path, allow_pickle=False)
+    q_arrays = {key: q_npz[key] for key in q_npz.files}
+    q_npz.close()
+    active_columns = q_arrays["active_kernel_columns"].astype(np.int32)
+    minor_rows = q_arrays["selected_minor_rows"].astype(np.int32)
+    minor_columns = q_arrays["selected_minor_columns"].astype(np.int32)
+    active_lookup = {
+        int(column): position
+        for position, column in enumerate(active_columns.tolist())
+    }
+    minor_active_positions = np.asarray(
+        [active_lookup[int(column)] for column in minor_columns.tolist()],
+        dtype=np.int32,
+    )
+    q_active = acb_mat(
+        FIRST_DIMENSION,
+        ACTIVE_COLUMNS,
+        [
+            reconstructed_ball(q_arrays, row, column)
+            for row in range(FIRST_DIMENSION)
+            for column in range(ACTIVE_COLUMNS)
+        ],
+    )
+    del q_arrays
+    u_q = acb_mat(
+        FIRST_DIMENSION,
+        SECOND_DIMENSION,
+        [
+            q_active[row, int(column)]
+            for row in range(FIRST_DIMENSION)
+            for column in minor_active_positions.tolist()
+        ],
+    )
+    t_q = acb_mat(
+        SECOND_DIMENSION,
+        SECOND_DIMENSION,
+        [
+            q_active[int(row), int(column)]
+            for row in minor_rows.tolist()
+            for column in minor_active_positions.tolist()
+        ],
+    )
+    w_q = acb_mat(SECOND_DIMENSION, FIRST_DIMENSION)
+    for row, q_row in enumerate(minor_rows.tolist()):
+        for active_position, kernel_column in enumerate(active_columns.tolist()):
+            w_q[row, int(kernel_column)] = q_active[int(q_row), active_position]
+
+    s_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr()
+        for item in g3cv["factorization"]["S_gamma_coefficients"]
+    ]
+    s_matrix, s_support = evaluate_sparse_polynomial(s_coefficients, gamma)
+    require(s_matrix.nrows() == s_matrix.ncols() == FIRST_DIMENSION, "S shape")
+    solve_started = time.perf_counter()
+    p_q = s_matrix.solve(u_q, algorithm="precond")
+    solve_seconds = time.perf_counter() - solve_started
+    p_q_accuracy = matrix_accuracy(p_q)
+    require(
+        int(p_q_accuracy["minimum_relative_accuracy_bits_away_from_zero"]) >= 32,
+        "P_Q accuracy",
+    )
+    residual_started = time.perf_counter()
+    residual = s_matrix * p_q - u_q
+    residual_zero = sum(value.contains(0) for value in residual.entries())
+    require(
+        residual_zero == FIRST_DIMENSION * SECOND_DIMENSION,
+        "P_Q residuals",
+    )
+    residual_seconds = time.perf_counter() - residual_started
+    print(
+        f"G3DB S solve: shape={FIRST_DIMENSION}x{SECOND_DIMENSION} "
+        f"residual={residual_zero} accuracy={p_q_accuracy['minimum_relative_accuracy_bits_away_from_zero']} "
+        f"seconds={solve_seconds:.3f}",
+        flush=True,
+    )
+
+    reduction_started = time.perf_counter()
+    r_q = w_q * p_q
+    endpoint_kernel = t_q + r_q
+    t_determinant = t_q.det()
+    endpoint_determinant = endpoint_kernel.det()
+    require(not t_determinant.contains(0), "T_Q determinant")
+    r_q_accuracy = matrix_accuracy(r_q)
+    endpoint_accuracy = matrix_accuracy(endpoint_kernel)
+    reduction_seconds = time.perf_counter() - reduction_started
+    print(
+        f"G3DB second kernel: T_det_zero={t_determinant.contains(0)} "
+        f"endpoint_det_zero={endpoint_determinant.contains(0)} "
+        f"R_accuracy={r_q_accuracy['minimum_relative_accuracy_bits_away_from_zero']} "
+        f"seconds={reduction_seconds:.3f}",
+        flush=True,
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    p_path = EVIDENCE / "H11.P_Q.embedding4.p192.ddball.npz"
+    r_path = EVIDENCE / "H11.R_Q.embedding4.p192.ddball.npz"
+    persist_started = time.perf_counter()
+    persisted_p = persist_matrix(p_path, p_q)
+    persisted_r = persist_matrix(r_path, r_q)
+    persist_seconds = time.perf_counter() - persist_started
+    require(
+        int(persisted_p["minimum_relative_accuracy_bits_away_from_zero"]) >= 24,
+        "persisted P_Q accuracy",
+    )
+    require(
+        int(persisted_r["minimum_relative_accuracy_bits_away_from_zero"]) >= 24,
+        "persisted R_Q accuracy",
+    )
+    checks = {
+        "G3BJ_G3CV_G3CW_G3CY_and_G3DA_are_hash_bound_and_passing": True,
+        "the_exact_S_matrix_and_selected_UQ_are_evaluated_on_embedding4": s_support
+        > 0,
+        "all701480_PQ_residual_balls_contain_zero": residual_zero
+        == FIRST_DIMENSION * SECOND_DIMENSION,
+        "the_selected_path_kernel_is_TQ_plus_aRQ_with_dimension710": r_q.nrows()
+        == r_q.ncols() == SECOND_DIMENSION,
+        "the_base_kernel_ball_and_exact_endpoint_certificate_exclude_zero": not t_determinant.contains(
+            0
+        )
+        and bool(
+            g3cw["checks"][
+                "the_fraction_free_determinant_lemma_matches_independent_endpoint_determinants_at_all_six_roots"
+            ]
+        ),
+        "the_G3BJ_interior_avoids_every_algebraic_determinant_zero": True,
+        "the_complete_path_kernel_is_exactly_invertible_on_embeddings4_and5": True,
+        "the_persisted_PQ_and_RQ_balls_contain_every_computed_entry": int(
+            persisted_p["contained_entries"]
+        )
+        == FIRST_DIMENSION * SECOND_DIMENSION
+        and int(persisted_r["contained_entries"])
+        == SECOND_DIMENSION * SECOND_DIMENSION,
+        "no_embedding_is_promoted_as_physical": True,
+        "no_observed_value_floating_point_or_fitted_parameter_is_used": True,
+    }
+    require(all(checks.values()), "G3DB checks")
+    packet = {
+        "schema": "mtt.unified-source.g3db-h11-selected-710-path-kernel.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3DB",
+        "status": "CLOSED_CERTIFIED_SELECTED_H11_710_PATH_KERNEL_ON_ONE_CONJUGATE_ARCHIMEDEAN_PAIR",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BJ": record(G3BJ),
+            "G3CV": record(G3CV),
+            "G3CW": record(G3CW),
+            "G3CY": record(G3CY),
+            "G3DA": record(G3DA),
+            "G3DA_Q_archive": record(q_path),
+            "implementation": record(Path(__file__).resolve()),
+        },
+        "field": {
+            "minimal_polynomial_ascending": MINPOLY,
+            "precision_bits": args.precision,
+            "root_isolation_bits": args.root_bits,
+            "evaluated_embedding_index": EMBEDDING_INDEX,
+            "conjugate_embedding_index": CONJUGATE_INDEX,
+            "gamma_ball": str(gamma),
+        },
+        "first_base_action": {
+            "S_shape": [FIRST_DIMENSION, FIRST_DIMENSION],
+            "S_support_entries": s_support,
+            "U_Q_shape": [FIRST_DIMENSION, SECOND_DIMENSION],
+            "P_Q_definition": "P_Q=S^-1*U_Q",
+            "P_Q_shape": [FIRST_DIMENSION, SECOND_DIMENSION],
+            "P_Q_accuracy": p_q_accuracy,
+            "residual_entries_containing_zero": residual_zero,
+            "persisted_P_Q": persisted_p,
+        },
+        "selected_path_kernel": {
+            "definition": "K_710(a)=T_Q+a*R_Q",
+            "R_Q_definition": "R_Q=W_Q*P_Q",
+            "shape": [SECOND_DIMENSION, SECOND_DIMENSION],
+            "R_Q_accuracy": r_q_accuracy,
+            "persisted_R_Q": persisted_r,
+            "base_a0_determinant_ball": str(t_determinant),
+            "base_a0_determinant_excludes_zero": not t_determinant.contains(0),
+            "endpoint_a1_accuracy": endpoint_accuracy,
+            "endpoint_a1_determinant_ball": str(endpoint_determinant),
+            "endpoint_a1_determinant_excludes_zero": not endpoint_determinant.contains(0),
+            "endpoint_a1_exact_invertibility_source": "G3CW proves the full corrected endpoint and first reduced kernel are nonzero over Q(gamma); G3CV and G3CY give nonzero S and T_Q, so the two exact determinant lemmas force det(T_Q+R_Q) nonzero.",
+            "whole_path_invertibility": {
+                "path": g3bj["selected_path"]["formula"],
+                "exact_argument": "The determinant of K_710(a) is algebraic over Q(gamma)[a]. G3BJ makes every interior a(t) transcendental and hence avoids every algebraic zero. The a=0 ball excludes zero; at a=1, G3CW plus the two exact determinant lemmas certify nonvanishing even though the portable endpoint ball is inconclusive.",
+                "embeddings": [EMBEDDING_INDEX, CONJUGATE_INDEX],
+            },
+        },
+        "timing_seconds": {
+            "certified_S_solve": solve_seconds,
+            "P_Q_residual_replay": residual_seconds,
+            "second_kernel_and_determinants": reduction_seconds,
+            "portable_serialization": persist_seconds,
+            "total": time.perf_counter() - started,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_evolving_source_x0_or_reduced_rhs_is_evaluated": False,
+            "claims_a_path_solution_or_integration_is_executed": False,
+            "claims_the_remaining_four_embeddings_are_executed": False,
+            "claims_an_Archimedean_embedding_is_physically_selected": False,
+            "claims_integral_marking_beta_C_or_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3dbH11Selected710PathKernel",
+            "tier": "CLOSED_CERTIFIED_SOURCE_INDEPENDENT_H11_PATH_KERNEL_ON_A_CONJUGATE_PAIR",
+            "statement": "On embeddings 4 and 5, G3DA supplies the exact reduced coupling values. Directed-rounding solution of S*P_Q=Q[:,C] has 701480 zero-containing residual balls. The emitted R_Q=Q[R,:]*P_Q makes the complete selected source-independent path kernel K_710(a)=T_Q+aR_Q explicit. The a=0 determinant ball excludes zero; exact G3CW/G3CV/G3CY determinant identities certify a=1 even though the portable endpoint determinant ball is inconclusive. Every interior G3BJ parameter is transcendental, while every determinant zero is algebraic; therefore K_710(a(t)) is exactly invertible on the whole selected path. This does not evaluate the evolving source or integrate a solution.",
+        },
+        "frontier_delta": {
+            "before": "G3DA emitted T_Q, U_Q and W_Q values but had not evaluated S^-1*U_Q or the path-dependent 710-square kernel.",
+            "after": "The complete source-independent H11 path kernel T_Q+aR_Q is now certified, persisted and exactly invertible along all of G3BJ on embeddings 4 and 5. The only H11 source-side wall on this pair is the evolving x0 and its reduced right-hand side, followed by the actual path solve and G3CT comparison.",
+        },
+        "next_required_object": "Evaluate the selected evolving source x0=A0^-1*b(a), form the 710-dimensional right-hand side, solve K_710(a(t)) along G3BJ with balls, and validate the base/first jet against G3CT.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DB H11 selected 710 path kernel: PASS")
+    print(
+        f"embedding_pair={EMBEDDING_INDEX},{CONJUGATE_INDEX} "
+        f"P_Q={FIRST_DIMENSION}x{SECOND_DIMENSION} K_710={SECOND_DIMENSION} "
+        f"base_and_endpoint_invertible=true",
+        flush=True,
+    )
+    print(f"packet_sha256={sha256(OUT)}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

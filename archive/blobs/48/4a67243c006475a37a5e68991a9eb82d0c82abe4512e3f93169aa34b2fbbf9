@@ -1,0 +1,142 @@
+# UST.G3CD Correction Full Affine Good-Fiber Operator Theorem v1
+
+Date: 2026-08-13
+Status: `CLOSED_EXACT_GF11_CORRECTION_FULL_OPERATOR_AND_SELECTED_AFFINE_SOURCE_PATH_LIFT_OPEN`
+
+## Setting
+
+Work at the common smooth reduction
+
+```text
+(11, gamma - 3)
+```
+
+of the terminal B89 member. Order the B103 relative-residue basis as
+
+```text
+H20(248), H11(1013), H02(248).
+```
+
+Let `C_section = F_G3BI - F_B89` be the exact 19-term correction direction
+selected in G3BI and compiled in G3BK. Exactly 18 of its terms survive at this
+reduction. The three residue-derivative source streams are
+
+```text
+-3 P s C_section,  P in H20,
+-4 P s C_section,  P in H11,
+-5 P s C_section,  P in H02.
+```
+
+The last stream is the already certified G3BQ toric pole-six return. G3CD
+executes the first two streams through the same frozen original-Jacobian
+coordinate factorizations and retains every lower-pole divergence.
+
+## Theorem
+
+All three correction-direction source blocks admit exact recursive return in
+the common B103 basis. Their target-by-source matrices have the following
+certified data over `GF(11)`:
+
+| source block | shape | nonzeros | rank |
+|---|---:|---:|---:|
+| H20 | 1509 x 248 | 251,822 | 248 |
+| H11 | 1509 x 1013 | 1,389,364 | 1013 |
+| H02 | 1509 x 248 | 340,473 | 248 |
+
+Concatenating these columns without reordering gives
+
+```text
+K_C in Mat_1509(GF(11)),
+nnz(K_C) = 1,981,659.
+```
+
+The complete operator satisfies
+
+```text
+rank(K_C) = 1508,
+det(K_C) = 0.
+```
+
+This rank statement has two independent exact witnesses:
+
+1. the emitted normalized nonzero vector `r_C` satisfies `K_C r_C = 0`;
+2. the emitted 1508-square minor has determinant `2 mod 11`.
+
+Thus both the kernel and cokernel are one-dimensional. The independently
+emitted normalized dual vector `ell_C` satisfies
+
+```text
+ell_C^T K_C = 0.
+```
+
+Embed the selected G3CC terminal source `b_C` in the final 248 H02 target
+coordinates and set its H20 and H11 coordinates to zero. It has 229 nonzero
+coordinates and obeys
+
+```text
+ell_C^T b_C = 2 mod 11.
+```
+
+Consequently `b_C` is not in `im(K_C)`. It spans the unique cokernel, and the
+affine coefficient matrix
+
+```text
+K_tilde_C = [[K_C, b_C],
+             [  0,   0]]
+```
+
+has rank 1509. This is an exact one-good-fiber obstruction certificate: the
+selected source is not a redundant column that can be absorbed by solving
+`K_C y = b_C` at this reduction.
+
+## Proof certificate
+
+The direct H20 and H11 source matrices independently reproduce the canonical
+G3BK good-reduction hashes. Their coordinate solutions reconstruct the
+ambient right-hand sides with zero residual through every retained lower-pole
+stage; eight spread H11-to-H02 columns are independently reconstructed in the
+largest chart. G3BQ supplies the hash-bound H02 block.
+
+The verifier then reassembles `K_C`, checks both null identities, evaluates the
+nonzero source pairing, and recomputes the determinant of the emitted
+1508-square minor. These facts imply
+
+```text
+1508 <= rank(K_C) <= 1508
+```
+
+and the nonzero cokernel pairing implies
+
+```text
+rank([K_C | b_C]) = 1509.
+```
+
+## Interpretation and boundary
+
+G3CD is the first point in this branch where the complete correction operator
+and the independently selected normalized-delta source meet in one exact
+finite object. Their meeting is nontrivial: the source detects precisely the
+one missing image direction.
+
+This theorem is deliberately restricted to the selected `GF(11)` terminal
+fiber. A rank defect after reduction does not by itself prove that the
+characteristic-zero operator has rank 1508; its determinant could be a
+nonzero algebraic integer divisible by the selected prime. Nor does this
+single-fiber obstruction prove source horizontality, integrate the G3BJ path,
+construct an integral B89 marking, or decide the normal function or `beta_C`.
+
+The next required object is a certified parameter-dependent atlas for
+`K_C(a)` and `b_C(a)` along G3BJ, followed by the one selected rank-1510
+inhomogeneous continuation and characteristic-zero/integral promotion.
+
+## Reproduction
+
+```text
+python run_ust_g3cd_correction_full_operator.py --resume
+python verify_ust_g3cd_correction_full_affine_operator.py
+```
+
+The canonical packet is
+`state/ust_g3cd_correction_full_affine_operator.packet.json`; all finite
+matrices, source vectors, null witnesses and the rank-minor certificate are
+under `evidence/ust_g3cd/`.

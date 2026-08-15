@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Verify the direct 9H+L/L-truncated signature-based candidate routes."""
+
+from __future__ import annotations
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import certify_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_candidate as certifier
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_hedge as runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+import verify_ust_g3ap_hmajor_direct_ltrunc_routes as hilbert_routes
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def main() -> None:
+    runner.hmajor.validate_grading()
+    parsed = fiber2.parse_leaders(
+        "G3AP_F2_MODULE_GB_SIZE=2\n"
+        "G3AP_F2_MODULE_LEADER_1_COMP=2\n"
+        "G3AP_F2_MODULE_LEADER_1_EXP=1,0,0,0,0,0,0,2\n"
+        "G3AP_F2_MODULE_LEADER_2_COMP=6\n"
+        "G3AP_F2_MODULE_LEADER_2_EXP=0,0,0,0,0,0,1,6\n"
+    )
+    require(
+        parsed == [(2, (1, 0, 0, 0, 0, 0, 0)), (6, (0, 0, 0, 0, 0, 0, 1))],
+        "Singular module-component coordinate normalization",
+    )
+    try:
+        fiber2.parse_leaders(
+            "G3AP_F2_MODULE_GB_SIZE=1\n"
+            "G3AP_F2_MODULE_LEADER_1_COMP=2\n"
+            "G3AP_F2_MODULE_LEADER_1_EXP=1,0,0,0,0,0,0,3\n"
+        )
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("mismatched Singular module component is rejected")
+    source = runner.SOURCE.read_text(encoding="ascii")
+    for label, order in permuted.PERMUTATIONS.items():
+        old_to_new, _ = permuted.position_maps(order)
+        generators = runner.direct.mapped_generators(order)
+        require(
+            len(generators[:39]) == 39 and len(generators[39:]) == 165,
+            f"{label} generators",
+        )
+        shifts = runner.direct.mapped_shifts(order)
+        targets = [
+            runner.hmajor.H_WEIGHT * h_degree
+            + runner.hmajor.L_WEIGHT * l_degree
+            + shifts[new_position - 1]
+            for new_position, old_component in enumerate(order, start=1)
+            for _, _, (h_degree, l_degree), _ in [fiber2.COMPONENTS[old_component - 1]]
+        ]
+        require(
+            targets == [runner.TARGET_SCALAR_DEGREE] * 6,
+            f"{label} common target",
+        )
+        script = runner.candidate_script(
+            source,
+            label,
+            order,
+            runner.paths(label)["module_cache"],
+        )
+        require(runner.direct.MODULE_RING in script, f"{label} ring")
+        require("qring q=" not in script, f"{label} direct presentation")
+        require("module G=sba(MT);" in script, f"{label} signature-basis call")
+        require("truncatedHilbert" not in script, f"{label} no Hilbert premise")
+        require(f"degBound={runner.TARGET_SCALAR_DEGREE};" in script, f"{label} bound")
+        require(
+            f"w^12*t2^4*gen({old_to_new[6]})" in script,
+            f"{label} canonical component",
+        )
+        require(script.count("*gen(") >= 204, f"{label} complete module input")
+        certification = certifier.certification_script(
+            source,
+            label,
+            order,
+            runner.paths(label)["module_cache"],
+            certifier.certified_paths(label, "sba")["module_cache"],
+            "sba",
+        )
+        tag = certifier.marker(label, "sba")
+        require(f'{tag}_PASS' in certification, f"{label} certification marker")
+        require("truncatedHilbert" not in certification, f"{label} no hidden Hilbert hint")
+        require('attrib(G,"isSB",1);' in certification, f"{label} explicit reduction check")
+        require(
+            f"w^12*t2^4*gen({old_to_new[6]})" in certification,
+            f"{label} certified canonical component",
+        )
+    hilbert_routes.verify_loader_contract("sba")
+    print(
+        "UST.G3AP direct H-major/L-truncated SBA routes: PASS "
+        f"routes={len(permuted.PERMUTATIONS)} selected=39 truncators=165 "
+        "target=174865 scalar=9H+L proof_status=CANDIDATE_ONLY"
+    )
+
+
+if __name__ == "__main__":
+    main()

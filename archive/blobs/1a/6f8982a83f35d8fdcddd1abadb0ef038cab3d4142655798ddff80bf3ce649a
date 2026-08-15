@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Independently verify the G3AW three-line Gram reduction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3aw_three_line_gram_meridian_reduction.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def identity(size: int) -> list[list[Fraction]]:
+    return [
+        [Fraction(int(row == column)) for column in range(size)]
+        for row in range(size)
+    ]
+
+
+def transpose(matrix: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [list(row) for row in zip(*matrix)]
+
+
+def multiply(
+    left: list[list[Fraction]], right: list[list[Fraction]]
+) -> list[list[Fraction]]:
+    return [
+        [
+            sum(
+                (left[row][inner] * right[inner][column] for inner in range(len(right))),
+                Fraction(0),
+            )
+            for column in range(len(right[0]))
+        ]
+        for row in range(len(left))
+    ]
+
+
+def determinant3(matrix: list[list[Fraction]]) -> Fraction:
+    a, b, c = matrix
+    return (
+        a[0] * (b[1] * c[2] - b[2] * c[1])
+        - a[1] * (b[0] * c[2] - b[2] * c[0])
+        + a[2] * (b[0] * c[1] - b[1] * c[0])
+    )
+
+
+def reflection(gram: list[list[Fraction]], index: int) -> list[list[Fraction]]:
+    result = identity(3)
+    require(gram[index][index] != 0, "nonisotropic line")
+    for column in range(3):
+        result[index][column] -= (
+            2 * gram[index][column] / gram[index][index]
+        )
+    return result
+
+
+def block_diagonal(
+    left: list[list[Fraction]], right: list[list[Fraction]]
+) -> list[list[Fraction]]:
+    rows = len(left) + len(right)
+    result = [[Fraction(0) for _ in range(rows)] for _ in range(rows)]
+    for i in range(len(left)):
+        for j in range(len(left)):
+            result[i][j] = left[i][j]
+    for i in range(len(right)):
+        for j in range(len(right)):
+            result[len(left) + i][len(left) + j] = right[i][j]
+    return result
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AW", "theorem id")
+    require(packet["status"].startswith("CLOSED_EXACT_"), "closed reduction")
+
+    for label, item in packet["inputs"].items():
+        path = ROOT / item["path"]
+        require(path.is_file() and sha256(path) == item["sha256"], f"input {label}")
+
+    pair = packet["three_line_pairing"]
+    require(
+        pair["unordered_pairs_zero_based"]
+        == [[0, 0], [0, 1], [0, 2], [1, 1], [1, 2], [2, 2]],
+        "six unordered pairs",
+    )
+    require(pair["top_reductions"] == 6, "six top reductions")
+    require(Fraction(-3, 144) == Fraction(-1, 48), "outer weights")
+    require(Fraction(-4, 144) == Fraction(-1, 36), "middle weight")
+
+    reduction = packet["execution_reduction"]
+    require(
+        reduction["previous_full_row_top_reductions"] == 4527
+        and reduction["immediate_gram_top_reductions"] == 6
+        and reduction["top_reductions_removed"] == 4521
+        and Fraction(reduction["retained_fraction"]) == Fraction(2, 1509)
+        and Fraction(reduction["removed_fraction"]) == Fraction(1507, 1509),
+        "exact workload reduction",
+    )
+
+    # Independent exact replay on a nondegenerate symmetric Gram model.
+    gram = [
+        [Fraction(-2), Fraction(1), Fraction(0)],
+        [Fraction(1), Fraction(-2), Fraction(1)],
+        [Fraction(0), Fraction(1), Fraction(-2)],
+    ]
+    require(determinant3(gram) != 0, "model Gram nondegenerate")
+    reflections = [reflection(gram, index) for index in range(3)]
+    for index, operator in enumerate(reflections):
+        require(multiply(operator, operator) == identity(3), f"R{index} involution")
+        require(
+            multiply(multiply(transpose(operator), gram), operator) == gram,
+            f"R{index} Gram orthogonality",
+        )
+
+        ambient_operator = block_diagonal(operator, identity(2))
+        ambient_gram = block_diagonal(
+            gram,
+            [[Fraction(3), Fraction(0)], [Fraction(0), Fraction(5)]],
+        )
+        require(
+            multiply(
+                multiply(transpose(ambient_operator), ambient_gram),
+                ambient_operator,
+            )
+            == ambient_gram,
+            f"R{index} ambient orthogonality",
+        )
+        require(
+            all(
+                ambient_operator[row][column] == Fraction(int(row == column))
+                for row in range(3, 5)
+                for column in range(5)
+            ),
+            f"R{index} fixes complement",
+        )
+
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    print("UST.G3AW three-line Gram reduction: PASS 4527 -> 6 top reductions")
+
+
+if __name__ == "__main__":
+    main()

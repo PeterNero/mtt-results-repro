@@ -1,0 +1,49 @@
+# UST G3AP Givaro-Map Pivot Replay Certificate Lemma v1
+
+## Status
+
+`CLOSED_EXACT_FINITE_FIELD_LINEAR_ALGEBRA_LEMMA`
+
+## Lemma
+
+Let `F = F_101[g]/(m(g))`, where `m` is the selected irreducible polynomial of
+degree six. Multiplication by any `a in F` is `F_101`-linear. It is therefore
+determined exactly by the six images
+
+```text
+a * 1, a * g, ..., a * g^5.
+```
+
+Suppose an `n x n` matrix over `F` is replayed by exact Gaussian elimination.
+At every reduction, obtain the six images of multiplication by the reduction
+factor from an independently selected finite-field implementation, apply that
+linear map coefficientwise modulo `101`, and obtain a nonzero pivot in each of
+the `n` steps. Then the product of the pivots is the determinant in that row
+and column ordering and is nonzero. Hence the matrix has rank `n`.
+
+## Proof
+
+The six displayed images are a basis specification of the multiplication map,
+so applying their `F_101`-linear combination is exactly multiplication in
+`F`. Subtraction modulo `101` is exact addition in the same field. Thus every
+replayed row operation is an elementary row operation over `F`. A nonzero
+pivot at every step yields an upper-echelon matrix with nonzero diagonal. Its
+determinant is the pivot product, and elementary elimination preserves
+nonsingularity. Therefore the original matrix is nonsingular.
+
+## Independence contract
+
+The G3AP use of this lemma must certify all of the following:
+
+1. the replayed matrix is a pure column permutation of the selected exact
+   `39,725` minor;
+2. Givaro constructs every inverse and every multiplication-basis image;
+3. the sparse replay implementation is source-distinct from the selecting
+   eliminator;
+4. all `39,725` pivots are nonzero;
+5. the independent pivot product agrees with the selected determinant residue;
+6. a separate Givaro dot-product pass checks the quotient functional on the
+   relevant relation map.
+
+No runtime plateau, matching alone, or structural rank is accepted as a
+substitute for these exact checks.

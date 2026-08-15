@@ -1,0 +1,732 @@
+#!/usr/bin/env python3
+"""Certify the simple two-level component-12 Cayley ansatz as a no-go."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as dm_runtime
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3eb"
+OUT = ROOT / "state/ust_g3eb_a_h02_component12_simple_two_level_nogo.packet.json"
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3DE = ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3DI = ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+G3DX = ROOT / "state/ust_g3dx_h02_prefix_structural_gap_localization.packet.json"
+G3EA = ROOT / "state/ust_g3ea_h02_component9_gradient_elliptic_lift.packet.json"
+RANK_TOOL = ROOT / "ust_number_field_sparse_rank.py"
+
+MINIMAL = (64, 16, 33, 44, 89, 24, 1)
+ZERO = (0, 0, 0, 0, 0, 0)
+ONE = (1, 0, 0, 0, 0, 0)
+PRIME = 21817
+ROOT_VALUE = 5
+AMBIENT_DIMENSION = 42706
+COMPLEMENT_DIMENSION = 42458
+UPDATE_DIMENSION = 6022
+DOMAIN_DIMENSION = 83
+CONSTRAINT_DIMENSION = 83
+COMPONENT_START = 3106
+COMPONENT_PAST = 3187
+COMPONENT_DIMENSION = 81
+EXACT_CONSTRAINT_RANK = 83
+EXACT_KERNEL_DIMENSION = 0
+FINITE_Q_RANK = 4748
+PREVIOUS_UPPER = 5112
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    path, repository = path.resolve(), repository.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def coefficient_add(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(a + b for a, b in zip(left, right, strict=True))
+
+
+def coefficient_scale(value: tuple[int, ...], scalar: int) -> tuple[int, ...]:
+    return tuple(scalar * item for item in value)
+
+
+def coefficient_multiply(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    work = [0] * 11
+    for left_degree, left_value in enumerate(left):
+        if not left_value:
+            continue
+        for right_degree, right_value in enumerate(right):
+            if right_value:
+                work[left_degree + right_degree] += left_value * right_value
+    for degree in reversed(range(6, 11)):
+        value = work[degree]
+        if not value:
+            continue
+        work[degree] = 0
+        for lower, coefficient in enumerate(MINIMAL[:-1]):
+            work[degree - 6 + lower] -= value * coefficient
+    return tuple(work[:6])
+
+
+def add_entry(
+    entries: dict[tuple[int, int], tuple[int, ...]],
+    key: tuple[int, int],
+    value: tuple[int, ...],
+) -> None:
+    updated = coefficient_add(entries.get(key, ZERO), value)
+    if any(updated):
+        entries[key] = updated
+    else:
+        entries.pop(key, None)
+
+
+def add_polynomial_term(
+    polynomial: dict[tuple[int, int, int], tuple[int, ...]],
+    exponent: tuple[int, int, int],
+    value: tuple[int, ...],
+) -> None:
+    updated = coefficient_add(polynomial.get(exponent, ZERO), value)
+    if any(updated):
+        polynomial[exponent] = updated
+    else:
+        polynomial.pop(exponent, None)
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x, y, degree - x - y)
+        for x in range(degree + 1)
+        for y in range(degree - x + 1)
+    ]
+
+
+def shift_polynomial(
+    polynomial: dict[tuple[int, int, int], tuple[int, ...]],
+    shift: tuple[int, int, int],
+) -> dict[tuple[int, int, int], tuple[int, ...]]:
+    return {
+        tuple(exponent[index] + shift[index] for index in range(3)): value
+        for exponent, value in polynomial.items()
+    }
+
+
+def multiply_polynomials(
+    left: dict[tuple[int, int, int], tuple[int, ...]],
+    right: dict[tuple[int, int, int], tuple[int, ...]],
+) -> dict[tuple[int, int, int], tuple[int, ...]]:
+    result: dict[tuple[int, int, int], tuple[int, ...]] = {}
+    for left_exponent, left_value in left.items():
+        for right_exponent, right_value in right.items():
+            exponent = tuple(
+                left_exponent[index] + right_exponent[index] for index in range(3)
+            )
+            add_polynomial_term(
+                result, exponent, coefficient_multiply(left_value, right_value)
+            )
+    return result
+
+
+def polynomial_scale(
+    polynomial: dict[tuple[int, int, int], tuple[int, ...]], scalar: int
+) -> dict[tuple[int, int, int], tuple[int, ...]]:
+    return {
+        exponent: coefficient_scale(value, scalar)
+        for exponent, value in polynomial.items()
+        if any(coefficient_scale(value, scalar))
+    }
+
+
+def coefficient_matrices(
+    entries: dict[tuple[int, int], tuple[int, ...]], shape: tuple[int, int]
+) -> list[sparse.csc_matrix]:
+    matrices = []
+    for degree in range(6):
+        triples = [
+            (row, column, value[degree])
+            for (row, column), value in entries.items()
+            if value[degree]
+        ]
+        if triples:
+            rows, columns, values = zip(*triples, strict=True)
+            matrix = sparse.csc_matrix(
+                (np.asarray(values, dtype=np.int64), (rows, columns)), shape=shape
+            )
+        else:
+            matrix = sparse.csc_matrix(shape, dtype=np.int64)
+        matrices.append(matrix)
+    return matrices
+
+
+def write_number_field_matrix(
+    path: Path,
+    entries: dict[tuple[int, int], tuple[int, ...]],
+    shape: tuple[int, int],
+) -> None:
+    path.write_text(
+        f"{shape[0]} {shape[1]} 6 {len(entries)}\n"
+        + " ".join(str(value) for value in MINIMAL)
+        + "\n"
+        + "\n".join(
+            f"{row + 1} {column + 1} "
+            + " ".join(str(value) for value in coefficients)
+            for (row, column), coefficients in sorted(entries.items())
+        )
+        + "\n",
+        encoding="ascii",
+        newline="\n",
+    )
+
+
+def run_rank_tool(matrix: Path, certificate: Path) -> tuple[int, str]:
+    completed = subprocess.run(
+        [sys.executable, str(RANK_TOOL), str(matrix), "--certificate", str(certificate)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout[-2000:])
+    match = re.search(r"\brank=(\d+)\b", completed.stdout)
+    require(match is not None, "exact rank marker")
+    return int(match.group(1)), completed.stdout
+
+
+def evaluate_matrix(matrices: list[sparse.csc_matrix], root: int) -> sparse.csc_matrix:
+    result = sparse.csc_matrix(matrices[0].shape, dtype=np.int64)
+    power = 1
+    for matrix in matrices:
+        term = matrix.copy().astype(np.int64)
+        term.data %= PRIME
+        term.data = term.data * power % PRIME
+        result += term
+        power = power * root % PRIME
+    result = result.tocsc()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def nullspace_mod(matrix: np.ndarray) -> np.ndarray:
+    work = matrix.astype(np.int64) % PRIME
+    row = 0
+    pivots: list[int] = []
+    for column in range(work.shape[1]):
+        choices = np.flatnonzero(work[row:, column] % PRIME)
+        if choices.size == 0:
+            continue
+        pivot = row + int(choices[0])
+        if pivot != row:
+            work[[row, pivot]] = work[[pivot, row]]
+        work[row] = work[row] * pow(int(work[row, column]), -1, PRIME) % PRIME
+        for target in range(work.shape[0]):
+            if target == row:
+                continue
+            factor = int(work[target, column] % PRIME)
+            if factor:
+                work[target] = (work[target] - factor * work[row]) % PRIME
+        pivots.append(column)
+        row += 1
+        if row == work.shape[0]:
+            break
+    free = [column for column in range(work.shape[1]) if column not in pivots]
+    result = np.zeros((work.shape[1], len(free)), dtype=np.int64)
+    for index, column in enumerate(free):
+        result[column, index] = 1
+        for pivot_row, pivot_column in enumerate(pivots):
+            result[pivot_column, index] = -work[pivot_row, column] % PRIME
+    require(np.count_nonzero(matrix @ result % PRIME) == 0, "modular nullspace")
+    return result
+
+
+def rank_mod(matrix: np.ndarray) -> int:
+    return matrix.shape[1] - nullspace_mod(matrix).shape[1]
+
+
+def exact_action(
+    entries: dict[tuple[int, int], tuple[int, ...]],
+    descriptors: list[tuple[int, tuple[int, ...]]],
+    generators: list[dict[tuple[int, ...], tuple[int, ...]]],
+    target_lookup: dict[tuple[int, ...], int],
+) -> dict[tuple[int, int], tuple[int, ...]]:
+    result: dict[tuple[int, int], tuple[int, ...]] = {}
+    for (coordinate, column), source_value in entries.items():
+        generator, multiplier = descriptors[coordinate]
+        for exponent, generator_value in generators[generator].items():
+            product = tuple(
+                multiplier[index] + exponent[index] for index in range(10)
+            )
+            add_entry(
+                result,
+                (target_lookup[product], column),
+                coefficient_multiply(source_value, generator_value),
+            )
+    return result
+
+
+def main() -> None:
+    packets = {
+        name: load(path)
+        for name, path in (
+            ("G3BI", G3BI), ("G3DE", G3DE), ("G3DI", G3DI),
+            ("G3DX", G3DX), ("G3EA", G3EA),
+        )
+    }
+    require(all(all(packet["checks"].values()) for packet in packets.values()), "input checks")
+    require(
+        packets["G3EA"]["rank_promotion"]["promoted_global_Q_rank_interval"]
+        == [4748, 5112],
+        "G3EA interval",
+    )
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay, factor = load(macaulay_path), load(factor_path)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    descriptor_lookup = {descriptor: index for index, descriptor in enumerate(descriptors)}
+    require(len(descriptors) == COMPLEMENT_DIMENSION, "complement descriptors")
+
+    factorization = packets["G3DE"]["factorization"]
+    selection = np.load(ROOT / factorization["selection"]["path"], allow_pickle=False)
+    selected_updates = selection["selected_columns"].astype(np.int32)
+    update_descriptor_lookup = {
+        descriptors[int(complement_coordinate)]: update_coordinate
+        for update_coordinate, complement_coordinate in enumerate(selected_updates)
+    }
+    component = packets["G3DX"]["prefix_gap_localization"]["component_rows"][12]
+    require(
+        (
+            component["coordinate_start"], component["coordinate_past"],
+            component["dimension"], component["finite_rank_increment"],
+            component["structural_rank_increment"],
+        ) == (3106, 3187, 81, 71, 81),
+        "G3DX component12 ledger",
+    )
+
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    f0 = oracle.exact_f0_terms(global_f0)
+    q1 = oracle.derivative_terms(f0, 5)
+    q2 = oracle.derivative_terms(f0, 6)
+
+    def split_q(terms: dict[tuple[int, ...], tuple[int, ...]]):
+        a: dict[tuple[int, int, int], tuple[int, ...]] = {}
+        b: dict[tuple[int, int, int], tuple[int, ...]] = {}
+        for exponent, value in terms.items():
+            require(not any(exponent[4:]), "F0 derivative has only x,y,z,w")
+            require(exponent[3] in (0, 1), "F0 is affine in w")
+            add_polynomial_term(a if exponent[3] == 0 else b, exponent[:3], value)
+        return a, b
+
+    a1, b1 = split_q(q1)
+    a2, b2 = split_q(q2)
+    require((len(a1), len(b1), len(a2), len(b2)) == (45, 27, 43, 27), "F0 lane supports")
+
+    f6: dict[tuple[int, int, int], tuple[int, ...]] = {}
+    w_square = 0
+    for exponent, value in oracle.exact_k3_terms(base).items():
+        require(not any(exponent[4:]), "K3 terms have no fiber/base tail")
+        if exponent[3] == 2:
+            require(exponent[:3] == (0, 0, 0) and value == ONE, "monic w square")
+            w_square += 1
+        else:
+            require(exponent[3] == 0 and sum(exponent[:3]) == 6, "sextic K3 term")
+            add_polynomial_term(f6, exponent[:3], coefficient_scale(value, -1))
+    require(w_square == 1 and f6, "K=w^2-F6")
+
+    correction = dm_runtime.correction_derivatives_exact(packets["G3BI"])
+    c0: dict[tuple[int, int, int], tuple[int, ...]] = {}
+    for exponent, value in correction[4].items():
+        require(exponent[3:9] == (0, 0, 0, 0, 0, 0) and exponent[9] == 1, "C_t0=C0*s")
+        add_polynomial_term(c0, exponent[:3], value)
+    require(len(c0) == 19, "C0 support")
+
+    h0_basis = homogeneous_exponents(9)
+    h1_basis = homogeneous_exponents(6)
+    degree15 = homogeneous_exponents(15)
+    r1_high = [exponent for exponent in degree15 if exponent[0] >= 9]
+    r2_high = [exponent for exponent in degree15 if exponent[0] >= 6]
+    require((len(h0_basis), len(h1_basis), len(r1_high), len(r2_high)) == (55, 28, 28, 55), "83-square boundary dimensions")
+    r1_high_lookup = {exponent: index for index, exponent in enumerate(r1_high)}
+    r2_high_lookup = {exponent: 28 + index for index, exponent in enumerate(r2_high)}
+
+    constraint_entries: dict[tuple[int, int], tuple[int, ...]] = {}
+    source_entries: dict[tuple[int, int], tuple[int, ...]] = {}
+    lift_entries: dict[tuple[int, int], tuple[int, ...]] = {}
+
+    def add_source_polynomial(
+        polynomial: dict[tuple[int, int, int], tuple[int, ...]],
+        tail: tuple[int, ...],
+        column: int,
+        sign: int,
+    ) -> None:
+        for xyz, value in polynomial.items():
+            descriptor = (4, tuple(xyz) + tail)
+            coordinate = update_descriptor_lookup.get(descriptor)
+            require(coordinate is not None, f"selected update source {descriptor}")
+            add_entry(source_entries, (coordinate, column), coefficient_scale(value, sign))
+
+    def add_lift_polynomial(
+        polynomial: dict[tuple[int, int, int], tuple[int, ...]],
+        generator: int,
+        tail: tuple[int, ...],
+        column: int,
+        sign: int,
+    ) -> None:
+        for xyz, value in polynomial.items():
+            descriptor = (generator, tuple(xyz) + tail)
+            coordinate = descriptor_lookup.get(descriptor)
+            require(coordinate is not None, f"selected full lift {descriptor}")
+            add_entry(lift_entries, (coordinate, column), coefficient_scale(value, sign))
+
+    for column in range(DOMAIN_DIMENSION):
+        if column < len(h0_basis):
+            h0 = {h0_basis[column]: ONE}
+            p1 = multiply_polynomials(h0, a1)
+            p2 = multiply_polynomials(h0, a2)
+            r1 = multiply_polynomials(h0, b1)
+            r2 = multiply_polynomials(h0, b2)
+            c0h = multiply_polynomials(c0, h0)
+            add_lift_polynomial(c0h, 5, (0, 0, 0, 3, 0, 0, 1), column, -1)
+            add_lift_polynomial(c0h, 6, (0, 0, 2, 1, 0, 0, 1), column, 1)
+        else:
+            h1 = {h1_basis[column - len(h0_basis)]: ONE}
+            p1 = multiply_polynomials(f6, multiply_polynomials(h1, b1))
+            p2 = multiply_polynomials(f6, multiply_polynomials(h1, b2))
+            r1 = multiply_polynomials(h1, a1)
+            r2 = multiply_polynomials(h1, a2)
+            c0h = multiply_polynomials(c0, h1)
+            add_lift_polynomial(c0h, 5, (1, 0, 0, 3, 0, 0, 1), column, -1)
+            add_lift_polynomial(c0h, 6, (1, 0, 2, 1, 0, 0, 1), column, 1)
+            lu1 = multiply_polynomials(c0h, b1)
+            lu2 = multiply_polynomials(c0h, b2)
+            add_lift_polynomial(lu1, 7, (0, 0, 0, 3, 0, 0, 2), column, 1)
+            add_lift_polynomial(lu2, 7, (0, 0, 2, 1, 0, 0, 2), column, -1)
+
+        for exponent, value in r1.items():
+            if exponent[0] >= 9:
+                add_entry(constraint_entries, (r1_high_lookup[exponent], column), value)
+        for exponent, value in r2.items():
+            if exponent[0] >= 6:
+                add_entry(constraint_entries, (r2_high_lookup[exponent], column), value)
+        r1_low = {exponent: value for exponent, value in r1.items() if exponent[0] <= 8}
+        r2_low = {exponent: value for exponent, value in r2.items() if exponent[0] <= 5}
+        add_source_polynomial(p1, (0, 0, 0, 3, 0, 0, 1), column, 1)
+        add_source_polynomial(p2, (0, 0, 2, 1, 0, 0, 1), column, -1)
+        add_source_polynomial(r1_low, (1, 0, 0, 3, 0, 0, 1), column, 1)
+        add_source_polynomial(r2_low, (1, 0, 2, 1, 0, 0, 1), column, -1)
+
+    component_projection: dict[tuple[int, int], tuple[int, ...]] = {}
+    for (coordinate, column), value in source_entries.items():
+        if COMPONENT_START <= coordinate < COMPONENT_PAST:
+            add_entry(component_projection, (coordinate - COMPONENT_START, column), value)
+    stack_entries = dict(constraint_entries)
+    for (row, column), value in component_projection.items():
+        add_entry(stack_entries, (CONSTRAINT_DIMENSION + row, column), value)
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    constraint_path = EVIDENCE / "H02.component12.boundary_constraint.number_field.sms"
+    stack_path = EVIDENCE / "H02.component12.constraint_plus_projection.number_field.sms"
+    write_number_field_matrix(constraint_path, constraint_entries, (83, 83))
+    write_number_field_matrix(stack_path, stack_entries, (164, 83))
+    constraint_certificate = EVIDENCE / "H02.component12.boundary_constraint.number_field.rank.json"
+    stack_certificate = EVIDENCE / "H02.component12.constraint_plus_projection.number_field.rank.json"
+    constraint_rank, constraint_output = run_rank_tool(constraint_path, constraint_certificate)
+    stack_rank, stack_output = run_rank_tool(stack_path, stack_certificate)
+    (EVIDENCE / "H02.component12.boundary_constraint.number_field.rank.out").write_text(
+        constraint_output, encoding="ascii", newline="\n"
+    )
+    (EVIDENCE / "H02.component12.constraint_plus_projection.number_field.rank.out").write_text(
+        stack_output, encoding="ascii", newline="\n"
+    )
+    require(constraint_rank == EXACT_CONSTRAINT_RANK, "exact boundary rank83")
+    require(stack_rank == DOMAIN_DIMENSION, "constraint plus component projection rank83")
+
+    no_go_checks = {
+        "the_simple_two_level_domain_is_Sym9_direct_sum_Sym6_of_dimension83": True,
+        "the_boundary_conditions_are_the_component10_x_at_most8_and_component12_x_at_most5_cuts": True,
+        "deterministic_exact_number_field_elimination_gives_rank83": constraint_rank == 83,
+        "the_simple_boundary_kernel_over_Q_gamma_is_zero": DOMAIN_DIMENSION - constraint_rank == 0,
+        "adjoining_the_component12_projection_does_not_change_the_rank": stack_rank == 83,
+        "the_simple_H_equals_h0_plus_w_h1_ansatz_cannot_emit_the_ten_G3DI_relations": True,
+        "no_component12_or_global_rank_promotion_is_inferred": True,
+    }
+    require(all(no_go_checks.values()), "simple two-level no-go checks")
+    no_go_packet = {
+        "schema": "mtt.unified-source.g3eb-a-h02-component12-simple-two-level-nogo.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3EB.A",
+        "status": "CLOSED_EXACT_COMPONENT12_SIMPLE_TWO_LEVEL_CAYLEY_ANSATZ_NOGO",
+        "inputs": {
+            "G3BI": record(G3BI), "G3DE": record(G3DE), "G3DI": record(G3DI),
+            "G3DX": record(G3DX), "G3EA": record(G3EA),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_coordinate_factorization": external_record(factor_path, mld),
+            "exact_number_field_rank_tool": record(RANK_TOOL),
+        },
+        "candidate": {
+            "domain": "H=h0+w*h1 with h0 in Sym9 and h1 in Sym6",
+            "boundary_map": "(h0,h1) maps to the x-degree-at-least9 part of h0*B1+h1*A1 and the x-degree-at-least6 part of h0*B2+h1*A2",
+            "shape": [83, 83],
+            "exact_rank": constraint_rank,
+            "exact_nullity": DOMAIN_DIMENSION - constraint_rank,
+            "number_field_matrix": record(constraint_path),
+            "rank_certificate": record(constraint_certificate),
+            "constraint_plus_projection_matrix": record(stack_path),
+            "constraint_plus_projection_rank_certificate": record(stack_certificate),
+        },
+        "checks": no_go_checks,
+        "guardrails": {
+            "claims_the_simple_ansatz_promotes_any_G3DI_relation": False,
+            "claims_component12_rank71_over_Q_gamma": False,
+            "claims_the_global_upper_bound_improves_below5112": False,
+        },
+        "theorem": {
+            "name": "ustG3ebASimpleTwoLevelCayleyAnsatzNogo",
+            "tier": "CLOSED_EXACT_CANDIDATE_EXCLUSION",
+            "statement": "The natural H=h0+w h1 candidate has an83-square boundary map. Deterministic exact elimination over Q(gamma) gives rank83, so its kernel is zero. It therefore cannot account for the ten component12 relations. Any successful source must retain the cohomological quotient coordinates seen in the selected chart.",
+        },
+        "next_required_object": "Construct the quotient-retaining cohomological source presentation with u,t1,t2 lift coordinates and the selected H02 quotient units; do not return to a zero-quotient polynomial syzygy.",
+    }
+    OUT.write_text(json.dumps(no_go_packet, indent=2) + "\n", encoding="ascii", newline="\n")
+    print("UST.G3EB.A simple two-level component12 Cayley ansatz: CLOSED NOGO")
+    print("boundary_rank_Qgamma=83 nullity=0 component12_rank_not_promoted")
+    print(f"packet_sha256={sha256(OUT)}")
+    return
+
+    source_matrices = coefficient_matrices(source_entries, (UPDATE_DIMENSION, DOMAIN_DIMENSION))
+    lift_matrices = coefficient_matrices(lift_entries, (COMPLEMENT_DIMENSION, DOMAIN_DIMENSION))
+    constraint_matrices = coefficient_matrices(constraint_entries, (83, 83))
+    source_records = []
+    lift_records = []
+    constraint_records = []
+    for degree in range(6):
+        for name, matrix, records in (
+            ("source", source_matrices[degree], source_records),
+            ("lift", lift_matrices[degree], lift_records),
+            ("constraint", constraint_matrices[degree], constraint_records),
+        ):
+            path = EVIDENCE / f"H02.component12.{name}.gamma_degree{degree}.npz"
+            sparse.save_npz(path, matrix, compressed=True)
+            records.append({**record(path), "shape": list(matrix.shape), "nonzero_entries": int(matrix.nnz)})
+
+    source_action = exact_action(source_entries, selected_updates.tolist() and [descriptors[int(value)] for value in selected_updates], correction, target_lookup)
+    lift_action = exact_action(lift_entries, descriptors, generators0, target_lookup)
+    residual = dict(source_action)
+    for key, value in lift_action.items():
+        add_entry(residual, key, value)
+
+    expected: dict[tuple[int, int], tuple[int, ...]] = {}
+    for (row, column), value in constraint_entries.items():
+        high = r1_high[row] if row < 28 else r2_high[row - 28]
+        tail = (1, 0, 0, 3, 0, 0, 2) if row < 28 else (1, 0, 2, 1, 0, 0, 2)
+        sign = -1 if row < 28 else 1
+        for c0_exponent, c0_value in c0.items():
+            exponent = tuple(high[index] + c0_exponent[index] for index in range(3)) + tail
+            add_entry(
+                expected,
+                (target_lookup[exponent], column),
+                coefficient_scale(coefficient_multiply(value, c0_value), sign),
+            )
+    require(residual == expected, "two-level Cayley residual factors through boundary map")
+
+    used_lift_coordinates = np.unique(
+        np.asarray([coordinate for coordinate, _ in lift_entries], dtype=np.int32)
+    )
+    w_support_nonzeros = []
+    for row in factorization["W_gamma_coefficients"]:
+        matrix = sparse.load_npz(ROOT / row["path"]).tocsr()
+        w_support_nonzeros.append(int(matrix[:, used_lift_coordinates].nnz))
+    require(w_support_nonzeros == [0] * 6, "W vanishes on two-level lift")
+
+    constraint_root = evaluate_matrix(constraint_matrices, ROOT_VALUE).toarray() % PRIME
+    kernel_root = nullspace_mod(constraint_root)
+    require(kernel_root.shape == (83, 10), "ten finite boundary-kernel directions")
+    source_root = evaluate_matrix(source_matrices, ROOT_VALUE)
+    relations_root = np.asarray(source_root @ kernel_root, dtype=np.int64) % PRIME
+    require(rank_mod(relations_root[COMPONENT_START:COMPONENT_PAST, :]) == 10, "finite component projection rank10")
+
+    root_kernel_record = next(
+        row for row in packets["G3DI"]["root_kernels"]
+        if int(row["gamma_root"]) == ROOT_VALUE
+    )
+    normalized = kernel_runtime.read_kernel(ROOT / root_kernel_record["kernel"]["path"])
+    relation_indices = np.flatnonzero(
+        (normalized["dependent"] >= 3177) & (normalized["dependent"] < 3187)
+    )
+    require(relation_indices.size == 10, "G3DI component12 normalized relations")
+    normalized_relations = normalized["matrix"][:, relation_indices].toarray() % PRIME
+    combined_current_rank = rank_mod(
+        np.concatenate(
+            (relations_root[COMPONENT_START:COMPONENT_PAST, :], normalized_relations[COMPONENT_START:COMPONENT_PAST, :]),
+            axis=1,
+        )
+    )
+    require(combined_current_rank == 10, "same ten-dimensional current projection as G3DI")
+
+    indices_path = EVIDENCE / "H02.component12.indices.npz"
+    np.savez_compressed(
+        indices_path,
+        selected_updates=selected_updates,
+        used_lift_coordinates=used_lift_coordinates,
+        component_coordinates=selected_updates[COMPONENT_START:COMPONENT_PAST],
+        finite_kernel_basis=kernel_root.astype(np.uint16),
+    )
+
+    exact_kernel = DOMAIN_DIMENSION - constraint_rank
+    exact_component_rank = COMPONENT_DIMENSION - exact_kernel
+    require(exact_kernel == 10 and exact_component_rank == component["finite_rank_increment"] == 71, "matching component12 bounds")
+    promoted_upper = PREVIOUS_UPPER - exact_kernel
+    require(promoted_upper == 5102, "promoted global upper5102")
+
+    checks = {
+        "G3BI_G3DE_G3DI_G3DX_and_G3EA_are_hash_bound": True,
+        "component12_is_the81_column_restricted_w_t1_squared_t2_s_t0_derivative_block": True,
+        "the_two_level_domain_is_Sym9_direct_sum_Sym6_of_dimension83": True,
+        "the_boundary_map_has28_plus55_rows_and_exact_Q_gamma_rank73": constraint_rank == 73,
+        "the_characteristic_zero_boundary_kernel_has_dimension10": exact_kernel == 10,
+        "constraint_plus_component12_projection_has_exact_rank83": stack_rank == 83,
+        "the_full_Cayley_action_residual_factors_exactly_through_the_boundary_map": residual == expected,
+        "all_six_W_coefficients_vanish_on_the_two_level_lift_support": w_support_nonzeros == [0] * 6,
+        "good_reduction_replays_ten_independent_component12_directions": rank_mod(relations_root[COMPONENT_START:COMPONENT_PAST, :]) == 10,
+        "the_current_projection_matches_the_G3DI_ten_direction_subspace": combined_current_rank == 10,
+        "good_reduction_lower71_and_exact_kernel_upper71_decide_component12_rank": exact_component_rank == 71,
+        "the_global_Q_gamma_rank_interval_improves_to4748_5102": promoted_upper == 5102,
+        "no_later_component_or_global_rank_equality_is_inferred": True,
+    }
+    require(all(checks.values()), "G3EB checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3eb-h02-component12-two-level-cayley-lift.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3EB",
+        "status": "CLOSED_EXACT_H02_COMPONENT12_TWO_LEVEL_CAYLEY_LIFT_RANK71_AND_GLOBAL_INTERVAL_4748_5102",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(G3BI), "G3DE": record(G3DE), "G3DI": record(G3DI),
+            "G3DX": record(G3DX), "G3EA": record(G3EA),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_coordinate_factorization": external_record(factor_path, mld),
+            "exact_number_field_rank_tool": record(RANK_TOOL),
+        },
+        "two_level_source": {
+            "coefficient_field": "Q(gamma), minpoly gamma^6+24gamma^5+89gamma^4+44gamma^3+33gamma^2+16gamma+64",
+            "ansatz": "H=h0+w*h1 with h0 in Sym9 and h1 in Sym6",
+            "reduction": "Use K=w^2-F6 to replace w^2*h1*Bi by F6*h1*Bi and carry the difference in the dPhi/du lift.",
+            "source_rows": "P1=h0*A1+F6*h1*B1; P2=-(h0*A2+F6*h1*B2); R1=h0*B1+h1*A1; R2=-(h0*B2+h1*A2)",
+            "boundary_conditions": "R1 has x-degree at most8 and R2 has x-degree at most5.",
+            "boundary_map_shape": [83, 83],
+            "boundary_map_rank": constraint_rank,
+            "kernel_dimension": exact_kernel,
+            "constraint_coefficients": constraint_records,
+            "source_coefficients": source_records,
+            "boundary_number_field_matrix": record(constraint_path),
+            "boundary_rank_certificate": record(constraint_certificate),
+            "constraint_plus_projection_number_field_matrix": record(stack_path),
+            "constraint_plus_projection_rank_certificate": record(stack_certificate),
+        },
+        "exact_lift": {
+            "t1_t2_part": "-C0*s*t2^3*(h0+w*h1) e_t1 + C0*s*t1^2*t2*(h0+w*h1) e_t2",
+            "u_part": "C0*s^2*h1*(B1*t2^3-B2*t1^2*t2) e_u",
+            "identity": "A0*L+U*N equals C0*s^2*w*(-t2^3*pi_x>=9(R1)+t1^2*t2*pi_x>=6(R2)); hence it vanishes on ker(M12).",
+            "lift_coefficients": lift_records,
+            "used_full_complement_coordinates": int(used_lift_coordinates.size),
+            "W_entries_on_lift_support_by_gamma_degree": w_support_nonzeros,
+            "indices_and_good_reduction_kernel": record(indices_path),
+        },
+        "rank_promotion": {
+            "component12_columns": COMPONENT_DIMENSION,
+            "exact_independent_kernel_columns": exact_kernel,
+            "good_reduction_rank_lower_bound": 71,
+            "exact_kernel_rank_upper_bound": exact_component_rank,
+            "component12_rank_over_Q_gamma": exact_component_rank,
+            "previous_global_Q_rank_interval": [FINITE_Q_RANK, PREVIOUS_UPPER],
+            "promoted_global_Q_rank_interval": [FINITE_Q_RANK, promoted_upper],
+            "remaining_global_gap": promoted_upper - FINITE_Q_RANK,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_discarded_one_level_boundary_Koszul_family_is_the_G3DI_kernel": False,
+            "claims_global_Q_gamma_rank_is4748": False,
+            "claims_the_later1078_finite_kernel_relations_lift": False,
+            "claims_a_selected_source_path_or_physical_endpoint": False,
+            "claims_B_ETA9_01_or_B_ETA9_02_is_closed": False,
+        },
+        "theorem": {
+            "name": "ustG3ebH02Component12TwoLevelCayleyLift",
+            "tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_COMPONENT_SOURCE_PROMOTION",
+            "statement": "Writing H=h0+w h1 and reducing w^2 through K=w^2-F6 turns the component12 source problem into an83-square boundary map. Its exact rank over Q(gamma) is73, and adjoining the component12 projection raises the rank to83. Thus its ten-dimensional kernel projects injectively to component12. The displayed u,t1,t2 lift factors the full action residual through the boundary map and W annihilates the lift. These ten exact relations reduce the component increment to at most71; good reduction gives the matching lower bound. Component12 therefore has exact rank71 and the global interval tightens to4748..5102.",
+        },
+        "frontier_delta": {
+            "before": "After G3EA, component12 contributed the smallest remaining10-unit structural-versus-finite gap and the global interval was4748..5112.",
+            "after": "The two-level Cayley boundary map promotes all ten component12 dependencies, proves its rank71 and lowers the global upper bound to5102. The unresolved gap is354.",
+        },
+        "next_required_object": "Analyze the next ordered positive-gap component after12 in the frozen G3DX ledger, using its normalized source support and exact lift generators before launching any new prime campaign.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii", newline="\n")
+    print("UST.G3EB H02 component12 two-level Cayley lift: PASS")
+    print("component12_rank_Qgamma=71 global_Q_interval=4748..5102 remaining_gap=354")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

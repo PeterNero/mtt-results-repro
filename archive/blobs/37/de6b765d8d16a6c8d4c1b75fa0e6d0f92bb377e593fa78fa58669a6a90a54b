@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Independently verify the selected H11 fraction-free Woodbury data."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3cv_h11_fraction_free_path_woodbury as builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load(path: Path):
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def matrices(records):
+    result = []
+    for value in records:
+        path = ROOT / value["path"]
+        require(sha256(path) == value["sha256"], f"hash {path.name}")
+        matrix = sparse.load_npz(path).tocsr().astype(np.int64)
+        require(list(matrix.shape) == value["shape"], f"shape {path.name}")
+        require(matrix.nnz == int(value["nonzero_entries"]), f"nnz {path.name}")
+        result.append(matrix)
+    return result
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["theorem_id"] == "UST.G3CV", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    g3cu_path = ROOT / packet["inputs"]["G3CU"]["path"]
+    require(sha256(g3cu_path) == packet["inputs"]["G3CU"]["sha256"], "G3CU hash")
+    g3cu = load(g3cu_path)
+    update = g3cu["affine_path_update"]
+    delta = [
+        sparse.load_npz(ROOT / value["path"]).tocsr().astype(np.int64)
+        for value in update["exact_gamma_coefficient_matrices"]
+    ]
+
+    factor = packet["factorization"]
+    selection_path = ROOT / factor["selection"]["path"]
+    require(sha256(selection_path) == factor["selection"]["sha256"], "selection hash")
+    selection = np.load(selection_path, allow_pickle=False)
+    rows = selection["selected_rows"].astype(np.int32)
+    columns = selection["selected_columns"].astype(np.int32)
+    require(rows.size == columns.size == 988, "selection size")
+
+    u = matrices(factor["U_gamma_coefficients"])
+    w = matrices(factor["W_gamma_coefficients"])
+    s = matrices(factor["S_gamma_coefficients"])
+    for degree in range(6):
+        require((u[degree] != delta[degree][:, columns]).nnz == 0, f"U degree {degree}")
+        require((w[degree] != delta[degree][rows, :]).nnz == 0, f"W degree {degree}")
+        require(
+            (s[degree] != delta[degree][rows, :][:, columns]).nnz == 0,
+            f"S degree {degree}",
+        )
+
+    root = int(factor["selected_place"]["gamma_root"])
+    delta_root = builder.evaluate(delta, root)
+    mismatches, components = builder.replay_factorization(delta_root, rows, columns)
+    require(mismatches == 0, "factorization replay")
+    require(sum(row["rank"] for row in components) == 988, "component rank sum")
+    require(
+        int(update["selected_minor_determinant_mod21817"]) != 0,
+        "nonzero selected minor",
+    )
+    require(int(update["exact_rank_over_Q_gamma"]) == 988, "exact rank")
+    require(
+        packet["reduced_inverse_equation"]["reduced_equation"]
+        == "(S+a*W*P)z=a*W*x0",
+        "reduced equation",
+    )
+    print("UST.G3CV selected H11 fraction-free path Woodbury verifier: PASS")
+    print("rank=988 polynomial_submatrices=18 selected_place_factorization_mismatches=0")
+
+
+if __name__ == "__main__":
+    main()

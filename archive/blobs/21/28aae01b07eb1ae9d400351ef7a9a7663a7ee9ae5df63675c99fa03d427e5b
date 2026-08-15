@@ -1,0 +1,493 @@
+#!/usr/bin/env python3
+"""Test the selected second-jet source for the component-20 O8 column."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fn_component20_hilbert_burch_source as hilbert_burch
+import probe_ust_g3fy_selected_degree21_source_span as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3FN = ROOT / "evidence/ust_g3fn/H02.component20.hilbert_burch_source.npz"
+G3FX = ROOT / "evidence/ust_g3fx/H02.component20.adjugate_normal_homotopy.npz"
+EVIDENCE = ROOT / "evidence/ust_g3fz"
+ARRAYS = EVIDENCE / "H02.component20.second_jet_o8_source.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.second_jet_o8_source.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def evaluate_coordinates(rows: np.ndarray, gamma: int, prime: int) -> np.ndarray:
+    return sum(
+        (rows[:, power].astype(np.int64) % prime) * pow(gamma, power, prime)
+        for power in range(rows.shape[1])
+    ) % prime
+
+
+def derivative(
+    vector: np.ndarray, degree: int, variable: int, prime: int
+) -> np.ndarray:
+    source = graded.homogeneous_exponents(degree)
+    target = graded.homogeneous_exponents(degree - 1)
+    lookup = {exponent: row for row, exponent in enumerate(target)}
+    result = np.zeros(len(target), dtype=np.int64)
+    for exponent, coefficient in zip(source, vector, strict=True):
+        if exponent[variable] == 0:
+            continue
+        shifted = list(exponent)
+        shifted[variable] -= 1
+        result[lookup[tuple(shifted)]] = (
+            result[lookup[tuple(shifted)]]
+            + int(coefficient) * exponent[variable]
+        ) % prime
+    return result
+
+
+def second_derivative_family(
+    vector: np.ndarray, prime: int
+) -> np.ndarray:
+    second = np.stack(
+        [
+            derivative(
+                derivative(vector, 9, first, prime), 8, second, prime
+            )
+            for first in range(3)
+            for second in range(first, 3)
+        ],
+        axis=1,
+    )
+    return graded.multiply_space(second, 7, 8, prime)
+
+
+def canonical_columns(matrix: np.ndarray, prime: int) -> np.ndarray:
+    _, pivots, _ = graded.rref(matrix, prime)
+    return matrix[:, pivots] % prime
+
+
+def row_lift(space: np.ndarray) -> np.ndarray:
+    result = np.zeros((180, 4 * space.shape[1]), dtype=np.int64)
+    for row in range(4):
+        result[
+            row * 45 : (row + 1) * 45,
+            row * space.shape[1] : (row + 1) * space.shape[1],
+        ] = space
+    return result
+
+
+def canonical_mod_inherited(
+    inherited: np.ndarray, candidate: np.ndarray, prime: int
+) -> np.ndarray:
+    rank, pivot_rows, _ = graded.rref(inherited.T, prime)
+    require(rank == 64, "inherited rank")
+    pivots = np.asarray(pivot_rows, dtype=np.int64)
+    coefficients = (
+        hilbert_burch.inverse_mod(inherited[pivots, :], prime)
+        @ candidate[pivots]
+        % prime
+    )
+    reduced = (candidate - inherited @ coefficients) % prime
+    require(np.count_nonzero(reduced[pivots]) == 0, "quotient pivot zeros")
+    support = np.flatnonzero(reduced)
+    require(support.size > 0, "nonzero quotient class")
+    return reduced * pow(int(reduced[int(support[0])]), -1, prime) % prime
+
+
+def fiber_source(
+    generators11: np.ndarray,
+    syzygy_block: np.ndarray,
+    d7: np.ndarray,
+    b6: np.ndarray,
+    forms9: tuple[np.ndarray, np.ndarray, np.ndarray],
+    target_o8: np.ndarray,
+    prime: int,
+) -> tuple[np.ndarray, np.ndarray, tuple[int, ...], tuple[int, ...]]:
+    linear_d7 = graded.multiply_space(d7[:, None], 7, 8, prime)
+    quadratic_b6 = graded.multiply_space(b6[:, None], 6, 8, prime)
+    gradient_a1 = np.stack(
+        [derivative(forms9[1], 9, variable, prime) for variable in range(3)],
+        axis=1,
+    )
+    gradient_a2 = np.stack(
+        [derivative(forms9[2], 9, variable, prime) for variable in range(3)],
+        axis=1,
+    )
+    first_order = canonical_columns(
+        np.concatenate(
+            (linear_d7, quadratic_b6, gradient_a1, gradient_a2), axis=1
+        ),
+        prime,
+    )
+    require(first_order.shape == (45, 15), "first-order source dimension")
+    second_a0 = second_derivative_family(forms9[0], prime)
+    second_order = canonical_columns(
+        np.concatenate((first_order, second_a0), axis=1), prime
+    )
+    require(second_order.shape == (45, 33), "second-order source dimension")
+
+    map19 = graded.multiply_space(generators11, 11, 19, prime)
+    inherited = np.concatenate(
+        (
+            hilbert_burch.lift_syzygy(syzygy_block[:12], 1, 8, prime),
+            hilbert_burch.lift_syzygy(syzygy_block[12:], 2, 8, prime),
+        ),
+        axis=1,
+    )
+    require(graded.rref(inherited, prime)[0] == 64, "inherited syzygies")
+
+    first_lift = row_lift(first_order)
+    _, _, first_nullspace = graded.rref(
+        map19 @ first_lift % prime, prime, emit_nullspace=True
+    )
+    require(first_nullspace is not None, "first-order nullspace")
+    first_solutions = first_lift @ first_nullspace % prime
+    first_solution_rank = graded.rref(first_solutions, prime)[0]
+    first_joint_rank = graded.rref(
+        np.concatenate((inherited, first_solutions), axis=1), prime
+    )[0]
+    require((first_nullspace.shape[1], first_solution_rank, first_joint_rank) == (5, 5, 64), "first-order inherited only")
+
+    second_lift = row_lift(second_order)
+    _, _, second_nullspace = graded.rref(
+        map19 @ second_lift % prime, prime, emit_nullspace=True
+    )
+    require(second_nullspace is not None, "second-order nullspace")
+    second_solutions = second_lift @ second_nullspace % prime
+    require(graded.rref(second_solutions, prime)[0] == 17, "second solution rank")
+    second_joint_rank = graded.rref(
+        np.concatenate((inherited, second_solutions), axis=1), prime
+    )[0]
+    require(
+        (second_nullspace.shape[1], second_solutions.shape[1], second_joint_rank)
+        == (17, 17, 65),
+        "one new second-order quotient class",
+    )
+    new, _, combined_rank = graded.complement_columns(
+        inherited, second_solutions, prime
+    )
+    require(new.shape == (180, 1) and combined_rank == 65, "new O8 class")
+    canonical = canonical_mod_inherited(inherited, new[:, 0], prime)
+    require(np.array_equal(canonical, target_o8 % prime), "canonical O8 replay")
+
+    # Select the same new class in the upstream 132-coordinate source chart.
+    intersection_system = np.concatenate((second_solutions, -inherited), axis=1)
+    _, _, intersection_relations = graded.rref(
+        intersection_system, prime, emit_nullspace=True
+    )
+    require(
+        intersection_relations is not None
+        and intersection_relations.shape == (81, 16),
+        "16-dimensional inherited intersection",
+    )
+    intersection_coefficients = (
+        second_nullspace @ intersection_relations[:17] % prime
+    )
+    require(
+        graded.rref(intersection_coefficients, prime)[0] == 16,
+        "source intersection rank",
+    )
+    source_new, _, source_combined_rank = graded.complement_columns(
+        intersection_coefficients, second_nullspace, prime
+    )
+    require(
+        source_new.shape == (132, 1) and source_combined_rank == 17,
+        "one source quotient class",
+    )
+    intersection_rank, source_pivot_rows, _ = graded.rref(
+        intersection_coefficients.T, prime
+    )
+    require(intersection_rank == 16, "source pivot chart")
+    source_pivots = np.asarray(source_pivot_rows, dtype=np.int64)
+    inherited_coordinates = (
+        hilbert_burch.inverse_mod(
+            intersection_coefficients[source_pivots, :], prime
+        )
+        @ source_new[source_pivots, 0]
+        % prime
+    )
+    source_coefficient = (
+        source_new[:, 0]
+        - intersection_coefficients @ inherited_coordinates
+    ) % prime
+    require(
+        np.count_nonzero(source_coefficient[source_pivots]) == 0,
+        "source quotient pivot zeros",
+    )
+    source_support = np.flatnonzero(source_coefficient)
+    require(source_support.size > 0, "nonzero source quotient")
+    source_normalization = int(source_support[0])
+    source_coefficient = (
+        source_coefficient
+        * pow(int(source_coefficient[source_normalization]), -1, prime)
+        % prime
+    )
+    source_output = second_lift @ source_coefficient % prime
+    require(np.count_nonzero(map19 @ source_output % prime) == 0, "source syzygy replay")
+    require(
+        np.array_equal(
+            canonical_mod_inherited(inherited, source_output, prime),
+            target_o8 % prime,
+        ),
+        "upstream source emits O8 quotient",
+    )
+    profile = (
+        first_order.shape[1],
+        first_nullspace.shape[1],
+        first_joint_rank - 64,
+        second_order.shape[1],
+        second_nullspace.shape[1],
+        second_joint_rank - 64,
+    )
+    source_profile = tuple(int(value) for value in source_pivot_rows) + (
+        source_normalization,
+    )
+    return canonical, source_coefficient, profile, source_profile
+
+
+def main() -> None:
+    g3bi = load(G3BI)
+    g3fx = np.load(G3FX, allow_pickle=False)
+    g3fn = np.load(G3FN, allow_pickle=False)
+    packets = [load(path) for path in conic.SPLIT_PACKETS]
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+    require(len(coefficient_vectors) == 249, "three selected B67 forms")
+    require(
+        tuple(int(packet["field"]["prime"]) for packet in packets)
+        == conic.EXPECTED_PRIMES,
+        "prime order",
+    )
+
+    replay = np.zeros((8, 6, 180), dtype=np.uint32)
+    source_coefficients = np.zeros((8, 6, 132), dtype=np.uint32)
+    source_residues: list[np.ndarray] = []
+    profiles: list[tuple[int, ...]] = []
+    source_profiles: list[tuple[int, ...]] = []
+    rows: list[dict[str, object]] = []
+    for prime_index, (packet_path, packet) in enumerate(
+        zip(conic.SPLIT_PACKETS, packets, strict=True)
+    ):
+        prime = int(packet["field"]["prime"])
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        root_rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        local_profiles: list[tuple[int, ...]] = []
+        for root_index, gamma in enumerate(roots):
+            generators, syzygy_block, _ = g3fe.extract_fiber(
+                ROOT / root_rows[gamma]["kernel"]["path"], prime
+            )
+            d7 = evaluate_coordinates(
+                g3fx["D7_gamma_coordinates"], gamma, prime
+            )
+            b6 = evaluate_coordinates(
+                g3fx["B6_gamma_coordinates"], gamma, prime
+            )
+            forms9 = tuple(
+                source_runtime.evaluate_selected_form(
+                    coefficient_vectors, theta, gamma, prime
+                )
+                for theta in range(3)
+            )
+            canonical, source_coefficient, profile, source_profile = fiber_source(
+                generators[11],
+                syzygy_block,
+                d7,
+                b6,
+                forms9,
+                g3fn["degree8_syzygy_values"][prime_index, root_index],
+                prime,
+            )
+            replay[prime_index, root_index] = canonical.astype(np.uint32)
+            source_coefficients[prime_index, root_index] = source_coefficient.astype(
+                np.uint32
+            )
+            local_profiles.append(profile)
+            profiles.append(profile)
+            source_profiles.append(source_profile)
+            print(
+                f"G3FZ p={prime} gamma={gamma}: first=5/0 "
+                "second=17/1 O8=replayed",
+                flush=True,
+            )
+        require(len(set(local_profiles)) == 1, f"common root profile p={prime}")
+        source_residues.append(
+            g3fe.interpolate(
+                source_coefficients[prime_index].astype(np.int64), roots, prime
+            ).reshape(-1).astype(np.uint32)
+        )
+        rows.append(
+            {
+                "prime": prime,
+                "roots": list(roots),
+                "profile": list(local_profiles[0]),
+                "source_packet": record(packet_path),
+            }
+        )
+    require(len(profiles) == 48 and len(set(profiles)) == 1, "common48 profile")
+    require(
+        len(source_profiles) == 48 and len(set(source_profiles)) == 1,
+        "common48 source normalization chart",
+    )
+    require(
+        np.array_equal(replay, g3fn["degree8_syzygy_values"]),
+        "all48 O8 replay",
+    )
+    source_residue_matrix = np.stack(source_residues)
+    require(source_residue_matrix.shape == (8, 792), "source residue shape")
+    reconstruction = g3fe.reconstruction_audit(
+        source_residue_matrix, conic.EXPECTED_PRIMES
+    )
+    valid_mask = reconstruction.pop("valid_mask")
+    pass_mask = reconstruction.pop("pass_mask")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ARRAYS,
+        primes=g3fn["primes"],
+        roots=g3fn["roots"],
+        degree8_syzygy_replay=replay,
+        second_jet_source_coefficients=source_coefficients,
+        second_jet_source_power_basis_residues=source_residue_matrix,
+        source_reconstruction_valid=np.packbits(valid_mask),
+        source_reconstruction_pass=np.packbits(pass_mask),
+        common_profile=np.asarray(profiles[0], dtype=np.int16),
+        source_normalization_profile=np.asarray(
+            source_profiles[0], dtype=np.int16
+        ),
+    )
+    packet = {
+        "schema": "ust.g3fz.h02.component20.second-jet-o8-source.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FZ",
+        "status": "CLOSED_EXACT_48_FIBER_SECOND_JET_O8_SOURCE_QGAMMA_COEFFICIENT_PROMOTION_OPEN",
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3FN": record(G3FN),
+            "G3FX": record(G3FX),
+            "split_prime_packets": [record(path) for path in conic.SPLIT_PACKETS],
+        },
+        "selected_source": {
+            "base_degree8_space": "Sym1*D7 + Sym2*B6 + span(grad A1) + span(grad A2)",
+            "base_dimension": 15,
+            "base_rowwise_syzygy_dimension": 5,
+            "base_new_quotient_classes": 0,
+            "second_jet_extension": "base + Sym1*span(partial_i partial_j A0, 0<=i<=j<=2)",
+            "second_jet_degree8_dimension": 33,
+            "second_jet_rowwise_syzygy_dimension": 17,
+            "second_jet_new_quotient_classes": 1,
+            "inherited_degree8_syzygy_dimension": 64,
+            "full_degree8_syzygy_dimension": 65,
+            "canonical_new_class": "the normalized G3FN O8 column",
+            "upstream_source_coordinate_dimension": 132,
+            "upstream_inherited_intersection_dimension": 16,
+            "upstream_quotient_dimension": 1,
+            "upstream_source_power_basis_slots": 792,
+            "upstream_source_reconstruction": reconstruction,
+            "common_profile": list(profiles[0]),
+        },
+        "campaign": {
+            "primes": len(packets),
+            "roots_per_prime": 6,
+            "fibers": len(profiles),
+            "prime_rows": rows,
+            "artifact": record(ARRAYS),
+        },
+        "interpretation": {
+            "result": (
+                "The missing degree8 Hilbert-Burch quotient class is selected by "
+                "a second jet of A0 together with the already selected D7, B6, A1 "
+                "and A2 first-order source spaces. The analogous first-order source "
+                "contains only inherited syzygies."
+            ),
+            "asymmetry": (
+                "Replacing the A0 second jet by the A1 or A2 second jet failed at "
+                "the anchor audit. A0 is therefore not an interchangeable row in "
+                "this finite source mechanism."
+            ),
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "checks": {
+            "all48_archived_split_fibers_are_replayed": True,
+            "the_first_order_source_has_dimension15": True,
+            "the_first_order_source_adds_no_new_degree8_quotient_class": True,
+            "the_second_jet_source_has_dimension33": True,
+            "the_second_jet_source_adds_exactly_one_degree8_quotient_class": True,
+            "the_new_class_equals_the_normalized_G3FN_O8_column_at_all48_fibers": True,
+            "the_upstream132_coordinate_source_has_a_common_normalization_chart": True,
+            "the_upstream_source_quotient_is_one_dimensional": True,
+        },
+        "guardrails": {
+            "claims_the_finite_syzygy_solution_coefficients_are_promoted_to_Qgamma": False,
+            "claims_the_second_jet_rule_is_derived_from_the_continuum_connection": False,
+            "claims_the_full_G3FN_matrix_is_identified_with_G3FV_over_Qgamma": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fzComponent20SecondJetO8SourceTheorem",
+            "tier": "CLOSED_EXACT_48_FIBER_SECOND_JET_SOURCE_IDENTIFICATION",
+            "statement": (
+                "At every one of the 48 archived split fibers, the rowwise degree8 "
+                "space generated by Sym1 D7, Sym2 B6, grad A1 and grad A2 contributes "
+                "only inherited Hilbert-Burch syzygies. Adjoining Sym1 times the "
+                "second derivatives of the selected A0 enlarges that space to "
+                "dimension33 and contributes exactly one non-inherited quotient "
+                "class. Canonical reduction modulo the inherited64-plane reproduces "
+                "the normalized G3FN O8 column exactly."
+            ),
+        },
+        "next_required_object": (
+            "Promote the canonical coefficient vector of this second-jet syzygy to "
+            "Q(gamma), or derive it as the Hessian/connection component of the Cox-H02 "
+            "residue functor. Then identify the degree1 and degree2 columns in the "
+            "same source frame and compare all four maximal minors over Q(gamma)."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FZ second-jet O8 source: PASS "
+        "fibers=48 first_quotient=0 second_quotient=1"
+    )
+
+
+if __name__ == "__main__":
+    main()

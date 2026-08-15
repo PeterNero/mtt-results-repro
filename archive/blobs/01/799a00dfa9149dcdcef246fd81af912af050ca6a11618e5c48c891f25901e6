@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""Construct the exact K3 matrix factorization for the selected root normals."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import runtime
+import build_ust_g3ff_component20_conic_fourth_normal_source as g3ff_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3FI = ROOT / "evidence/ust_g3fi/H02.component20.root_ideal_normal_pair.json"
+EVIDENCE = ROOT / "evidence/ust_g3fj"
+TRANSFER = EVIDENCE / "H02.component20.k3_normal_matrix_factorization.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.k3_normal_matrix_factorization.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def repository_root(path: Path) -> Path:
+    current = path.resolve().parent
+    while current.parent != current:
+        if (current / ".git").exists():
+            return current
+        current = current.parent
+    raise AssertionError(f"repository root for {path}")
+
+
+def external_record(path: Path) -> dict[str, object]:
+    repository = repository_root(path)
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (a, b, degree - a - b)
+        for a in range(degree + 1)
+        for b in range(degree - a + 1)
+    ]
+
+
+def main() -> None:
+    g3bi = load(G3BI)
+    g3fi = load(G3FI)
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3fi["checks"].values()), "G3FI checks")
+    require(
+        g3fi["status"]
+        == "CLOSED_EXACT_AMBIENT_ROOT_IDEAL_NORMAL_PAIR_NORMAL_JET_HOMOTOPY_OPEN",
+        "G3FI status",
+    )
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+
+    base_path = oracle.BASE
+    base = load(base_path)
+    require(all(base["checks"].values()), "q79 K3 base checks")
+
+    x, y, z, w = sp.symbols("x y z w")
+    k3_terms = oracle.exact_k3_terms(base)
+    require(len(k3_terms) == 28, "28 selected K3 terms")
+    require(
+        all(coordinate[1:] == (0, 0, 0, 0, 0) for coordinate in k3_terms.values()),
+        "K3 is rational in the frozen Q(gamma) basis",
+    )
+    k3 = sp.Poly(
+        sum(
+            int(coordinate[0])
+            * x ** exponent[0]
+            * y ** exponent[1]
+            * z ** exponent[2]
+            * w ** exponent[3]
+            for exponent, coordinate in k3_terms.items()
+        ),
+        x,
+        y,
+        z,
+        w,
+        domain=sp.ZZ,
+    )
+    require(k3.coeff_monomial(w**2) == 1, "monic K3 double-cover coordinate")
+    p6 = sp.Poly(k3.as_expr() - w**2, x, y, z, domain=sp.ZZ)
+    require(p6.total_degree() == 6, "K3 sextic degree")
+
+    g3 = sp.Poly(
+        sum(
+            coefficient * x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+            for exponent, coefficient in g3ff_runtime.G3_TERMS.items()
+        ),
+        x,
+        y,
+        z,
+        domain=sp.ZZ,
+    )
+    q = sp.Poly(x * z - y**2, x, y, z, domain=sp.ZZ)
+    h4, remainder = sp.div(
+        sp.Poly(p6.as_expr() + g3.as_expr() ** 2, x, y, z, domain=sp.ZZ), q
+    )
+    require(remainder.is_zero, "selected root curve lies on K3")
+    require(h4.total_degree() == 4, "H4 degree")
+    require(sp.gcd(q, h4).as_expr() == 1, "q and H4 are coprime")
+
+    r = w + g3.as_expr()
+    rbar = w - g3.as_expr()
+    require(
+        sp.Poly(r * rbar + q.as_expr() * h4.as_expr(), x, y, z, w, domain=sp.ZZ)
+        == k3,
+        "K3 root-normal decomposition",
+    )
+
+    matrix_m = sp.Matrix([[r, q.as_expr()], [-h4.as_expr(), rbar]])
+    matrix_n = sp.Matrix([[rbar, -q.as_expr()], [h4.as_expr(), r]])
+    identity = sp.eye(2) * k3.as_expr()
+    require(
+        all(sp.expand(value) == 0 for value in matrix_m * matrix_n - identity),
+        "M*N=K3*I2",
+    )
+    require(
+        all(sp.expand(value) == 0 for value in matrix_n * matrix_m - identity),
+        "N*M=K3*I2",
+    )
+
+    normal_path = ROOT / g3fi["exact_ambient_normal_pair"]["normal_pair_artifact"][
+        "path"
+    ]
+    require(
+        sha256(normal_path)
+        == g3fi["exact_ambient_normal_pair"]["normal_pair_artifact"]["sha256"],
+        "G3FI normal-pair hash",
+    )
+    normal = np.load(normal_path, allow_pickle=False)
+    b6_rows = normal["B6_gamma_coordinates"].astype(np.int64)
+    d7_rows = normal["D7_gamma_coordinates"].astype(np.int64)
+    coefficients = g3bi["selected_source"]["coefficient_vectors"]
+    for coordinate in range(6):
+        b6 = sum(
+            int(b6_rows[local, coordinate])
+            * x ** exponent[0]
+            * y ** exponent[1]
+            * z ** exponent[2]
+            for local, exponent in enumerate(homogeneous_exponents(6))
+        )
+        d7 = sum(
+            int(d7_rows[local, coordinate])
+            * x ** exponent[0]
+            * y ** exponent[1]
+            * z ** exponent[2]
+            for local, exponent in enumerate(homogeneous_exponents(7))
+        )
+        a0 = source_polynomial(coefficients, 0, coordinate, x, y, z, w)
+        a1 = source_polynomial(coefficients, 1, coordinate, x, y, z, w)
+        require(
+            sp.Poly(r * b6 + q.as_expr() * d7, x, y, z, w, domain=sp.ZZ)
+            == a0 - a1,
+            f"selected normal pair coordinate {coordinate}",
+        )
+
+    h4_rows = np.asarray(
+        [
+            int(
+                h4.coeff_monomial(
+                    x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+                )
+            )
+            for exponent in homogeneous_exponents(4)
+        ],
+        dtype=np.int64,
+    )
+    require(h4_rows.shape == (15,), "H4 coefficient shape")
+    require(np.count_nonzero(h4_rows) == 13, "H4 support")
+
+    # The opposite branch factor is not a global unit on the conic: its
+    # restriction is -2*G3, a positive-degree section. This forbids a hidden
+    # division by rbar in the global contraction.
+    require(g3.total_degree() == 3, "G3 positive degree")
+    require(sp.gcd(q, g3).as_expr() == 1, "q and G3 share no component")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        TRANSFER,
+        H4_coefficients=h4_rows,
+        degree4_exponents=np.asarray(homogeneous_exponents(4), dtype=np.int16),
+        B6_gamma_coordinates=b6_rows,
+        D7_gamma_coordinates=d7_rows,
+    )
+
+    packet = {
+        "schema": "ust.g3fj.h02.component20.k3-normal-matrix-factorization.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FJ",
+        "status": "CLOSED_EXACT_K3_ROOT_NORMAL_MATRIX_FACTORIZATION_SELECTED_CONTRACTION_OPEN",
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3FI": record(G3FI),
+            "q79_K3_base": external_record(base_path),
+            "characteristic_zero_oracle": external_record(Path(oracle.__file__)),
+        },
+        "K3_root_normal_identity": {
+            "K3": "w^2+P6(x,y,z)",
+            "q": "xz-y^2",
+            "r": "w+G3",
+            "rbar": "w-G3",
+            "H4": str(h4.as_expr()),
+            "identity": "K3=r*rbar+q*H4",
+            "H4_nonzero_coefficients": int(np.count_nonzero(h4_rows)),
+            "gcd_q_H4": "1",
+        },
+        "matrix_factorization": {
+            "M": [["r", "q"], ["-H4", "rbar"]],
+            "N": [["rbar", "-q"], ["H4", "r"]],
+            "identities": ["M*N=K3*I2", "N*M=K3*I2"],
+            "first_row_normal_map": "(B,D) maps to r*B+q*D",
+            "denominator_free_syzygies_on_K3": [
+                "(rbar,H4): r*rbar+q*H4=K3=0",
+                "(-q,r): -r*q+q*r=0",
+            ],
+            "graded_pair": "B has degree n and D degree n+1; preimages have degrees n-3 and n-2",
+            "artifact": record(TRANSFER),
+        },
+        "selected_source_binding": {
+            "normal_pair": "(B6,D7)",
+            "source_identity": "A0_selected-A1=[r q]*(B6,D7)^T",
+            "coordinates_replayed": 6,
+            "meaning": (
+                "The selected derivative difference is now a section of the exact "
+                "K3 normal matrix-factorization module, not merely a polynomial "
+                "known to vanish on the root graph."
+            ),
+        },
+        "global_unit_boundary": {
+            "rbar_on_Rminus": "-2*G3 on q=0",
+            "gcd_q_G3": "1 (no common component)",
+            "rbar_is_a_global_unit_on_the_projective_conic": False,
+            "consequence": (
+                "A valid global homotopy must use the denominator-free matrix "
+                "factorization; it may not divide by w-G3."
+            ),
+        },
+        "checks": {
+            "the_selected_root_curve_lies_on_the_exact_K3": True,
+            "the_H4_quotient_is_integral_and_coprime_to_q": True,
+            "both_two_by_two_matrix_factorization_identities_replay": True,
+            "all_six_selected_source_normal_pairs_replay": True,
+            "the_normal_transfer_uses_no_denominator": True,
+        },
+        "guardrails": {
+            "claims_rbar_is_globally_invertible_on_the_root_curve": False,
+            "claims_the_matrix_factorization_alone_selects_the100_plane": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fjComponent20K3RootNormalMatrixFactorization",
+            "tier": "CLOSED_EXACT_DENOMINATOR_FREE_ROOT_NORMAL_TRANSFER",
+            "statement": (
+                "The frozen q79 K3 equation has the exact decomposition "
+                "K3=(w+G3)(w-G3)+(xz-y^2)H4 with integral quartic H4 coprime "
+                "to q. The displayed matrices M and N factor K3 in both orders. "
+                "The selected G3FI source pair (B6,D7) is mapped by the first row "
+                "of M to A0_selected-A1 in every Q(gamma) coordinate. This closes "
+                "the denominator-free two-normal transfer object, while selection "
+                "and exact replay of the100 lower-normal relations remain open."
+            ),
+        },
+        "next_required_object": (
+            "Lift the M-N two-periodic contraction into the frozen H02 Cox degree, "
+            "including the t0/t1 and u/s multipliers, and compute its four-step "
+            "q-adic truncation on Sym15/q4Sym7. Replay the resulting100 columns "
+            "against G3EX before claiming the exact component rank."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FJ K3 normal matrix factorization: PASS "
+        "K3=r*rbar+q*H4 H4_terms=13 source_coordinates=6"
+    )
+
+
+def source_polynomial(
+    coefficients: list[list[int]],
+    theta: int,
+    coordinate: int,
+    x: sp.Symbol,
+    y: sp.Symbol,
+    z: sp.Symbol,
+    w: sp.Symbol,
+) -> sp.Poly:
+    offset = 83 * theta
+    expression = sum(
+        int(coefficients[offset + local][coordinate])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(g3ff_runtime.source_monomials(9))
+    )
+    expression += w * sum(
+        int(coefficients[offset + 55 + local][coordinate])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(g3ff_runtime.source_monomials(6))
+    )
+    return sp.Poly(expression, x, y, z, w, domain=sp.ZZ)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Verify the G3CS full selected pole-six preimage first jet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cs_selected_pole_six_preimage_first_jet.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "build_q79_eta9_toric_return_stage1_chunk.py").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def verify_record(record: dict[str, Any], repository: Path | None = None) -> Path:
+    if "path" in record:
+        path = ROOT / record["path"]
+    else:
+        require(repository is not None, "external repository")
+        path = repository / record["repository_relative_path"]
+    require(path.is_file(), f"record {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"bytes {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def polynomial(rows: list[dict[str, Any]]) -> dict[tuple[int, ...], int]:
+    return {
+        tuple(int(value) for value in row["exponent"]): int(row["coefficient_mod11"]) % PRIME
+        for row in rows
+        if int(row["coefficient_mod11"]) % PRIME
+    }
+
+
+def add(target: dict[tuple[int, ...], int], source: dict[tuple[int, ...], int], scale: int = 1) -> None:
+    for exponent, coefficient in source.items():
+        target[exponent] = (target.get(exponent, 0) + scale * coefficient) % PRIME
+        if target[exponent] == 0:
+            del target[exponent]
+
+
+def derivative(poly: dict[tuple[int, ...], int], variable: int) -> dict[tuple[int, ...], int]:
+    result: dict[tuple[int, ...], int] = {}
+    for exponent, coefficient in poly.items():
+        power = exponent[variable]
+        if power == 0:
+            continue
+        target = list(exponent)
+        target[variable] -= 1
+        key = tuple(target)
+        result[key] = (result.get(key, 0) + coefficient * power) % PRIME
+        if result[key] == 0:
+            del result[key]
+    return result
+
+
+def main() -> None:
+    packet = load(PACKET)
+    mld = resolve_mld()
+    require(packet["theorem_id"] == "UST.G3CS", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    for record in packet["inputs"].values():
+        verify_record(record, mld)
+    for section in (
+        packet["image_jet_composition"],
+        packet["full_preimage_first_jet"],
+        packet["full_H02_return_first_jet"],
+        packet["execution"],
+    ):
+        for value in section.values():
+            if isinstance(value, dict) and "sha256" in value:
+                verify_record(value)
+
+    image_payload = load(ROOT / packet["image_jet_composition"]["json"]["path"])
+    full_payload = load(ROOT / packet["full_preimage_first_jet"]["json"]["path"])
+    g3cq = load(ROOT / packet["inputs"]["G3CQ"]["path"])
+    correction_payload = load(
+        ROOT / g3cq["selected_first_order_coefficient_correction"]["json"]["path"]
+    )
+    image_rows = [polynomial(row["terms"]) for row in image_payload["rows_in_original_variable_order"]]
+    full_rows = [polynomial(row["terms"]) for row in full_payload["rows_in_original_variable_order"]]
+    correction_rows = [polynomial(row["terms"]) for row in correction_payload["rows_in_original_variable_order"]]
+    require(len(image_rows) == len(full_rows) == len(correction_rows) == 10, "ten rows")
+    for image, correction, full in zip(image_rows, correction_rows, full_rows, strict=True):
+        replay = dict(image)
+        add(replay, correction)
+        require(replay == full, "full row composition")
+
+    replay_return: dict[tuple[int, ...], int] = {}
+    for variable, row in enumerate(full_rows):
+        add(replay_return, derivative(row, variable), -1)
+    return_payload = load(
+        ROOT / packet["full_H02_return_first_jet"]["ambient_json"]["path"]
+    )
+    ambient_return = polynomial(return_payload["terms"])
+    require(replay_return == ambient_return, "full divergence replay")
+    rhs = sparse.load_npz(
+        ROOT / packet["full_H02_return_first_jet"]["ambient_scipy_NPZ"]["path"]
+    ).tocsc()
+    require(rhs.shape == (42706, 1) and rhs.nnz == len(ambient_return) == 11236, "ambient RHS")
+
+    normal_payload = load(
+        ROOT / packet["full_H02_return_first_jet"]["normal_form_json"]["path"]
+    )
+    normal = polynomial(normal_payload["terms"])
+    stored = np.fromfile(
+        ROOT / packet["full_H02_return_first_jet"]["normal_form_binary_uint8"]["path"],
+        dtype=np.uint8,
+    )
+    b103 = load(mld / packet["inputs"]["B103"]["repository_relative_path"])
+    h02 = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    lookup = {tuple(int(value) for value in exponent): index for index, exponent in enumerate(h02["basis_exponent_vectors"])}
+    replay_vector = np.zeros(248, dtype=np.uint8)
+    for exponent, coefficient in normal.items():
+        replay_vector[lookup[exponent]] = coefficient
+    require(np.array_equal(replay_vector, stored), "normal vector replay")
+    output = (ROOT / packet["execution"]["output"]["path"]).read_text(encoding="utf-8")
+    for marker in (
+        "G3CS_DIFFERENTIATED_IDENTITY_ZERO=1",
+        "G3CS_FULL_COEFFICIENT_DEGREES_OK=1",
+        "G3CS_FULL_RETURN_DEGREE_OK=1",
+        "G3CS_PASS",
+    ):
+        require(marker in output, marker)
+    print("UST.G3CS selected pole-six preimage first jet verification: PASS")
+    print(
+        f"image_terms={sum(len(row) for row in image_rows)} full_terms={sum(len(row) for row in full_rows)} "
+        f"return_terms={len(ambient_return)} H02_nnz={np.count_nonzero(stored)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

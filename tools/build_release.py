@@ -429,6 +429,16 @@ def main() -> int:
         return json.loads(archive_blob_path(artifact).read_text(encoding="utf-8"))
 
     unified_frontier = archived_json("unified_source", "state/frontier.json")
+    unified_selection = current_selection.get("unified_source_snapshot") or {}
+    frontier_key = str(unified_selection.get("frontier_key") or "frontier_current")
+    delta_key = str(unified_selection.get("frontier_delta_key") or "next_action")
+    if frontier_key not in unified_frontier or delta_key not in unified_frontier:
+        raise RuntimeError(
+            "configured unified-source frontier keys are absent: "
+            f"{frontier_key}, {delta_key}"
+        )
+    unified_frontier_current = unified_frontier[frontier_key]
+    unified_frontier_next_action = unified_frontier[delta_key]
     dump(
         RELEASE / "current_snapshot.json",
         {
@@ -446,7 +456,14 @@ def main() -> int:
                 "promoted_result_count": len(current_results),
                 "result_ids": [row["id"] for row in current_results],
                 "unified_source_hypothesis": unified_frontier["hypothesis"],
-                "unified_source_next_action": unified_frontier["next_action"],
+                "unified_source_committed_head": unified_selection.get("committed_head"),
+                "unified_source_frontier_key": frontier_key,
+                "unified_source_frontier": unified_frontier_current,
+                "unified_source_next_action": unified_frontier_next_action,
+                "unified_source_integrity": unified_selection.get(
+                    "integrity_note",
+                    "Only committed unified-source artifacts selected in this snapshot are promoted.",
+                ),
             },
             "paper_corpus": paper_lock,
             "source_repositories": source_snapshot["repositories"],

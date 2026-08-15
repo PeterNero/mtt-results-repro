@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Independently verify the G3CD full correction and affine obstruction operator."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cd_correction_full_affine_operator.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def normalized(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc(copy=True)
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def residual_nonzeros(left: sparse.spmatrix, right: sparse.spmatrix) -> int:
+    return int(normalized(left.astype(np.int32) - right.astype(np.int32)).nnz)
+
+
+def correction_terms(g3bi: dict[str, Any]) -> list[tuple[tuple[int, ...], int]]:
+    terms: list[tuple[tuple[int, ...], int]] = []
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        coefficients = [int(value) for value in row["correction_gamma_coordinates"]]
+        value = sum(coefficient * pow(3, power, PRIME) for power, coefficient in enumerate(coefficients)) % PRIME
+        if value:
+            exponent = tuple(int(item) for item in row["source_monomial"]) + (0, 1, 0, 0, 0, 0, 1)
+            terms.append((exponent, value))
+    require(len(terms) == 18, "18 independent GF11 correction terms")
+    return terms
+
+
+def rebuild_direct_block(
+    source_name: str,
+    target_name: str,
+    pole_order: int,
+    b103: dict[str, Any],
+    target_macaulay: dict[str, Any],
+    terms: list[tuple[tuple[int, ...], int]],
+) -> sparse.csc_matrix:
+    source_block = next(block for block in b103["basis_blocks"] if block["name"] == source_name)
+    sources = [tuple(int(value) for value in row) for row in source_block["basis_exponent_vectors"]]
+    targets = [
+        tuple(int(value) for value in row)
+        for row in target_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    lookup = {row: index for index, row in enumerate(targets)}
+    rows: list[int] = []
+    columns: list[int] = []
+    values: list[int] = []
+    for column, source in enumerate(sources):
+        seen: set[int] = set()
+        for deformation, coefficient in terms:
+            product = tuple(a + b for a, b in zip(source, deformation))
+            row = lookup.get(product)
+            require(row is not None and row not in seen, f"{source_name} direct product")
+            seen.add(row)
+            value = -pole_order * coefficient % PRIME
+            if value:
+                rows.append(row)
+                columns.append(column)
+                values.append(value)
+    matrix = sparse.csc_matrix(
+        (
+            np.asarray(values, dtype=np.uint8),
+            (np.asarray(rows, dtype=np.int32), np.asarray(columns, dtype=np.int32)),
+        ),
+        shape=(len(targets), len(sources)),
+        dtype=np.uint8,
+    )
+    return normalized(matrix)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["schema"] == "mtt.unified-source.g3cd-correction-full-affine-operator.v1", "schema")
+    require(packet["theorem_id"] == "UST.G3CD", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_full_recursive_H20_source_block as common
+    import assemble_q79_eta9_gauss_manin_strict_blocks as linear
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    inputs = packet["inputs"]
+    direct_path = verify_record(inputs["direct_correction_sources"])
+    g3bq_path = verify_record(inputs["G3BQ_correction_H02_return"])
+    g3cc_path = verify_record(inputs["G3CC_selected_terminal_source"])
+    verify_record(inputs["terminal_H20_divergence"], mld)
+    direct = load(direct_path)
+    g3bq = load(g3bq_path)
+    g3cc = load(g3cc_path)
+    require(all(direct["checks"].values()), "direct checks")
+    require(all(g3bq["checks"].values()), "G3BQ checks")
+    require(all(g3cc["checks"].values()), "G3CC checks")
+
+    direct_inputs = direct["inputs"]
+    g3bi_path = verify_record(direct_inputs["G3BI"])
+    verify_record(direct_inputs["G3BK"])
+    b103_path = verify_record(direct_inputs["B103"], mld)
+    h11_macaulay_path = verify_record(direct_inputs["target_Macaulay"]["H11"], mld)
+    h02_macaulay_path = verify_record(direct_inputs["target_Macaulay"]["H02"], mld)
+    g3bi = load(g3bi_path)
+    b103 = load(b103_path)
+    h11_macaulay = load(h11_macaulay_path)
+    h02_macaulay = load(h02_macaulay_path)
+    terms = correction_terms(g3bi)
+    expected_h20_direct = rebuild_direct_block("H20", "H11", 3, b103, h11_macaulay, terms)
+    expected_h11_direct = rebuild_direct_block("H11", "H02", 4, b103, h02_macaulay, terms)
+    stored_h20_direct_path = verify_record(direct["blocks"]["H20"]["NPZ"])
+    stored_h11_direct_path = verify_record(direct["blocks"]["H11"]["NPZ"])
+    stored_h20_direct = normalized(sparse.load_npz(stored_h20_direct_path))
+    stored_h11_direct = normalized(sparse.load_npz(stored_h11_direct_path))
+    require(residual_nonzeros(expected_h20_direct, stored_h20_direct) == 0, "H20 direct rebuild")
+    require(residual_nonzeros(expected_h11_direct, stored_h11_direct) == 0, "H11 direct rebuild")
+
+    coordinate_records = inputs["coordinate_payloads"]
+    coordinate_paths = {name: verify_record(item) for name, item in coordinate_records.items()}
+    h20_h11, h20_h11_q, _ = solver_io.read_coordinates(coordinate_paths["H20_H11"])
+    h20_h20, h20_h20_q, _ = solver_io.read_coordinates(coordinate_paths["H20_H20"])
+    h11_h02, h11_h02_q, _ = solver_io.read_coordinates(coordinate_paths["H11_H02"])
+    h11_h11, h11_h11_q, _ = solver_io.read_coordinates(coordinate_paths["H11_H11"])
+    h11_h20, h11_h20_q, _ = solver_io.read_coordinates(coordinate_paths["H11_H20"])
+    require((h20_h11_q, h20_h20_q, h11_h02_q, h11_h11_q, h11_h20_q) == (1013, 248, 248, 1013, 248), "coordinate quotient dimensions")
+
+    divergence_paths = {
+        name: verify_record(item)
+        for name, item in inputs["recursive_divergence_packets"].items()
+    }
+    h20_lower_packet = load(divergence_paths["H20_lower"])
+    h11_lower_packet = load(divergence_paths["H11_lower"])
+    h11_terminal_packet = load(divergence_paths["H11_terminal"])
+    for item in (h20_lower_packet, h11_lower_packet, h11_terminal_packet):
+        require(all(item["checks"].values()), "divergence checks")
+    h20_lower_rhs_path = verify_record(h20_lower_packet["lower_pole_ambient_RHS"]["NPZ"])
+    h11_lower_rhs_path = verify_record(h11_lower_packet["lower_pole_ambient_RHS"]["NPZ"])
+    h11_terminal_rhs_path = verify_record(h11_terminal_packet["lower_pole_ambient_RHS"]["NPZ"])
+    h20_lower_rhs = sparse.load_npz(h20_lower_rhs_path).tocsc()
+    h11_lower_rhs = sparse.load_npz(h11_lower_rhs_path).tocsc()
+    h11_terminal_rhs = sparse.load_npz(h11_terminal_rhs_path).tocsc()
+
+    h11_selected, _ = common.selected_source_matrix("H11")
+    h20_selected, _ = common.selected_source_matrix("H20")
+    h02_selected, _ = common.selected_source_matrix("H02")
+    require(residual_nonzeros(normalized(h11_selected @ h20_h11.astype(np.int32)), stored_h20_direct) == 0, "H20 direct coordinate reconstruction")
+    require(residual_nonzeros(normalized(h20_selected @ h20_h20.astype(np.int32)), h20_lower_rhs) == 0, "H20 lower coordinate reconstruction")
+    sample = np.asarray(packet["exact_reconstruction"]["H11_direct_H02_sample_columns"], dtype=np.int32)
+    require(residual_nonzeros(normalized(h02_selected @ h11_h02[:, sample].astype(np.int32)), stored_h11_direct[:, sample]) == 0, "H11 direct sampled reconstruction")
+    require(residual_nonzeros(normalized(h11_selected @ h11_h11.astype(np.int32)), h11_lower_rhs) == 0, "H11 lower reconstruction")
+    require(residual_nonzeros(normalized(h20_selected @ h11_h20.astype(np.int32)), h11_terminal_rhs) == 0, "H11 terminal reconstruction")
+
+    h20_block = normalized(
+        sparse.vstack(
+            [h20_h20[:248, :], h20_h11[:1013, :], sparse.csc_matrix((248, 248), dtype=np.uint8)],
+            format="csc",
+        )
+    )
+    h11_block = normalized(
+        sparse.vstack([h11_h20[:248, :], h11_h11[:1013, :], h11_h02[:248, :]], format="csc")
+    )
+    h02_record = g3bq["full_block"]["NPZ"]
+    h02_path = verify_record(h02_record)
+    h02_block = normalized(sparse.load_npz(h02_path))
+    stored_h20_block_path = verify_record(packet["source_blocks"]["H20"]["NPZ"])
+    stored_h11_block_path = verify_record(packet["source_blocks"]["H11"]["NPZ"])
+    require(residual_nonzeros(h20_block, sparse.load_npz(stored_h20_block_path)) == 0, "H20 block")
+    require(residual_nonzeros(h11_block, sparse.load_npz(stored_h11_block_path)) == 0, "H11 block")
+
+    connection = normalized(sparse.hstack([h20_block, h11_block, h02_block], format="csc"))
+    connection_record = packet["correction_operator"]
+    connection_path = verify_record(connection_record["NPZ"])
+    connection_dense_path = verify_record(connection_record["dense_uint8"])
+    stored_connection = normalized(sparse.load_npz(connection_path))
+    require(residual_nonzeros(connection, stored_connection) == 0, "full correction operator")
+    dense = np.fromfile(connection_dense_path, dtype=np.uint8).reshape(1509, 1509)
+    require(np.array_equal(dense, connection.toarray()), "connection dense payload")
+
+    affine_record = packet["selected_affine_source"]
+    source_path = verify_record(affine_record["source_vector"])
+    source = np.load(source_path, allow_pickle=False).astype(np.uint8)
+    g3cc_h02_path = verify_record(g3cc["terminal_source"]["B103_H02_vector"])
+    g3cc_h02 = np.load(g3cc_h02_path, allow_pickle=False).astype(np.uint8)
+    require(np.array_equal(source[:1261], np.zeros(1261, dtype=np.uint8)), "source upper sectors vanish")
+    require(np.array_equal(source[1261:], g3cc_h02), "source H02 embedding")
+    affine_path = verify_record(affine_record["NPZ"])
+    affine_dense_path = verify_record(affine_record["dense_uint8"])
+    stored_affine = normalized(sparse.load_npz(affine_path))
+    expected_affine = normalized(
+        sparse.bmat(
+            [
+                [connection, sparse.csc_matrix(source.reshape(-1, 1))],
+                [sparse.csc_matrix((1, 1509), dtype=np.uint8), sparse.csc_matrix((1, 1), dtype=np.uint8)],
+            ],
+            format="csc",
+        )
+    )
+    require(residual_nonzeros(expected_affine, stored_affine) == 0, "affine sparse payload")
+    affine_dense = np.fromfile(affine_dense_path, dtype=np.uint8).reshape(1510, 1510)
+    require(np.array_equal(affine_dense, expected_affine.toarray()), "affine dense payload")
+
+    right_record = affine_record["right_kernel"]
+    left_record = affine_record["left_cokernel"]
+    right = np.load(verify_record(right_record["vector"]), allow_pickle=False).astype(np.int64)
+    left = np.load(verify_record(left_record["vector"]), allow_pickle=False).astype(np.int64)
+    require(int(right[np.flatnonzero(right)[0]]) == 1, "right normalization")
+    require(int(left[np.flatnonzero(left)[0]]) == 1, "left normalization")
+    require(not np.any(dense.astype(np.int64) @ right % PRIME), "right-kernel residual")
+    require(not np.any(left @ dense.astype(np.int64) % PRIME), "left-cokernel residual")
+    obstruction = int(left @ source.astype(np.int64) % PRIME)
+    require(obstruction == int(affine_record["obstruction_pairing_mod11"]) == 2, "obstruction pairing")
+
+    minor_record = affine_record["rank1508_minor"]
+    minor_path = verify_record(minor_record["certificate"])
+    with np.load(minor_path, allow_pickle=False) as certificate:
+        rows = certificate["rows"].astype(np.int64)
+        columns = certificate["columns"].astype(np.int64)
+    require(rows.shape == columns.shape == (1508,), "minor index shapes")
+    require(np.unique(rows).size == np.unique(columns).size == 1508, "minor unique indices")
+    minor_determinant = linear.determinant_mod_prime(dense[np.ix_(rows, columns)])
+    require(minor_determinant == int(minor_record["determinant_mod11"]) != 0, "rank minor determinant")
+    require(int(connection_record["rank_mod11"]) == 1508, "connection rank record")
+    require(int(affine_record["affine_rank_mod11"]) == 1509, "affine rank record")
+    require(not bool(affine_record["source_is_in_the_one_fiber_connection_image"]), "source nonimage record")
+
+    print("UST.G3CD correction full affine operator verifier: PASS")
+    print(
+        f"K_rank=1508 minor_det={minor_determinant} affine_rank=1509 "
+        f"obstruction={obstruction} K_nnz={connection.nnz} source_nnz={np.count_nonzero(source)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

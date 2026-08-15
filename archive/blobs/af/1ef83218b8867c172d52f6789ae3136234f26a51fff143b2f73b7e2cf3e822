@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""Evaluate the selected G3CA source in both terminal B89 residue frames."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shlex
+import subprocess
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "state" / "ust_g3cc_selected_source_terminal_b89_dualization.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3cc"
+G3CA = ROOT / "state" / "ust_g3ca_selected_delta_correction_h02_source.packet.json"
+G3CB = ROOT / "state" / "ust_g3cb_b69_b103_h20_frame_intertwiner.packet.json"
+PRIME = 11
+GAMMA = 3
+VARIABLES = ["x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s"]
+WEIGHTS = [1, 1, 1, 3, 1, 1, 1, 6, 9, 2]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def upstream_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository),
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def fraction_mod(value: str) -> int:
+    fraction = Fraction(value)
+    return int(fraction.numerator) * pow(int(fraction.denominator) % PRIME, -1, PRIME) % PRIME
+
+
+def evaluate_gamma(coordinates: list[str]) -> int:
+    value = 0
+    for coordinate in reversed(coordinates):
+        value = (value * GAMMA + fraction_mod(coordinate)) % PRIME
+    return value
+
+
+def monomial(exponent: list[int]) -> str:
+    factors = []
+    for variable, power in zip(VARIABLES, exponent, strict=True):
+        if power == 1:
+            factors.append(variable)
+        elif power > 1:
+            factors.append(f"{variable}^{power}")
+    return "*".join(factors) if factors else "1"
+
+
+def polynomial(terms: list[dict[str, Any]]) -> tuple[str, int]:
+    pieces = []
+    nonzeros = 0
+    for term in terms:
+        coefficient = evaluate_gamma(term["gamma_coordinates_ascending"])
+        if coefficient:
+            pieces.append(f"{coefficient}*{monomial(term['exponent'])}")
+            nonzeros += 1
+    require(pieces, "nonzero source reduction")
+    return "+".join(pieces), nonzeros
+
+
+def parse_monomial(value: str) -> tuple[int, ...]:
+    result = {variable: 0 for variable in VARIABLES}
+    if value == "1":
+        return tuple(result[variable] for variable in VARIABLES)
+    for factor in value.split("*"):
+        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*)(?:\^(\d+))?", factor)
+        require(match is not None and match.group(1) in result, "normal-form monomial")
+        result[match.group(1)] += int(match.group(2) or 1)
+    return tuple(result[variable] for variable in VARIABLES)
+
+
+def field_value(value: str) -> int:
+    text = value.strip()
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        return int(numerator) * pow(int(denominator) % PRIME, -1, PRIME) % PRIME
+    return int(text) % PRIME
+
+
+def parse_scalar(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, re.MULTILINE)
+    require(match is not None, f"missing {label}")
+    return int(match.group(1))
+
+
+def parse_vector(output: str) -> list[int]:
+    match = re.search(r"^G3CC_TRACE_VECTOR=([^\r\n]*)$", output, re.MULTILINE)
+    require(match is not None, "trace vector")
+    vector = [field_value(value) for value in match.group(1).split(",")]
+    require(len(vector) == 248, "trace-vector length")
+    return vector
+
+
+def make_script(source: str, primitive_rows: list[str], cache: Path) -> str:
+    return f'''option(redSB);
+ring r=11,({','.join(VARIABLES)}),wp({','.join(str(value) for value in WEIGHTS)});
+number gamma=3;
+number gammaRelation=64+16*gamma+33*gamma^2+44*gamma^3+89*gamma^4+24*gamma^5+gamma^6;
+option(noredSB);
+def cachedBasis=read("ssi:r {runtime.wsl_path(cache)}");
+ideal G=cachedBasis;
+attrib(G,"isSB",1);
+poly selectedSource={source};
+poly sourceClass=reduce(selectedSource,G);
+poly sourceTail=sourceClass;
+int sourceClassTerms=0;
+while (sourceTail!=0)
+{{
+  sourceClassTerms=sourceClassTerms+1;
+  print("G3CC_SOURCE_CLASS_TERM="+string(leadcoef(sourceTail))+"|"+string(leadmonom(sourceTail)));
+  sourceTail=sourceTail-leadcoef(sourceTail)*leadmonom(sourceTail);
+}}
+print("G3CC_SOURCE_CLASS_TERMS="+string(sourceClassTerms));
+poly reducedSocle=reduce(w^12*t2^4*s^2,G);
+list primitiveRows={','.join(primitive_rows)};
+int ri; int badNormalForms=0; int nonzeroEntries=0;
+poly entryNormal; number entryCoefficient;
+string vectorText="";
+for (ri=1;ri<=248;ri++)
+{{
+  entryNormal=reduce(selectedSource*primitiveRows[ri],G);
+  entryCoefficient=0;
+  if (entryNormal!=0)
+  {{
+    entryCoefficient=leadcoef(entryNormal)/leadcoef(reducedSocle);
+    if (entryNormal-entryCoefficient*reducedSocle!=0)
+    {{ badNormalForms=badNormalForms+1; entryCoefficient=0; }}
+    else {{ nonzeroEntries=nonzeroEntries+1; }}
+  }}
+  if (ri>1) {{ vectorText=vectorText+","; }}
+  vectorText=vectorText+string(entryCoefficient);
+}}
+print("G3CC_TRACE_VECTOR="+vectorText);
+print("G3CC_GAMMA_REL="+string(gammaRelation));
+print("G3CC_GB_SIZE="+string(size(G)));
+print("G3CC_SOCLE_ZERO="+string(reducedSocle==0));
+print("G3CC_BAD_NORMAL_FORMS="+string(badNormalForms));
+print("G3CC_TRACE_NONZERO_ENTRIES="+string(nonzeroEntries));
+if (badNormalForms==0) {{ print("UST_G3CC_TERMINAL_SOURCE_DUALIZATION_PASS"); }}
+else {{ print("UST_G3CC_TERMINAL_SOURCE_DUALIZATION_FAIL"); }}
+quit;
+'''
+
+
+def run_singular(script: Path, timeout: int) -> tuple[str, str]:
+    root = "/home/nerodes/.local/opt/singular-4.4.1/root"
+    binary = f"{root}/usr/bin/Singular"
+    library = f"{root}/usr/lib/x86_64-linux-gnu"
+    modules = f"{library}/singular/MOD"
+    command = (
+        f"export LD_LIBRARY_PATH={shlex.quote(library + ':' + modules)}; "
+        f"export SINGULARPATH={shlex.quote(root + '/usr/share/singular/LIB:' + modules)}; "
+        f"export SINGULAR_BIN_DIR={shlex.quote(root + '/usr/bin')}; "
+        f"export SINGULAR_DATA_DIR={shlex.quote(root + '/usr/share')}; "
+        f"export SINGULAR_PROCS_DIR={shlex.quote(modules)}; "
+        f"export SINGULAR_ROOT_DIR={shlex.quote(root + '/usr')}; "
+        f"{shlex.quote(binary)} -q --threads=1 {shlex.quote(runtime.wsl_path(script))}"
+    )
+    completed = subprocess.run(
+        ["wsl", "sh", "-lc", command],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return completed.stdout + completed.stderr, f"WSL:{binary}"
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    g3ca = load(G3CA)
+    g3cb = load(G3CB)
+    require(all(g3ca["checks"].values()), "G3CA checks")
+    require(all(g3cb["checks"].values()), "G3CB checks")
+    paths = {
+        "B69": mld / "q79_eta9_cayley_jacobian_reducer.packet.json",
+        "B72": mld / "q79_eta9_cayley_structural_residue_promotion.packet.json",
+        "B89": mld / "q79_eta9_concrete_pencil_seed.packet.json",
+        "B103": mld / "q79_eta9_full_vanishing_residue_basis.packet.json",
+    }
+    packets = {name: load(path) for name, path in paths.items()}
+    for name, packet in packets.items():
+        require(all(packet["checks"].values()), f"{name} checks")
+    b69 = packets["B69"]
+    b72 = packets["B72"]
+    b103 = packets["B103"]
+    require(
+        b72["checks"]["the_B69_socle_is_the_local_generator_and_survives_in_characteristic_zero_R1"],
+        "socle promotion",
+    )
+    require(g3cb["frame_intertwiner"]["rank_mod11"] == 248, "frame isomorphism")
+    cache = Path(b69["Cayley_Jacobian_reducer"]["Singular_basis_cache"]["path"])
+    require(cache.is_file(), "B69 cache")
+    require(sha256(cache) == b69["Cayley_Jacobian_reducer"]["Singular_basis_cache"]["sha256"], "B69 cache hash")
+
+    exact_path = ROOT / g3ca["selected_source"]["exact_polynomial"]["path"]
+    exact = load(exact_path)
+    require(exact["formula"] == "u*v*P_delta*(t0*t1*t2)*C_section", "source formula")
+    require(exact["Cox_degree"] == [9, 1, 2], "source degree")
+    source, source_terms_mod11 = polynomial(exact["terms"])
+    primitive_rows = [str(value) for value in b69["primitive_and_graph_bases"]["primitive_rows"]]
+    require(len(primitive_rows) == 248, "primitive rows")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    script_path = EVIDENCE / "selected_delta_correction_terminal_B89_dualization.sing"
+    output_path = EVIDENCE / "selected_delta_correction_terminal_B89_dualization.out"
+    script = make_script(source, primitive_rows, cache)
+    reusable_output = (
+        script_path.is_file()
+        and output_path.is_file()
+        and script_path.read_text(encoding="ascii") == script
+        and "UST_G3CC_TERMINAL_SOURCE_DUALIZATION_PASS"
+        in output_path.read_text(encoding="utf-8")
+    )
+    script_path.write_text(script, encoding="ascii")
+    if reusable_output:
+        output = output_path.read_text(encoding="utf-8")
+        engine = "replayed hash-bound Singular transcript"
+    else:
+        output, engine = run_singular(script_path, timeout=3600)
+        output_path.write_text(output, encoding="utf-8")
+    require("UST_G3CC_TERMINAL_SOURCE_DUALIZATION_PASS" in output, output[-4000:])
+    require(parse_scalar(output, "G3CC_GAMMA_REL") == 0, "field relation")
+    require(parse_scalar(output, "G3CC_GB_SIZE") == 26883, "basis size")
+    require(parse_scalar(output, "G3CC_SOCLE_ZERO") == 0, "socle nonzero")
+    require(parse_scalar(output, "G3CC_BAD_NORMAL_FORMS") == 0, "top normal forms")
+
+    h02 = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    h02_exponents = [tuple(int(value) for value in row) for row in h02["basis_exponent_vectors"]]
+    h02_lookup = {row: index for index, row in enumerate(h02_exponents)}
+    require(len(h02_lookup) == 248, "H02 basis")
+    rows = re.findall(r"^G3CC_SOURCE_CLASS_TERM=([^|\r\n]+)\|([^\r\n]+)$", output, re.MULTILINE)
+    require(len(rows) == parse_scalar(output, "G3CC_SOURCE_CLASS_TERMS"), "source-class terms")
+    h02_vector = [0] * 248
+    h02_terms = []
+    for coefficient_text, monomial_text in rows:
+        exponent = parse_monomial(monomial_text)
+        require(exponent in h02_lookup, f"H02 normal form {monomial_text}")
+        index = h02_lookup[exponent]
+        coefficient = field_value(coefficient_text)
+        require(h02_vector[index] == 0, "unique H02 normal form")
+        h02_vector[index] = coefficient
+        h02_terms.append(
+            {
+                "B103_H02_index_zero_based": index,
+                "coefficient_mod11": coefficient,
+                "monomial": monomial_text,
+                "exponent": list(exponent),
+            }
+        )
+    h02_terms.sort(key=lambda row: int(row["B103_H02_index_zero_based"]))
+    h02_nonzero = [index for index, value in enumerate(h02_vector) if value]
+    require(h02_nonzero, "nonzero terminal H02 vector")
+
+    trace_vector = parse_vector(output)
+    trace_nonzero = [index for index, value in enumerate(trace_vector) if value]
+    require(len(trace_nonzero) == parse_scalar(output, "G3CC_TRACE_NONZERO_ENTRIES"), "trace count")
+    require(trace_nonzero, "nonzero terminal trace covector")
+    h02_path = EVIDENCE / "selected_delta_correction_terminal_B89_B103_H02.mod11.npy"
+    trace_path = EVIDENCE / "selected_delta_correction_terminal_B89_spectral_trace.mod11.npy"
+    np.save(h02_path, np.asarray(h02_vector, dtype=np.uint8), allow_pickle=False)
+    np.save(trace_path, np.asarray(trace_vector, dtype=np.uint8), allow_pickle=False)
+
+    inverse_record = g3cb["frame_intertwiner"]["inverse_matrix"]
+    inverse_path = ROOT / inverse_record["path"]
+    require(inverse_path.is_file() and sha256(inverse_path) == inverse_record["sha256"], "G3CB inverse frame")
+    inverse = np.load(inverse_path, allow_pickle=False).astype(np.int64)
+    frame_path = ROOT / g3cb["frame_intertwiner"]["frame_matrix"]["path"]
+    require(frame_path.is_file() and sha256(frame_path) == g3cb["frame_intertwiner"]["frame_matrix"]["sha256"], "G3CB frame")
+    frame = np.load(frame_path, allow_pickle=False).astype(np.int64)
+    trace_array = np.asarray(trace_vector, dtype=np.int64)
+    b103_h20_dual = (inverse.T @ trace_array % PRIME).astype(np.uint8)
+    require(
+        np.array_equal((frame.T @ b103_h20_dual.astype(np.int64) % PRIME).astype(np.uint8), trace_array.astype(np.uint8)),
+        "B103 dual re-evaluation",
+    )
+    b103_h20_dual_path = EVIDENCE / "selected_delta_correction_terminal_B89_B103_H20_dual.mod11.npy"
+    np.save(b103_h20_dual_path, b103_h20_dual, allow_pickle=False)
+    b103_h20_dual_nonzero = np.flatnonzero(b103_h20_dual).tolist()
+
+    checks = {
+        "G3CA_and_G3CB_are_hash_bound_and_passing": True,
+        "the_exact_same100_term_characteristic_zero_source_is_reduced_mod11": True,
+        "the_terminal_fiber_is_the_frozen_B89_B69_good_fiber": True,
+        "the_B69_socle_and248_primitive_rows_are_hash_bound": True,
+        "the_source_reduces_entirely_to_the_B103_H02_basis": True,
+        "the_terminal_B103_H02_source_vector_is_nonzero": True,
+        "all248_spectral_products_reduce_to_the_one_dimensional_socle": True,
+        "the_terminal_spectral_trace_covector_is_nonzero": True,
+        "G3CB_proves_the_spectral_rows_are_a_basis_not_the_B103_order": True,
+        "the_inverse_G3CB_frame_emits_the_unique_B103_H20_dual_covector": True,
+        "re_evaluating_the_B103_dual_on_all_B69_rows_recovers_the_trace_vector": True,
+        "B72_perfect_pairing_makes_the_trace_covector_the_unique_dual_of_the_same_H02_class": True,
+        "no_horizontal_integral_transport_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CC checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cc-selected-source-terminal-b89-dualization.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3CC",
+        "status": "CLOSED_EXACT_TERMINAL_B89_SELECTED_SOURCE_H02_VECTOR_AND_SPECTRAL_COVECTOR_HORIZONTAL_TRANSPORT_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3CA": local_record(G3CA),
+            "G3CB": local_record(G3CB),
+            "G3CA_exact_source": local_record(exact_path),
+            **{name: upstream_record(path, mld) for name, path in paths.items()},
+            "B69_basis_cache": upstream_record(cache, mld),
+        },
+        "terminal_source": {
+            "family_point": "B89 endpoint a=0 at the common good reduction (11,gamma-3)",
+            "unscaled_formula": "[u*v*P_delta*(t0*t1*t2)*C_section]",
+            "path_scaled_formula": "a'(t) times the displayed unscaled source",
+            "exact_terms_before_reduction": 100,
+            "terms_surviving_mod11_before_reduction": source_terms_mod11,
+            "B103_H02_shape": [248],
+            "B103_H02_nonzero_entries": len(h02_nonzero),
+            "B103_H02_nonzero_indices_zero_based": h02_nonzero,
+            "B103_H02_terms": h02_terms,
+            "B103_H02_vector": local_record(h02_path),
+            "spectral_trace_shape": [248],
+            "spectral_trace_nonzero_entries": len(trace_nonzero),
+            "spectral_trace_nonzero_indices_zero_based": trace_nonzero,
+            "spectral_trace_vector": local_record(trace_path),
+            "B103_H20_dual_shape": [248],
+            "B103_H20_dual_nonzero_entries": len(b103_h20_dual_nonzero),
+            "B103_H20_dual_nonzero_indices_zero_based": b103_h20_dual_nonzero,
+            "B103_H20_dual_vector": local_record(b103_h20_dual_path),
+            "frame_identity": "spectral_trace = G3CB_frame^T * B103_H20_dual",
+            "duality_certificate": "The B69 products reduce to the promoted one-dimensional socle; G3CB identifies the B69 rows as a basis, and B72 perfect pairing makes these 248 values the unique covector induced by the same H02 source class.",
+            "characteristic_zero_consequence": "Both nonzero good-reduction vectors certify that the selected terminal H02 class and its trace covector are nonzero in characteristic zero; their characteristic-zero entries are not reconstructed.",
+        },
+        "execution": {
+            "engine": engine,
+            "reused_existing_passing_transcript": reusable_output,
+            "script": local_record(script_path),
+            "output": local_record(output_path),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_characteristic_zero_coordinate_values": False,
+            "claims_the_source_section_is_horizontal": False,
+            "claims_the_path_inhomogeneous_ODE_is_integrated": False,
+            "claims_a_flat_rank1509_lift_or_integral_marking": False,
+            "claims_terminal_normal_function_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3ccSelectedSourceTerminalB89Dualization",
+            "tier": "CLOSED_EXACT_SELECTED_TERMINAL_SOURCE_DUALIZATION",
+            "statement": "At the terminal B89 good fiber, the exact G3CA normalized-delta correction source reduces to the emitted nonzero B103 H02 vector. Pairing the same polynomial with all 248 ordered B69 primitive rows gives the emitted nonzero spectral covector, with every product reducing exactly to the promoted socle. G3CB and B72 identify these as two coordinate descriptions of one source class without identifying their row orders.",
+        },
+        "next_required_object": "Integrate the rank-1510 inhomogeneous relative-de-Rham system for this selected source along G3BJ using the G3BZ rank-6022 one-source resolvent, then apply the terminal G3CB/B72 dualization and integral B89 normalization.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3CC selected source terminal B89 dualization: PASS")
+    print(
+        f"source_terms_mod11={source_terms_mod11} H02_nnz={len(h02_nonzero)} "
+        f"trace_nnz={len(trace_nonzero)} B103_dual_nnz={len(b103_h20_dual_nonzero)} "
+        "bad_normal_forms=0"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

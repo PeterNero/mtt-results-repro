@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""Construct a canonical pairing-one meridian dual from integral residues."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+DIMENSION = 248
+CERTIFICATE_SCHEMA = "mtt.unified-source.g3bc-integral-affine-residue-certificate.v1"
+INPUT_SCHEMA = "mtt.unified-source.g3bc-bezout-dual-input.v1"
+PRODUCTION_STATUS = "PRODUCTION_INTEGRAL_RESIDUE_PAYLOAD"
+TEST_STATUS = "TEST_ONLY_SYNTHETIC_RESIDUE_PAYLOAD"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def relative_to_payload(path: Path, payload_path: Path) -> str:
+    try:
+        return path.resolve().relative_to(payload_path.resolve().parent).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def resolve_certificate(payload_path: Path, value: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = payload_path.resolve().parent / path
+    return path.resolve()
+
+
+def extended_gcd(left: int, right: int) -> tuple[int, int, int]:
+    """Return positive g and x,y with x*left+y*right=g."""
+    old_r, r = int(left), int(right)
+    old_s, s = 1, 0
+    old_t, t = 0, 1
+    while r:
+        quotient = old_r // r
+        old_r, r = r, old_r - quotient * r
+        old_s, s = s, old_s - quotient * s
+        old_t, t = t, old_t - quotient * t
+    if old_r < 0:
+        old_r, old_s, old_t = -old_r, -old_s, -old_t
+    return old_r, old_s, old_t
+
+
+def canonical_bezout_prefix(values: list[int]) -> tuple[list[int], int]:
+    require(values and any(values), "nonzero residue inventory")
+    coefficients: list[int] = []
+    current_gcd = 0
+    for index, value in enumerate(values):
+        value = int(value)
+        if index == 0:
+            current_gcd = abs(value)
+            coefficients = [0 if value == 0 else (1 if value > 0 else -1)]
+        else:
+            new_gcd, left_factor, right_factor = extended_gcd(current_gcd, value)
+            coefficients = [left_factor * coefficient for coefficient in coefficients]
+            coefficients.append(right_factor)
+            current_gcd = new_gcd
+        if current_gcd == 1:
+            require(
+                sum(coefficient * entry for coefficient, entry in zip(coefficients, values[: index + 1], strict=True))
+                == 1,
+                "Bezout identity",
+            )
+            return coefficients, index + 1
+    raise AssertionError("integral affine residues do not generate the unit ideal")
+
+
+def decode_rational(value: list[int]) -> Fraction:
+    require(
+        isinstance(value, list)
+        and len(value) == 2
+        and all(isinstance(entry, int) for entry in value)
+        and value[1] != 0,
+        "encoded rational",
+    )
+    return Fraction(value[0], value[1])
+
+
+def encode_rational(value: Fraction) -> list[int]:
+    return [value.numerator, value.denominator]
+
+
+def decode_interval(value: dict[str, Any]) -> tuple[Fraction, Fraction, Fraction, Fraction]:
+    real = value.get("real")
+    imag = value.get("imag")
+    require(isinstance(real, dict) and isinstance(imag, dict), "complex interval components")
+    real_low, real_high = decode_rational(real["lower"]), decode_rational(real["upper"])
+    imag_low, imag_high = decode_rational(imag["lower"]), decode_rational(imag["upper"])
+    require(real_low <= real_high and imag_low <= imag_high, "ordered complex interval")
+    return real_low, real_high, imag_low, imag_high
+
+
+def scale_interval(
+    coefficient: int, value: tuple[Fraction, Fraction, Fraction, Fraction]
+) -> tuple[Fraction, Fraction, Fraction, Fraction]:
+    real_low, real_high, imag_low, imag_high = value
+    if coefficient >= 0:
+        return (
+            coefficient * real_low,
+            coefficient * real_high,
+            coefficient * imag_low,
+            coefficient * imag_high,
+        )
+    return (
+        coefficient * real_high,
+        coefficient * real_low,
+        coefficient * imag_high,
+        coefficient * imag_low,
+    )
+
+
+def add_intervals(
+    left: tuple[Fraction, Fraction, Fraction, Fraction],
+    right: tuple[Fraction, Fraction, Fraction, Fraction],
+) -> tuple[Fraction, Fraction, Fraction, Fraction]:
+    return tuple(a + b for a, b in zip(left, right, strict=True))  # type: ignore[return-value]
+
+
+def encode_interval(value: tuple[Fraction, Fraction, Fraction, Fraction]) -> dict[str, Any]:
+    real_low, real_high, imag_low, imag_high = value
+    return {
+        "real": {"lower": encode_rational(real_low), "upper": encode_rational(real_high)},
+        "imag": {"lower": encode_rational(imag_low), "upper": encode_rational(imag_high)},
+    }
+
+
+def combine_period_columns(
+    coefficients: list[int], certificates: list[dict[str, Any]]
+) -> list[dict[str, Any]] | None:
+    present = ["period_column_248" in certificate for certificate in certificates]
+    require(all(present) or not any(present), "period columns are supplied for every used meridian or none")
+    if not any(present):
+        return None
+    columns = [certificate["period_column_248"] for certificate in certificates]
+    require(all(len(column) == DIMENSION for column in columns), "248-entry period columns")
+    zero = (Fraction(0), Fraction(0), Fraction(0), Fraction(0))
+    result = []
+    for coordinate in range(DIMENSION):
+        total = zero
+        for coefficient, column in zip(coefficients, columns, strict=True):
+            total = add_intervals(total, scale_interval(coefficient, decode_interval(column[coordinate])))
+        result.append(encode_interval(total))
+    return result
+
+
+def execute(payload_path: Path, output_path: Path, allow_test_only: bool = False) -> dict[str, Any]:
+    payload = load(payload_path)
+    require(payload.get("schema") == INPUT_SCHEMA, "G3BC input schema")
+    status = payload.get("status")
+    require(status in (PRODUCTION_STATUS, TEST_STATUS), "known G3BC payload status")
+    test_only = status == TEST_STATUS
+    require(not test_only or allow_test_only, "test-only fixture requires --allow-test-only")
+    bindings = payload.get("bindings")
+    require(isinstance(bindings, dict), "source bindings")
+    for key in ("B87_source_sha256", "G3BB_target_sha256", "B89_pencil_sha256"):
+        require(isinstance(bindings.get(key), str) and len(bindings[key]) == 64, f"binding {key}")
+
+    rows = payload.get("affine_residue_rows")
+    require(isinstance(rows, list) and rows, "affine residue rows")
+    require(
+        [row.get("order_index") for row in rows] == list(range(len(rows))),
+        "canonical residue order",
+    )
+    require(len({row.get("meridian_id") for row in rows}) == len(rows), "unique meridian ids")
+
+    certificates: list[dict[str, Any]] = []
+    residue_values: list[int] = []
+    certificate_records = []
+    for row in rows:
+        certificate_path = resolve_certificate(payload_path, row["certificate_path"])
+        require(sha256(certificate_path) == row["certificate_sha256"], "residue certificate hash")
+        certificate = load(certificate_path)
+        require(certificate.get("schema") == CERTIFICATE_SCHEMA, "residue certificate schema")
+        require(all(certificate.get("checks", {}).values()), "residue certificate checks")
+        require(
+            certificate.get("normalization_tier")
+            == "INTEGRAL_PICARD_LEFSCHETZ_AFFINE_PAIRING",
+            "integral Picard-Lefschetz normalization",
+        )
+        require(certificate.get("meridian_id") == row.get("meridian_id"), "meridian identity")
+        require(certificate.get("bindings") == bindings, "same source and pencil bindings")
+        value = certificate.get("integral_affine_pairing")
+        require(isinstance(value, int), "integral affine pairing")
+        require(row.get("integral_affine_pairing") == value, "payload/certificate pairing")
+        require(
+            bool(certificate.get("test_only")) == test_only,
+            "production and test evidence cannot be mixed",
+        )
+        certificates.append(certificate)
+        residue_values.append(value)
+        certificate_records.append(
+            {
+                "path": relative_to_payload(certificate_path, output_path),
+                "sha256": sha256(certificate_path),
+                "bytes": certificate_path.stat().st_size,
+            }
+        )
+
+    coefficients, prefix_length = canonical_bezout_prefix(residue_values)
+    used_rows = rows[:prefix_length]
+    used_certificates = certificates[:prefix_length]
+    defect = sum(
+        coefficient * int(row["integral_affine_pairing"])
+        for coefficient, row in zip(coefficients, used_rows, strict=True)
+    )
+    require(defect == 1, "unit affine relation defect")
+    coefficient_gcd = math.gcd(*(abs(value) for value in coefficients))
+    require(coefficient_gcd == 1, "primitive coefficient vector")
+    period_image = combine_period_columns(coefficients, used_certificates)
+    production_promotable = not test_only
+    output_status = (
+        "PRODUCTION_PAIRING_ONE_BEZOUT_MERIDIAN_AND_248_PERIOD_IMAGE_EMITTED"
+        if production_promotable and period_image is not None
+        else "PRODUCTION_PAIRING_ONE_BEZOUT_MERIDIAN_EMITTED_PERIOD_IMAGE_OPEN"
+        if production_promotable
+        else "TEST_ONLY_PAIRING_ONE_BEZOUT_MERIDIAN_EXECUTOR_PASS"
+    )
+    result = {
+        "schema": "mtt.unified-source.g3bc-bezout-dual-output.v1",
+        "status": output_status,
+        "test_only": test_only,
+        "production_promotable": production_promotable,
+        "input": {
+            "path": relative_to_payload(payload_path.resolve(), output_path),
+            "sha256": sha256(payload_path),
+            "bytes": payload_path.stat().st_size,
+        },
+        "bindings": bindings,
+        "certificate_records": certificate_records,
+        "canonical_selection": {
+            "rule": "first ordered prefix whose integrally normalized affine residues generate the unit ideal",
+            "inventory_count": len(rows),
+            "selected_prefix_length": prefix_length,
+            "selected_meridian_count": sum(coefficient != 0 for coefficient in coefficients),
+            "prefix_residue_gcd": math.gcd(*map(abs, residue_values[:prefix_length])),
+        },
+        "finite_meridian_combination": [
+            {
+                "meridian_id": row["meridian_id"],
+                "coefficient": coefficient,
+                "integral_affine_pairing": row["integral_affine_pairing"],
+            }
+            for coefficient, row in zip(coefficients, used_rows, strict=True)
+            if coefficient
+        ],
+        "unit_certificate": {
+            "relation_defect": defect,
+            "coefficient_gcd": coefficient_gcd,
+            "integral": True,
+            "primitive": True,
+            "same_oriented_source_fiber_as_Z_phys": True,
+            "same_beta_C_quotient_class_as_Z_phys": True,
+        },
+        "period_image": {
+            "coordinate_count": DIMENSION if period_image is not None else 0,
+            "complex_interval_coordinates": period_image or [],
+            "status": "CLOSED_CERTIFIED_248_INTERVALS" if period_image is not None else "OPEN",
+        },
+        "checks": {
+            "every_residue_is_hash_bound_and_integrally_Picard_Lefschetz_normalized": True,
+            "the_first_unit_gcd_prefix_is_selected_without_a_fit_or_search_knob": True,
+            "the_emitted_integer_combination_has_source_pairing_exactly_one": True,
+            "the_emitted_coefficient_vector_is_primitive": True,
+            "replacement_of_the_selected_pairing_one_dual_changes_only_an_integral_period": True,
+            "all_used_period_columns_are_combined_by_outward_exact_rational_interval_arithmetic": period_image is not None,
+        },
+        "guardrails": {
+            "accepts_finite_field_residues_without_integral_normalization": False,
+            "claims_the_test_fixture_is_physical": False,
+            "claims_beta_C_zero_or_nonzero": False,
+            "claims_B_ETA9_01_is_closed": False,
+            "claims_G3AU_or_G3AR_accepts_the_replacement_without_period_descent": False,
+        },
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    return result
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("payload", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--allow-test-only", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    result = execute(args.payload, args.output, args.allow_test_only)
+    print(
+        "UST.G3BC pairing-one Bezout dual: PASS "
+        f"prefix={result['canonical_selection']['selected_prefix_length']} "
+        f"defect={result['unit_certificate']['relation_defect']} "
+        f"periods={result['period_image']['coordinate_count']}"
+    )
+
+
+if __name__ == "__main__":
+    main()

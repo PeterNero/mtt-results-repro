@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Independently verify UST.G3EU and its exact residual specialization."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state/ust_g3eu_h02_component16_exact_residual_adjudication.packet.json"
+RELATIONS = 21
+DEGREE = 6
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def checked(record: dict[str, Any]) -> Path:
+    path = ROOT / str(record["path"])
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def modular_rank(matrix: list[list[int]], prime: int) -> int:
+    work = [[value % prime for value in row] for row in matrix]
+    rank = 0
+    for column in range(RELATIONS):
+        pivot = next((row for row in range(rank, len(work)) if work[row][column]), None)
+        if pivot is None:
+            continue
+        work[rank], work[pivot] = work[pivot], work[rank]
+        inverse = pow(work[rank][column], -1, prime)
+        work[rank] = [value * inverse % prime for value in work[rank]]
+        for row in range(rank + 1, len(work)):
+            factor = work[row][column]
+            if factor:
+                work[row] = [
+                    (value - factor * pivot_value) % prime
+                    for value, pivot_value in zip(work[row], work[rank], strict=True)
+                ]
+        rank += 1
+    require(all(value == 0 for row in work[rank:] for value in row), "rank zero tail")
+    return rank
+
+
+def parse_exact(path: Path) -> tuple[list[int], dict[int, list[list[tuple[int, int]]]]]:
+    with path.open("r", encoding="ascii") as handle:
+        rows, relations, degree, rank_marker = map(int, handle.readline().split())
+        require(relations == RELATIONS and degree == DEGREE, "exact shape")
+        require(rank_marker in (-1, RELATIONS), "exact rank marker")
+        source_rows: list[int] = []
+        payload: dict[int, list[list[tuple[int, int]]]] = {}
+        lines = 0
+        for line in handle:
+            values = line.split()
+            require(len(values) == 2 + DEGREE, "exact line width")
+            source_row = int(values[0]) - 1
+            relation = int(values[1]) - 1
+            require(relation == lines % RELATIONS, "exact relation order")
+            if relation == 0:
+                source_rows.append(source_row)
+                payload[source_row] = [[] for _ in range(RELATIONS)]
+            require(source_rows[-1] == source_row, "exact row grouping")
+            payload[source_row][relation] = [
+                tuple(map(int, value.split("/", maxsplit=1))) for value in values[2:]
+            ]
+            lines += 1
+    require(len(source_rows) == rows and lines == rows * RELATIONS, "exact completeness")
+    return source_rows, payload
+
+
+def parse_modular(path: Path) -> tuple[int, int, int, list[int], dict[int, list[int]]]:
+    with path.open("r", encoding="ascii") as handle:
+        rows, relations, prime, gamma, rank, _ = map(int, handle.readline().split())
+        require(relations == RELATIONS, "modular shape")
+        source_rows: list[int] = []
+        payload: dict[int, list[int]] = {}
+        lines = 0
+        for line in handle:
+            source_row_one, relation_one, value = map(int, line.split())
+            source_row = source_row_one - 1
+            relation = relation_one - 1
+            require(relation == lines % RELATIONS, "modular relation order")
+            if relation == 0:
+                source_rows.append(source_row)
+                payload[source_row] = [0] * RELATIONS
+            require(source_rows[-1] == source_row, "modular row grouping")
+            payload[source_row][relation] = value
+            lines += 1
+    require(len(source_rows) == rows and lines == rows * RELATIONS, "modular completeness")
+    return prime, gamma, rank, source_rows, payload
+
+
+def specialize(coefficients: list[tuple[int, int]], prime: int, gamma: int) -> int:
+    value = 0
+    for numerator, denominator in reversed(coefficients):
+        require(denominator % prime != 0, "denominator-safe specialization")
+        value = (
+            value * gamma
+            + numerator % prime * pow(denominator % prime, -1, prime)
+        ) % prime
+    return value
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--deep", action="store_true", help="also hash the 2.8 GB kernel archive")
+    args = parser.parse_args()
+
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3eu-h02-component16-exact-residual-adjudication.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    inputs = {name: checked(record) for name, record in packet["inputs"].items()}
+
+    cutset_values = [int(value) for value in inputs["cutset"].read_text(encoding="ascii").split()]
+    cutset = [value - 1 for value in cutset_values[1:]]
+    require(cutset_values[0] == len(cutset) == 38, "cutset")
+
+    g3eq = json.loads(inputs["G3EQ"].read_text(encoding="utf-8"))
+    g3et = json.loads(inputs["G3ET"].read_text(encoding="utf-8"))
+    audit = json.loads(inputs["audit_rows"].read_text(encoding="utf-8"))
+    selected = set(g3eq["specialization"]["selected_source_rows_zero_based"])
+    recovery = set(g3et["selected_source_rows_zero_based"])
+    selected_audit = set(audit["selected_audit_rows_zero_based"])
+    require((len(selected), len(recovery), len(selected_audit)) == (1200, 800, 400), "selected partition dimensions")
+    require(recovery.isdisjoint(selected_audit), "selected partition disjoint")
+    require(recovery | selected_audit == selected, "selected partition complete")
+    require(set(audit["omitted_rows_zero_based"]) == set(cutset), "audit omitted rows")
+
+    exact_rows, exact = parse_exact(inputs["exact_residual_map"])
+    prime, gamma, reported_rank, modular_rows, modular = parse_modular(inputs["modular_residual_map"])
+    require(set(exact_rows) <= set(cutset), "defects confined to omitted rows")
+    require(modular_rows == cutset, "modular cutset rows")
+
+    matrix: list[list[int]] = []
+    comparison_slots = 0
+    for source_row in cutset:
+        modular_row = modular[source_row]
+        exact_row = exact.get(source_row)
+        for relation, observed in enumerate(modular_row):
+            expected = 0 if exact_row is None else specialize(exact_row[relation], prime, gamma)
+            require(expected == observed, "exact/modular residual equality")
+            comparison_slots += 1
+        matrix.append(modular_row)
+    require(comparison_slots == 798, "comparison slots")
+    require(modular_rank(matrix, prime) == reported_rank, "displayed modular residual rank")
+
+    exact_certificate = json.loads(
+        inputs["exact_residual_rank_certificate"].read_text(encoding="utf-8")
+    )
+    exact_rank = int(
+        exact_certificate["rank_certificate"][
+            "independent_python_flint_quotient_rank"
+        ]
+    )
+    require(reported_rank <= exact_rank <= RELATIONS, "exact residual rank bounds")
+    witness = json.loads(
+        inputs["modular_witness_certificate"].read_text(encoding="utf-8")
+    )
+    require(witness["residual_map"]["native_rank"] == reported_rank, "witness rank")
+    kernel = ROOT / witness["kernel"]
+    require(kernel.is_file(), "kernel archive exists")
+    require(
+        kernel.stat().st_size
+        == exact_certificate["recovered_kernel_size_bytes"]
+        == witness["kernel_size_bytes"],
+        "kernel archive size",
+    )
+    if args.deep:
+        require(sha256(kernel) == witness["kernel_sha256"], "kernel archive hash")
+
+    rank = packet["rank_adjudication"]
+    require(rank["exact_full_reduced_rank"] == 1200 + exact_rank, "full reduced rank")
+    require(rank["exact_full_reduced_nullity"] == RELATIONS - exact_rank, "full reduced nullity")
+    require(rank["exact_component16_rank_increment"] == 138 + exact_rank, "component16 rank")
+    require(rank["finite_kernel_directions_that_lift"] == RELATIONS - exact_rank, "lift directions")
+    require(rank["finite_kernel_directions_that_do_not_lift"] == exact_rank, "no-lift directions")
+    require(rank["certified_global_Q_rank_interval"] == [4748, 5081 + exact_rank], "global interval")
+    require(rank["next_positive_gap_component"] == 20, "next component")
+    require(rank["next_positive_gap_units"] == 100, "next gap units")
+    print("UST.G3EU independent component16 adjudication verifier: PASS")
+    print(
+        f"exact_selected_residual=0 residual_rank={exact_rank} "
+        f"full_rank={1200 + exact_rank} nullity={RELATIONS - exact_rank}"
+    )
+    print(
+        f"component16_rank={138 + exact_rank} "
+        f"global_interval=4748..{5081 + exact_rank} next=component20:100"
+    )
+
+
+if __name__ == "__main__":
+    main()

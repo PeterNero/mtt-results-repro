@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""Certify toric-orbit regularity of the selected F_101^6 Cayley carrier.
+
+This is the selected-carrier analogue of the earlier B71 good-reduction
+campaign.  The elliptic frame and triangular Cayley gauge are integral
+coordinate changes; every orbit system is recomputed over the G3AL field and
+coefficient member rather than importing a GF(11) regularity result.
+"""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import itertools
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "state" / "ust_g3al_selected_cayley_basis.sing"
+G3AL = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+BIDUAL_IDENTITY = ROOT / "state" / "ust_g3ao_elliptic_bidual_identity.packet.json"
+CAMPAIGN = ROOT / "state" / "g3ao_selected_cayley_toric_regularity"
+OUT = ROOT / "state" / "ust_g3ao_selected_cayley_toric_regularity.packet.json"
+
+BASE = ("x", "y", "z", "w")
+ELLIPTIC = ("t0", "t1", "t2")
+FIBER = ("u", "v", "s")
+MINPOLY_EXPECTED = "64+16*g^1+33*g^2+44*g^3+89*g^4+24*g^5+g^6"
+ELLIPTIC_DETERMINANT = -14
+ELLIPTIC_POLYNOMIAL = "(t0+t1+t2)^3+(t1+7*t2)^3+(3*t1+7*t2)^3"
+AMBIENT_GAUGE = (
+    "(9*x^3+2*y^3+2*z^3+3*w+3*x^2*y+9*x*y^2+6*x^2*z+6*x*z^2"
+    "+2*y^2*z+9*y*z^2)*t0"
+    "+(4*x^3+9*y^3+9*z^3+9*w+8*x^2*y+2*x*y^2+4*x*z^2+y^2*z"
+    "+4*y*z^2+x*y*z)*t1"
+    "+(5*x^3+y^3+z^3+8*w+5*x^2*y+9*x*y^2+8*x^2*z+7*x*z^2+y^2*z"
+    "+7*y*z^2+x*y*z)*t2"
+)
+TORIC_AMBIENT = {
+    "description": "P(O(6,0) direct_sum O(0,3) direct_sum O(9,1)) over P(1,1,1,3) x P^2",
+    "Cox_degree_matrix_by_variable": {
+        "x": [1, 0, 0],
+        "y": [1, 0, 0],
+        "z": [1, 0, 0],
+        "w": [3, 0, 0],
+        "t0": [0, 1, 0],
+        "t1": [0, 1, 0],
+        "t2": [0, 1, 0],
+        "u": [-6, 0, 1],
+        "v": [0, -3, 1],
+        "s": [-9, -1, 1],
+    },
+    "dimension": 7,
+    "Cayley_degree": [0, 0, 1],
+    "Cox_anticanonical_degree": [-9, -1, 3],
+    "maximal_chart_count": 36,
+    "orbit_support_count": 735,
+    "chart_cover": "one nonzero coordinate from each of (x,y,z,w), (t0,t1,t2), and (u,v,s)",
+    "chart_gauge_degree_determinants": [1, 3],
+    "chart_gauge_is_etale_over_F1016": True,
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def nonempty_subsets(items: tuple[str, ...]) -> list[tuple[str, ...]]:
+    return [
+        subset
+        for size in range(1, len(items) + 1)
+        for subset in itertools.combinations(items, size)
+    ]
+
+
+def label(
+    base: tuple[str, ...], elliptic: tuple[str, ...], fiber: tuple[str, ...]
+) -> str:
+    return (
+        "B_" + "".join(base)
+        + "__T_" + "".join(elliptic)
+        + "__I_" + "".join(fiber)
+    )
+
+
+def selected_polynomials() -> dict[str, str]:
+    text = SOURCE.read_text(encoding="ascii")
+    result: dict[str, str] = {}
+    for name in ("F6", "A0", "A1", "A2"):
+        match = re.search(rf"^poly {name}=(.*);$", text, flags=re.MULTILINE)
+        require(match is not None, f"selected {name}")
+        result[name] = match.group(1).strip()
+    minpoly = re.search(r"^minpoly=(.*);$", text, flags=re.MULTILINE)
+    require(minpoly is not None, "selected minpoly")
+    result["minpoly"] = minpoly.group(1).strip()
+    require(result["minpoly"] == MINPOLY_EXPECTED, "selected field polynomial")
+    return result
+
+
+def make_script(
+    polynomials: dict[str, str],
+    base_support: tuple[str, ...],
+    elliptic_support: tuple[str, ...],
+    fiber_support: tuple[str, ...],
+    algorithm: str,
+) -> str:
+    base_gauge = base_support[0]
+    elliptic_gauge = elliptic_support[0]
+    fiber_anchor = fiber_support[-1]
+    lambdas = {name: f"lambda{name}" for name in fiber_support[:-1]}
+    source_variables = [*BASE, *ELLIPTIC, *lambdas.values()]
+    sections = {"u": "K", "v": "E", "s": "C"}
+    potential = "+".join(
+        f"({1 if name == fiber_anchor else lambdas[name]})*{sections[name]}"
+        for name in fiber_support
+    )
+    tangent_variables = [
+        name
+        for name in (*base_support, *elliptic_support)
+        if name not in (base_gauge, elliptic_gauge)
+    ]
+    generators = [sections[name] for name in fiber_support]
+    generators.extend(f"diff(({potential}),{name})" for name in tangent_variables)
+    saturation_variables = [*tangent_variables, *lambdas.values()]
+    target_variables = [*saturation_variables, "orbitInv"]
+    if not saturation_variables:
+        target_variables = ["dummy"]
+    map_images = []
+    for name in source_variables:
+        if name in BASE:
+            image = "1" if name == base_gauge else name if name in base_support else "0"
+        elif name in ELLIPTIC:
+            image = (
+                "1"
+                if name == elliptic_gauge
+                else name if name in elliptic_support else "0"
+            )
+        else:
+            image = name
+        map_images.append(image)
+    restricted = ["orbitMap(orbitSystem)"]
+    if saturation_variables:
+        restricted.append("orbitInv*(" + "*".join(saturation_variables) + ")-1")
+    ap0 = "A0"
+    ap1 = "A0+A1+3*A2"
+    ap2 = "A0+7*A1+7*A2"
+    orbit_label = label(base_support, elliptic_support, fiber_support)
+    return f'''// UST.G3AO selected F_101^6 toric-orbit regularity: {orbit_label}
+ring source=(101,g),({','.join(source_variables)}),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly E={ELLIPTIC_POLYNOMIAL};
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly C_reduced=({ap0})*t0+({ap1})*t1+({ap2})*t2;
+poly B_ambient={AMBIENT_GAUGE};
+poly C=C_reduced+K*B_ambient;
+ideal orbitSystem={','.join(generators)};
+ring orbit=(101,g),({','.join(target_variables)}),dp;
+minpoly={polynomials["minpoly"]};
+map orbitMap=source,{','.join(map_images)};
+ideal restrictedSystem={','.join(restricted)};
+ideal orbitBasis={algorithm}(restrictedSystem);
+if (size(orbitBasis)==1 && orbitBasis[1]==1)
+{{ print("G3AO_TORIC_ORBIT_PASS {orbit_label}"); }}
+else
+{{ print("G3AO_TORIC_ORBIT_FAIL {orbit_label} basis="+string(size(orbitBasis))+" dim="+string(dim(orbitBasis))); }}
+quit;
+'''
+
+
+def record_is_current(path: Path, script: Path, source_hash: str) -> bool:
+    if not path.is_file():
+        return False
+    packet = json.loads(path.read_text(encoding="ascii"))
+    output = CAMPAIGN / packet.get("output", {}).get("path", "")
+    return (
+        packet.get("passed") is True
+        and packet.get("source_sha256") == source_hash
+        and packet.get("script", {}).get("sha256") == sha256(script)
+        and output.is_file()
+        and packet.get("output", {}).get("sha256") == sha256(output)
+    )
+
+
+def alternate_record_is_current(path: Path, source_hash: str) -> bool:
+    """Accept a previously adopted exact alternate certificate without clobbering it."""
+    if not path.is_file():
+        return False
+    packet = json.loads(path.read_text(encoding="ascii"))
+    if packet.get("certificate_method") not in {
+        "determinantal_necessary_locus",
+        "vs_elliptic_bidual_contact_and_cusp_necessary_loci",
+        "uvs_elliptic_bidual_contact_and_cusp_necessary_loci",
+        "uvs_quadratic_norm_and_compatibility_elimination",
+        "uvs_quadratic_prime_field_f4_elimination",
+        "uvs_primal_contact_and_original_flex_prime_field_f4_elimination",
+        "vs_primal_contact_and_original_flex_prime_field_f4_elimination",
+        "vs_K_split_uvs_structural_and_off_K_bidual",
+        "vs_K_split_uvs_structural_and_reciprocal_bidual",
+    }:
+        return False
+    script = CAMPAIGN / packet.get("script", {}).get("path", "")
+    output = CAMPAIGN / packet.get("output", {}).get("path", "")
+    return (
+        packet.get("passed") is True
+        and packet.get("source_sha256") == source_hash
+        and script.is_file()
+        and packet.get("script", {}).get("sha256") == sha256(script)
+        and output.is_file()
+        and packet.get("output", {}).get("sha256") == sha256(output)
+    )
+
+
+def run_one(
+    item: tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+    polynomials: dict[str, str],
+    algorithm: str,
+    timeout: int,
+    source_hash: str,
+) -> tuple[str, bool, float]:
+    base_support, elliptic_support, fiber_support = item
+    orbit_label = label(base_support, elliptic_support, fiber_support)
+    script = CAMPAIGN / f"{orbit_label}.sing"
+    output = CAMPAIGN / f"{orbit_label}.singular.out"
+    packet_path = CAMPAIGN / f"{orbit_label}.packet.json"
+    if alternate_record_is_current(packet_path, source_hash):
+        return orbit_label, True, 0.0
+    script_text = make_script(
+        polynomials, base_support, elliptic_support, fiber_support, algorithm
+    )
+    if (
+        script.is_file()
+        and script.read_text(encoding="ascii") == script_text
+        and record_is_current(packet_path, script, source_hash)
+    ):
+        return orbit_label, True, 0.0
+    script.write_text(script_text, encoding="ascii")
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            singular_command(ROOT, script),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        captured = error.stdout or b""
+        raw = (
+            captured.decode("utf-8", errors="replace")
+            if isinstance(captured, bytes)
+            else captured
+        )
+        returncode = 124
+    output.write_text(raw, encoding="utf-8")
+    elapsed = time.time() - started
+    passed = (
+        not timed_out
+        and returncode == 0
+        and f"G3AO_TORIC_ORBIT_PASS {orbit_label}" in raw
+    )
+    packet = {
+        "schema": "mtt.unified-source.g3ao-selected-cayley-toric-orbit.v1",
+        "label": orbit_label,
+        "source_sha256": source_hash,
+        "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+        "supports": {
+            "base": list(base_support),
+            "elliptic": list(elliptic_support),
+            "Cayley_fiber": list(fiber_support),
+        },
+        "script": {"path": script.name, "sha256": sha256(script)},
+        "output": {"path": output.name, "sha256": sha256(output)},
+        "algorithm": algorithm,
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "passed": passed,
+    }
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    return orbit_label, passed, elapsed
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--labels", default="")
+    parser.add_argument("--exclude-labels", default="")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--timeout-per-system", type=int, default=900)
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="slimgb")
+    args = parser.parse_args()
+    require(1 <= args.workers <= 16, "workers")
+    source_hash = sha256(SOURCE)
+    polynomials = selected_polynomials()
+    g3al = json.loads(G3AL.read_text(encoding="ascii"))
+    require(g3al["theorem_id"] == "UST.G3AL", "G3AL input")
+    require(g3al["residue_field"]["prime"] == 101, "selected prime")
+    bidual_identity = json.loads(BIDUAL_IDENTITY.read_text(encoding="ascii"))
+    require(
+        bidual_identity["status"]
+        == "CLOSED_EXACT_SYMBOLIC_ELLIPTIC_BIDUAL_IDENTITY",
+        "elliptic bidual identity input",
+    )
+    require(all(bidual_identity["checks"].values()), "elliptic bidual checks")
+    require(ELLIPTIC_DETERMINANT % 101 != 0, "elliptic frame unit")
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    all_items = list(
+        itertools.product(
+            nonempty_subsets(BASE),
+            nonempty_subsets(ELLIPTIC),
+            nonempty_subsets(FIBER),
+        )
+    )
+    require(len(all_items) == 735, "735 toric orbit systems")
+    requested = {value for value in args.labels.split(",") if value}
+    excluded = {value for value in args.exclude_labels.split(",") if value}
+    known = {label(*item) for item in all_items}
+    require(excluded <= known, f"unknown excluded labels {sorted(excluded - known)}")
+    if requested:
+        require(requested <= known, f"unknown labels {sorted(requested - known)}")
+        items = [item for item in all_items if label(*item) in requested]
+    else:
+        items = all_items[: args.limit or None]
+    items = [item for item in items if label(*item) not in excluded]
+    failures = []
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(
+                run_one,
+                item,
+                polynomials,
+                args.algorithm,
+                args.timeout_per_system,
+                source_hash,
+            ): label(*item)
+            for item in items
+        }
+        for future in as_completed(futures):
+            orbit_label, passed, elapsed = future.result()
+            print(f"{orbit_label}: {'PASS' if passed else 'FAIL'} ({elapsed:.1f}s)", flush=True)
+            if not passed:
+                failures.append(orbit_label)
+    records = sorted(CAMPAIGN.glob("*.packet.json"))
+    current = []
+    for path in records:
+        packet = json.loads(path.read_text(encoding="ascii"))
+        if packet.get("source_sha256") == source_hash and packet.get("passed") is True:
+            current.append(packet)
+    if len(current) == 735:
+        labels = {packet["label"] for packet in current}
+        require(labels == {label(*item) for item in all_items}, "complete orbit cover")
+        result = {
+            "schema": "mtt.unified-source.g3ao-selected-cayley-toric-regularity.v1",
+            "date": "2026-08-10",
+            "theorem_id": "UST.G3AO",
+            "status": "CLOSED_EXACT_SELECTED_F1016_CAYLEY_TORIC_REGULARITY_735_OF_735",
+            "inputs": {
+                "G3AL": {"path": str(G3AL.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(G3AL)},
+                "elliptic_bidual_identity": {"path": str(BIDUAL_IDENTITY.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(BIDUAL_IDENTITY)},
+                "selected_Cayley_source": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": source_hash},
+            },
+            "toric_ambient": TORIC_AMBIENT,
+            "coordinate_transport": {
+                "elliptic_old_coordinates_from_new": [[1, 1, 1], [0, 1, 7], [0, 3, 7]],
+                "determinant": ELLIPTIC_DETERMINANT,
+                "triangular_C_shift": "C -> C + K*B_ambient",
+                "preserves_complete_intersection_and_response_rank": True,
+                "is_a_physical_parameter": False,
+            },
+            "orbit_systems": {"passed": 735, "total": 735},
+            "checks": {
+                "all_735_nonempty_toric_support_systems_are_unit_ideals": True,
+                "all_systems_use_the_same_selected_F1016_member": True,
+                "elliptic_and_triangular_changes_are_units_mod101": True,
+                "no_GF11_regularity_result_is_imported": True,
+                "no_observed_value_or_fit_parameter_is_used": True,
+            },
+            "guardrails": {
+                "claims_characteristic_zero_selected_member_is_emitted": False,
+                "claims_full_response_rank122": False,
+                "claims_beta_C_is_computed": False,
+            },
+            "next_required_object": "Combine this good special-fiber regularity with G3AJ's same-residue characteristic-zero lift, the selected rank-one ordinary top line and the G3AN unit minor to promote the complete response rank without importing B70 entries.",
+        }
+        OUT.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+        print(f"UST.G3AO selected toric regularity: PASS ({OUT})")
+    if failures:
+        raise SystemExit(f"failed toric systems: {','.join(sorted(failures))}")
+
+
+if __name__ == "__main__":
+    main()

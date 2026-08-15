@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Compute the selected ordinary Cayley top piece with a bounded basis.
+
+For homogeneous input and a global positive weighted order, Singular's
+``degBound`` computes every leading term needed through the bound.  The target
+Cox degree (18,2,2) has selected scalar weight 44, so a full standard basis is
+not needed for this dimension calculation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_ordinary_top_dimension as top
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "state" / "ust_g3al_selected_cayley_basis.sing"
+SCRIPT = ROOT / "state" / "ust_g3ap_selected_cayley_bounded_top.sing"
+OUTPUT = ROOT / "state" / "ust_g3ap_selected_cayley_bounded_top.singular.out"
+PACKET = ROOT / "state" / "ust_g3ap_selected_cayley_bounded_top.packet.json"
+CACHE = ROOT / "state" / "ust_g3ap_selected_cayley_bounded_top_degree44.ssi"
+SCALAR_DEGREE_BOUND = 44
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def bounded_script(source: str) -> str:
+    marker = "ideal J=jacob(Phi);"
+    require(source.count(marker) == 1, "one selected Jacobian marker")
+    prefix = source.split(marker, 1)[0] + marker + "\n"
+    prefix = prefix.replace("option(redSB);\n", "", 1)
+    return prefix + f'''degBound={SCALAR_DEGREE_BOUND};
+ideal G=std(J);
+int i;
+print("G3AP_BOUND="+string(degBound));
+print("G3AP_LEADING_EXPONENT_COUNT="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{ print("G3AP_LEADING_EXPONENT_"+string(i)+"="+string(leadexp(G[i]))); }}
+attrib(G,"isSB",0);
+write("ssi:w state/ust_g3ap_selected_cayley_bounded_top_degree44.ssi",G);
+print("G3AP_LEADING_EXPONENT_EXPORT_PASS");
+quit;
+'''
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    args = parser.parse_args()
+    source = SOURCE.read_text(encoding="ascii")
+    SCRIPT.write_text(bounded_script(source), encoding="ascii")
+    if CACHE.is_file():
+        CACHE.unlink()
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "bounded Singular execution")
+    require(f"G3AP_BOUND={SCALAR_DEGREE_BOUND}" in completed.stdout, "degree bound")
+    require(CACHE.is_file() and CACHE.stat().st_size > 0, "bounded basis cache")
+    exponents = top.parse_exponents(completed.stdout)
+    standards, sectors = top.enumerate_top(exponents)
+    total = sum(value["enumerated_monomials"] for value in sectors.values())
+    require(total == top.EXPECTED_TOTAL_MONOMIALS, "complete Cox-degree enumeration")
+    require(standards == [top.EXPECTED_SOCLE], "unique selected ordinary top basis")
+    checks = {
+        "selected_F101e6_source_is_hash_bound": True,
+        "positive_weighted_input_is_homogeneous_of_scalar_degree_12": True,
+        "bounded_standard_basis_reaches_target_scalar_degree_44": True,
+        "all_174865_target_Cox_monomials_are_enumerated": True,
+        "leading_divisibility_is_replayed_in_every_fiber_sector": True,
+        "ordinary_top_piece_has_dimension_one": True,
+        "selected_top_representative_is_w12_t2_4_s2": True,
+        "no_predecessor_Hilbert_series_is_assumed": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-bounded-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.BOUNDED",
+        "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_DIMENSION_ONE",
+        "inputs": {
+            "selected_source": {
+                "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SOURCE),
+            }
+        },
+        "execution": {
+            "script": {
+                "path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SCRIPT),
+            },
+            "output": {
+                "path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(OUTPUT),
+            },
+            "returncode": completed.returncode,
+            "elapsed_seconds": time.time() - started,
+            "leading_basis_size_through_bound": len(exponents),
+            "scalar_degree_bound": SCALAR_DEGREE_BOUND,
+            "full_standard_basis_claimed": False,
+            "bounded_basis_cache": {
+                "path": str(CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(CACHE),
+                "bytes": CACHE.stat().st_size,
+                "valid_through_scalar_degree": SCALAR_DEGREE_BOUND,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": list(top.TARGET_COX_DEGREE),
+            "scalar_weight": SCALAR_DEGREE_BOUND,
+            "enumerated_monomials": total,
+            "dimension": len(standards),
+            "basis": [top.monomial(value) for value in standards],
+            "basis_exponent_vectors": [list(value) for value in standards],
+            "fiber_sectors": sectors,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_a_full_standard_basis_was_computed": False,
+            "claims_response_normal_forms_are_available": False,
+            "claims_characteristic_zero_rank_promotion": False,
+            "claims_beta_C_is_computed": False,
+        },
+        "next_required_object": (
+            "Use a completed full selected basis, or a separately certified toric "
+            "residue evaluator, for the principal and Schur response normal forms."
+        ),
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AP.BOUNDED selected ordinary top: PASS "
+        f"leaders={len(exponents)} monomials={total} basis=w^12*t2^4*s^2"
+    )
+
+
+if __name__ == "__main__":
+    main()

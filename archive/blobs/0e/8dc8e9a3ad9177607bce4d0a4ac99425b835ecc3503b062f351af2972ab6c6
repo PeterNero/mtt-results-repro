@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Run the exact H02 bordered-coupling rank at all six split roots."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3de_h02_fraction_free_path_woodbury as woodbury
+import build_ust_g3dg_h02_split_place_full_coupling_rank as rank_one
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3BT = ROOT / "state" / "ust_g3bt_h02_endpoint_action_one_split_prime.packet.json"
+G3BW = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+G3BZ = ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json"
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3DF = ROOT / "state" / "ust_g3df_h02_dm_source_observation_corridor.packet.json"
+G3DG = ROOT / "state" / "ust_g3dg_h02_split_place_full_coupling_rank.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dh"
+OUT = ROOT / "state" / "ust_g3dh_h02_all_split_roots_coupling_rank.packet.json"
+PRIME = 21817
+QUOTIENT = 248
+COMPLEMENT = 42458
+CORE_DIMENSION = 24767
+UPDATE_RANK = 6022
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def pattern_hash(matrix: sparse.spmatrix) -> str:
+    value = matrix.tocsc()
+    digest = hashlib.sha256()
+    digest.update(f"{value.shape[0]}x{value.shape[1]}\n".encode("ascii"))
+    digest.update(value.indptr.astype("<u8").tobytes())
+    digest.update(value.indices.astype("<u4").tobytes())
+    return digest.hexdigest()
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    packets = {
+        "G3BT": load(G3BT),
+        "G3BW": load(G3BW),
+        "G3BZ": load(G3BZ),
+        "G3DE": load(G3DE),
+        "G3DF": load(G3DF),
+        "G3DG": load(G3DG),
+    }
+    for label, packet in packets.items():
+        require(all(packet["checks"].values()), f"{label} checks")
+    roots = tuple(int(value) for value in packets["G3BT"]["field"]["roots_of_selected_sextic"])
+    require(roots == (5, 1971, 6912, 10062, 10605, 14055), "selected split roots")
+    root_records = {int(row["gamma_root"]): row for row in packets["G3BT"]["root_solves"]}
+
+    dm_path = ROOT / packets["G3BW"]["DM_reduction"]["arrays"]["path"]
+    corridor_path = ROOT / packets["G3DF"]["exact_component_DAG"]["arrays"]["path"]
+    dm = np.load(dm_path, allow_pickle=False)
+    corridor = np.load(corridor_path, allow_pickle=False)
+    core_component = int(corridor["corridor_components"][0])
+    core_rows = np.flatnonzero(dm["component_by_row"] == core_component).astype(np.int32)
+    core_columns = np.flatnonzero(dm["component_by_column"] == core_component).astype(np.int32)
+    ambient_core_rows = dm["complement_rows"][core_rows].astype(np.int32)
+    require(core_rows.size == core_columns.size == CORE_DIMENSION, "core dimensions")
+
+    update = packets["G3BZ"]["affine_path_update"]
+    delta_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in update["exact_gamma_coefficient_matrices"]
+    ]
+    factor = packets["G3DE"]["factorization"]
+    u_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factor["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factor["W_gamma_coefficients"]
+    ]
+    solution_components = set(int(value) for value in corridor["solution_components"])
+    recovery_columns = np.flatnonzero(
+        np.isin(dm["component_by_column"], list(solution_components))
+    ).astype(np.int32)
+    singleton_recovery_columns = np.setdiff1d(recovery_columns, core_columns)
+    require(singleton_recovery_columns.size == 94, "recovery singletons")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    compile_stdout = rank_one.compile_rank_tool()
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    campaign: list[dict[str, Any]] = []
+    support_hashes: set[str] = set()
+    structural_ranks: set[int] = set()
+    for index, root in enumerate(roots, start=1):
+        print(f"G3DH root {index}/6 gamma={root}: constructing exact core", flush=True)
+        source_record = root_records[root]
+        endpoint_path = ROOT / source_record["endpoint_chart"]["path"]
+        require(sha256(endpoint_path) == source_record["endpoint_chart"]["sha256"], "endpoint hash")
+        endpoint = rank_one.as_scipy(
+            arithmetic.read_csc(endpoint_path, b"MTTSPC1\0", 6)
+        ).astype(np.int64)
+        delta = woodbury.evaluate(delta_coefficients, root)
+        corrected_complement = endpoint[dm["complement_rows"], :][:, QUOTIENT:]
+        base_complement = rank_one.normalize(corrected_complement - delta)
+        a_core = rank_one.normalize(base_complement[core_rows, :][:, core_columns])
+        u = woodbury.evaluate(u_coefficients, root)
+        w = woodbury.evaluate(w_coefficients, root)
+        outside = np.ones(COMPLEMENT, dtype=bool)
+        outside[core_rows] = False
+        require(u[outside, :].nnz == 0, "U core support")
+        require(w[:, singleton_recovery_columns].nnz == 0, "W ignores recovery singletons")
+        u_core = rank_one.normalize(u[core_rows, :])
+        w_core = rank_one.normalize(w[:, core_columns])
+        border = rank_one.normalize(
+            sparse.bmat(
+                [
+                    [a_core, u_core],
+                    [w_core, sparse.csc_matrix((UPDATE_RANK, UPDATE_RANK), dtype=np.uint32)],
+                ],
+                format="csc",
+            )
+        )
+        support_hash = pattern_hash(border)
+        support_hashes.add(support_hash)
+        matching = maximum_bipartite_matching(border.astype(bool).tocsr(), perm_type="column")
+        structural_rank = int(np.count_nonzero(matching >= 0))
+        structural_ranks.add(structural_rank)
+
+        det_a, core_path, core_log, core_stdout = rank_one.run_determinant(
+            solver,
+            exporter,
+            mld,
+            a_core,
+            f"H02.B89.core.p{PRIME}.g{root}",
+            evidence=EVIDENCE,
+        )
+        border_path = EVIDENCE / f"H02.B89.bordered_Q.p{PRIME}.g{root}.chart.bin"
+        exporter.write_chart(
+            border_path,
+            PRIME,
+            border.shape[0],
+            0,
+            border.shape[0],
+            border.indptr.astype(np.uint64).tolist(),
+            border.indices.astype(np.uint32).tolist(),
+            border.data.astype(np.uint32).tolist(),
+        )
+        rank_log = EVIDENCE / f"H02.B89.bordered_Q.p{PRIME}.g{root}.rank.log"
+        rank_fields, rank_stdout = rank_one.run_rank(border_path, rank_log)
+        border_rank = int(rank_fields["RANK"])
+        q_rank = border_rank - CORE_DIMENSION
+        require(0 <= q_rank <= structural_rank - CORE_DIMENSION, "Schur rank interval")
+        campaign.append(
+            {
+                "gamma_root": root,
+                "endpoint_chart": record(endpoint_path),
+                "core_chart": record(core_path),
+                "core_determinant_log": record(core_log),
+                "core_determinant_mod21817": det_a,
+                "core_solver_stdout": core_stdout,
+                "border_chart": record(border_path),
+                "border_rank_log": record(rank_log),
+                "border_rank": border_rank,
+                "border_nullity": border.shape[1] - border_rank,
+                "Q_rank": q_rank,
+                "structural_rank": structural_rank,
+                "Q_structural_upper_bound": structural_rank - CORE_DIMENSION,
+                "border_support_sha256": support_hash,
+                "rank_tool_stdout": rank_stdout,
+            }
+        )
+        print(
+            f"G3DH gamma={root}: detA={det_a} rankQ={q_rank} "
+            f"structural_upper={structural_rank - CORE_DIMENSION}",
+            flush=True,
+        )
+
+    q_ranks = [int(row["Q_rank"]) for row in campaign]
+    require(q_ranks == [4748] * 6, "same rank 4748 at all split roots")
+    require(len(support_hashes) == len(structural_ranks) == 1, "common support")
+    structural_q_upper = next(iter(structural_ranks)) - CORE_DIMENSION
+    require(structural_q_upper == 5223, "common structural upper")
+    checks = {
+        "G3BT_G3BW_G3BZ_G3DE_G3DF_and_G3DG_are_hash_bound_and_passing": True,
+        "all_six_roots_of_the_selected_sextic_mod21817_are_executed": True,
+        "all_six_B89_core_determinants_are_nonzero": all(int(row["core_determinant_mod21817"]) != 0 for row in campaign),
+        "all_six_exact_bordered_eliminations_give_Q_rank4748": q_ranks == [4748] * 6,
+        "the_border_support_and_structural_Q_upper_bound5223_are_common_to_all_roots": len(support_hashes) == len(structural_ranks) == 1 and structural_q_upper == 5223,
+        "the_complete_split_algebra_rank_is4748_without_a_root_specific_drop": True,
+        "the_characteristic_zero_rank_is_not_inferred_without_an_upper_certificate": True,
+        "no_Archimedean_value_source_path_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DH checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dh-h02-all-split-roots-coupling-rank.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DH",
+        "status": "CLOSED_EXACT_H02_ALL_SIX_SPLIT_ROOT_COUPLING_RANK_4748_GENERIC_UPPER_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {label: record(path) for label, path in (("G3BT", G3BT), ("G3BW", G3BW), ("G3BZ", G3BZ), ("G3DE", G3DE), ("G3DF", G3DF), ("G3DG", G3DG))},
+        "field": {
+            "prime": PRIME,
+            "roots": list(roots),
+            "split_algebra": "F_21817[gamma]/(m_gamma) is the product over the six listed roots",
+        },
+        "rank_tool": {
+            "source": record(rank_one.RANK_SOURCE),
+            "executable": record(rank_one.RANK_EXECUTABLE),
+            "compile_stdout": compile_stdout,
+        },
+        "campaign": campaign,
+        "result": {
+            "Q": "W*A_H02,B89^-1*U",
+            "Q_shape": [UPDATE_RANK, UPDATE_RANK],
+            "rank_at_each_split_root": q_ranks,
+            "rank_over_complete_split_F21817_algebra": 4748,
+            "common_structural_rank_upper_bound": structural_q_upper,
+            "characteristic_zero_rank_lower_bound": 4748,
+            "characteristic_zero_rank_upper_bound": structural_q_upper,
+            "remaining_rank_gap": structural_q_upper - 4748,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_rank_Q_gamma_Q_is_exactly4748": False,
+            "claims_a_second_fraction_free_factorization_is_emitted": False,
+            "claims_Archimedean_values_source_contraction_path_integration_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dhH02AllSplitRootsCouplingRank",
+            "tier": "CLOSED_EXACT_COMPLETE_SPLIT_ALGEBRA_RANK_EVIDENCE",
+            "statement": "At every one of the six roots of the selected sextic modulo 21817, the B89 H02 core is invertible and the exact Schur coupling Q has rank 4748. Thus the rank over the complete split reduction algebra is 4748 and the defect is not tied to one gamma root. Combined with the common support matching, 4748<=rank_Q(gamma)(Q)<=5223. A characteristic-zero upper certificate remains necessary before rank 4748 can be promoted.",
+        },
+        "frontier_delta": {
+            "before": "G3DG found rank 4748 at only gamma=5, leaving a possible root-specific specialization drop.",
+            "after": "All six conjugate split roots have rank 4748 with one common support. Root-specific rank loss is excluded at p=21817; only a characteristic-p versus characteristic-zero promotion gap remains.",
+        },
+        "next_required_object": "Construct a characteristic-zero upper certificate of rank at most4748 by lifting the common selected/dependent coordinate partition to 1274 independent Q(gamma)-kernel relations. Repeat at independent completely split good primes, reconstruct with a proved bound, and verify the exact polynomial identity.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DH H02 all-split-roots coupling rank: PASS")
+    print(f"ranks={q_ranks} generic_interval=4748..{structural_q_upper}")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

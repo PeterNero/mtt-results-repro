@@ -1,0 +1,251 @@
+# UST.G3AD: Fixed-FQ Selected-Second-H Graph First-Order Obstruction Theorem
+
+## Status
+
+`CLOSED_EXACT_FINITE_RING_FIRST_ORDER_OBSTRUCTION`
+
+This theorem decides one branch left open by `UST.G3AC`. It does not close the
+visible eta9 source. It proves that the convenient smooth characteristic-zero
+integer-`gamma` lift called `F_Q` is not the member carrying the selected
+graph-Prym configuration.
+
+The result therefore changes the route:
+
+```text
+fixed smooth F_Q lift + selected graph maps
+    -> excluded at first 101-adic order
+
+graph-preserving eta9 family + beta_C zero
+    -> active selected-member route
+```
+
+## 1. Inputs
+
+The calculation locks four already certified objects:
+
+1. the finite-field global eta9 equation
+   `F_0=A_0 T_0+A_1 T_1+A_2 T_2` containing all three marked graphs;
+2. its explicit smooth number-field coefficient lift over `Q(gamma)`;
+3. the compatible selected second-`H` source and marked Fermat map through
+   precision `101^6`;
+4. the q79 degree-two K3 equation `w_K3^2=F_6(x,y,z)`.
+
+The exact source hashes and the complete portable arithmetic payload are in
+`state/ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json`.
+
+## 2. Why the Field Embedding Must Be Handled Carefully
+
+On the special fiber the coefficient field is presented as
+
+```text
+F_101[alpha,mu]/(
+  alpha^3+12 alpha^2+69 alpha+31,
+  mu^2+3
+),
+
+gamma = alpha+mu.
+```
+
+The residue minimal polynomial of `gamma` is
+
+```text
+M(gamma)
+= gamma^6+24 gamma^5+89 gamma^4+44 gamma^3
+  +33 gamma^2+16 gamma+64.
+```
+
+The fixed characteristic-zero lift uses these displayed residues as integer
+coefficients of `M`. This integer polynomial is not the exact characteristic-
+zero resultant of the `alpha` and `mu` equations. Consequently it would be
+incorrect to impose `gamma=alpha+mu` literally modulo `101^2`.
+
+Instead work in
+
+```text
+R_2=(Z/101^2 Z)[gamma]/(M).
+```
+
+The selected residue roots are
+
+```text
+alpha_0 = 23+97 gamma+74 gamma^2+65 gamma^3+33 gamma^4+98 gamma^5,
+mu_0    = 78+ 5 gamma+27 gamma^2+36 gamma^3+68 gamma^4+ 3 gamma^5.
+```
+
+They satisfy `alpha_0+mu_0=gamma` modulo `101`. Both defining polynomials
+have invertible derivatives in the residue field. Ordinary simple-root Hensel
+lifting therefore gives unique selected lifts in `R_2`:
+
+```text
+alpha = [3356,4137,2296,3095,6598,8683]_gamma,
+mu    = [8057,5863, 835,2561,1280,8184]_gamma.
+```
+
+Direct multiplication in `R_2` verifies
+
+```text
+alpha^3+12 alpha^2+69 alpha+31 = 0,
+mu^2+3 = 0.
+```
+
+Their sum differs from the chosen integer-lift generator by a multiple of
+`101`, exactly as it may:
+
+```text
+alpha+mu-gamma
+= [1212,9999,3131,5656,7878,6666]_gamma.
+```
+
+This selected Hensel embedding, rather than an unjustified equality of
+generators, is used throughout the restriction calculation.
+
+## 3. The Selected Graph in the Completion
+
+On the affine source chart the second primitive-`H` curve has
+
+```text
+y=1,
+z=r x+w,
+y_h^2=F_6(x,1,r x+w).
+```
+
+The emitted `101^6` packet supplies `r,w`, the cubic polynomials `P,Q,S`, the
+scalar `lambda`, and `k`. Reduction to `R_2` through the selected `alpha` lift
+verifies independently that
+
+```text
+Q(P^3+16Q^3)=lambda F_6(x,1,r x+w) S^2,
+k^2=-3 lambda.
+```
+
+The homogeneous Fermat coordinates are therefore
+
+```text
+T_0=12Q^2-k S y_h,
+T_1=12Q^2+k S y_h,
+T_2=6P Q.
+```
+
+No target coordinate or sign is fitted in this calculation. These are the
+coordinate conventions of the already certified marked-map theorem.
+
+## 4. Restricting the Fixed Coefficient Lift
+
+Each of the 214 nonzero finite-field coefficients of `F_0` is first converted
+from the `(1,mu)` basis over `F_101(alpha)` to the `gamma` basis. All 214
+conversions are independently replayed. The fixed number-field rule then
+lifts each `gamma` coordinate to its integer representative in `[0,100]`.
+
+For each target coordinate write
+
+```text
+A_i|C = A_i^even(x)+y_h A_i^odd(x).
+```
+
+Substitute the three displayed Fermat coordinates and reduce every product by
+`y_h^2=F_6(x,1,r x+w)`. This gives
+
+```text
+F_Q|Gamma_2 = E(x)+y_h O(x),
+deg E, deg O <= 15.
+```
+
+There are therefore 32 coefficient rows: 16 even and 16 odd. Every one of
+their six `gamma` coordinates vanishes modulo `101`. This recovers the known
+special-fiber graph containment and is a strong convention check.
+
+Divide the restriction by `101` and reduce again modulo `101`. The result is
+not zero:
+
+```text
+29 of 32 coefficient rows are nonzero.
+```
+
+The first nonzero row is
+
+```text
+parity      = even,
+x degree    = 0,
+gamma row   = [21,98,96,70,54,94] mod 101.
+```
+
+The complete dense 32-row value, its SHA-256 digest, and the sparse nonzero
+list are stored in the packet. The verifier reconstructs them from the raw
+finite coefficient rows, cubic graph data, K3 polynomial and Hensel
+embeddings; it does not merely compare the reported first row.
+
+## 5. Theorem
+
+**Fixed-FQ Selected-Second-H Graph First-Order Obstruction Theorem.** Let
+`F_Q` be the fixed explicit integer-`gamma` number-field lift of the selected
+finite-field eta9 equation, and let `Gamma_2` be the unique compatible
+`101`-adic lift of the selected second primitive-`H` marked graph. Then
+
+```text
+F_Q|Gamma_2 = 0 mod 101,
+F_Q|Gamma_2 != 0 mod 101^2.
+```
+
+Hence `Gamma_2` is not contained in the fixed characteristic-zero `F_Q`.
+Because the G3AC Prym divisor uses all three selected graph divisors, this
+fixed `F_Q` cannot be the same-member realization of that selected graph-Prym
+configuration.
+
+**Proof.** The simple-root Hensel calculations construct the selected cubic
+embedding in `R_2`. The marked-map identities prove that the substituted
+`T_i` define the selected graph through this precision. The direct 214-row
+restriction calculation gives zero modulo `101` and the displayed nonzero
+divided restriction modulo `101`. If the graph were contained in `F_Q`, its
+restriction would vanish in every finite quotient, contradicting the
+`101^2` result. QED.
+
+## 6. Exact Scope
+
+The theorem proves:
+
+- the selected second-`H` graph does not lift inside the fixed `F_Q`;
+- the fixed integer-`gamma` lift is not the selected G3AC graph-Prym member;
+- continuing to test that fixed lift as though specialization forced graph
+  containment is invalid.
+
+It does not prove:
+
+- that the fixed `F_Q` has no other nonambient Prym or Noether-Lefschetz
+  class;
+- that every eta9 coefficient lift fails;
+- that the nonempty G3AC graph-preserving family fails;
+- that `beta_C` is nonzero or zero;
+- that a visible twisted `V_3`, visible HYM connection or physical
+  Hull-Strominger endpoint has been selected.
+
+No observed physics value, continuous fit parameter or discrete fit parameter
+enters the computation.
+
+## 7. Frontier Consequence
+
+The old fork is now reduced:
+
+```text
+Route A: identify the fixed integer-gamma F_Q with the graph-Prym member
+         -> retired for the selected graph configuration by UST.G3AD.
+
+Route B: select a member inside the irreducible graph-preserving eta9 family
+         that also satisfies beta_C=0
+         -> active.
+```
+
+The next useful construction is therefore a same-member coefficient and
+Deligne solver on the graph-preserving family. A first practical stage is to
+lift the three marked graphs and the global eta9 coefficient vector together
+through `101^n`, rather than lifting the coefficient vector independently.
+The analytic exit remains the characteristic-zero `beta_C` normal row on that
+same selected member.
+
+## 8. Reproduction
+
+```text
+python build_ust_g3ad_fixed_fq_second_h_graph_obstruction.py
+python verify_ust_g3ad_fixed_fq_second_h_graph_obstruction.py
+python verify.py
+```
+

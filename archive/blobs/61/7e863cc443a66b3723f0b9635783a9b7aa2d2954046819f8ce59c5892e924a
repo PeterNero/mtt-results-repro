@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""Execute a targeted pole-six return chunk for the G3BI correction direction."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+OUT_DIR = ROOT / "evidence" / "ust_g3bm"
+PRIME = 11
+GAMMA = 3
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "build_q79_eta9_toric_return_stage1_chunk.py").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def evaluate(coefficients: list[int]) -> int:
+    return sum(
+        int(value) * pow(GAMMA, power, PRIME)
+        for power, value in enumerate(coefficients)
+    ) % PRIME
+
+
+def correction_b0(g3bi: dict[str, Any], ordinary) -> tuple[str, list[dict[str, Any]]]:
+    terms = []
+    text = []
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        coefficient = evaluate([int(value) for value in row["correction_gamma_coordinates"]])
+        exponent = tuple(int(value) for value in row["source_monomial"]) + (0,) * 7
+        if coefficient == 0:
+            continue
+        monomial = ordinary.monomial_text(exponent)
+        text.append(monomial if coefficient == 1 else f"{coefficient}*{monomial}")
+        terms.append(
+            {
+                "t_power": int(row["t_power"]),
+                "coefficient_mod11": coefficient,
+                "monomial": monomial,
+            }
+        )
+    require(len(terms) == 18, "18 correction terms at good reduction")
+    return "+".join(text), terms
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--row-start", type=int, default=0)
+    parser.add_argument("--row-count", type=int, default=1)
+    parser.add_argument("--timeout", type=float, default=1800.0)
+    args = parser.parse_args()
+    mld = resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_cayley_ordinary_top_dimension as ordinary
+    import build_q79_eta9_smooth_graph_slice_witness as residue
+    import build_q79_eta9_toric_return_stage1_chunk as stage
+    import build_q79_eta9_gauss_manin_block_chunk as strict
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bk_path = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+    g3bi = load(g3bi_path)
+    g3bk = load(g3bk_path)
+    b69 = load(stage.B69)
+    b103 = load(stage.B103)
+    support = load(stage.SUPPORT)
+    transform = load(stage.TRANSFORM)
+    contract = load(stage.CONTRACT)
+    h02_macaulay = load(stage.H02_MACAULAY)
+    require(all(g3bi["checks"].values()) and all(g3bk["checks"].values()), "G3BI/G3BK checks")
+    require(all(support["checks"].values()), "support checks")
+    require(all(transform["checks"].values()), "transform checks")
+    require(all(contract["checks"].values()), "contract checks")
+    require(all(h02_macaulay["checks"].values()), "H02 Macaulay checks")
+    require(sha256(stage.BASIS_CACHE) == b69["Cayley_Jacobian_reducer"]["Singular_basis_cache"]["sha256"], "basis cache")
+    require(sha256(stage.TRANSFORM_CACHE) == transform["transform"]["cache"]["sha256"], "transform cache")
+
+    source = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    source_vectors = [tuple(int(value) for value in row) for row in source["basis_exponent_vectors"]]
+    target_lookup = {row: index for index, row in enumerate(source_vectors)}
+    ambient_vectors = [
+        tuple(int(value) for value in row)
+        for row in h02_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    ambient_lookup = {row: index for index, row in enumerate(ambient_vectors)}
+    require(len(target_lookup) == len(source_vectors) == 248, "H02 residue basis")
+    require(len(ambient_lookup) == len(ambient_vectors) == 42706, "H02 ambient basis")
+    require(0 <= args.row_start < len(source_vectors), "row start")
+    row_stop = min(args.row_start + args.row_count, len(source_vectors))
+    require(row_stop > args.row_start, "row interval")
+    selected = source_vectors[args.row_start:row_stop]
+    source_monomials = [ordinary.monomial_text(row) for row in selected]
+    b0, correction_terms = correction_b0(g3bi, ordinary)
+    support_indices = [int(value) for value in support["support_union_indices_one_based"]]
+    require(len(support_indices) == 225, "targeted support size")
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    stem = f"rows_{args.row_start:04d}_{row_stop - 1:04d}"
+    script_path = OUT_DIR / f"{stem}.sing"
+    raw_path = OUT_DIR / f"{stem}.singular.out"
+    return_cache = OUT_DIR / f"{stem}.return_rows.ssi"
+    quotient_cache = OUT_DIR / f"{stem}.next_quotient.ssi"
+    normal_cache = OUT_DIR / f"{stem}.normal_forms.ssi"
+    ambient_matrix_path = OUT_DIR / f"{stem}.ambient_return.npz"
+    h02_matrix_path = OUT_DIR / f"{stem}.H02_normal_form.u8"
+    packet_path = OUT_DIR / f"{stem}.packet.json"
+    script_path.write_text(
+        stage.make_script(
+            source_monomials,
+            [b0, "0", "0"],
+            support_indices,
+            return_cache,
+            quotient_cache,
+            normal_cache,
+        ),
+        encoding="utf-8",
+    )
+    output, engine, timed_out, elapsed = residue.run_singular(script_path, args.timeout)
+    raw_path.write_text(output, encoding="utf-8")
+    require(not timed_out, f"Singular timeout after {elapsed:.1f}s")
+    ambient_rows, normal_rows, next_rows = stage.parse_output(output, len(selected))
+    require(return_cache.is_file() and quotient_cache.is_file() and normal_cache.is_file(), "serialized return objects")
+    sparse_rows = []
+    all_ambient_terms_in_basis = True
+    all_normal_terms_in_basis = True
+    support_union: set[int] = set()
+    ambient_row_indices: list[int] = []
+    ambient_column_indices: list[int] = []
+    ambient_data: list[int] = []
+    h02_matrix = np.zeros((len(selected), len(source_vectors)), dtype=np.uint8)
+    for offset, (source_vector, ambient_text, normal_text, next_row) in enumerate(
+        zip(selected, ambient_rows, normal_rows, next_rows, strict=True)
+    ):
+        ambient = strict.parse_normal_form(ambient_text)
+        for exponent, coefficient in sorted(
+            ambient.items(), key=lambda item: ambient_lookup.get(item[0], 10**9)
+        ):
+            if exponent not in ambient_lookup:
+                all_ambient_terms_in_basis = False
+                continue
+            ambient_row_indices.append(ambient_lookup[exponent])
+            ambient_column_indices.append(offset)
+            ambient_data.append(coefficient % PRIME)
+        normal = strict.parse_normal_form(normal_text)
+        for exponent, coefficient in sorted(
+            normal.items(), key=lambda item: target_lookup.get(item[0], 10**9)
+        ):
+            if exponent not in target_lookup:
+                all_normal_terms_in_basis = False
+                continue
+            h02_matrix[offset, target_lookup[exponent]] = coefficient % PRIME
+        support_union.update(next_row["Groebner_generator_indices_one_based"])
+        sparse_rows.append(
+            {
+                "source_index": args.row_start + offset,
+                "global_source_index": int(source["first_index"]) + args.row_start + offset,
+                "source_exponent_vector": list(source_vector),
+                "source_monomial": ordinary.monomial_text(source_vector),
+                "ambient_return_term_count": len(ambient),
+                "H02_normal_form_term_count": len(normal),
+                "next_lower_pole_Groebner_support": next_row,
+            }
+        )
+    ambient_matrix = sparse.csc_matrix(
+        (
+            np.asarray(ambient_data, dtype=np.uint8),
+            (
+                np.asarray(ambient_row_indices, dtype=np.int32),
+                np.asarray(ambient_column_indices, dtype=np.int32),
+            ),
+        ),
+        shape=(len(ambient_vectors), len(selected)),
+        dtype=np.uint8,
+    )
+    ambient_matrix.sum_duplicates()
+    ambient_matrix.data %= PRIME
+    ambient_matrix.eliminate_zeros()
+    sparse.save_npz(ambient_matrix_path, ambient_matrix, compressed=True)
+    h02_matrix_path.write_bytes(h02_matrix.tobytes(order="C"))
+    packet = {
+        "schema": "mtt.unified-source.g3bm-correction-toric-return-chunk.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_GF11_G3BK_CORRECTION_POLE6_TARGETED_RETURN_CHUNK_CLOSED",
+        "row_start": args.row_start,
+        "row_stop": row_stop,
+        "row_count": row_stop - args.row_start,
+        "source_total_rows": len(source_vectors),
+        "complete_source_coverage": args.row_start == 0 and row_stop == len(source_vectors),
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BK": record(g3bk_path),
+            "B69_sha256": sha256(stage.B69),
+            "B103_sha256": sha256(stage.B103),
+            "support_sha256": sha256(stage.SUPPORT),
+            "transform_sha256": sha256(stage.TRANSFORM),
+            "contract_sha256": sha256(stage.CONTRACT),
+            "H02_macaulay_sha256": sha256(stage.H02_MACAULAY),
+            "basis_cache_sha256": sha256(stage.BASIS_CACHE),
+            "transform_cache_sha256": sha256(stage.TRANSFORM_CACHE),
+        },
+        "correction": {
+            "field": "GF(11) at gamma=3",
+            "B0": b0,
+            "B1": "0",
+            "B2": "0",
+            "terms": correction_terms,
+        },
+        "sparse_rows": sparse_rows,
+        "ambient_return_terms_with_multiplicity": sum(
+            row["ambient_return_term_count"] for row in sparse_rows
+        ),
+        "next_lower_pole_support_union_count": len(support_union),
+        "next_lower_pole_support_union_indices_one_based": sorted(support_union),
+        "next_lower_pole_quotient_terms_with_multiplicity": sum(
+            row["coefficient_terms"] for row in next_rows
+        ),
+        "execution": {
+            "engine": engine,
+            "elapsed_seconds": elapsed,
+            "script": record(script_path),
+            "raw_output": record(raw_path),
+        },
+        "serialized_exact_objects": {
+            "minus_divergence_return_rows": record(return_cache),
+            "next_lower_pole_quotient": record(quotient_cache),
+            "H02_normal_forms": record(normal_cache),
+        },
+        "coordinate_objects": {
+            "ambient_return": {
+                **record(ambient_matrix_path),
+                "format": "scipy sparse CSC npz",
+                "shape": [len(ambient_vectors), len(selected)],
+                "nonzero_entries": int(ambient_matrix.nnz),
+            },
+            "H02_normal_form": {
+                **record(h02_matrix_path),
+                "format": "uint8 row-major GF(11)",
+                "shape": [len(selected), len(source_vectors)],
+                "nonzero_entries": int(np.count_nonzero(h02_matrix)),
+            },
+        },
+        "checks": {
+            "the_G3BK_18_term_good_reduction_direction_is_used": True,
+            "the_bound225_column_targeted_transform_is_used": True,
+            "the_original_Jacobian_identity_is_exact": True,
+            "all_Cox_coefficient_and_return_degrees_pass": True,
+            "all_requested_rows_are_emitted_in_order": True,
+            "every_minus_divergence_term_lands_in_the_complete_H02_ambient_basis": all_ambient_terms_in_basis,
+            "every_first_normal_form_term_lands_in_the_H02_residue_basis": all_normal_terms_in_basis,
+            "the_H02_normal_forms_and_recursive_quotients_are_serialized": True,
+        },
+        "guardrails": {
+            "claims_uncomputed_H02_rows": False,
+            "claims_characteristic_zero_transport": False,
+            "claims_integral_terminal_coordinates": False,
+        },
+        "next_required_object": "Execute the remaining H02 source rows, assemble the complete correction-direction H02 return, and recurse its lower-pole preimages.",
+    }
+    require(all(packet["checks"].values()), "chunk checks")
+    packet_path.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BM correction toric return chunk: PASS")
+    print(f"rows={args.row_start}:{row_stop} elapsed={elapsed:.3f}s packet_sha256={sha256(packet_path)}")
+
+
+if __name__ == "__main__":
+    main()

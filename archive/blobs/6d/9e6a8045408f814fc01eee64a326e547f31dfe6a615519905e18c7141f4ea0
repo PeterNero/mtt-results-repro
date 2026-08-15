@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Run the direct 9H+L/L-truncated G3AP module with Singular SBA.
+
+This is an independent signature-based candidate engine.  Its output remains
+non-authoritative until a separate certifier replays the selected generators,
+Cox homogeneity, target-effective provenance and complete target squeeze.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_hilbert_hedge as direct
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_std_hedge as hmajor
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+ENGINE = "sba"
+TARGET_SCALAR_DEGREE = direct.TARGET_SCALAR_DEGREE
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def paths(label: str) -> dict[str, Path]:
+    stem = f"ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_{label}_sba"
+    return {
+        "script": STATE / f"{stem}.sing",
+        "output": STATE / f"{stem}.singular.out",
+        "module_cache": STATE / f"{stem}_degree328.ssi",
+        "packet": STATE / f"{stem}.packet.json",
+    }
+
+
+def marker(label: str) -> str:
+    return f"G3AP_F2_HMAJORDIRECTLTRUNCSBA_{label.upper()}"
+
+
+def candidate_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    module_cache: Path,
+) -> str:
+    old_to_new, _ = permuted.position_maps(order)
+    generators = direct.mapped_generators(order)
+    require(len(generators) == 204, "39 selected plus 165 L boundaries")
+    shifts = ",".join(str(value) for value in direct.mapped_shifts(order))
+    cache = str(module_cache.relative_to(ROOT)).replace("\\", "/")
+    tag = marker(label)
+    canonical_component = old_to_new[6]
+    return direct.base_prefix(source) + f'''option(noredTail);
+module MT=
+  {',\n  '.join(generators)};
+intvec componentShifts={shifts};
+attrib(MT,"isHomog",componentShifts);
+degBound={TARGET_SCALAR_DEGREE};
+module G=sba(MT);
+vector canonicalSocle=w^12*t2^4*gen({canonical_component});
+vector canonicalNormal=reduce(canonicalSocle,G);
+int i;
+print("{tag}_BOUND="+string(degBound));
+print("{tag}_MODULE_GENERATORS="+string(size(MT)));
+print("{tag}_MODULE_GB_SIZE="+string(size(G)));
+print("{tag}_CANONICAL_NORMAL_ZERO="+string(canonicalNormal==0));
+print("{tag}_CANONICAL_NORMAL="+string(canonicalNormal));
+for (i=1;i<=size(G);i++)
+{{
+  print("{tag}_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("{tag}_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {cache}",G);
+print("{tag}_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_module(raw: str, label: str):
+    return fiber2.parse_leaders(raw.replace(f"{marker(label)}_", "G3AP_F2_"))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(permuted.PERMUTATIONS), required=True)
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    hmajor.validate_grading()
+    label = args.permutation
+    order = permuted.PERMUTATIONS[label]
+    old_to_new, new_to_old = permuted.position_maps(order)
+    route = paths(label)
+    source = SOURCE.read_text(encoding="ascii")
+    route["script"].write_text(
+        candidate_script(source, label, order, route["module_cache"]),
+        encoding="ascii",
+    )
+    if args.emit_only:
+        print(f"emitted {route['script'].relative_to(ROOT)}")
+        return
+
+    route["module_cache"].unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, route["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    route["output"].write_text(completed.stdout, encoding="utf-8")
+    tag = marker(label)
+    require(completed.returncode == 0, "direct H-major SBA execution")
+    require(
+        not any(line.lstrip().startswith("?") for line in completed.stdout.splitlines()),
+        "Singular execution errors",
+    )
+    require(f"{tag}_LEADER_EXPORT_PASS" in completed.stdout, "completion marker")
+    require(
+        route["module_cache"].is_file() and route["module_cache"].stat().st_size > 0,
+        "candidate module cache",
+    )
+    module_new = parse_module(completed.stdout, label)
+    module_old = [(new_to_old[component], exponent) for component, exponent in module_new]
+    standards, sectors = fiber2.enumerate_target(module_old)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(len(standards) == 1, "candidate target upper bound one")
+    standard_old_component, standard_exponent = standards[0]
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-sba-candidate.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_REQUIRES_INDEPENDENT_HMAJOR_DIRECT_LTRUNC_SBA_CERTIFICATION",
+        "candidate_engine": ENGINE,
+        "permutation": {
+            "label": label,
+            "old_components_in_new_position_order": list(order),
+            "old_to_new": {str(key): value for key, value in old_to_new.items()},
+            "new_to_old": {str(key): value for key, value in new_to_old.items()},
+            "new_position_shifts": list(direct.mapped_shifts(order)),
+            "is_degree_preserving_module_isomorphism": True,
+        },
+        "inputs": {
+            "selected_source": {
+                "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SOURCE),
+            }
+        },
+        "regrading": {
+            "Cox_functional": "9H+L",
+            "base_weights": list(direct.BASE_WEIGHTS),
+            "component_shifts_old_order": list(direct.COMPONENT_SHIFTS),
+            "target_scalar_degree": TARGET_SCALAR_DEGREE,
+        },
+        "truncation": {
+            "kind": "componentwise_L_boundary_plus_H_major_scalar_bound",
+            "target_H_degrees": [entry[2][0] for entry in fiber2.COMPONENTS],
+            "target_L_degrees": [entry[2][1] for entry in fiber2.COMPONENTS],
+            "L_boundary_generator_count": 165,
+            "target_Cox_piece_of_boundary_submodule_is_zero": True,
+            "one_H_step_exits_the_scalar_bound_in_every_component": True,
+        },
+        "execution": {
+            "engine": "Singular signature-based sba",
+            "script": {
+                "path": str(route["script"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(route["script"]),
+            },
+            "output": {
+                "path": str(route["output"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(route["output"]),
+            },
+            "elapsed_seconds": time.time() - started,
+            "selected_module_generator_count": 39,
+            "truncation_generator_count": 165,
+            "candidate_basis_size": len(module_new),
+            "candidate_module_cache": {
+                "path": str(route["module_cache"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(route["module_cache"]),
+                "bytes": route["module_cache"].stat().st_size,
+                "valid_for_Cox_degree": [18, 2, 2],
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "candidate_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "weighted_scalar_degree": TARGET_SCALAR_DEGREE,
+            "enumerated_monomials": total,
+            "dimension_if_certified": 1,
+            "standard_old_component": standard_old_component,
+            "standard_new_component": old_to_new[standard_old_component],
+            "standard_exponent": list(standard_exponent),
+        },
+        "guardrails": {
+            "claims_candidate_process_success_is_a_proof": False,
+            "claims_candidate_cache_is_a_full_standard_basis": False,
+            "claims_target_effective_reducers_are_certified": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Reconstruct the direct selected module and certify Cox homogeneity, "
+            "all 39 generator reductions, boundary target vanishing and the target squeeze."
+        ),
+    }
+    route["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP direct H-major/L-truncated SBA candidate "
+        f"({label}): PASS module={len(module_new)} standard={standards[0]} certification=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

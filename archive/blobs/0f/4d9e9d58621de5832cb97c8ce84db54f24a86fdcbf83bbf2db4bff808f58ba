@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Verify the complete selected G3CT connection-action first jet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ct_selected_connection_action_first_jet.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "build_q79_eta9_toric_return_stage1_chunk.py").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def verify_local(record: dict[str, Any]) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"record {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"bytes {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc().astype(np.int64)
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result.astype(np.uint8)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    mld = resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_full_recursive_H20_source_block as common
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    require(packet["theorem_id"] == "UST.G3CT", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    for name, record in packet["inputs"].items():
+        if "path" in record:
+            verify_local(record)
+        else:
+            path = mld / record["repository_relative_path"]
+            require(path.is_file() and sha256(path) == record["sha256"], f"external {name}")
+    for section in (
+        packet["selected_base_action"],
+        packet["selected_connection_action_first_jet"],
+    ):
+        for value in section.values():
+            if isinstance(value, dict) and "sha256" in value:
+                verify_local(value)
+    for block in packet["differentiated_coordinate_equations"].values():
+        for value in block.values():
+            if isinstance(value, dict) and "sha256" in value:
+                verify_local(value)
+
+    g3bk = load(ROOT / packet["inputs"]["G3BK"]["path"])
+    g3bq = load(ROOT / packet["inputs"]["G3BQ"]["path"])
+    g3cc = load(ROOT / packet["inputs"]["G3CC"]["path"])
+    g3cs = load(ROOT / packet["inputs"]["G3CS"]["path"])
+    selected = np.load(
+        ROOT / g3cc["terminal_source"]["B103_H02_vector"]["path"], allow_pickle=False
+    ).astype(np.uint8)
+    selected_column = sparse.csc_matrix(selected.reshape(248, 1))
+    base: dict[str, sparse.csc_matrix] = {}
+    qdims = {"H02": 248, "H11": 1013, "H20": 248}
+    for target in ("H02", "H11", "H20"):
+        coordinates, q, _ = solver_io.read_coordinates(
+            ROOT / g3bq["inputs"][f"{target}_coordinates"]["path"]
+        )
+        require(q == qdims[target], f"{target} qdim")
+        base[target] = normalize(coordinates.astype(np.int64) @ selected_column.astype(np.int64))
+
+    updates = {
+        target: sparse.load_npz(
+            ROOT / g3bk["good_reduction_family_updates"][target]["matrix"]["path"]
+        ).tocsc()
+        for target in ("H02", "H11", "H20")
+    }
+    blocks = packet["differentiated_coordinate_equations"]
+    coordinates: dict[str, sparse.csc_matrix] = {}
+    for target in ("H02", "H11", "H20"):
+        coordinates[target], q, _ = solver_io.read_coordinates(
+            ROOT / blocks[target]["coordinates"]["path"]
+        )
+        require(q == qdims[target], f"{target} derivative qdim")
+        rhs = sparse.load_npz(ROOT / blocks[target]["RHS_NPZ"]["path"]).tocsc()
+        selected_matrix, _ = common.selected_source_matrix(target)
+        reconstruction = normalize(selected_matrix @ coordinates[target].astype(np.int64))
+        require(common.exact_residual_nonzeros(reconstruction, rhs) == 0, f"{target} derivative equation")
+
+    full_h02_prime = sparse.load_npz(
+        ROOT / g3cs["full_H02_return_first_jet"]["ambient_scipy_NPZ"]["path"]
+    ).tocsc()
+    expected_h02_rhs = normalize(
+        full_h02_prime.astype(np.int64)
+        - updates["H02"].astype(np.int64) @ base["H02"][248:, :].astype(np.int64)
+    )
+    stored_h02_rhs = sparse.load_npz(ROOT / blocks["H02"]["RHS_NPZ"]["path"]).tocsc()
+    require(common.exact_residual_nonzeros(expected_h02_rhs, stored_h02_rhs) == 0, "H02 differentiated RHS")
+    h11_divergence = sparse.load_npz(
+        ROOT / "evidence" / "ust_g3ct" / "g3ct_H02_prime_divergence_H11.npz"
+    ).tocsc()
+    expected_h11_rhs = normalize(
+        h11_divergence.astype(np.int64)
+        - updates["H11"].astype(np.int64) @ base["H11"][1013:, :].astype(np.int64)
+    )
+    stored_h11_rhs = sparse.load_npz(ROOT / blocks["H11"]["RHS_NPZ"]["path"]).tocsc()
+    require(common.exact_residual_nonzeros(expected_h11_rhs, stored_h11_rhs) == 0, "H11 differentiated RHS")
+    h20_divergence = sparse.load_npz(
+        ROOT / "evidence" / "ust_g3ct" / "g3ct_H11_prime_divergence_H20.npz"
+    ).tocsc()
+    expected_h20_rhs = normalize(
+        h20_divergence.astype(np.int64)
+        - updates["H20"].astype(np.int64) @ base["H20"][248:, :].astype(np.int64)
+    )
+    stored_h20_rhs = sparse.load_npz(ROOT / blocks["H20"]["RHS_NPZ"]["path"]).tocsc()
+    require(common.exact_residual_nonzeros(expected_h20_rhs, stored_h20_rhs) == 0, "H20 differentiated RHS")
+
+    assembled = normalize(
+        sparse.vstack(
+            [coordinates["H20"][:248, :], coordinates["H11"][:1013, :], coordinates["H02"][:248, :]],
+            format="csc",
+        )
+    )
+    stored = sparse.load_npz(
+        ROOT / packet["selected_connection_action_first_jet"]["NPZ"]["path"]
+    ).tocsc()
+    require(common.exact_residual_nonzeros(assembled, stored) == 0, "full derivative NPZ")
+    dense = np.fromfile(
+        ROOT / packet["selected_connection_action_first_jet"]["dense_uint8"]["path"],
+        dtype=np.uint8,
+    ).reshape(1509, 1)
+    require(np.array_equal(dense, assembled.toarray().astype(np.uint8)), "full derivative dense")
+    require(assembled.nnz == 1381, "full derivative nnz")
+    print("UST.G3CT selected connection action first jet verification: PASS")
+    print(
+        f"H02_q={coordinates['H02'][:248,:].nnz} H11_q={coordinates['H11'][:1013,:].nnz} "
+        f"H20_q={coordinates['H20'][:248,:].nnz} full_nnz={assembled.nnz}"
+    )
+
+
+if __name__ == "__main__":
+    main()

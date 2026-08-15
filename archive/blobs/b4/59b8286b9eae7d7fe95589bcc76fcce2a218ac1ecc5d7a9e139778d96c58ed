@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Certify a Hilbert-guided G3AP quotient-module candidate exactly."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import run_ust_g3ap_selected_cayley_fiber2_qring_hilbert_hedge as guided
+import run_ust_g3ap_selected_cayley_fiber2_qring_hilbert44_hedge as guided44
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+CANDIDATE = guided.PACKET
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert_certify.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert_certify.singular.out"
+BASE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert_certified_base.ssi"
+MODULE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert_certified_degree44.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert_certified.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file() and sha256(path) == record["sha256"], label)
+    return path
+
+
+def certification_script(
+    source: str,
+    candidate_base_cache: Path = guided.BASE_CACHE,
+    candidate_module_cache: Path = guided.MODULE_CACHE,
+) -> str:
+    generators = ",\n  ".join(qring.derivative_generators())
+    representatives_before, representatives_after = qring.derivative_representatives()
+    candidate_base_relative = str(candidate_base_cache.relative_to(ROOT)).replace(
+        "\\", "/"
+    )
+    candidate_module_relative = str(candidate_module_cache.relative_to(ROOT)).replace(
+        "\\", "/"
+    )
+    base_relative = str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    module_relative = str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    return fiber2.selected_base_prefix(source) + f'''option(noredTail);
+{representatives_before}
+ideal I0=K,E,C;
+ideal G0=std(I0);
+def cachedIdeal=read("ssi:r {candidate_base_relative}");
+ideal GI=cachedIdeal;
+print("G3AP_F2_QHCERT_BASE_CANDIDATE_IS_SB_ATTR="+string(attrib(GI,"isSB")));
+ideal GICheck=std(GI);
+int equalBase=1;
+int i;
+for (i=1;i<=size(G0);i++)
+{{ if (reduce(G0[i],GICheck)!=0) {{ equalBase=0; }} }}
+for (i=1;i<=size(GICheck);i++)
+{{ if (reduce(GICheck[i],G0)!=0) {{ equalBase=0; }} }}
+print("G3AP_F2_QHCERT_BASE_IDEAL_EQUAL="+string(equalBase));
+print("G3AP_F2_QHCERT_BASE_GB_SIZE="+string(size(GICheck)));
+for (i=1;i<=size(GICheck);i++)
+{{ print("G3AP_F2_QHCERT_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GICheck[i]))); }}
+attrib(GICheck,"isSB",0);
+write("ssi:w {base_relative}",GICheck);
+attrib(GICheck,"isSB",1);
+qring q=GICheck;
+{representatives_after}
+module M=
+  {generators};
+intvec componentShifts=12,15,8,18,11,4;
+attrib(M,"isHomog",componentShifts);
+def cachedCandidate=read("ssi:r {candidate_module_relative}");
+module candidateBasis=cachedCandidate;
+print("G3AP_F2_QHCERT_MODULE_CANDIDATE_IS_SB_ATTR="+string(attrib(candidateBasis,"isSB")));
+attrib(candidateBasis,"isHomog",componentShifts);
+degBound=44;
+module G=std(candidateBasis);
+int badGeneratorRemainders=0;
+for (i=1;i<=size(M);i++)
+{{ if (reduce(M[i],G)!=0) {{ badGeneratorRemainders=badGeneratorRemainders+1; }} }}
+print("G3AP_F2_QHCERT_BOUND="+string(degBound));
+print("G3AP_F2_QHCERT_ORIGINAL_GENERATORS="+string(size(M)));
+print("G3AP_F2_QHCERT_BAD_GENERATOR_REMAINDERS="+string(badGeneratorRemainders));
+print("G3AP_F2_QHCERT_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("G3AP_F2_QHCERT_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("G3AP_F2_QHCERT_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isHomog",componentShifts);
+attrib(G,"isSB",0);
+write("ssi:w {module_relative}",G);
+print("G3AP_F2_QHCERT_PASS");
+quit;
+'''
+
+
+def parse_leaders(
+    raw: str,
+) -> tuple[list[tuple[int, ...]], list[tuple[int, tuple[int, ...]]]]:
+    normalized = raw.replace("G3AP_F2_QHCERT_", "G3AP_F2_QRING_")
+    return qring.parse_leaders(normalized)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    parser.add_argument("--candidate", choices=("full", "degree44"), default="full")
+    args = parser.parse_args()
+    candidate_path = CANDIDATE if args.candidate == "full" else guided44.PACKET
+    candidate_runner = guided if args.candidate == "full" else guided44
+    expected_schema = (
+        "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-hilbert-guided-candidate.v1"
+        if args.candidate == "full"
+        else "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-hilbert44-guided-candidate.v1"
+    )
+    expected_status = (
+        "CANDIDATE_REQUIRES_INDEPENDENT_BASE_AND_SELECTED_SOURCE_CERTIFICATION"
+        if args.candidate == "full"
+        else "CANDIDATE_REQUIRES_ORDINARY_NO_HINT_RECONSTRUCTION"
+    )
+    candidate = json.loads(candidate_path.read_text(encoding="ascii"))
+    require(
+        candidate["schema"] == expected_schema,
+        "candidate schema",
+    )
+    require(candidate["status"] == expected_status, "candidate status")
+    require(all(candidate["checks"].values()), "candidate checks")
+    require(not any(candidate["guardrails"].values()), "candidate guardrails")
+    source_path = checked(candidate["inputs"]["selected_source"], "selected source")
+    checked(candidate["inputs"]["predecessor_hint"], "predecessor hint")
+    candidate_base = checked(candidate["inputs"]["untrusted_base_cache"], "candidate base")
+    candidate_script = checked(candidate["execution"]["script"], "candidate script")
+    checked(candidate["execution"]["output"], "candidate output")
+    candidate_module = checked(
+        candidate["execution"]["candidate_module_cache"], "candidate module"
+    )
+    source = source_path.read_text(encoding="ascii")
+    _, full_hint = guided.guided.load_hint()
+    hint = full_hint if args.candidate == "full" else guided44.prefix_hint(full_hint)
+    require(
+        candidate_script.read_text(encoding="ascii")
+        == guided.guided_qring_script(source, hint, candidate_runner.MODULE_CACHE),
+        "candidate script reconstruction",
+    )
+    require(candidate_base == candidate_runner.BASE_CACHE, "canonical candidate base path")
+    require(
+        candidate_module == candidate_runner.MODULE_CACHE,
+        "canonical candidate module path",
+    )
+    SCRIPT.write_text(
+        certification_script(source, candidate_base, candidate_module),
+        encoding="ascii",
+    )
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)}")
+        return
+    BASE_CACHE.unlink(missing_ok=True)
+    MODULE_CACHE.unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "candidate certification execution")
+    require("G3AP_F2_QHCERT_PASS" in completed.stdout, "certification pass marker")
+    expected_markers = {
+        "G3AP_F2_QHCERT_BASE_CANDIDATE_IS_SB_ATTR": 0,
+        "G3AP_F2_QHCERT_BASE_IDEAL_EQUAL": 1,
+        "G3AP_F2_QHCERT_MODULE_CANDIDATE_IS_SB_ATTR": 0,
+        "G3AP_F2_QHCERT_ORIGINAL_GENERATORS": 21,
+        "G3AP_F2_QHCERT_BAD_GENERATOR_REMAINDERS": 0,
+    }
+    for label, value in expected_markers.items():
+        require(
+            re.search(rf"^{label}={value}$", completed.stdout, re.MULTILINE)
+            is not None,
+            label,
+        )
+    require(BASE_CACHE.is_file() and BASE_CACHE.stat().st_size > 0, "certified base cache")
+    require(
+        MODULE_CACHE.is_file() and MODULE_CACHE.stat().st_size > 0,
+        "certified module cache",
+    )
+    base, module = parse_leaders(completed.stdout)
+    standards, sectors = fiber2.enumerate_target(qring.combined_leaders(base, module))
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(standards == [fiber2.EXPECTED_STANDARD], "certified unique top")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-hilbert-certified-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.FIBER2.QRING.HILBERT.CERTIFIED",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_QRING_HILBERT_CERTIFIED_TOP_DIMENSION_ONE",
+        "inputs": {
+            "candidate": {
+                "path": str(candidate_path.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(candidate_path),
+            },
+            "selected_source": {
+                "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SOURCE),
+            },
+        },
+        "execution": {
+            "script": {
+                "path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SCRIPT),
+            },
+            "output": {
+                "path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(OUTPUT),
+            },
+            "elapsed_seconds": time.time() - started,
+            "base_basis_size": len(base),
+            "original_module_generator_count": 21,
+            "certified_basis_size_through_bound": len(module),
+            "scalar_degree_bound": 44,
+            "certified_base_cache": {
+                "path": str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BASE_CACHE),
+                "bytes": BASE_CACHE.stat().st_size,
+                "isSB_trust_attribute_stored": False,
+            },
+            "certified_module_cache": {
+                "path": str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(MODULE_CACHE),
+                "bytes": MODULE_CACHE.stat().st_size,
+                "valid_through_base_scalar_degree": 44,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "fiber_degree_two_module": {
+            "base_quotient": "B/(K,E,C)",
+            "components": [name for _, name, _, _ in fiber2.COMPONENTS],
+            "component_scalar_shifts": [shift for _, _, _, shift in fiber2.COMPONENTS],
+            "sectors": sectors,
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "scalar_weight": 44,
+            "enumerated_monomials": total,
+            "dimension": 1,
+            "basis": ["w^12*t2^4*s^2"],
+            "basis_component": "s2",
+            "basis_base_exponent": list(fiber2.EXPECTED_STANDARD[1]),
+        },
+        "checks": {
+            "candidate_base_cache_is_reloaded_without_isSB_trust": True,
+            "selected_base_ideal_is_recomputed_from_K_E_C": True,
+            "candidate_base_and_selected_base_ideals_are_mutually_equal": True,
+            "candidate_module_cache_is_reloaded_without_isSB_trust": True,
+            "component_shifts_are_reasserted_before_candidate_recomputation": True,
+            "ordinary_std_is_recomputed_from_the_candidate_without_a_Hilbert_hint": True,
+            "candidate_elements_originate_from_exact_std_operations_on_the_21_selected_generators": True,
+            "all_21_original_selected_generators_reduce_to_zero": True,
+            "therefore_the_candidate_and_selected_quotient_modules_are_equal": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "selected_ordinary_top_piece_has_dimension_one": True,
+            "no_predecessor_entry_is_used_as_selected_source_evidence": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_an_unrestricted_module_basis": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_promotion": False,
+        },
+        "next_required_object": (
+            "Independently verify this certificate packet, adopt canonical G3AP, "
+            "then execute G3AM/G3AN response ranks."
+        ),
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP qring Hilbert candidate certification: PASS "
+        f"base={len(base)} module={len(module)} monomials={total} dimension=1"
+    )
+
+
+if __name__ == "__main__":
+    main()

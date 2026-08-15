@@ -1,0 +1,84 @@
+# Exact number-field helper
+
+`ust_nf_kernel.c` computes a literal nullspace over the number field encoded by
+the sparse SMS input. `ust_nf_kernel_replay.c` independently replays that
+kernel against every sparse matrix row. Both use FLINT's generic number-field
+API; finite or floating-point output is never promoted by either helper.
+
+`ust_nf_kernel_recover.c` is a production checkpoint path for component 16.
+It accepts 400 complete coordinate rows from an interrupted serialization, a
+hash-bound list of the 21 free-coordinate identities, and a certified list of
+800 recovery equations. It solves the remaining `800 x 800` exact system and
+writes a separate complete archive. The original checkpoint is never modified.
+
+The free-column file is essential. G3EU rejected the first recovery because it
+mistook the retained finite relation coordinates `986..1006` for the basis used
+by FLINT's interrupted nullspace serialization. Exact replay found 101 failures
+inside the selected 1,200-row subsystem. The corrected standard profile is
+`1199,1200,1201,1202,1204,...,1220`; no recovered archive is promoted before a
+literal complement replay.
+
+Build and run the exact smoke fixture in WSL or another POSIX environment:
+
+```text
+sh native/build_ust_nf_kernel.sh
+```
+
+The script discovers compiler and linker flags through `pkg-config flint`,
+compares the generated smoke kernel with `ust_nf_kernel_smoke.nfk`, and runs
+the native replay verifier. FLINT 3.4.0 is the tested version. The output path
+is optional; the replay binary receives the same path plus `_replay`:
+
+```text
+sh native/build_ust_nf_kernel.sh /path/to/ust_nf_kernel
+```
+
+Production component-16 execution uses the recovered archive rather than the
+interrupted G3EQ serialization:
+
+```text
+python build_ust_g3et_component16_checkpoint_recovery_rows.py
+native/ust_nf_kernel_recover \
+  evidence/ust_g3el/H02.component16.unit_pivot_reduced.number_field.sms \
+  evidence/ust_g3eq/H02.component16.exact_kernel.partial_checkpoint.nfk \
+  evidence/ust_g3et/H02.component16.checkpoint_recovery_rows.txt \
+  evidence/ust_g3et/H02.component16.checkpoint_free_columns.txt \
+  evidence/ust_g3et/H02.component16.exact_kernel.recovered.nfk
+```
+
+The exact audit partitions the selected subsystem into 800 rows enforced by
+the recovery solve and a 400-row literal complement. It audits those 400 rows
+together with the 38 omitted rows. `UST_NF_SKIP_RESIDUAL_RANK=1` deliberately
+emits the exact residual map before attempting expensive generic rank
+reduction; `UST_NF_ACTIVE_COLUMNS` avoids constructing unused number-field
+kernel coordinates.
+
+```text
+python build_ust_g3eu_component16_exact_audit_rows.py
+UST_NF_SKIP_RESIDUAL_RANK=1 \
+UST_NF_ACTIVE_ROWS=evidence/ust_g3eu/H02.component16.exact_audit_rows.txt \
+UST_NF_ACTIVE_COLUMNS=evidence/ust_g3eu/H02.component16.exact_audit_columns.txt \
+native/ust_nf_kernel_replay \
+  evidence/ust_g3el/H02.component16.unit_pivot_reduced.number_field.sms \
+  evidence/ust_g3et/H02.component16.exact_kernel.recovered.nfk \
+  evidence/ust_g3eu/H02.component16.exact_residual_map.no_rank.nfr
+```
+
+`ust_nf_kernel_modular_cutset.c` evaluates the same displayed rational kernel
+at a denominator-safe fresh good specialization and emits the complete 38 by
+21 omitted-row residual. Such a witness is an exact rank lower bound, not an
+upper bound unless it reaches 21. The final Python certificate combines a
+nonzero exact pivot minor with an exact row-span identity; it never promotes a
+common finite rank by repetition alone.
+
+```text
+python build_ust_g3eu_component16_omitted_row_cutset.py
+python verify_ust_g3eu_component16_modular_residual_campaign.py
+python verify_ust_g3eu_component16_exact_residual_rank.py
+python build_ust_g3eu_h02_component16_exact_residual_adjudication.py
+python verify_ust_g3eu_h02_component16_exact_residual_adjudication.py
+```
+
+The multi-gigabyte kernel archives are calculation-capsule artifacts, not
+ordinary Git text payloads. The small cutsets, residual maps, hashes, theorem
+packet and verifier source are the repository proof interface.

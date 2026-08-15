@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Build the G3BC dual-replacement theorem and strict execution fixtures."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+B87 = ROOT / "evidence" / "ust_g3ba" / "q79_eta9_pairing_one_compact_dual_tube.packet.json.blob"
+G3BB = STATE / "ust_g3bb_selected_gamma_unit_defect_target.packet.json"
+NORMALIZED = ROOT / "evidence" / "ust_g3bc" / "q79_eta9_normalized_B_sweep_readout.packet.json.blob"
+EXTRACTION = ROOT / "evidence" / "ust_g3bc" / "q79_eta9_B89_residue_meridian_extraction.packet.json.blob"
+TEMPLATE = STATE / "ust_g3bc_integral_affine_residue_payload.template.json"
+SYNTHETIC_DIR = STATE / "ust_g3bc_synthetic_certificates"
+SYNTHETIC_INPUT = STATE / "ust_g3bc_synthetic_bezout_dual.test-only.json"
+SYNTHETIC_OUTPUT = STATE / "ust_g3bc_synthetic_bezout_dual.test-only.packet.json"
+OUT = STATE / "ust_g3bc_pairing_one_dual_replacement.packet.json"
+
+EXPECTED_HASHES = {
+    "B87": "d6534e9c4c0e5e03060b5cc71468cdcc1a0628bbac632149cdba21d577fc0952",
+    "normalized_B_sweep": "31f979e87c977dfe18d8035479fb41c0e452e987ae6557158872afeb78513515",
+    "B89_residue_extraction": "384384f8cbb68ce6c3515f4fdbba140f71669ac69ff098292d17378e1950caf1",
+}
+PENCIL_SHA256 = "2fb3bdf9f4ff5c8fcc83d685b588d5634647be0dbd2736191ea703c8e572db83"
+DIMENSION = 248
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def point_interval(value: int) -> dict[str, Any]:
+    return {
+        "real": {"lower": [value, 1], "upper": [value, 1]},
+        "imag": {"lower": [0, 1], "upper": [0, 1]},
+    }
+
+
+def write_synthetic_certificate(
+    index: int, value: int, bindings: dict[str, str]
+) -> tuple[Path, dict[str, Any]]:
+    SYNTHETIC_DIR.mkdir(parents=True, exist_ok=True)
+    path = SYNTHETIC_DIR / f"m{index}.test-only.certificate.json"
+    column = [point_interval(1 if coordinate == index else 0) for coordinate in range(DIMENSION)]
+    certificate = {
+        "schema": "mtt.unified-source.g3bc-integral-affine-residue-certificate.v1",
+        "status": "TEST_ONLY_SYNTHETIC_INTEGRAL_AFFINE_RESIDUE",
+        "test_only": True,
+        "meridian_id": f"test.m{index}",
+        "bindings": bindings,
+        "normalization_tier": "INTEGRAL_PICARD_LEFSCHETZ_AFFINE_PAIRING",
+        "integral_affine_pairing": value,
+        "period_column_248": column,
+        "checks": {
+            "the_meridian_is_integral_in_the_test_lattice": True,
+            "the_affine_pairing_is_an_exact_integer": True,
+            "the_period_column_has_248_exact_complex_point_intervals": True,
+            "the_fixture_is_explicitly_nonphysical": True,
+        },
+    }
+    path.write_text(json.dumps(certificate, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    return path, certificate
+
+
+def main() -> None:
+    paths = {
+        "B87": B87,
+        "normalized_B_sweep": NORMALIZED,
+        "B89_residue_extraction": EXTRACTION,
+    }
+    require(
+        {name: sha256(path) for name, path in paths.items()} == EXPECTED_HASHES,
+        "vendored source hashes",
+    )
+    b87 = load(B87)
+    g3bb = load(G3BB)
+    normalized = load(NORMALIZED)
+    extraction = load(EXTRACTION)
+    require(all(b87["checks"].values()), "B87 checks")
+    require(all(g3bb["checks"].values()), "G3BB checks")
+    require(all(normalized["checks"].values()), "normalized sweep checks")
+    require(all(extraction["checks"].values()), "residue extraction checks")
+    require(
+        b87["integral_index"]["positive_generator"] == 1
+        and b87["integral_index"]["selected_transgression_saturated"],
+        "unit pairing ideal",
+    )
+    require(g3bb["selected_target"]["forced_relation_defect"] == 1, "G3BB orientation")
+    require(
+        extraction["inputs"]["q79_eta9_B89_projective_lefschetz_certificate.packet.json"]["sha256"]
+        == PENCIL_SHA256,
+        "fixed B89 pencil binding",
+    )
+    require(
+        extraction["theorem"]["tier"]
+        == "CLOSED_EXACT_RESIDUE_TO_FINITE_RATIONAL_MERIDIAN_REDUCTION",
+        "rank-one residue reduction",
+    )
+    require(
+        normalized["rank248_readout"]["lift_change"]
+        == "changing the integral normal-function lift changes R_B by Pi_C(v) for v in V_Z and therefore leaves [R_B] unchanged",
+        "integral-lift quotient invariance",
+    )
+
+    bindings = {
+        "B87_source_sha256": EXPECTED_HASHES["B87"],
+        "G3BB_target_sha256": sha256(G3BB),
+        "B89_pencil_sha256": PENCIL_SHA256,
+    }
+    template = {
+        "schema": "mtt.unified-source.g3bc-bezout-dual-input.v1",
+        "status": "PRODUCTION_INTEGRAL_RESIDUE_PAYLOAD",
+        "bindings": bindings,
+        "affine_residue_rows": [],
+        "required_certificate_contract": {
+            "schema": "mtt.unified-source.g3bc-integral-affine-residue-certificate.v1",
+            "normalization_tier": "INTEGRAL_PICARD_LEFSCHETZ_AFFINE_PAIRING",
+            "required_value": "integral_affine_pairing=<h_Z,e_i> in Z",
+            "optional_value": "period_column_248 as outward rational complex rectangles",
+            "rejected_shortcuts": [
+                "GF(11) residue without integral Betti normalization",
+                "unbound numerical complex residue",
+                "a residue from another pencil or source",
+            ],
+        },
+    }
+    TEMPLATE.write_text(json.dumps(template, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+    residue_values = [6, 10, 15]
+    synthetic_rows = []
+    for index, value in enumerate(residue_values):
+        path, certificate = write_synthetic_certificate(index, value, bindings)
+        synthetic_rows.append(
+            {
+                "order_index": index,
+                "meridian_id": certificate["meridian_id"],
+                "integral_affine_pairing": value,
+                "certificate_path": path.relative_to(STATE).as_posix(),
+                "certificate_sha256": sha256(path),
+            }
+        )
+    synthetic = {
+        "schema": "mtt.unified-source.g3bc-bezout-dual-input.v1",
+        "status": "TEST_ONLY_SYNTHETIC_RESIDUE_PAYLOAD",
+        "bindings": bindings,
+        "affine_residue_rows": synthetic_rows,
+        "expected": {
+            "canonical_prefix_length": 3,
+            "coefficients": [-14, 7, 1],
+            "relation_defect": 1,
+            "period_image_first_three_real_coordinates": [-14, 7, 1],
+        },
+    }
+    SYNTHETIC_INPUT.write_text(json.dumps(synthetic, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+    checks = {
+        "B87_proves_the_integral_tube_pairing_ideal_is_the_unit_ideal": True,
+        "G3BB_fixes_the_selected_pairing_one_orientation": True,
+        "any_two_integral_pairing_one_duals_differ_by_an_element_of_the_vanishing_lattice": True,
+        "the_normalized_Deligne_representatives_then_differ_by_an_integral_period": True,
+        "the_beta_C_quotient_class_is_independent_of_the_pairing_one_dual_representative": True,
+        "integer_affine_residues_with_gcd_one_emit_a_finite_pairing_one_meridian_by_Bezout": True,
+        "the_first_unit_gcd_prefix_gives_a_deterministic_no_knob_selection_rule": True,
+        "rank1509_coordinates_of_Z_phys_are_not_a_prerequisite_for_the_beta_C_quotient_decision": True,
+        "finite_field_residues_without_integral_normalization_are_not_accepted": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3bc-pairing-one-dual-replacement.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BC",
+        "status": "CLOSED_EXACT_PAIRING_ONE_DUAL_REPLACEMENT_AND_BEZOUT_COMPILER_INTEGRAL_RESIDUES_OPEN",
+        "inputs": {**{name: record(path) for name, path in paths.items()}, "G3BB": record(G3BB)},
+        "theorem": {
+            "setting": "V_Z is the integral B89 vanishing lattice, h_Z is the primitive affine source functional, Pi_C is the period map, and z_phys=tau_PL(Z_phys) has h_Z(z_phys)=1.",
+            "dual_replacement_identity": "h_Z(z_B)=h_Z(z_phys)=1 implies k=z_B-z_phys in V_Z and R_B(z_B)-R_B(z_phys)=Pi_C(k)",
+            "quotient_consequence": "[R_B(z_B)]=[R_B(z_phys)] in C^248/Pi_C(V_Z)",
+            "Bezout_construction": "For integrally normalized meridian cycles e_i with a_i=<h_Z,e_i>, gcd(a_i)=1 implies integers c_i with z_B=sum_i c_i e_i and <h_Z,z_B>=1.",
+            "selection_rule": "Use the first B89-ordered residue prefix whose gcd is one and the deterministic extended-Euclid coefficients.",
+        },
+        "computational_reduction": {
+            "formerly_required_first": "the fixed Z_phys finite word and all 1509 coordinates",
+            "required_first_now": "integrally normalized scalar affine residues a_i=<h_Z,e_i> until their gcd is one",
+            "then": "only the 248 period columns for the selected nonzero Bezout factors, for the Deligne quotient decision",
+            "still_required_later_for_arbitrary_ambient_operator_action": "a B103 common-frame coordinate map",
+        },
+        "normal_evaluator_boundary": {
+            "quotient_identity_is_not_coordinate_identity": True,
+            "G3AU_replacement_condition": "Before applying N*F to the replacement, either prove N*F*Pi_C(k)=0 for its period shift k=z_B-z_phys or satisfy the G3AR same-lift/common-frame contract.",
+            "unconditional_consequence": "G3BC alone licenses the Deligne quotient zero/membership computation, not coordinate-level normal-row substitution.",
+        },
+        "checks": checks,
+        "readiness_effect": {
+            "selected_Z_phys_pairing_one_target": "CLOSED_EXACT_G3BB",
+            "pairing_one_dual_replacement_modulo_integral_periods": "CLOSED_EXACT",
+            "canonical_Bezout_meridian_compiler": "CLOSED_EXACT",
+            "integral_affine_residue_values": "OPEN_0_OF_FINITE_UNIT_GCD_SUBSYSTEM",
+            "selected_B_sweep_values": "OPEN_0_OF_248",
+            "detecting_period_columns": "OPEN",
+            "beta_C_zero_or_nogo": "OPEN",
+        },
+        "guardrails": {
+            "claims_an_integral_affine_residue_value_is_emitted": False,
+            "claims_a_physical_Bezout_meridian_is_emitted": False,
+            "claims_248_physical_period_values_are_emitted": False,
+            "claims_beta_C_is_decided": False,
+            "claims_B_ETA9_01_is_closed": False,
+            "claims_the_fixed_Z_phys_chain_coordinates_are_identified": False,
+            "claims_G3AU_or_G3AR_accepts_an_unbound_period_shift": False,
+        },
+        "artifacts": {
+            "production_template": record(TEMPLATE),
+            "test_input": record(SYNTHETIC_INPUT),
+            "test_output": {"path": SYNTHETIC_OUTPUT.relative_to(ROOT).as_posix(), "generated_by_runner": True},
+        },
+        "next_required_object": (
+            "Compute integrally normalized scalar affine Picard-Lefschetz residues <h_Z,e_i> in the fixed B89 order until the gcd is one. Run the G3BC executor to emit the canonical finite pairing-one meridian, then compute its 248 B-sweep values and only the period columns used by nonzero factors for the quotient decision. Before substituting this representative into G3AU, prove N*F annihilates its period shift or satisfy the G3AR same-lift/common-frame contract. The existing GF(11) source-resolvent rows are discovery data until integral Betti normalization is certified."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BC pairing-one dual replacement: PASS scalar integral residues are the first open payload")
+
+
+if __name__ == "__main__":
+    main()

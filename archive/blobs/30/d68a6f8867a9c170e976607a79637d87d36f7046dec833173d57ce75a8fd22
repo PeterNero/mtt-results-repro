@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Independent replay of the UST.G3GE finite-height certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as interpolation
+import build_ust_g3ft_component20_full_relation_height_campaign as height_campaign
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3ge/H02.component20.eleven_prime_second_jet_height_audit.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, object]) -> Path:
+    path = ROOT / str(item["path"])
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size: {path}")
+    require(sha256(path) == item["sha256"], f"record hash: {path}")
+    return path
+
+
+def crt_reconstruct(
+    residues: np.ndarray, primes: tuple[int, ...]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int]:
+    combined = [int(value) for value in residues[0]]
+    modulus = primes[0]
+    for prime, row in zip(primes[1:], residues[1:], strict=True):
+        inverse = pow(modulus % prime, -1, prime)
+        combined = [
+            value
+            + modulus * (((int(target) - value % prime) * inverse) % prime)
+            for value, target in zip(combined, row, strict=True)
+        ]
+        modulus *= prime
+    bound = math.isqrt((modulus - 1) // 2)
+    numerators = np.zeros(792, dtype=object)
+    denominators = np.zeros(792, dtype=object)
+    valid = np.zeros(792, dtype=bool)
+    for index, residue in enumerate(combined):
+        numerator, denominator, candidate = height_campaign.rational_reconstruct(
+            residue, modulus, bound
+        )
+        numerators[index] = int(numerator)
+        denominators[index] = int(denominator)
+        valid[index] = bool(candidate)
+    return numerators, denominators, valid, modulus, bound
+
+
+def evaluate(
+    numerators: np.ndarray,
+    denominators: np.ndarray,
+    valid: np.ndarray,
+    prime: int,
+    gamma: int,
+    target: np.ndarray,
+) -> np.ndarray:
+    numerators = numerators.reshape(6, 132)
+    denominators = denominators.reshape(6, 132)
+    valid = valid.reshape(6, 132)
+    passed = np.zeros(132, dtype=bool)
+    for coordinate in range(132):
+        if not bool(np.all(valid[:, coordinate])):
+            continue
+        value = 0
+        for power in range(6):
+            denominator = int(denominators[power, coordinate]) % prime
+            if denominator == 0:
+                break
+            value = (
+                value
+                + int(numerators[power, coordinate])
+                * pow(denominator, -1, prime)
+                * pow(gamma, power, prime)
+            ) % prime
+        else:
+            passed[coordinate] = value == int(target[coordinate])
+    return passed
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3GE", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    for item in packet["inputs"].values():
+        if isinstance(item, list):
+            for record in item:
+                verify_record(record)
+        else:
+            verify_record(item)
+    arrays_path = verify_record(packet["full_root_campaign"]["artifact"])
+    arrays = np.load(arrays_path, allow_pickle=False)
+    primes = tuple(int(value) for value in arrays["primes"])
+    roots = arrays["roots"].astype(np.uint32)
+    residues = arrays["second_jet_source_power_basis_residues"].astype(np.uint32)
+    added = arrays["added_complete_prime_source_values"].astype(np.uint32)
+    require(primes[-2:] == (81359, 82963), "added primes")
+    require(roots.shape == (11, 6) and residues.shape == (11, 792), "campaign shapes")
+    require(added.shape == (2, 6, 132), "added source shape")
+    for index, prime in enumerate(primes[-2:]):
+        replay = interpolation.interpolate(
+            added[index].astype(np.int64), tuple(int(x) for x in roots[-2 + index]), prime
+        ).reshape(-1)
+        require(np.array_equal(replay.astype(np.uint32), residues[-2 + index]), "interpolation replay")
+
+    numerators, denominators, valid, modulus, bound = crt_reconstruct(residues, primes)
+    require(modulus.bit_length() == 174 and bound.bit_length() == 87, "height")
+    require(int(np.count_nonzero(valid)) == 513, "valid slots")
+    require(
+        np.array_equal(
+            np.asarray([str(value) for value in numerators], dtype="U64"),
+            arrays["reconstructed_numerators"],
+        ),
+        "numerator replay",
+    )
+    require(
+        np.array_equal(
+            np.asarray([str(value) for value in denominators], dtype="U64"),
+            arrays["reconstructed_denominators"],
+        ),
+        "denominator replay",
+    )
+    require(np.array_equal(valid.astype(np.uint8), arrays["reconstruction_valid"]), "valid replay")
+
+    holdout_primes = arrays["root_holdout_primes"].astype(np.uint32)
+    holdout_gamma = arrays["root_holdout_gamma"].astype(np.uint32)
+    targets = arrays["root_holdout_targets"].astype(np.uint32)
+    recorded = arrays["root_holdout_coordinate_pass"].astype(bool)
+    replay_rows = []
+    for prime, gamma, target in zip(
+        holdout_primes, holdout_gamma, targets, strict=True
+    ):
+        replay_rows.append(
+            evaluate(
+                numerators,
+                denominators,
+                valid,
+                int(prime),
+                int(gamma),
+                target,
+            )
+        )
+    replay = np.stack(replay_rows)
+    require(np.array_equal(replay, recorded), "root holdout replay")
+    require([int(np.count_nonzero(row)) for row in replay] == [17] * 5, "pass counts")
+    common = np.flatnonzero(np.all(replay, axis=0)).tolist()
+    require(
+        common == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 18, 21, 24, 27, 30],
+        "trivial coordinate support",
+    )
+    print(
+        "UST.G3GE independent verification: PASS "
+        "modulus_bits=174 bound_bits=87 nontrivial=0"
+    )
+
+
+if __name__ == "__main__":
+    main()

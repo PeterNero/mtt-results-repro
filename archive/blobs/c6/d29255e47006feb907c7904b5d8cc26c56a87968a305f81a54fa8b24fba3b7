@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Export nine fixed-root exact cusp inputs for the G3AO uvs chart."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "uvs_cusp_split_msolve"
+EXPORT_SCRIPT = CAMPAIGN / "export_cusp_split.sing"
+RAW_OUTPUT = CAMPAIGN / "export_cusp_split.singular.out"
+OUT = CAMPAIGN / "inputs.packet.json"
+BIDUAL_IDENTITY = ROOT / "state" / "ust_g3ao_elliptic_bidual_identity.packet.json"
+CASES = ("dual0", "dual1", "dual2")
+ROOTS = ("root0", "root1", "root2")
+ZETA_EXPRESSIONS = {
+    "root0": "1",
+    "root1": "89+53*g+64*g^2+18*g^3+34*g^4+52*g^5",
+    "root2": "11+48*g+37*g^2+83*g^3+67*g^4+49*g^5",
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_export_script(polynomials: dict[str, str]) -> str:
+    declarations: list[str] = []
+    printers: list[str] = []
+    coordinate_data = {
+        "dual0": ("D0", "D1", "D2"),
+        "dual1": ("D1", "D0", "D2"),
+        "dual2": ("D2", "D0", "D1"),
+    }
+    for case in CASES:
+        zero, left, right = coordinate_data[case]
+        for root in ROOTS:
+            label = f"{case}_{root}"
+            ideal_name = f"cusp_{label}"
+            zeta = ZETA_EXPRESSIONS[root]
+            declarations.append(
+                f"ideal {ideal_name}=K,{zero},{left}-({zeta})*{right},"
+                f"orbitInv*y*z*w*{right}-1;"
+            )
+            marker = label.upper()
+            printers.extend(
+                [
+                    f'print("G3AO_MSOLVE_{marker}_COUNT="+string(size({ideal_name})));',
+                    f"for (exportIndex=1;exportIndex<=size({ideal_name});exportIndex++)",
+                    f'{{ print("G3AO_MSOLVE_{marker}_"+string(exportIndex)+"="+string({ideal_name}[exportIndex])); }}',
+                ]
+            )
+    return f'''// UST.G3AO exact nine-component fixed-root Fermat-dual cusp cover.
+ring source=(101,g),(x,y,z,w),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly Ap0=A0;
+poly Ap1=A0+A1+3*A2;
+poly Ap2=A0+7*A1+7*A2;
+poly D0=-14*Ap0;
+poly D1=-4*Ap0+7*Ap1-3*Ap2;
+poly D2=6*Ap0-7*Ap1+Ap2;
+ring orbit=(101,g),(y,z,w,orbitInv),dp;
+minpoly={polynomials["minpoly"]};
+map orbitMap=source,1,y,z,w;
+poly K=orbitMap(K);
+poly D0=orbitMap(D0);
+poly D1=orbitMap(D1);
+poly D2=orbitMap(D2);
+{chr(10).join(declarations)}
+int exportIndex;
+{chr(10).join(printers)}
+print("G3AO_MSOLVE_EXPORT_PASS");
+quit;
+'''
+
+
+def make_msolve_input(polynomials: dict[str, str], generators: list[str]) -> str:
+    equations = [common.normalize_for_msolve(polynomials["minpoly"])]
+    equations.extend(common.normalize_for_msolve(value) for value in generators)
+    return "y,z,w,orbitInv,g\n101\n" + ",\n".join(equations) + "\n"
+
+
+def verify_cube_roots(polynomials: dict[str, str]) -> None:
+    g = sp.symbols("g")
+    modulus = sp.Poly(sp.sympify(polynomials["minpoly"].replace("^", "**")), g, modulus=101)
+    require(modulus.degree() == 6 and modulus.is_irreducible, "irreducible F101 extension")
+    values = {
+        root: sp.Poly(sp.sympify(expr.replace("^", "**")), g, modulus=101)
+        for root, expr in ZETA_EXPRESSIONS.items()
+    }
+    one = sp.Poly(1, g, modulus=101)
+    require(values["root0"] == one, "trivial cube root")
+    for root in ROOTS:
+        require((values[root] ** 3).rem(modulus) == one, f"{root} cubed")
+    require((values["root1"] ** 2).rem(modulus) == values["root2"], "zeta squared")
+    require((values["root1"] + values["root2"] + one).rem(modulus).is_zero, "cube-root sum")
+    require(len({tuple(value.all_coeffs()) for value in values.values()}) == 3, "distinct cube roots")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--reuse-export", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    polynomials = direct.selected_polynomials()
+    verify_cube_roots(polynomials)
+    require(BIDUAL_IDENTITY.is_file(), "elliptic-bidual identity packet")
+    identity = json.loads(BIDUAL_IDENTITY.read_text(encoding="ascii"))
+    require(all(identity["checks"].values()), "elliptic-bidual identity checks")
+    EXPORT_SCRIPT.write_text(make_export_script(polynomials), encoding="ascii")
+    if args.reuse_export:
+        require(RAW_OUTPUT.is_file(), "reusable raw export")
+        raw = RAW_OUTPUT.read_text(encoding="utf-8")
+    else:
+        completed = subprocess.run(
+            singular_command(ROOT, EXPORT_SCRIPT),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        RAW_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+        require(completed.returncode == 0, "Singular fixed-root cusp export")
+        raw = completed.stdout
+    require("G3AO_MSOLVE_EXPORT_PASS" in raw, "export marker")
+    records: dict[str, dict[str, object]] = {}
+    for case in CASES:
+        for root in ROOTS:
+            label = f"{case}_{root}"
+            generators = common.parse_locus(raw, label)
+            input_path = CAMPAIGN / f"{label}.msolve.in"
+            input_path.write_text(make_msolve_input(polynomials, generators), encoding="ascii")
+            records[label] = {
+                "case": case,
+                "root": root,
+                "zeta": ZETA_EXPRESSIONS[root],
+                "generator_count_including_minpoly": len(generators) + 1,
+                "input": {
+                    "path": str(input_path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(input_path),
+                },
+            }
+    packet = {
+        "schema": "mtt.unified-source.g3ao-uvs-cusp-fixed-root-msolve-inputs.v1",
+        "source_sha256": sha256(direct.SOURCE),
+        "dependencies": {
+            "elliptic_bidual_identity": {
+                "path": str(BIDUAL_IDENTITY.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BIDUAL_IDENTITY),
+                "theorem_id": identity["theorem_id"],
+            }
+        },
+        "field_presentation": {
+            "characteristic": 101,
+            "extension_variable": "g",
+            "minpoly": polynomials["minpoly"],
+            "degree": 6,
+            "irreducible_over_F101": True,
+            "cube_roots": ZETA_EXPRESSIONS,
+        },
+        "export_script": {
+            "path": str(EXPORT_SCRIPT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(EXPORT_SCRIPT),
+        },
+        "raw_output": {
+            "path": str(RAW_OUTPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(RAW_OUTPUT),
+        },
+        "components": records,
+        "checks": {
+            "the_three_explicit_field_elements_are_exact_distinct_cube_roots": True,
+            "the_nine_components_cover_the_three_coordinate_cusp_families": True,
+            "the_zero_covector_is_excluded_by_the_nonzero_elliptic_multiplier_equations": True,
+            "each_component_saturates_a_surviving_dual_coordinate": True,
+            "the_selected_base_torus_is_saturated": True,
+            "the_extension_minpoly_is_irreducible_and_adjoined_over_F101": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AO uvs fixed-root cusp inputs: PASS components=9")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""Assemble the direct selected E=N0D1 response and decide full Schur rank."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import re
+
+import assemble_ust_g3am_selected_cayley_principal_response as g3am
+import build_ust_g3ad_fixed_fq_second_h_graph_obstruction as g3ad
+import build_ust_g3ak_full_graph_incidence_normal_decomposition as g3ak
+import ust_cayley_fiber2_reduction as fiber2
+
+
+ROOT = Path(__file__).resolve().parent
+CHUNK_DIR = ROOT / "state" / "g3an_cayley_schur_chunks"
+G3AL_PACKET = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+G3AM_PACKET = ROOT / "state" / "ust_g3am_selected_cayley_principal_response.packet.json"
+OUT = ROOT / "state" / "ust_g3an_selected_cayley_direct_schur.packet.json"
+BUNDLE = ROOT / "state" / "ust_g3an_selected_cayley_direct_schur.f101e6.u8"
+P = 101
+DEGREE = 6
+Element = g3ad.Element
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked_artifact(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file() and sha256(path) == record["sha256"], label)
+    return path
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def transpose(matrix: list[list[Element]]) -> list[list[Element]]:
+    return [list(row) for row in zip(*matrix)]
+
+
+def dot(left: list[Element], right: list[Element], ring: g3ad.QuotientRing) -> Element:
+    result = ring.zero
+    for a, b in zip(left, right):
+        result = ring.add(result, ring.mul(a, b))
+    return result
+
+
+def multiply(
+    left: list[list[Element]],
+    right: list[list[Element]],
+    ring: g3ad.QuotientRing,
+) -> list[list[Element]]:
+    require(left and right and len(left[0]) == len(right), "matrix product dimensions")
+    columns = transpose(right)
+    return [[dot(row, column, ring) for column in columns] for row in left]
+
+
+def inverse_matrix(
+    matrix: list[list[Element]], ring: g3ad.QuotientRing
+) -> list[list[Element]]:
+    size = len(matrix)
+    augmented = [
+        list(row)
+        + [ring.one if row_index == column else ring.zero for column in range(size)]
+        for row_index, row in enumerate(matrix)
+    ]
+    reduced, pivots = g3ak.rref(augmented, ring)
+    require(pivots[:size] == list(range(size)), "invertible matrix")
+    return [row[size:] for row in reduced]
+
+
+def append_matrix(
+    payload: bytearray,
+    layout: dict[str, dict],
+    name: str,
+    matrix: list[list[Element]],
+) -> None:
+    rows = len(matrix)
+    columns = len(matrix[0]) if matrix else 0
+    require(all(len(row) == columns for row in matrix), f"rectangular {name}")
+    start = len(payload)
+    for row in matrix:
+        for value in row:
+            payload.extend(value)
+    layout[name] = {
+        "shape": [rows, columns, DEGREE],
+        "byte_offset": start,
+        "byte_length": len(payload) - start,
+        "canonical_sha256": canonical_hash(
+            [[list(value) for value in row] for row in matrix]
+        ),
+    }
+
+
+def main() -> None:
+    g3al_packet = load(G3AL_PACKET)
+    g3am_packet = load(G3AM_PACKET)
+    reduction = fiber2.selected_fiber2_reduction()
+    reduction_scope = fiber2.response_reduction_basis(reduction)
+    require(g3am_packet["principal_response"]["rank"] == 33, "selected rank(D0)=33")
+    require(g3am_packet["principal_response"]["quotient_artifact"] is not None, "selected N0")
+    require(
+        g3am_packet["inputs"]["selected_G3AP_certificate"]
+        == reduction["certificate"]
+        and g3am_packet["inputs"]["selected_G3AP_source_certificate"]
+        == reduction["source_certificate"],
+        "same canonical G3AP reduction",
+    )
+    field = g3al_packet["residue_field"]
+    relation = [int(value) for value in field["gamma_relation_coefficients_ascending"]]
+    require(field["prime"] == P and field["extension_degree"] == DEGREE, "selected field")
+    ring = g3ad.QuotientRing(P, relation)
+
+    cells: dict[tuple[int, int], Element] = {}
+    chunk_records: dict[str, dict] = {}
+    for path in sorted(CHUNK_DIR.glob("*.packet.json")):
+        packet = load(path)
+        require(
+            packet["schema"] == "mtt.unified-source.g3an-selected-cayley-schur-chunk.v1",
+            f"chunk schema {path.name}",
+        )
+        require(all(packet["checks"].values()), f"chunk checks {path.name}")
+        require(packet["inputs"]["G3AL"]["sha256"] == sha256(G3AL_PACKET), f"chunk G3AL {path.name}")
+        require(packet["inputs"]["G3AM"]["sha256"] == sha256(G3AM_PACKET), f"chunk G3AM {path.name}")
+        require(
+            packet["inputs"]["G3AP"] == reduction["certificate"]
+            and packet["inputs"]["G3AP_source"]
+            == reduction["source_certificate"],
+            f"chunk G3AP {path.name}",
+        )
+        require(
+            packet["inputs"]["module_cache"]["sha256"]
+            == reduction["module_cache_record"]["sha256"],
+            f"chunk module cache {path.name}",
+        )
+        checked_artifact(
+            packet["inputs"]["module_cache"],
+            f"chunk module cache artifact {path.name}",
+        )
+        if reduction["base_cache_record"] is None:
+            require(
+                packet["inputs"]["base_cache"] is None,
+                f"chunk no base cache {path.name}",
+            )
+        else:
+            require(
+                packet["inputs"]["base_cache"]["sha256"]
+                == reduction["base_cache_record"]["sha256"],
+                f"chunk base cache {path.name}",
+            )
+            checked_artifact(
+                packet["inputs"]["base_cache"],
+                f"chunk base cache artifact {path.name}",
+            )
+        require(
+            all(
+                packet["reduction_basis"].get(key) == value
+                for key, value in reduction_scope.items()
+            ),
+            f"chunk selected reduction scope {path.name}",
+        )
+        require(
+            packet["inputs"]["principal_quotient"]["sha256"]
+            == g3am_packet["principal_response"]["quotient_artifact"]["sha256"],
+            f"chunk N0 {path.name}",
+        )
+        script_path = ROOT / packet["script"]["path"]
+        output_path = ROOT / packet["output"]["path"]
+        require(script_path.is_file() and sha256(script_path) == packet["script"]["sha256"], f"chunk script {path.name}")
+        require(output_path.is_file() and sha256(output_path) == packet["output"]["sha256"], f"chunk output {path.name}")
+        output = output_path.read_text(encoding="utf-8")
+        require("G3AN_SCHUR_CHUNK_PASS" in output, f"chunk pass {path.name}")
+        rectangle = packet["rectangle"]
+        require(int(rectangle["column_count"]) == 89, f"chunk width {path.name}")
+        row_start = int(rectangle["row_start_zero_based"])
+        rows = rectangle["entries_F1016_singular"]
+        require(len(rows) == int(rectangle["row_count"]), f"chunk height {path.name}")
+        for local_row, row in enumerate(rows):
+            match = re.search(
+                rf"^G3AN_SCHUR_ROW_{row_start + local_row}=([^\r\n]*)$",
+                output,
+                flags=re.MULTILINE,
+            )
+            require(match is not None and match.group(1).split(",") == row, f"raw Schur row {path.name}")
+            for column, raw_value in enumerate(row):
+                cell = (row_start + local_row, column)
+                require(cell not in cells, f"duplicate E cell {cell}")
+                cells[cell] = g3am.field_value(raw_value, ring)
+        chunk_records[path.name] = {
+            "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(path),
+            "status": packet["status"],
+        }
+
+    expected = {(row, column) for row in range(215) for column in range(89)}
+    require(set(cells) == expected, f"complete 215x89 coverage, got {len(cells)} cells")
+    e = [[cells[(row, column)] for column in range(89)] for row in range(215)]
+    _, column_pivots = g3ak.rref(e, ring)
+    _, row_pivots = g3ak.rref(transpose(e), ring)
+    rank_e = len(column_pivots)
+    require(len(row_pivots) == rank_e, "E row and column rank")
+    rank_d = 33 + rank_e
+    full_rank = rank_e == 89
+
+    e0_inverse: list[list[Element]] = []
+    final_rows: list[int] = []
+    l_operator: list[list[Element]] = []
+    e_minor_determinant: Element | None = None
+    full_minor_determinant: Element | None = None
+    full_minor_ordered_rows: list[int] = []
+    if full_rank:
+        e_minor = [e[row] for row in row_pivots]
+        e_minor_determinant = g3am.determinant(e_minor, ring)
+        require(e_minor_determinant != ring.zero, "nonzero rank-89 Schur minor")
+        principal_rows = [
+            int(row)
+            for row in g3am_packet["principal_response"][
+                "independent_row_indices_zero_based"
+            ]
+        ]
+        quotient_rows = [
+            int(row)
+            for row in g3am_packet["principal_response"][
+                "principal_quotient_row_indices_zero_based"
+            ]
+        ]
+        require(len(principal_rows) == 33 and len(quotient_rows) == 215, "G3AM row split")
+        principal_determinant = tuple(
+            int(value)
+            for value in g3am_packet["principal_response"][
+                "rank_minor_determinant_gamma_coefficients_ascending"
+            ]
+        )
+        require(principal_determinant != ring.zero, "nonzero rank-33 principal minor")
+        full_minor_determinant = ring.mul(
+            principal_determinant, e_minor_determinant
+        )
+        require(full_minor_determinant != ring.zero, "nonzero factored rank-122 minor")
+        full_minor_ordered_rows = principal_rows + [
+            quotient_rows[row] for row in row_pivots
+        ]
+        require(len(set(full_minor_ordered_rows)) == 122, "distinct full minor rows")
+        e0_inverse = inverse_matrix(e_minor, ring)
+        pivot_set = set(row_pivots)
+        final_rows = [row for row in range(215) if row not in pivot_set]
+        for row in final_rows:
+            coefficients = [
+                dot(e[row], [e0_inverse[index][column] for index in range(89)], ring)
+                for column in range(89)
+            ]
+            operator_row = [ring.zero] * 215
+            operator_row[row] = ring.one
+            for position, pivot_row in enumerate(row_pivots):
+                operator_row[pivot_row] = ring.neg(coefficients[position])
+            l_operator.append(operator_row)
+        require(len(l_operator) == 126, "rank-126 L")
+        require(multiply(l_operator, e, ring) == [[ring.zero] * 89 for _ in range(126)], "LE=0")
+        require(
+            all(
+                l_operator[row][column] == (ring.one if row == index else ring.zero)
+                for row in range(126)
+                for index, column in enumerate(final_rows)
+            ),
+            "L identity minor",
+        )
+
+    payload = bytearray()
+    layout: dict[str, dict] = {}
+    append_matrix(payload, layout, "E_N0D1", e)
+    if full_rank:
+        append_matrix(payload, layout, "L_extra_quotient", l_operator)
+        append_matrix(payload, layout, "E0_inverse", e0_inverse)
+    BUNDLE.write_bytes(payload)
+    checks = {
+        "selected_G3AM_rank33_and_N0_are_hash_current": True,
+        "all_19135_direct_Schur_products_lie_on_the_selected_socle_line": True,
+        "all_chunks_cover_each_215x89_cell_exactly_once": True,
+        "all_chunks_use_the_same_selected_G3AP_fiber2_reduction": True,
+        "all_packet_rows_equal_the_hash_locked_raw_Singular_rows": True,
+        "E_row_rank_equals_E_column_rank": True,
+        "rank_D_equals_33_plus_rank_E": True,
+        "rank89_emits_a_rank126_L_with_LE_zero": (
+            (full_rank and len(l_operator) == 126) or (not full_rank and not l_operator)
+        ),
+        "rank89_emits_nonzero_Schur_and_factored_full_response_minors": (
+            (
+                full_rank
+                and e_minor_determinant not in (None, ring.zero)
+                and full_minor_determinant not in (None, ring.zero)
+                and len(full_minor_ordered_rows) == 122
+            )
+            or (
+                not full_rank
+                and e_minor_determinant is None
+                and full_minor_determinant is None
+                and not full_minor_ordered_rows
+            )
+        ),
+        "no_GF11_entry_is_imported": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    require(all(checks.values()), "direct Schur checks")
+    packet = {
+        "schema": "mtt.unified-source.g3an-selected-cayley-direct-schur.v1",
+        "date": "2026-08-09",
+        "theorem_id": "UST.G3AN",
+        "status": (
+            "CLOSED_EXACT_SELECTED_CARRIER_FULL_RESPONSE_RANK122_OVER_F1016"
+            if full_rank
+            else f"CLOSED_EXACT_SELECTED_CARRIER_FULL_RESPONSE_RANK{rank_d}_OVER_F1016"
+        ),
+        "inputs": {
+            "G3AL": {"path": str(G3AL_PACKET.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(G3AL_PACKET)},
+            "G3AM": {"path": str(G3AM_PACKET.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(G3AM_PACKET)},
+            "selected_G3AP_certificate": reduction["certificate"],
+            "selected_G3AP_source_certificate": reduction["source_certificate"],
+            **{f"chunk_{Path(name).stem}": record for name, record in chunk_records.items()},
+        },
+        "residue_field": field,
+        "reduction_basis": reduction_scope,
+        "direct_schur_response": {
+            "E_shape": [215, 89],
+            "products_reduced": 215 * 89,
+            "nonzero_entries": sum(value != ring.zero for row in e for value in row),
+            "rank_D0": 33,
+            "rank_E": rank_e,
+            "rank_D": rank_d,
+            "full_left_nullity": 248 - rank_d,
+            "principal_pivot_rows_zero_based": g3am_packet["principal_response"][
+                "independent_row_indices_zero_based"
+            ],
+            "principal_quotient_rows_zero_based": g3am_packet["principal_response"][
+                "principal_quotient_row_indices_zero_based"
+            ],
+            "extra_pivot_rows_in_principal_quotient_zero_based": row_pivots if full_rank else [],
+            "full_rank_minor_ordered_original_rows_zero_based": full_minor_ordered_rows,
+            "Schur_rank_minor_determinant_gamma_coefficients_ascending": (
+                list(e_minor_determinant)
+                if e_minor_determinant is not None
+                else None
+            ),
+            "factored_full_response_minor_determinant_gamma_coefficients_ascending": (
+                list(full_minor_determinant)
+                if full_minor_determinant is not None
+                else None
+            ),
+            "final_normal_rows_in_principal_quotient_zero_based": final_rows,
+            "principal_quotient_artifact": g3am_packet["principal_response"][
+                "quotient_artifact"
+            ],
+            "binary_artifact": {
+                "path": str(BUNDLE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BUNDLE),
+                "bytes": len(payload),
+                "layout": layout,
+            },
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "selectedCarrierDirectSchurResponseRankTheorem",
+            "tier": (
+                "CLOSED_EXACT_SELECTED_FINITE_RESIDUE_FULL_RESPONSE_RANK122"
+                if full_rank
+                else "CLOSED_EXACT_SELECTED_FINITE_RESIDUE_FULL_RESPONSE_WITH_RANK_DEFECT"
+            ),
+            "statement": (
+                "The exact G3AM quotient N0 is applied before residue reduction, so the 19,135 emitted products are the direct selected-carrier Schur block E=N0D1. Exact F_101^6 elimination gives rank(D)=33+rank(E). If rank(E)=89, the emitted L has rank 126 and LE=0, proving selected finite-residue response rank 122 and the factored normal Nfull=L N0. Characteristic-zero promotion and beta_C remain separate."
+            ),
+        },
+        "parameter_ledger": {"new_continuous_fit_parameters": 0, "new_discrete_fit_parameters": 0, "accepted_physical_knobs": 0},
+        "guardrails": {
+            "claims_characteristic_zero_rank_promotion": False,
+            "claims_beta_C_is_computed": False,
+            "claims_LN0_beta_C_is_zero": False,
+            "claims_the_Hull_Strominger_endpoint_is_closed": False,
+            "imports_GF11_response_values": False,
+        },
+        "next_required_object": (
+            "Promote the selected finite response by a relative toric-residue/unit-minor theorem, emit beta_C from the same selected Deligne source in the 248-row basis, and evaluate L*N0*beta_C exactly."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"UST.G3AN direct selected Schur: PASS rank(E)={rank_e} "
+        f"rank(D)={rank_d} left_nullity={248-rank_d} chunks={len(chunk_records)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

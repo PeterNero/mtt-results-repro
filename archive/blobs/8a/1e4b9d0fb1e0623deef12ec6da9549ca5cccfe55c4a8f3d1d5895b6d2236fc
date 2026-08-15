@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Run an exact-candidate direct-module H-only/L-truncated G3AP hedge.
+
+Unlike the quotient-ring H-only route, this route puts the 18 componentwise
+base-ideal relations, 21 derivative relations and 165 minimal L boundaries in
+one polynomial module before computing a bounded standard basis.  The L
+directions are therefore finite from the outset.  The zero L weights remain a
+computational device only; an independent Cox-bigraded squeeze is required.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_honly_ltrunc_hedge as honly
+import run_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_hedge as ltrunc
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+ENGINES = ("std", "qslimgb")
+DIRECT_MODULE_RING = honly.HONLY_MODULE_RING
+TARGET_H_DEGREE = honly.TARGET_H_DEGREE
+COMPONENT_SHIFTS = honly.COMPONENT_SHIFTS
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def paths(label: str, engine: str = "std") -> dict[str, Path]:
+    require(engine in ENGINES, "direct H-only candidate engine")
+    stem = f"ust_g3ap_selected_cayley_fiber2_honly_direct_ltrunc_{label}_{engine}"
+    return {
+        "script": STATE / f"{stem}.sing",
+        "output": STATE / f"{stem}.singular.out",
+        "module_cache": STATE / f"{stem}_degree36.ssi",
+        "packet": STATE / f"{stem}.packet.json",
+    }
+
+
+def mapped_shifts(order: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(COMPONENT_SHIFTS[old - 1] for old in order)
+
+
+def mapped_generators(order: tuple[int, ...]) -> list[str]:
+    old_to_new, _ = permuted.position_maps(order)
+    selected = [
+        permuted.map_components(value, old_to_new)
+        for value in fiber2.module_generators()
+    ]
+    boundaries = [
+        permuted.map_components(value, old_to_new)
+        for value in ltrunc.truncation_generators()
+    ]
+    require(len(selected) == 39, "39 direct selected module generators")
+    require(len(boundaries) == 165, "165 L-boundary generators")
+    return selected + boundaries
+
+
+def direct_base_prefix(source: str) -> str:
+    prefix = fiber2.selected_base_prefix(source)
+    require(prefix.count(fiber2.MODULE_RING) == 1, "ordinary module ring marker")
+    return prefix.replace(fiber2.MODULE_RING, DIRECT_MODULE_RING, 1)
+
+
+def candidate_marker(label: str, engine: str) -> str:
+    require(engine in ENGINES, "direct H-only candidate engine")
+    tag = {"std": "STD", "qslimgb": "QSLIMGB"}[engine]
+    return f"G3AP_F2_HONLYDIRECTLTRUNC{tag}_{label.upper()}"
+
+
+def candidate_script(
+    source: str,
+    label: str,
+    order: tuple[int, ...],
+    module_cache: Path,
+    engine: str = "std",
+) -> str:
+    require(engine in ENGINES, "direct H-only candidate engine")
+    old_to_new, _ = permuted.position_maps(order)
+    generators = mapped_generators(order)
+    shifts = ",".join(str(value) for value in mapped_shifts(order))
+    module_relative = str(module_cache.relative_to(ROOT)).replace("\\", "/")
+    marker = candidate_marker(label, engine)
+    canonical_component = old_to_new[6]
+    library = 'LIB("standard.lib");\n' if engine == "qslimgb" else ""
+    return direct_base_prefix(source) + f'''{library}option(noredTail);
+module MT=
+  {',\n  '.join(generators)};
+intvec componentShifts={shifts};
+attrib(MT,"isHomog",componentShifts);
+degBound={TARGET_H_DEGREE};
+module G={engine}(MT);
+vector canonicalSocle=w^12*t2^4*gen({canonical_component});
+vector canonicalNormal=reduce(canonicalSocle,G);
+int i;
+print("{marker}_BOUND="+string(degBound));
+print("{marker}_MODULE_GENERATORS="+string(size(MT)));
+print("{marker}_MODULE_GB_SIZE="+string(size(G)));
+print("{marker}_CANONICAL_NORMAL_ZERO="+string(canonicalNormal==0));
+print("{marker}_CANONICAL_NORMAL="+string(canonicalNormal));
+for (i=1;i<=size(G);i++)
+{{
+  print("{marker}_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("{marker}_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {module_relative}",G);
+print("{marker}_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_module(raw: str, label: str, engine: str):
+    marker = f"{candidate_marker(label, engine)}_"
+    return fiber2.parse_leaders(raw.replace(marker, "G3AP_F2_"))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(permuted.PERMUTATIONS), required=True)
+    parser.add_argument("--engine", choices=ENGINES, default="std")
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    honly.validate_grading()
+    label = args.permutation
+    engine = args.engine
+    order = permuted.PERMUTATIONS[label]
+    old_to_new, new_to_old = permuted.position_maps(order)
+    route = paths(label, engine)
+    source = SOURCE.read_text(encoding="ascii")
+    route["script"].write_text(
+        candidate_script(source, label, order, route["module_cache"], engine),
+        encoding="ascii",
+    )
+    if args.emit_only:
+        print(f"emitted {route['script'].relative_to(ROOT)}")
+        return
+
+    route["module_cache"].unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, route["script"]),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    raw = completed.stdout
+    route["output"].write_text(raw, encoding="utf-8")
+    marker = candidate_marker(label, engine)
+    require(completed.returncode == 0, "direct H-only/L-truncated execution")
+    require(
+        not any(line.lstrip().startswith("?") for line in raw.splitlines()),
+        "Singular execution errors",
+    )
+    require(f"{marker}_LEADER_EXPORT_PASS" in raw, "direct H-only completion marker")
+    require(
+        route["module_cache"].is_file() and route["module_cache"].stat().st_size > 0,
+        "candidate module cache",
+    )
+    module_new = parse_module(raw, label, engine)
+    module_old = [
+        (new_to_old[component], exponent) for component, exponent in module_new
+    ]
+    standards, sectors = fiber2.enumerate_target(module_old)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(len(standards) == 1, "candidate target upper bound one")
+    standard_old_component, standard_exponent = standards[0]
+    packet = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-fiber2-honly-direct-"
+            f"ltrunc-{engine}-candidate.v1"
+        ),
+        "date": "2026-08-10",
+        "status": "CANDIDATE_REQUIRES_INDEPENDENT_HONLY_DIRECT_LTRUNC_CERTIFICATION",
+        "candidate_engine": engine,
+        "permutation": {
+            "label": label,
+            "old_components_in_new_position_order": list(order),
+            "old_to_new": {str(key): value for key, value in old_to_new.items()},
+            "new_to_old": {str(key): value for key, value in new_to_old.items()},
+            "new_position_shifts": list(mapped_shifts(order)),
+            "is_degree_preserving_module_isomorphism": True,
+        },
+        "inputs": {
+            "selected_source": {
+                "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SOURCE),
+            }
+        },
+        "computational_order": {
+            "H_weights_with_zero_L": list(honly.BASE_WEIGHTS),
+            "component_H_shifts_old_order": list(COMPONENT_SHIFTS),
+            "target_H_degree": TARGET_H_DEGREE,
+            "zero_L_weights_are_acceleration_only": True,
+        },
+        "truncation": {
+            "kind": "componentwise_L_boundary_plus_H_degree_bound",
+            "target_H_degrees": [entry[2][0] for entry in fiber2.COMPONENTS],
+            "target_L_degrees": [entry[2][1] for entry in fiber2.COMPONENTS],
+            "L_boundary_generator_count": 165,
+            "target_Cox_piece_of_boundary_submodule_is_zero": True,
+        },
+        "execution": {
+            "engine": f"Singular {engine} direct H-only/L-truncated module",
+            "script": {
+                "path": str(route["script"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(route["script"]),
+            },
+            "output": {
+                "path": str(route["output"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(route["output"]),
+            },
+            "elapsed_seconds": time.time() - started,
+            "selected_module_generator_count": 39,
+            "truncation_generator_count": 165,
+            "candidate_basis_size_through_bound": len(module_new),
+            "candidate_module_cache": {
+                "path": str(route["module_cache"].relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(route["module_cache"]),
+                "bytes": route["module_cache"].stat().st_size,
+                "valid_for_Cox_degree": [18, 2, 2],
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "candidate_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "enumerated_monomials": total,
+            "dimension_if_certified": 1,
+            "standard_old_component": standard_old_component,
+            "standard_new_component": old_to_new[standard_old_component],
+            "standard_exponent": list(standard_exponent),
+        },
+        "guardrails": {
+            "claims_zero_weight_order_is_a_proof": False,
+            "claims_candidate_process_success_is_a_proof": False,
+            "claims_target_effective_reducers_are_certified": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Independently reconstruct the direct selected module and certify "
+            "Cox homogeneity, all 39 generator reductions, boundary target "
+            "vanishing and the one-line target squeeze."
+        ),
+    }
+    route["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"G3AP direct H-only/L-truncated {engine} candidate ({label}): PASS "
+        f"module={len(module_new)} standard={standards[0]} certification=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

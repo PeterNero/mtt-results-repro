@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Verify UST.G3R stable reduction, clutching, qutrit descent and WIT ranks."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3r_relative_stable_wit0_promotion.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    loaded: dict[str, dict] = {}
+    for key, source in packet["inputs"].items():
+        path = ROOT / source["path"]
+        require(path.is_file(), f"missing input {key}")
+        require(sha256(path) == source["sha256"], f"input hash {key}")
+        loaded[key] = load(path)
+    return loaded
+
+
+def verify_stable_reduction(packet: dict, inputs: dict[str, dict]) -> None:
+    reduction = packet["stable_reduction"]
+    g3e = inputs["local_G3E_packet"]
+    g3g = inputs["local_G3G_packet"]
+
+    require(reduction["defect_count"] == 2, "defect count")
+    require(reduction["defects_are_simple"], "defects must be simple")
+    require(
+        reduction["defect_count"]
+        == g3e["corrected_fiber_atlas"]["remaining_derived_defect_base_fibers"],
+        "G3E defect binding",
+    )
+    require(reduction["P_degree"] == 0, "P degree")
+    require(reduction["N_degree"] == 3, "N degree")
+    require(reduction["middle_rank"] == 2, "middle rank")
+    require(reduction["middle_degree"] == 3, "middle degree")
+    require(math.gcd(reduction["middle_rank"], reduction["middle_degree"]) == 1, "coprimality")
+    require(reduction["rank_degree_coprime"], "coprime flag")
+    require(reduction["fixed_determinant_stable_limit_unique"], "fixed determinant uniqueness")
+
+    # On an elliptic curve, h1(P*N^-1)=3 for degree -3.
+    ext_dimension = reduction["N_degree"] - reduction["P_degree"]
+    require(reduction["extension_space_dimension"] == ext_dimension == 3, "Ext1 dimension")
+    require(not reduction["new_continuous_choice"], "continuous choice introduced")
+    require(reduction["punctured_family_isomorphic_to_stable_limit"], "punctured gluing")
+    require(reduction["disjoint_defect_neighborhoods"], "defect neighborhoods")
+
+    locked = g3g["stable_recombination"]
+    require(locked["middle_rank"] == reduction["middle_rank"], "G3G rank")
+    require(locked["middle_degree"] == reduction["middle_degree"], "G3G degree")
+    require(locked["middle_is_stable"], "G3G stability")
+    require(locked["determinant_preserved"], "G3G determinant")
+
+
+def verify_clutching(packet: dict) -> None:
+    clutching = packet["determinant_balanced_clutching"]
+    weights = clutching["integer_weights"]
+    require(weights == [-1, 0, 1], "balanced weights")
+    require(weights[0] - weights[1] == clutching["extension_rescaling_weight_difference"] == -1, "extension rescaling")
+    require(sum(weights) == clutching["determinant_winding"] == 0, "determinant winding")
+    require(clutching["group"] == "SL(3,C)", "clutching group")
+    require(clutching["pi1_group"] == 0, "SL3 fundamental group")
+    require(clutching["topologically_null_homotopic"], "topological null homotopy")
+    require(clutching["holomorphic_coweight_nonzero"], "holomorphic modification erased")
+    require(clutching["topological_K_class_preserved"], "K class")
+    require(not clutching["ordinary_frozen_atlas_obstruction_erased"], "G3G no-go reopened")
+
+
+def sigma_exponent(g: tuple[int, int], h: tuple[int, int]) -> int:
+    # U_(a,b) U_(c,d) = omega^(-c*b) U_(a+c,b+d).
+    _, b = g
+    c, _ = h
+    return (-c * b) % 3
+
+
+def verify_qutrit_descent(packet: dict, inputs: dict[str, dict]) -> None:
+    descent = packet["two_twist_descent"]
+    g3h = inputs["local_G3H_packet"]
+    require(not descent["alpha_sigma_identified"], "alpha and sigma conflated")
+    require(descent["repair_commutes_with_overlap_line_tensor"], "alpha functoriality")
+    require(descent["alpha_triple_law_preserved"], "alpha triple law")
+    require(descent["global_repaired_alpha_twisted_object_constructed"], "global object")
+    require(descent["generator_maps"] == ["mathsf_X", "mathsf_Z"], "generator maps")
+    require(descent["global_sigma_projective_action_constructed"], "sigma action")
+
+    group = [(a, b) for a in range(3) for b in range(3)]
+    pair_products = 0
+    associativities = 0
+    for g in group:
+        for h in group:
+            pair_products += 1
+            for k in group:
+                gh = ((g[0] + h[0]) % 3, (g[1] + h[1]) % 3)
+                hk = ((h[0] + k[0]) % 3, (h[1] + k[1]) % 3)
+                lhs = (sigma_exponent(g, h) + sigma_exponent(gh, k)) % 3
+                rhs = (sigma_exponent(h, k) + sigma_exponent(g, hk)) % 3
+                require(lhs == rhs, "sigma associativity")
+                associativities += 1
+    require(pair_products == descent["pair_products"] == 81, "pair products")
+    require(associativities == descent["associativity_relations"] == 729, "associativities")
+    require(g3h["generator_reduction"]["selected_sigma_follows_from_generator_relations"], "G3H sigma binding")
+
+
+def verify_uniform_wit(packet: dict, inputs: dict[str, dict]) -> None:
+    wit = packet["uniform_WIT0"]
+    g3g = inputs["local_G3G_packet"]
+    off_rank = sum(degree for _, degree in wit["off_support_inputs"])
+    support_rank = sum(degree for _, degree in wit["support_inputs_after_repair"])
+    require(off_rank == sum(wit["off_support_output_ranks"]) == 9, "off-support FM rank")
+    require(support_rank == sum(wit["support_output_ranks"]) == 9, "support FM rank")
+    require(all(degree > 0 for _, degree in wit["off_support_inputs"]), "off-support positivity")
+    require(all(degree > 0 for _, degree in wit["support_inputs_after_repair"]), "support positivity")
+    require(all(wit["support_stability"]), "support stability")
+    require(wit["remaining_shifted_skyscrapers"] == 0, "derived defect remains")
+    require(wit["all_fibers_WIT0"], "uniform WIT0")
+    require(wit["constant_output_rank"] == off_rank == support_rank, "constant rank")
+    require(wit["relative_base_change_applies"], "base change")
+    require(wit["global_tau_projective_locally_free_rank9_sheaf_constructed"], "local freeness")
+    require(not wit["finite_rank_alpha_twisted_bundle_on_all_J_claimed"], "non-torsion alpha module overclaimed")
+    require(g3g["fourier_mukai_repair"]["shifted_skyscraper_count_after_local_repair"] == 0, "G3G defect binding")
+
+
+def verify_class_and_scope(packet: dict, inputs: dict[str, dict]) -> None:
+    binding = packet["selected_class_binding"]
+    g3p = inputs["local_G3P_packet"]
+    require(binding["canonical_T2_integral_lift"] == 0, "selected lift")
+    require(binding["integral_lift_preserved_by_null_clutching"], "integral lift")
+    require(binding["free_rows"] == g3p["perfect_complex"]["physical_rows"], "G3P row match")
+    require(binding["matches_G3P_free_rows"], "G3P match flag")
+    require(not binding["canonical_quasi_isomorphism_to_G3P_constructed"], "G3P equivalence overclaimed")
+    require(not binding["holomorphic_SU9_determinant_trivialization_constructed"], "determinant overclaimed")
+
+    scope = packet["scope"]
+    for key in (
+        "global_horizontal_repair_closed",
+        "global_alpha_twisted_object_closed",
+        "two_global_qutrit_generator_maps_closed",
+        "uniform_WIT0_closed",
+        "holomorphic_tau_projective_rank9_local_freeness_closed",
+        "selected_topological_k0_and_free_rows_closed",
+    ):
+        require(scope[key], key)
+    for key in (
+        "target_G3D_stability_closed",
+        "holomorphic_P39_determinant_reduction_closed",
+        "target_HYM_closed",
+        "pointwise_differential_Bianchi_closed",
+        "same_source_visible_V3_closed",
+        "B_HS_01_closed",
+        "UST_G3_closed",
+    ):
+        require(not scope[key], key)
+    require(packet["continuous_fit_parameters"] == 0, "continuous fit")
+    require(packet["observed_inputs"] == 0, "observed input")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    require(
+        packet["schema"] == "mtt.unified-source.q79-relative-stable-wit0-promotion.v1",
+        "schema",
+    )
+    require(packet["theorem_id"] == "UST.G3R", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_GLOBAL_ALPHA_SIGMA_REPAIR_AND_LOCALLY_FREE_TWISTED_RANK9_TARGET_STABILITY_HYM_BIANCHI_OPEN",
+        "status",
+    )
+    inputs = verify_inputs(packet)
+    verify_stable_reduction(packet, inputs)
+    verify_clutching(packet)
+    verify_qutrit_descent(packet, inputs)
+    verify_uniform_wit(packet, inputs)
+    verify_class_and_scope(packet, inputs)
+
+    print("UST.G3R relative stable WIT0 promotion: PASS")
+    print("two split limits -> unique fixed-determinant stable limits")
+    print("clutching weights (-1,0,+1): determinant winding 0, K-class retained")
+    print("alpha descent and sigma generator relations: global")
+    print("uniform WIT0 -> locally free tau-projective rank-nine sheaf on Y")
+    print("remaining: target stability/determinant reduction/HYM/Bianchi")
+    print("downstream: G3S excludes the unbalanced target; G3T supplies the balanced presentation")
+
+
+if __name__ == "__main__":
+    main()

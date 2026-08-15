@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""Compile the selected K6 source through the frozen G3CA H02 chart."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import build_ust_g3ca_selected_delta_correction_h02_source as g3ca
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3gj"
+OUT = ROOT / "state" / "ust_g3gj_k6_h02_source_injection.packet.json"
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3BT = ROOT / "state" / "ust_g3bt_h02_endpoint_action_one_split_prime.packet.json"
+G3CA = ROOT / "state" / "ust_g3ca_selected_delta_correction_h02_source.packet.json"
+G3FY = ROOT / "evidence" / "ust_g3fy" / "H02.component20.pdelta_socle_kernel_source.json"
+G3FY_ARRAYS = ROOT / "evidence" / "ust_g3fy" / "H02.component20.pdelta_socle_kernel_source.npz"
+PRIME = 21817
+ROOT_VALUE = 5
+DIMENSION = 42706
+QUOTIENT_UNITS = 248
+SOURCE_DIMENSION = 18
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path, *, repository: Path = ROOT) -> dict[str, Any]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def evaluate_gamma(coordinates: list[int], root: int) -> int:
+    value = 0
+    for coordinate in reversed(coordinates):
+        value = (value * root + int(coordinate)) % PRIME
+    return value
+
+
+def selected_k6_source(
+    k6: np.ndarray,
+    degree6_exponents: np.ndarray,
+    g3bi: dict[str, Any],
+    target_lookup: dict[tuple[int, ...], int],
+) -> sparse.csc_matrix:
+    """Return u*v*K6*(t0*t1*t2)*C_section at gamma=5."""
+    require(k6.shape == (28, SOURCE_DIMENSION), "K6 matrix shape")
+    require(degree6_exponents.shape == (28, 3), "degree-six exponent shape")
+    fixed = (0, 0, 0, 0, 1, 1, 1, 1, 1, 0)
+    entries: dict[tuple[int, int], int] = {}
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        section_exponent = tuple(int(value) for value in row["source_monomial"]) + (
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        section_coefficient = evaluate_gamma(
+            row["correction_gamma_coordinates"], ROOT_VALUE
+        )
+        if section_coefficient == 0:
+            continue
+        for basis_row, xyz in enumerate(degree6_exponents):
+            k_exponent = tuple(int(value) for value in xyz) + (0,) * 7
+            exponent = tuple(
+                a + b + c
+                for a, b, c in zip(
+                    k_exponent, section_exponent, fixed, strict=True
+                )
+            )
+            require(g3ca.cox_degree(exponent) == (9, 1, 2), "source Cox degree")
+            ambient_row = target_lookup.get(exponent)
+            require(ambient_row is not None, "K6 source monomial in H02 ambient basis")
+            for column in np.flatnonzero(k6[basis_row] % PRIME):
+                key = (ambient_row, int(column))
+                entries[key] = (
+                    entries.get(key, 0)
+                    + section_coefficient * int(k6[basis_row, column])
+                ) % PRIME
+                if entries[key] == 0:
+                    del entries[key]
+    keys = sorted(entries)
+    source = sparse.csc_matrix(
+        (
+            np.asarray([entries[key] for key in keys], dtype=np.uint32),
+            (
+                np.asarray([key[0] for key in keys], dtype=np.int32),
+                np.asarray([key[1] for key in keys], dtype=np.int32),
+            ),
+        ),
+        shape=(DIMENSION, SOURCE_DIMENSION),
+        dtype=np.uint32,
+    )
+    source.sum_duplicates()
+    source.data %= PRIME
+    source.eliminate_zeros()
+    require(source.shape == (DIMENSION, SOURCE_DIMENSION), "source shape")
+    require(all(source.getcol(column).nnz > 0 for column in range(SOURCE_DIMENSION)), "nonzero source columns")
+    return source
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="emit and validate the exact RHS without running the finite-field solve",
+    )
+    args = parser.parse_args()
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi = load(G3BI)
+    g3bt = load(G3BT)
+    g3ca_packet = load(G3CA)
+    g3fy = load(G3FY)
+    for packet, label in (
+        (g3bi, "G3BI"),
+        (g3bt, "G3BT"),
+        (g3ca_packet, "G3CA"),
+        (g3fy, "G3FY"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    arrays = np.load(G3FY_ARRAYS, allow_pickle=False)
+    require(int(arrays["prime"][0]) == PRIME, "anchor prime")
+    require(int(arrays["gamma"][0]) == ROOT_VALUE, "anchor root")
+    k6 = arrays["pdelta_kernel_degree6"].astype(np.int64) % PRIME
+    degree6_exponents = arrays["degree6_exponents"].astype(np.int64)
+    require(graded.rref(k6, PRIME)[0] == SOURCE_DIMENSION, "K6 rank18")
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    macaulay = load(macaulay_path)
+    require(all(macaulay["checks"].values()), "H02 Macaulay checks")
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    require(len(target_lookup) == DIMENSION, "H02 ambient dimension")
+    source = selected_k6_source(k6, degree6_exponents, g3bi, target_lookup)
+
+    root_record = next(
+        row for row in g3bt["root_solves"] if int(row["gamma_root"]) == ROOT_VALUE
+    )
+    chart_path = ROOT / root_record["endpoint_chart"]["path"]
+    require(
+        chart_path.is_file()
+        and sha256(chart_path) == root_record["endpoint_chart"]["sha256"],
+        "frozen root-five endpoint chart",
+    )
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    require(solver.is_file(), "split-prime chart solver")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    source_npz = EVIDENCE / "H02.p21817.g5.K6_C_section_source.npz"
+    rhs_path = EVIDENCE / "H02.p21817.g5.K6_C_section_source.rhs.bin"
+    solution_path = EVIDENCE / "H02.p21817.g5.K6_C_section_source.solution.bin"
+    log_path = EVIDENCE / "H02.p21817.g5.K6_C_section_source.solve.log"
+    quotient_path = EVIDENCE / "H02.p21817.g5.K6_C_section_source.quotient.npy"
+    sparse.save_npz(source_npz, source, compressed=True)
+    exporter.write_rhs(
+        rhs_path,
+        PRIME,
+        DIMENSION,
+        source.indptr.astype(np.uint64).tolist(),
+        source.indices.astype(np.uint32).tolist(),
+        source.data.astype(np.uint32).tolist(),
+    )
+    print(
+        f"G3GJ prepared source shape={source.shape} nnz={source.nnz} "
+        f"column_nnz_min={min(source.getcol(c).nnz for c in range(SOURCE_DIMENSION))}",
+        flush=True,
+    )
+    if args.prepare_only:
+        return
+
+    reusable = (
+        solution_path.is_file()
+        and log_path.is_file()
+        and initializer.parse_log(log_path).get("STATUS") == "SUCCESS"
+    )
+    if not reusable:
+        command = [
+            "wsl",
+            runtime.wsl_path(solver),
+            "--chart",
+            runtime.wsl_path(chart_path),
+            "--rhs",
+            runtime.wsl_path(rhs_path),
+            "--output",
+            runtime.wsl_path(solution_path),
+            "--log",
+            runtime.wsl_path(log_path),
+        ]
+        completed = subprocess.run(
+            command, cwd=mld, capture_output=True, text=True, check=False
+        )
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        solver_stdout = completed.stdout.strip()
+    else:
+        solver_stdout = "reused exact zero-residual K6 checkpoint"
+
+    chart = split_io.as_scipy(arithmetic.read_csc(chart_path, b"MTTSPC1\0", 6))
+    stored_rhs = split_io.as_scipy(arithmetic.read_csc(rhs_path, b"MTTSRH1\0", 4))
+    solution = split_io.as_scipy(
+        arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+    )
+    require((stored_rhs != source).nnz == 0, "stored source equality")
+    residual = split_io.residual_nonzeros(chart, solution, stored_rhs, PRIME)
+    require(residual == 0, "zero solve residual")
+    fields = initializer.parse_log(log_path)
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(
+        determinant == int(root_record["endpoint_determinant_mod21817"]),
+        "frozen chart determinant",
+    )
+    quotient = solution[:QUOTIENT_UNITS, :].toarray().astype(np.int64) % PRIME
+    quotient_rank = graded.rref(quotient, PRIME)[0]
+    np.save(quotient_path, quotient.astype(np.uint32), allow_pickle=False)
+
+    roots = [int(value) for value in g3ca_packet["selected_source"]["roots"]]
+    root_index = roots.index(ROOT_VALUE)
+    pdelta_values_path = ROOT / g3ca_packet["selected_source"]["root_values"]["path"]
+    require(
+        pdelta_values_path.is_file()
+        and sha256(pdelta_values_path)
+        == g3ca_packet["selected_source"]["root_values"]["sha256"],
+        "G3CA Pdelta quotient values",
+    )
+    pdelta_quotient = np.load(pdelta_values_path, allow_pickle=False)[:, root_index].astype(np.int64) % PRIME
+    augmented_rank = graded.rref(
+        np.concatenate((quotient, pdelta_quotient[:, None]), axis=1), PRIME
+    )[0]
+
+    checks = {
+        "G3BI_G3BT_G3CA_and_G3FY_are_hash_bound_and_passing": True,
+        "the_exact_anchor_K6_basis_has_dimension18": True,
+        "every_K6_C_section_source_term_has_Cox_degree9_1_2": True,
+        "all18_source_columns_lie_in_the_frozen42706_row_H02_basis": True,
+        "the_frozen_endpoint_chart_solve_has_zero_residual": residual == 0,
+        "the_K6_source_quotient_map_has_rank18": quotient_rank == SOURCE_DIMENSION,
+        "the_prior_Pdelta_source_is_a_nineteenth_quotient_direction": augmented_rank == 19,
+        "no_scalar_catalecticant_or_empirical_coefficient_is_reintroduced": True,
+        "no_characteristic_zero_or_holdout_promotion_is_inferred": True,
+    }
+    require(all(checks.values()), "G3GJ checks")
+    packet = {
+        "schema": "mtt.unified-source.g3gj-k6-h02-source-injection.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GJ",
+        "status": "CLOSED_EXACT_ANCHOR_K6_H02_SOURCE_INJECTION_G3CQ_COMPILATION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.HS.01"],
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3BT": record(G3BT),
+            "G3CA": record(G3CA),
+            "G3FY": record(G3FY),
+            "G3FY_arrays": record(G3FY_ARRAYS),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+            "endpoint_chart": record(chart_path),
+        },
+        "selected_source": {
+            "formula": "u*v*K6_j*(t0*t1*t2)*C_section, j=1,...,18",
+            "domain": "K6=ker(mu_Pdelta:R6->R12)",
+            "domain_dimension": SOURCE_DIMENSION,
+            "Cox_degree": [9, 1, 2],
+            "ambient_shape": [DIMENSION, SOURCE_DIMENSION],
+            "ambient_nonzero_entries": int(source.nnz),
+            "source_matrix": record(source_npz),
+            "RHS": record(rhs_path),
+        },
+        "anchor_execution": {
+            "prime": PRIME,
+            "gamma_root": ROOT_VALUE,
+            "endpoint_determinant_mod21817": determinant,
+            "solution_nonzero_entries": int(solution.nnz),
+            "quotient_nonzero_entries": int(np.count_nonzero(quotient)),
+            "preimage_nonzero_entries": int(solution[QUOTIENT_UNITS:, :].nnz),
+            "residual_nonzeros": residual,
+            "solution": record(solution_path),
+            "solver_log": record(log_path),
+            "solver_stdout": solver_stdout,
+            "quotient_coordinates": record(quotient_path),
+        },
+        "rank_decision": {
+            "K6_quotient_image_rank": quotient_rank,
+            "K6_plus_Pdelta_quotient_image_rank": augmented_rank,
+            "interpretation": (
+                "The selected non-Hankel H02 source injection is faithful on K6 "
+                "at the anchor. The original G3CA Pdelta row is independent of its image."
+            ),
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_quotient_image_equals_the_G3FR_primitive15_plane": False,
+            "claims_the_G3CQ_transform_has_been_applied_to_all18_columns": False,
+            "claims_the_anchor_result_holds_at_the47_other_fibers": False,
+            "claims_Qgamma_promotion": False,
+            "claims_component20_rank36_or_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3gjK6H02SourceInjection",
+            "tier": "CLOSED_EXACT_ANCHOR_SELECTED_SOURCE_INJECTION",
+            "statement": (
+                "At the exact p=21817, gamma=5 anchor, replacing the Pdelta slot "
+                "of the selected G3CA source by the complete18-dimensional K6 basis "
+                "and reducing through the frozen G3BI endpoint chart gives an "
+                "injective rank18 map into the 248-coordinate H02 quotient. The prior "
+                "Pdelta source adds one independent quotient direction. This closes "
+                "the source-injection step only; the G3CQ connection transform and "
+                "comparison with the G3FR primitive plane remain open."
+            ),
+        },
+        "next_required_object": (
+            "Apply the selected G3CQ Jacobian-division, original-partial correction, "
+            "minus-divergence and H02 normal projection columnwise to this exact18-column "
+            "source. Compare the resulting136x18 image with the G3FR primitive15 plane."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print(
+        "UST.G3GJ K6 H02 source injection: PASS "
+        f"source_rank=18 quotient_rank={quotient_rank} augmented_rank={augmented_rank}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

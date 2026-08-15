@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Run the G3EC p-adic kernel probe on the exact unit-pivot quotient."""
+
+from __future__ import annotations
+
+import json
+
+import probe_ust_g3ec_component12_padic_kernel as padic
+
+
+def main() -> None:
+    certificate = json.loads(padic.Path(
+        padic.ROOT / "evidence/ust_g3ec/H02.component12.unit_pivot_reduction.json"
+    ).read_text(encoding="utf-8"))
+    output = certificate["output"]
+    padic.MATRIX = padic.ROOT / output["matrix"]
+    padic.ROWS, padic.COLUMNS = map(int, output["shape"])
+    padic.FREE_COLUMNS = tuple(int(value) for value in output["free_component12_columns"])
+    padic.main()
+
+
+if __name__ == "__main__":
+    main()

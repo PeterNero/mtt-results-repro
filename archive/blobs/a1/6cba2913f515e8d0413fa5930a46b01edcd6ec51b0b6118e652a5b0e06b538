@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Verify the source locks and deductions in UST.G3CP."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cp_smooth_start_removable_connection.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def local(record: dict) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record["bytes"], f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["theorem_id"] == "UST.G3CP", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_SMOOTH_START_REMOVABLE_GAUSS_MANIN_CONNECTION_EXISTENCE_START_LIMIT_AND_EXECUTION_OPEN",
+        "status",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    sources = {label: load(local(record)) for label, record in packet["inputs"].items()}
+    for label, source in sources.items():
+        require(all(source["checks"].values()), f"{label} checks")
+
+    require(
+        sources["G3BI"]["checks"]["proper_good_reduction_promotes_smoothness_to_characteristic_zero"],
+        "smooth start replay",
+    )
+    require(
+        sources["G3BJ"]["checks"]["the_selected_path_avoids_the_complete_discriminant"],
+        "smooth path replay",
+    )
+    require(
+        sources["G3BJ"]["checks"]["the_integral_Gauss_Manin_local_system_map_is_well_defined"],
+        "local system replay",
+    )
+    require(
+        sources["G3CL"]["checks"]["the_standard1510_affine_coordinate_frame_is_regular_on_the_closed_path"],
+        "regular frame replay",
+    )
+    require(
+        sources["G3CO"]["checks"]["the_pole_six_original_Jacobian_map_is_surjective_for_every_0_lt_t_le_1"],
+        "dense-open exactness replay",
+    )
+    require(
+        sources["G3BG"]["primitive_projection_theorem"]["primitive_tube"]
+        == packet["geometric_domain"]["initial_geometric_class"],
+        "initial class replay",
+    )
+
+    regularity = packet["regularity_theorem"]
+    comparison = packet["dense_open_comparison"]
+    ivp = packet["path_initial_value_problem"]
+    require("finite locally free" in regularity["relative_de_Rham_bundle"], "relative de Rham bundle")
+    require("Mat_1510(O_U)" in regularity["standard_matrix"], "regular matrix")
+    require("finite" in regularity["conclusion"], "finite start value")
+    require("accumulating at a=1" in comparison["identity_domain"], "dense comparison")
+    require("gauge artifact" in comparison["removable_singularity"], "removable presentation pole")
+    require("not an existence prerequisite" in comparison["ordinary_start_rank_policy"], "start rank policy")
+    require(ivp["path_derivative"] == "a'(t)=-1+i*pi*(1-2t)", "path derivative")
+    require("exp(L*epsilon)-1" in ivp["certified_epsilon_bound"], "epsilon bound")
+
+    for key, value in packet["guardrails"].items():
+        require(value is False, key)
+    require("exact canceled Q(gamma)-valued limit" in packet["next_required_object"], "next exact exit")
+    require("complex interval ball" in packet["next_required_object"], "next interval exit")
+    schema = load(local(packet["exit_contract"]))
+    require(schema["$id"] == "mtt.unified-source.g3cp-start-limit-majorant.schema.v1", "exit schema id")
+    required = set(schema["required"])
+    require({"route", "initial_embedding", "verification", "promotion"} <= required, "exit schema requirements")
+    route_methods = schema["properties"]["route"]["properties"]["method"]["enum"]
+    require(route_methods == ["EXACT_LIMIT", "INTERVAL_START_BALL"], "accepted exit routes")
+    require(schema["properties"]["frame"]["properties"]["cohomology_dimension"]["const"] == 1509, "schema cohomology dimension")
+    require(schema["properties"]["frame"]["properties"]["affine_dimension"]["const"] == 1510, "schema affine dimension")
+
+    print("UST.G3CP smooth-start removable-connection verifier: PASS")
+    print("start_geometric_singularity=false ordinary_start_surjectivity_required=false")
+
+
+if __name__ == "__main__":
+    main()

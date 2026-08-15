@@ -1,0 +1,340 @@
+// Independent exact pivot replay with Givaro-certified multiplication maps.
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <givaro/extension.h>
+#include <givaro/givpoly1.h>
+#include <givaro/modular.h>
+
+namespace {
+
+constexpr int PRIME = 101;
+constexpr std::size_t DEGREE = 6;
+
+struct FastElement {
+    std::array<std::uint8_t, DEGREE> coefficient{};
+};
+
+bool is_zero(const FastElement& value) {
+    for (const auto coefficient : value.coefficient) {
+        if (coefficient != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::uint64_t pack(const FastElement& value) {
+    std::uint64_t result = 0;
+    std::uint64_t place = 1;
+    for (const auto coefficient : value.coefficient) {
+        result += place * coefficient;
+        place *= PRIME;
+    }
+    return result;
+}
+
+FastElement unpack(std::uint64_t packed) {
+    FastElement result;
+    for (auto& coefficient : result.coefficient) {
+        coefficient = static_cast<std::uint8_t>(packed % PRIME);
+        packed /= PRIME;
+    }
+    if (packed != 0) {
+        throw std::runtime_error("packed coefficient outside F_101^6");
+    }
+    return result;
+}
+
+FastElement subtract(const FastElement& left, const FastElement& right) {
+    FastElement result;
+    for (std::size_t index = 0; index < DEGREE; ++index) {
+        int value = static_cast<int>(left.coefficient[index]) -
+                    static_cast<int>(right.coefficient[index]);
+        if (value < 0) {
+            value += PRIME;
+        }
+        result.coefficient[index] = static_cast<std::uint8_t>(value);
+    }
+    return result;
+}
+
+using BaseField = Givaro::Modular<std::int64_t>;
+using PolynomialDomain = Givaro::Poly1Dom<BaseField, Givaro::Dense>;
+using Field = Givaro::Extension<BaseField>;
+
+class GivaroMultiplicationMap {
+public:
+    GivaroMultiplicationMap(const Field& field, const FastElement& factor) {
+        Field::Element field_factor;
+        field.init(field_factor, Givaro::Integer(pack(factor)));
+        std::uint64_t place = 1;
+        for (std::size_t input = 0; input < DEGREE; ++input) {
+            Field::Element unit;
+            Field::Element product;
+            field.init(unit, Givaro::Integer(place));
+            field.mul(product, field_factor, unit);
+            Givaro::Integer packed_product;
+            field.convert(packed_product, product);
+            const auto image = unpack(static_cast<std::uint64_t>(packed_product));
+            basis_image_[input] = image;
+            place *= PRIME;
+        }
+    }
+
+    FastElement apply(const FastElement& value) const {
+        std::array<int, DEGREE> accumulator{};
+        for (std::size_t input = 0; input < DEGREE; ++input) {
+            const int scalar = value.coefficient[input];
+            for (std::size_t output = 0; output < DEGREE; ++output) {
+                accumulator[output] +=
+                    scalar * basis_image_[input].coefficient[output];
+            }
+        }
+        FastElement result;
+        for (std::size_t output = 0; output < DEGREE; ++output) {
+            result.coefficient[output] =
+                static_cast<std::uint8_t>(accumulator[output] % PRIME);
+        }
+        return result;
+    }
+
+private:
+    std::array<FastElement, DEGREE> basis_image_;
+};
+
+FastElement inverse(const Field& field, const FastElement& value) {
+    Field::Element input;
+    Field::Element output;
+    field.init(input, Givaro::Integer(pack(value)));
+    field.inv(output, input);
+    Givaro::Integer packed_output;
+    field.convert(packed_output, output);
+    return unpack(static_cast<std::uint64_t>(packed_output));
+}
+
+struct InputEntry {
+    std::uint32_t column{};
+    std::uint64_t packed{};
+};
+
+struct BasisEntry {
+    std::uint32_t column{};
+    FastElement value;
+};
+
+class PivotReplay {
+public:
+    PivotReplay(const Field& field, std::size_t dimension)
+        : field_(field),
+          dimension_(dimension),
+          basis_(dimension),
+          working_(dimension),
+          nonzero_((dimension + 63) / 64, 0) {}
+
+    void load(const std::vector<InputEntry>& row) {
+        if (working_nonzeros_ != 0) {
+            throw std::runtime_error("working row was not cleared");
+        }
+        for (const auto& entry : row) {
+            if (!is_zero(working_[entry.column])) {
+                throw std::runtime_error("duplicate matrix coordinate");
+            }
+            const auto value = unpack(entry.packed);
+            if (is_zero(value)) {
+                throw std::runtime_error("zero SMS coefficient");
+            }
+            working_[entry.column] = value;
+            nonzero_[entry.column / 64] |=
+                std::uint64_t{1} << (entry.column % 64);
+            ++working_nonzeros_;
+        }
+    }
+
+    FastElement insert(std::size_t expected_pivot) {
+        std::size_t search_from = 0;
+        while (working_nonzeros_ != 0) {
+            const auto pivot = first_nonzero(search_from);
+            if (basis_[pivot].empty()) {
+                if (pivot != expected_pivot) {
+                    throw std::runtime_error(
+                        "pivot-order replay disagrees with selected transcript");
+                }
+                const auto pivot_coefficient = working_[pivot];
+                const GivaroMultiplicationMap normalize(
+                    field_, inverse(field_, pivot_coefficient));
+                auto& new_basis = basis_[pivot];
+                new_basis.reserve(working_nonzeros_);
+                for (std::size_t word_index = pivot / 64;
+                     word_index < nonzero_.size(); ++word_index) {
+                    auto word = nonzero_[word_index];
+                    while (word != 0) {
+                        const auto bit =
+                            static_cast<unsigned>(__builtin_ctzll(word));
+                        const auto column = static_cast<std::uint32_t>(
+                            word_index * 64 + bit);
+                        if (column < dimension_) {
+                            new_basis.push_back(
+                                {column, normalize.apply(working_[column])});
+                            working_[column] = FastElement{};
+                        }
+                        word &= word - 1;
+                    }
+                    nonzero_[word_index] = 0;
+                }
+                basis_terms_ += new_basis.size();
+                working_nonzeros_ = 0;
+                ++rank_;
+                return pivot_coefficient;
+            }
+
+            const auto factor = working_[pivot];
+            const GivaroMultiplicationMap multiplication(field_, factor);
+            for (const auto& entry : basis_[pivot]) {
+                update(entry.column, multiplication.apply(entry.value));
+            }
+            ++reductions_;
+            coefficient_updates_ += basis_[pivot].size();
+            search_from = pivot;
+        }
+        throw std::runtime_error("selected minor row reduced to zero");
+    }
+
+    std::size_t rank() const { return rank_; }
+    std::uint64_t reductions() const { return reductions_; }
+    std::uint64_t coefficient_updates() const { return coefficient_updates_; }
+    std::uint64_t basis_terms() const { return basis_terms_; }
+
+private:
+    std::size_t first_nonzero(std::size_t start) const {
+        auto word_index = start / 64;
+        auto word = nonzero_[word_index] &
+                    ((~std::uint64_t{0}) << (start % 64));
+        while (true) {
+            if (word != 0) {
+                return word_index * 64 +
+                       static_cast<unsigned>(__builtin_ctzll(word));
+            }
+            ++word_index;
+            if (word_index >= nonzero_.size()) {
+                return dimension_;
+            }
+            word = nonzero_[word_index];
+        }
+    }
+
+    void update(std::uint32_t column, const FastElement& product) {
+        const bool old_nonzero = !is_zero(working_[column]);
+        const auto value = subtract(working_[column], product);
+        const bool new_nonzero = !is_zero(value);
+        if (!old_nonzero && new_nonzero) {
+            nonzero_[column / 64] |= std::uint64_t{1} << (column % 64);
+            ++working_nonzeros_;
+        } else if (old_nonzero && !new_nonzero) {
+            nonzero_[column / 64] &= ~(std::uint64_t{1} << (column % 64));
+            --working_nonzeros_;
+        }
+        working_[column] = value;
+    }
+
+    const Field& field_;
+    std::size_t dimension_;
+    std::vector<std::vector<BasisEntry>> basis_;
+    std::vector<FastElement> working_;
+    std::vector<std::uint64_t> nonzero_;
+    std::size_t working_nonzeros_{};
+    std::size_t rank_{};
+    std::uint64_t reductions_{};
+    std::uint64_t coefficient_updates_{};
+    std::uint64_t basis_terms_{};
+};
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "usage: ust_f1016_givaro_map_pivot_replay MATRIX\n";
+        return 64;
+    }
+    try {
+        BaseField base(PRIME);
+        PolynomialDomain polynomials(base, "g");
+        PolynomialDomain::Element minpoly;
+        polynomials.init(minpoly, Givaro::Degree(DEGREE));
+        const std::int64_t coefficients[7] = {64, 16, 33, 44, 89, 24, 1};
+        for (std::size_t index = 0; index < 7; ++index) {
+            base.init(minpoly[index], coefficients[index]);
+        }
+        Field field(polynomials, minpoly);
+
+        std::ifstream input(argv[1]);
+        std::size_t rows = 0;
+        std::size_t columns = 0;
+        std::size_t nonzeros = 0;
+        if (!input || !(input >> rows >> columns >> nonzeros) || rows != columns) {
+            throw std::runtime_error("invalid square SMS header");
+        }
+        std::vector<std::vector<InputEntry>> matrix(rows);
+        for (std::size_t index = 0; index < nonzeros; ++index) {
+            std::size_t row = 0;
+            std::size_t column = 0;
+            std::uint64_t packed = 0;
+            if (!(input >> row >> column >> packed) || row == 0 || column == 0 ||
+                row > rows || column > columns) {
+                throw std::runtime_error("invalid SMS entry");
+            }
+            matrix[row - 1].push_back(
+                {static_cast<std::uint32_t>(column - 1), packed});
+        }
+        for (auto& row : matrix) {
+            std::sort(
+                row.begin(), row.end(),
+                [](const InputEntry& left, const InputEntry& right) {
+                    return left.column < right.column;
+                });
+        }
+
+        PivotReplay replay(field, rows);
+        Field::Element determinant;
+        field.init(determinant, Givaro::Integer(1));
+        const auto started = std::chrono::steady_clock::now();
+        for (std::size_t row = 0; row < rows; ++row) {
+            replay.load(matrix[row]);
+            const auto pivot = replay.insert(row);
+            Field::Element field_pivot;
+            field.init(field_pivot, Givaro::Integer(pack(pivot)));
+            field.mulin(determinant, field_pivot);
+            if ((row + 1) % 250 == 0 || row + 1 == rows) {
+                const auto elapsed = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - started)
+                                         .count();
+                std::cerr << "[givaro-map-pivot-replay] processed=" << row + 1
+                          << '/' << rows << " rank=" << replay.rank()
+                          << " reductions=" << replay.reductions()
+                          << " elapsed=" << elapsed << "s\n";
+            }
+        }
+        Givaro::Integer packed_determinant;
+        field.convert(packed_determinant, determinant);
+        std::cout << "EXACT_F1016_GIVARO_MAP_PIVOT_REPLAY rows=" << rows
+                  << " columns=" << columns << " nonzeros=" << nonzeros
+                  << " rank=" << replay.rank()
+                  << " determinant_packed=" << packed_determinant
+                  << " reductions=" << replay.reductions()
+                  << " coefficient_updates=" << replay.coefficient_updates()
+                  << " basis_terms=" << replay.basis_terms() << "\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "Givaro map replay error: " << error.what() << "\n";
+        return 2;
+    }
+}

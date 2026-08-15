@@ -1,0 +1,113 @@
+# UST.G3AP Adaptive Source-Scheduling Lemma
+
+Date: 2026-08-11
+
+Status: `CLOSED_EXACT_LINEAR_ALGEBRA_LEMMA_NOT_G3AP_RANK_CLOSURE`
+
+## Setting
+
+Let (k=mathbf F_{101^6}), with the selected irreducible polynomial
+
+\[
+g^6+24g^5+89g^4+44g^3+33g^2+16g+64.
+\]
+
+Let (M) be the exact target-Macaulay matrix. Its rows are the selected
+derivative-relation multiples and its columns are the 39,726 selected target
+coordinates. An adaptive scheduler may inspect row supports and the sizes of
+already stored pivot rows, but it may only choose an as-yet unprocessed
+original row of (M).
+
+## Lemma
+
+Suppose exact sparse elimination processes distinct original rows in any
+fixed or adaptively chosen order. At rank (r), let
+
+\[
+i_1,\ldots,i_r
+\]
+
+be the original source-row identifiers, let
+
+\[
+j_1,\ldots,j_r
+\]
+
+be the distinct pivot coordinates, and let (a_1,\ldots,a_r\in k^\times)
+be the pre-normalization pivot coefficients. Then:
+
+1. the processed-row span is a subspace of the full selected relation span;
+2. exact row operations preserve the span and rank of the processed rows;
+3. the submatrix (M[(i_1,\ldots,i_r),(j_1,\ldots,j_r)]) is nonsingular;
+4. after restoring the pivot columns to natural order, its determinant is
+
+   \[
+   (-1)^{\operatorname{inv}(j_1,\ldots,j_r)}
+   \prod_{q=1}^r a_q\ne0;
+   \]
+5. if (r=39{,}725), the selected relation span has codimension at most one
+   in the 39,726-coordinate target.
+
+These conclusions are independent of how the scheduler chose the next row.
+
+## Proof
+
+Before insertion of row (i_q), exact elimination subtracts scalar multiples
+of already normalized pivot rows. These are invertible elementary row
+operations, so the resulting vector lies in, and preserves, the span of the
+processed original rows. A new pivot is accepted only when its coefficient
+(a_q) is nonzero. Normalizing by (a_q^{-1}) produces a unit pivot in a
+coordinate not used by earlier accepted rows. Induction therefore gives an
+echelon matrix with distinct unit pivots.
+
+Restricting to the accepted original rows and pivot coordinates yields a
+triangular matrix in pivot order with diagonal
+(a_1,\ldots,a_r). Sorting the pivot coordinates into natural order changes
+the determinant by precisely the permutation sign shown above. Since every
+(a_q) is nonzero in the field, the determinant is nonzero. Thus the selected
+original rows are independent and have rank (r). The codimension statement
+is rank-nullity for a target of dimension 39,726.
+
+Adaptive choice does not enter the induction: it permutes or selects original
+rows but never changes a coefficient, imports a relation, or assumes the
+desired rank. Therefore support-count and weighted-support scheduling have the
+same proof status as the original source order.
+
+## Weighted Scheduler
+
+For a candidate row, the weighted scheduler finds its first target coordinate
+that is not already a pivot and sums the stored normalized pivot-row sizes of
+earlier occupied coordinates in that row's original support. The score is
+monotone as pivots are added and is used only to reduce computational fill.
+It is not a bound on rank, a genericity assumption, or part of the determinant
+certificate.
+
+## Free-Support Refinement
+
+The refined scheduler first separates candidates whose original support still
+contains an unoccupied target coordinate from candidates without such direct
+free support. Within each class it uses the same weighted-support score. Both
+properties are recomputed lazily whenever a row reaches the queue head. Since
+the pivot set only grows, loss of direct free support and growth of the work
+score are monotone.
+
+This refinement still chooses only unprocessed original rows, so the lemma
+applies unchanged. Its exact scheduler test uses three rows: after the first
+row occupies one target, a dependent row supported only there is postponed in
+favor of a third row that reaches the remaining target. The emitted selection
+is rows `[0,2]`, rank two is reached after two processed rows, and at least one
+lazy rescore is required. This test certifies ordering behavior only; it does
+not contribute a pivot to the G3AP campaign.
+
+## Certification Boundary
+
+This lemma proves that an adaptive run may emit the same kind of exact minor
+witness as the canonical ordered run. It does **not** assert that the current
+50,000-row campaign reaches rank 39,725. G3AP closes only after:
+
+1. an actual nonzero 39,725-minor is emitted;
+2. its selected rows and determinant are independently replayed;
+3. the normalized quotient functional annihilates every campaign row;
+4. the source/base provenance certification passes; and
+5. the rank upper bound is squeezed with the independent nonzero top-line
+   lower bound.

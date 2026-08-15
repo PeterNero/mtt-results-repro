@@ -1,0 +1,746 @@
+#!/usr/bin/env python3
+"""Certify the selected G3AP target-Macaulay rank squeeze and quotient map."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import build_ust_g3ap_selected_cayley_ordinary_top_lower_bound as lower
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as chunk_builder
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import extract_ust_g3ap_selected_cayley_target_macaulay_minor as extractor
+import run_ust_g3ap_selected_cayley_target_macaulay_minor as rank_runner
+import ust_f1016_sparse_minor as minor
+import build_ust_f1016_native_tools as native_tools
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+RANK_CANDIDATE = rank_runner.PACKET
+BASE_SCRIPT = STATE / "ust_g3ap_selected_cayley_target_macaulay_base_certify.sing"
+BASE_OUTPUT = STATE / "ust_g3ap_selected_cayley_target_macaulay_base_certify.singular.out"
+BASE_STANDARD_CACHE = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_base_certified.ssi"
+)
+PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay_certified.packet.json"
+LOWER_VERIFIER = ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_lower_bound.py"
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+RAW_COEFFICIENT_PRIME = 101
+RAW_COEFFICIENT_BASIS_DEGREE = 6
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def checked(record: dict[str, object], label: str) -> Path:
+    path = ROOT / str(record["path"])
+    require(
+        path.is_file()
+        and sha256(path) == record["sha256"]
+        and ("bytes" not in record or path.stat().st_size == record["bytes"]),
+        label,
+    )
+    return path
+
+
+def artifact(path: Path) -> dict[str, object]:
+    return {"path": relative(path), "sha256": sha256(path), "bytes": path.stat().st_size}
+
+
+def base_certification_script(source: str) -> str:
+    cache = relative(macaulay.BASE_CACHE)
+    certified_cache = relative(BASE_STANDARD_CACHE)
+    return weighted.weighted_base_prefix(source) + f'''option(noredTail);
+ideal I0=K,E,C;
+ideal G0=std(I0);
+def cachedBase=read("ssi:r {cache}");
+ideal GI=cachedBase;
+int cachedAttr=attrib(GI,"isSB");
+attrib(GI,"isSB",0);
+ideal GICheck=std(GI);
+ideal LCache;
+ideal LCheck;
+int i;
+for (i=1;i<=size(GI);i++) {{ LCache[i]=lead(GI[i]); }}
+for (i=1;i<=size(GICheck);i++) {{ LCheck[i]=lead(GICheck[i]); }}
+ideal LCacheGB=std(LCache);
+ideal LCheckGB=std(LCheck);
+int cacheInSelected=1;
+int selectedInCache=1;
+int cacheLeadingInCheck=1;
+int checkLeadingInCache=1;
+for (i=1;i<=size(GI);i++)
+{{ if (reduce(GI[i],G0)!=0) {{ cacheInSelected=0; }} }}
+for (i=1;i<=size(G0);i++)
+{{ if (reduce(G0[i],GICheck)!=0) {{ selectedInCache=0; }} }}
+for (i=1;i<=size(LCache);i++)
+{{ if (reduce(LCache[i],LCheckGB)!=0) {{ cacheLeadingInCheck=0; }} }}
+for (i=1;i<=size(LCheck);i++)
+{{ if (reduce(LCheck[i],LCacheGB)!=0) {{ checkLeadingInCache=0; }} }}
+write("ssi:w {certified_cache}",GICheck);
+print("G3AP_MACAULAY_BASECERT_CACHE_ATTR="+string(cachedAttr));
+print("G3AP_MACAULAY_BASECERT_CACHE_SIZE="+string(size(GI)));
+print("G3AP_MACAULAY_BASECERT_SELECTED_GB_SIZE="+string(size(G0)));
+print("G3AP_MACAULAY_BASECERT_CACHE_GB_SIZE="+string(size(GICheck)));
+print("G3AP_MACAULAY_BASECERT_CACHE_IN_SELECTED="+string(cacheInSelected));
+print("G3AP_MACAULAY_BASECERT_SELECTED_IN_CACHE="+string(selectedInCache));
+print("G3AP_MACAULAY_BASECERT_CACHE_LEADING_IN_CHECK="+string(cacheLeadingInCheck));
+print("G3AP_MACAULAY_BASECERT_CHECK_LEADING_IN_CACHE="+string(checkLeadingInCache));
+for (i=1;i<=size(GI);i++)
+{{ print("G3AP_MACAULAY_BASECERT_CACHE_LEADER_"+string(i)+"="+string(leadexp(GI[i]))); }}
+print("G3AP_MACAULAY_BASECERT_PASS");
+quit;
+'''
+
+
+def parse_linbox(output: str) -> tuple[int, int, int, int]:
+    match = re.fullmatch(
+        r"EXACT_F1016_SPARSE_ELIMINATION_RANK rows=(\d+) columns=(\d+) "
+        r"nonzeros=(\d+) rank=(\d+)\s*",
+        output,
+    )
+    require(match is not None, "LinBox output")
+    return tuple(int(value) for value in match.groups())
+
+
+def monomial_label(component: int, exponent: tuple[int, ...]) -> str:
+    factors = []
+    for name, power in zip(("x", "y", "z", "w", "t0", "t1", "t2"), exponent):
+        if power == 1:
+            factors.append(name)
+        elif power > 1:
+            factors.append(f"{name}^{power}")
+    factors.append(("u^2", "u*v", "u*s", "v^2", "v*s", "s^2")[component - 1])
+    return "*".join(factors)
+
+
+def independently_pack_raw_coefficient(value: str) -> int:
+    """Parse Singular's F_101(g) coefficient syntax without producer helpers."""
+    expression = "".join(value.split())
+    while expression.startswith("(") and expression.endswith(")"):
+        expression = expression[1:-1]
+    require(expression != "" and "(" not in expression and ")" not in expression,
+            "raw coefficient parentheses")
+
+    coefficients = [0] * RAW_COEFFICIENT_BASIS_DEGREE
+    position = 0
+    while position < len(expression):
+        sign = 1
+        if expression[position] in "+-":
+            sign = -1 if expression[position] == "-" else 1
+            position += 1
+        require(position < len(expression), "raw coefficient trailing sign")
+
+        end = position
+        while end < len(expression) and expression[end] not in "+-":
+            end += 1
+        term = expression[position:end]
+        require(term != "", "raw coefficient empty term")
+
+        if "g" not in term:
+            require(term.isdigit(), "raw integer coefficient term")
+            scalar = int(term)
+            power = 0
+        else:
+            require(term.count("g") == 1, "raw coefficient generator count")
+            generator = term.index("g")
+            scalar_text = term[:generator]
+            if scalar_text:
+                require(
+                    scalar_text.endswith("*") and scalar_text[:-1].isdigit(),
+                    "raw coefficient scalar syntax",
+                )
+                scalar = int(scalar_text[:-1])
+            else:
+                scalar = 1
+            power_text = term[generator + 1 :]
+            if power_text:
+                require(
+                    power_text.startswith("^") and power_text[1:].isdigit(),
+                    "raw coefficient power syntax",
+                )
+                power = int(power_text[1:])
+            else:
+                power = 1
+            require(
+                0 <= power < RAW_COEFFICIENT_BASIS_DEGREE,
+                "raw coefficient basis degree",
+            )
+
+        coefficients[power] = (
+            coefficients[power] + sign * scalar
+        ) % RAW_COEFFICIENT_PRIME
+        position = end
+
+    return sum(
+        coefficient * RAW_COEFFICIENT_PRIME**power
+        for power, coefficient in enumerate(coefficients)
+    )
+
+
+def self_test_raw_coefficient_parser() -> None:
+    require(independently_pack_raw_coefficient("1") == 1, "raw parser unit")
+    require(independently_pack_raw_coefficient("-1") == 100, "raw parser sign")
+    require(independently_pack_raw_coefficient("g") == 101, "raw parser generator")
+    require(
+        independently_pack_raw_coefficient("(g^5-2*g^3+3)")
+        == 3 + 99 * 101**3 + 101**5,
+        "raw parser polynomial",
+    )
+
+
+def replay_raw_export(
+    raw_output: Path,
+    start: int,
+    stop: int,
+    target_index: dict[tuple[int, tuple[int, ...]], int],
+) -> tuple[int, str]:
+    """Reconstruct one packed-triple stream directly from raw Singular output."""
+    marker = f"G3AP_MACAULAY_EXPORT_ROWS={stop - start}"
+    marker_seen = False
+    pass_seen = False
+    errors: list[str] = []
+    count = 0
+    digest = hashlib.sha256()
+    with gzip.open(raw_output, "rt", encoding="utf-8") as stream:
+        for line in stream:
+            stripped = line.rstrip()
+            if stripped == marker:
+                marker_seen = True
+            elif stripped == "G3AP_MACAULAY_EXPORT_PASS":
+                pass_seen = True
+            if line.lstrip().startswith("?"):
+                errors.append(stripped)
+            if not line.startswith("G3AP_MACAULAY_TERM="):
+                continue
+            row_text, component_text, exponent_text, coefficient_text = (
+                stripped.split("=", 1)[1].split("|", 3)
+            )
+            local_row = int(row_text)
+            coordinate = (
+                int(component_text),
+                tuple(int(value) for value in exponent_text.split(",")),
+            )
+            require(
+                1 <= local_row <= stop - start and coordinate in target_index,
+                "raw export coordinate",
+            )
+            packed = independently_pack_raw_coefficient(coefficient_text)
+            require(packed != 0, "raw export nonzero coefficient")
+            digest.update(
+                f"{start + local_row} {target_index[coordinate]} {packed}\n".encode(
+                    "ascii"
+                )
+            )
+            count += 1
+    require(marker_seen and pass_seen and not errors, "raw export completion transcript")
+    return count, digest.hexdigest()
+
+
+def validate_campaign(
+    campaign: dict[str, object], base_packet: dict[str, object]
+) -> tuple[list[tuple[int, tuple[int, ...]]], int]:
+    self_test_raw_coefficient_parser()
+    require(
+        RAW_COEFFICIENT_PRIME == macaulay.PRIME == minor.PRIME
+        and RAW_COEFFICIENT_BASIS_DEGREE == minor.DEGREE
+        and minor.FIELD_ORDER
+        == RAW_COEFFICIENT_PRIME**RAW_COEFFICIENT_BASIS_DEGREE,
+        "selected coefficient field",
+    )
+    rows = int(campaign["selection"]["rows"])
+    schema = campaign["schema"]
+    require(
+        schema
+        in (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v1",
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v2",
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v3",
+        ),
+        "campaign schema",
+    )
+    pieces = int(
+        campaign["selection"].get(
+            "workers", campaign["selection"].get("pieces", -1)
+        )
+    )
+    require(rows >= TARGET_RANK and pieces == len(campaign["chunks"]), "campaign size")
+    leaders = [tuple(int(value) for value in item) for item in base_packet["base_leading_exponents"]]
+    targets, _ = macaulay.coordinate_data(leaders)
+    target_index = {value: index for index, value in enumerate(targets, start=1)}
+    require(len(target_index) == len(targets), "unique target coordinates")
+    all_sources, _ = macaulay.source_data(leaders)
+    selected, quotas = macaulay.balanced_source_subset(all_sources, rows)
+    require(
+        chunk_builder.selection_hash(selected) == campaign["selection"]["selection_sha256"]
+        and quotas == campaign["selection"]["per_generator_quotas"],
+        "balanced source schedule",
+    )
+    source_text = macaulay.SOURCE.read_text(encoding="ascii")
+    expected_matrix_hash = hashlib.sha256()
+    expected_matrix_hash.update(
+        f"{rows} {macaulay.EXPECTED_TARGET_COORDINATES} {campaign['matrix']['nonzeros']}\n".encode(
+            "ascii"
+        )
+    )
+    total_nonzeros = 0
+    expected_start = 0
+    executed_rows = 0
+    executed_per_generator = [0] * len(quotas)
+    for index, record in enumerate(campaign["chunks"]):
+        packet_path = checked(record["packet"], f"chunk {index} packet")
+        chunk = json.loads(packet_path.read_text(encoding="ascii"))
+        chunk_schema = chunk["schema"]
+        require(
+            chunk_schema
+            in (
+                "mtt.unified-source.g3ap-selected-cayley-target-macaulay-chunk.v1",
+                "mtt.unified-source.g3ap-selected-cayley-target-macaulay-range.v1",
+            )
+            and chunk["selection"]["balanced_rows"] == rows
+            and chunk["selection"]["selection_sha256"]
+            == campaign["selection"]["selection_sha256"],
+            f"chunk {index} identity",
+        )
+        start, stop = [int(value) for value in record["global_range_zero_based"]]
+        require(
+            (start == expected_start if schema.endswith(("v1", "v2")) else start >= expected_start)
+            and 0 <= start < stop <= rows
+            and chunk["selection"]["global_start_zero_based"] == start
+            and chunk["selection"]["global_stop_exclusive_zero_based"] == stop,
+            f"chunk {index} range",
+        )
+        if chunk_schema.endswith("chunk.v1"):
+            require(
+                chunk["selection"]["chunk_count"] > 0
+                and 0 <= chunk["selection"]["chunk_index"]
+                < chunk["selection"]["chunk_count"],
+                f"chunk {index} fixed partition identity",
+            )
+        expected_start = stop
+        executed_rows += stop - start
+        for generator, _ in selected[start:stop]:
+            executed_per_generator[generator] += 1
+        script = checked(chunk["execution"]["script"], f"chunk {index} script")
+        expected_script = macaulay.export_script(source_text, selected[start:stop])
+        require(
+            script.read_text(encoding="ascii") == expected_script,
+            f"chunk {index} selected-source script reconstruction",
+        )
+        raw_output = checked(
+            chunk["execution"]["compressed_output"], f"chunk {index} raw output"
+        )
+        triples = checked(chunk["execution"]["packed_triples"], f"chunk {index} triples")
+        previous_row = start
+        seen_columns: set[int] = set()
+        counted = 0
+        semantic_triples_hash = hashlib.sha256()
+        with triples.open("rb") as stream:
+            for raw_line in stream:
+                row_text, column_text, packed_text = raw_line.split()
+                row = int(row_text)
+                column = int(column_text)
+                packed = int(packed_text)
+                require(
+                    start + 1 <= row <= stop
+                    and row >= previous_row
+                    and 1 <= column <= macaulay.EXPECTED_TARGET_COORDINATES
+                    and 0 < packed < minor.FIELD_ORDER,
+                    f"chunk {index} exact triple",
+                )
+                if row != previous_row:
+                    seen_columns.clear()
+                    previous_row = row
+                require(column not in seen_columns, f"chunk {index} duplicate coordinate")
+                seen_columns.add(column)
+                semantic_triples_hash.update(
+                    f"{row} {column} {packed}\n".encode("ascii")
+                )
+                expected_matrix_hash.update(raw_line)
+                counted += 1
+        require(counted == chunk["execution"]["nonzeros"], f"chunk {index} nonzeros")
+        replayed_count, replayed_hash = replay_raw_export(
+            raw_output, start, stop, target_index
+        )
+        require(
+            replayed_count == counted
+            and replayed_hash == semantic_triples_hash.hexdigest(),
+            f"chunk {index} raw-to-triple replay",
+        )
+        total_nonzeros += counted
+    if schema.endswith(("v1", "v2")):
+        require(expected_start == rows, "complete campaign range cover")
+    else:
+        require(
+            executed_rows == campaign["selection"]["executed_rows"]
+            and executed_rows >= TARGET_RANK,
+            "rank subcampaign row coverage",
+        )
+        require(
+            executed_per_generator
+            == campaign["selection"]["executed_per_generator"],
+            "rank subcampaign generator coverage",
+        )
+        reference_quotient, reference_remainder = divmod(TARGET_RANK, len(quotas))
+        reference_rows = [
+            reference_quotient + (generator < reference_remainder)
+            for generator in range(len(quotas))
+        ]
+        require(
+            campaign["selection"]["reference_rank_balanced_rows"]
+            == reference_rows
+            and campaign["selection"]["reference_rank_balanced_deficits"]
+            == [
+                max(0, target - actual)
+                for target, actual in zip(reference_rows, executed_per_generator)
+            ],
+            "rank subcampaign balance diagnostic",
+        )
+    matrix_path = ROOT / str(campaign["matrix"]["path"])
+    require(
+        total_nonzeros == campaign["matrix"]["nonzeros"]
+        and expected_matrix_hash.hexdigest() == campaign["matrix"]["sha256"]
+        and matrix_path.is_file()
+        and sha256(matrix_path) == campaign["matrix"]["sha256"],
+        "assembled exact matrix",
+    )
+    return targets, total_nonzeros
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    source = macaulay.SOURCE.read_text(encoding="ascii")
+    BASE_SCRIPT.write_text(base_certification_script(source), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {relative(BASE_SCRIPT)}")
+        return
+
+    subprocess.run([sys.executable, str(LOWER_VERIFIER)], cwd=ROOT, check=True)
+    lower_packet = json.loads(lower.OUT.read_text(encoding="ascii"))
+    require(
+        lower_packet["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_AT_LEAST_ONE"
+        and all(lower_packet["checks"].values())
+        and not any(lower_packet["guardrails"].values()),
+        "selected lower bound",
+    )
+    rank_candidate = json.loads(RANK_CANDIDATE.read_text(encoding="ascii"))
+    require(
+        rank_candidate["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-rank-candidate.v1"
+        and all(rank_candidate["checks"].values())
+        and not any(rank_candidate["guardrails"].values()),
+        "rank candidate",
+    )
+    checked(rank_candidate["inputs"]["native_tools_build"], "native tools build")
+    require(native_tools.current(), "hash-current native tools build")
+    campaign_path = checked(rank_candidate["inputs"]["campaign"], "campaign")
+    matrix_path = checked(rank_candidate["inputs"]["campaign_matrix"], "campaign matrix")
+    extraction_path = checked(
+        rank_candidate["inputs"]["minor_extraction"], "minor extraction"
+    )
+    selected_minor = checked(rank_candidate["inputs"]["selected_minor"], "selected minor")
+    campaign = json.loads(campaign_path.read_text(encoding="ascii"))
+    require(matrix_path == ROOT / campaign["matrix"]["path"], "campaign matrix identity")
+    base_packet_path = checked(campaign["inputs"]["base_coordinate_packet"], "base packet")
+    base_packet = json.loads(base_packet_path.read_text(encoding="ascii"))
+    require(
+        base_packet["inputs"]["selected_source"]["sha256"] == sha256(macaulay.SOURCE),
+        "selected source binding",
+    )
+    targets, matrix_nonzeros = validate_campaign(campaign, base_packet)
+
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, BASE_SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    BASE_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "base certification execution")
+    require(
+        not any(line.lstrip().startswith("?") for line in completed.stdout.splitlines()),
+        "base certification Singular errors",
+    )
+    for label, value in {
+        "G3AP_MACAULAY_BASECERT_CACHE_IN_SELECTED": 1,
+        "G3AP_MACAULAY_BASECERT_SELECTED_IN_CACHE": 1,
+        "G3AP_MACAULAY_BASECERT_CACHE_LEADING_IN_CHECK": 1,
+        "G3AP_MACAULAY_BASECERT_CHECK_LEADING_IN_CACHE": 1,
+    }.items():
+        require(f"{label}={value}" in completed.stdout, label)
+    require("G3AP_MACAULAY_BASECERT_PASS" in completed.stdout, "base pass")
+    require(BASE_STANDARD_CACHE.is_file(), "certified standard-basis cache")
+    cache_size = int(
+        re.search(
+            r"^G3AP_MACAULAY_BASECERT_CACHE_SIZE=(\d+)$",
+            completed.stdout,
+            re.MULTILINE,
+        ).group(1)
+    )
+    cache_leaders = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(
+            r"^G3AP_MACAULAY_BASECERT_CACHE_LEADER_(\d+)=([0-9,]+)$",
+            completed.stdout,
+            re.MULTILINE,
+        )
+    }
+    require(
+        set(cache_leaders) == set(range(1, cache_size + 1))
+        and [cache_leaders[index] for index in range(1, cache_size + 1)]
+        == [tuple(value) for value in base_packet["base_leading_exponents"]],
+        "certified base coordinate leaders",
+    )
+
+    extraction = json.loads(extraction_path.read_text(encoding="ascii"))
+    custom_engine = rank_candidate["engines"]["custom_sparse_column_elimination"]
+    checked(custom_engine["source"], "custom source")
+    checked(custom_engine["binary"], "custom binary")
+    checked(custom_engine["log"], "custom log")
+    for index, dependency in enumerate(custom_engine.get("source_dependencies", [])):
+        checked(dependency, f"custom source dependency {index}")
+    scheduler_test = custom_engine.get("scheduler_self_test")
+    if custom_engine.get("scheduler") == "weighted-free-fast":
+        require(isinstance(scheduler_test, dict), "free-support scheduler self-test")
+        checked(scheduler_test["matrix"], "free-support scheduler matrix")
+        scheduler_output = checked(
+            scheduler_test["output"], "free-support scheduler output"
+        )
+        checked(scheduler_test["log"], "free-support scheduler log")
+        scheduler_scalars, scheduler_vectors = minor.parse_output(scheduler_output)
+        require(
+            scheduler_scalars["ROW_ORDER"]
+            == "adaptive-free-then-weighted-support"
+            and int(scheduler_scalars["PROCESSED_SOURCE_ROWS"]) == 2
+            and int(scheduler_scalars["RESCORED_SOURCE_ROWS"]) >= 1
+            and scheduler_vectors["SELECTED_SOURCE_ROWS_ZERO_BASED"] == [0, 2],
+            "free-support scheduler exact ordering replay",
+        )
+    custom_output = checked(custom_engine["output"], "custom output")
+    scalars, vectors = minor.parse_output(custom_output)
+    functional = vectors["QUOTIENT_FUNCTIONAL_PACKED"]
+    require(
+        scalars["SCHEMA"] == "MTTF1016SparseColumnMinorExactOutput.v2"
+        and int(scalars["MINOR_SIZE"]) == TARGET_RANK
+        and int(scalars["QUOTIENT_FUNCTIONAL_VERIFIED_MATRIX_NONZEROS"])
+        == matrix_nonzeros
+        and len(functional) == len(targets) == macaulay.EXPECTED_TARGET_COORDINATES,
+        "custom quotient output",
+    )
+    require(
+        minor.determinant(
+            vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"],
+            vectors["PIVOT_COEFFICIENTS_PACKED"],
+        )
+        == int(scalars["MINOR_DETERMINANT_PACKED"])
+        != 0,
+        "independent determinant replay",
+    )
+    normalization = int(scalars["QUOTIENT_NORMALIZATION_TARGET_COORDINATE_ZERO_BASED"])
+    require(functional[normalization] == 1, "quotient normalization")
+    linbox_output = checked(
+        rank_candidate["engines"]["linbox_givaro_sparse_elimination"]["output"],
+        "LinBox output",
+    )
+    linbox_shape = parse_linbox(linbox_output.read_text(encoding="utf-8"))
+    require(
+        linbox_shape[0] == linbox_shape[1] == linbox_shape[3] == TARGET_RANK
+        and linbox_shape[2] == extraction["minor"]["nonzeros"]
+        and selected_minor == ROOT / extraction["minor"]["path"],
+        "independent exact minor rank",
+    )
+    functional_engine = rank_candidate["engines"][
+        "givaro_full_matrix_functional_replay"
+    ]
+    checked(functional_engine["source"], "Givaro functional source")
+    checked(functional_engine["binary"], "Givaro functional binary")
+    functional_artifact = checked(functional_engine["functional"], "functional artifact")
+    functional_output = checked(functional_engine["output"], "Givaro functional output")
+    functional_shape = rank_runner.parse_functional_replay(
+        functional_output.read_text(encoding="utf-8")
+    )
+    require(
+        functional_shape[0] == campaign["matrix"]["rows"]
+        and functional_shape[1] == macaulay.EXPECTED_TARGET_COORDINATES
+        and functional_shape[2] == matrix_nonzeros
+        and functional_shape[3] == campaign["matrix"]["rows"],
+        "independent Givaro functional replay",
+    )
+    for record_name in (
+        "matrix",
+        "custom_output",
+        "custom_log",
+        "linbox_output",
+        "functional",
+        "functional_output",
+    ):
+        checked(rank_candidate["field_self_test"][record_name], f"self-test {record_name}")
+    require(rank_candidate["field_self_test"]["exact_rank"] == 1, "field self-test rank")
+
+    component, exponent = targets[normalization]
+    executed_relation_rows = int(
+        campaign["selection"].get(
+            "executed_rows", campaign["matrix"]["rows"]
+        )
+    )
+    functional_hash = hashlib.sha256(
+        json.dumps(functional, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    require(
+        functional_hash
+        == extraction["minor"]["quotient_functional"]["packed_coefficients_sha256"],
+        "quotient functional hash",
+    )
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-certified.v1",
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AP.MACAULAY-RANK-SQUEEZE",
+        "status": "CLOSED_EXACT_SELECTED_F1016_TARGET_MACAULAY_RANK_SQUEEZE_TOP_DIMENSION_ONE",
+        "inputs": {
+            "rank_candidate": artifact(RANK_CANDIDATE),
+            "selected_source": artifact(macaulay.SOURCE),
+            "selected_ordinary_top_lower_bound": artifact(lower.OUT),
+            "campaign": artifact(campaign_path),
+            "base_coordinate_packet": artifact(base_packet_path),
+        },
+        "base_quotient": {
+            "ideal": "(K,E,C)",
+            "cached_generators": cache_size,
+            "original_cache": artifact(macaulay.BASE_CACHE),
+            "cache": artifact(BASE_STANDARD_CACHE),
+            "certification_script": artifact(BASE_SCRIPT),
+            "certification_output": artifact(BASE_OUTPUT),
+            "cached_ideal_equals_selected_ideal": True,
+            "original_cache_leading_ideal_equals_its_recomputed_standard_basis_leading_ideal": True,
+            "certified_cache_is_the_recomputed_standard_basis": True,
+        },
+        "target_relation_map": {
+            "Cox_degree": [18, 2, 2],
+            "coordinates": len(targets),
+            "scheduled_relation_rows": campaign["matrix"]["rows"],
+            "selected_relation_rows": executed_relation_rows,
+            "explicit_zero_rows": (
+                campaign["matrix"]["rows"] - executed_relation_rows
+            ),
+            "selected_relation_nonzeros": matrix_nonzeros,
+            "exact_rank": TARGET_RANK,
+            "codimension_upper_bound": 1,
+            "custom_nonzero_minor_determinant_packed": int(
+                scalars["MINOR_DETERMINANT_PACKED"]
+            ),
+            "independent_linbox_minor_rank": TARGET_RANK,
+        },
+        "quotient_functional": {
+            "coefficient_encoding": "sum_i coefficient_i*101^i in 1,g,...,g^5",
+            "packed_coefficients_sha256": functional_hash,
+            "packed_coefficients": functional,
+            "normalization_target_coordinate_zero_based": normalization,
+            "normalization_component": component,
+            "normalization_base_exponent": list(exponent),
+            "normalization_basis": monomial_label(component, exponent),
+            "normalization_value_packed": 1,
+            "annihilates_every_campaign_relation_row": True,
+            "artifact": artifact(functional_artifact),
+            "independent_givaro_replay": artifact(functional_output),
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "Cox_monomials_enumerated": fiber2.EXPECTED_TOTAL,
+            "base_quotient_target_coordinates": len(targets),
+            "upper_bound_dimension": 1,
+            "lower_bound_dimension": 1,
+            "dimension": 1,
+            "basis": [monomial_label(component, exponent)],
+            "basis_component": component,
+            "basis_base_exponent": list(exponent),
+        },
+        "checks": {
+            "the_cached_base_ideal_is_independently_proved_equal_to_K_E_C": True,
+            "the_original_cache_is_independently_proved_to_be_a_Groebner_basis": True,
+            "a_recomputed_hash_bound_standard_basis_cache_is_emitted_for_downstream_use": True,
+            "all_base_coordinate_leaders_match_the_certified_cache": True,
+            "every_chunk_script_is_reconstructed_from_the_selected_source_and_balanced_schedule": True,
+            "all_chunk_triples_are_exact_well_formed_and_hash_bound": True,
+            "every_raw_Singular_term_stream_is_independently_replayed_to_the_packed_triples": True,
+            "the_assembled_matrix_is_the_exact_concatenation_of_all_chunks": True,
+            "the_custom_engine_emits_a_nonzero_rank39725_minor": True,
+            "the_declared_adaptive_scheduler_passes_its_exact_ordering_self_test": True,
+            "the_custom_pivot_determinant_is_independently_recomputed": True,
+            "independent_LinBox_Givaro_elimination_finds_the_same_rank39725": True,
+            "both_engines_pass_a_dependence_test_using_the_selected_degree6_minpoly": True,
+            "the_unique_normalized_quotient_functional_annihilates_every_campaign_row": True,
+            "independent_Givaro_arithmetic_replays_the_functional_on_every_campaign_row": True,
+            "the_selected_relation_span_gives_target_dimension_at_most_one": True,
+            "the_independent_selected_R1_theorem_gives_target_dimension_at_least_one": True,
+            "the_selected_ordinary_top_piece_has_dimension_exactly_one": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_the_cached_generators_are_used_with_unverified_isSB_trust": False,
+            "claims_the_39725_minor_is_only_probabilistic": False,
+            "claims_a_full_unrestricted_standard_basis": False,
+            "claims_characteristic_zero_promotion": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+        },
+        "theorem": {
+            "name": "selectedCayleyOrdinaryTopDimensionByExactTargetMacaulayRankSqueezeTheorem",
+            "tier": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_ONE",
+            "statement": (
+                "For the selected F_101^6 Cayley member, an exact selected-source "
+                "target Macaulay map has rank 39,725 in a 39,726-coordinate "
+                "presentation. The independently selected toric R1 theorem gives "
+                "the matching lower bound, so the ordinary top quotient in Cox "
+                "degree (18,2,2) is one-dimensional; the emitted normalized dual "
+                "functional is its exact finite reduction map."
+            ),
+        },
+        "elapsed_seconds": time.time() - started,
+        "next_required_object": (
+            "Adopt this quotient functional as canonical G3AP and execute the "
+            "same-carrier G3AM principal-response rank."
+        ),
+    }
+    require(all(packet["checks"].values()), "certified checks")
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP target Macaulay rank-squeeze certification: PASS "
+        f"coordinates={len(targets)} rank={TARGET_RANK} dimension=1 "
+        f"basis={packet['ordinary_top_piece']['basis'][0]}"
+    )
+
+
+if __name__ == "__main__":
+    main()

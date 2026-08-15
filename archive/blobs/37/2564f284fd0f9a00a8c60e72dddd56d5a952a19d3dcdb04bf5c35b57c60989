@@ -1,0 +1,279 @@
+// Weighted exact minor search with factor-specific multiplication maps.
+
+#define UST_F1016_GREEDY_LIBRARY
+#include "ust_f1016_sparse_column_minor_greedy.cpp"
+
+namespace {
+
+struct MultiplicationMap {
+    std::array<Element, 6> basis_images;
+
+    explicit MultiplicationMap(const Element& factor) {
+        for (std::size_t basis = 0; basis < 6; ++basis) {
+            Element unit;
+            unit.coefficient[basis] = 1;
+            basis_images[basis] = multiply(factor, unit);
+        }
+    }
+
+    Element apply(const Element& value) const {
+        std::array<int, 6> accumulator{};
+        for (std::size_t basis = 0; basis < 6; ++basis) {
+            const int scalar = value.coefficient[basis];
+            if (scalar == 0) {
+                continue;
+            }
+            for (std::size_t output = 0; output < 6; ++output) {
+                accumulator[output] +=
+                    scalar * basis_images[basis].coefficient[output];
+            }
+        }
+        Element result;
+        for (std::size_t output = 0; output < 6; ++output) {
+            result.coefficient[output] =
+                static_cast<std::uint8_t>(mod101(accumulator[output]));
+        }
+        return result;
+    }
+};
+
+class MappedExactEliminator {
+public:
+    MappedExactEliminator(
+        std::size_t rows,
+        std::vector<std::uint32_t> original_to_priority,
+        std::vector<std::uint32_t> priority_to_original)
+        : rows_(rows),
+          original_to_priority_(std::move(original_to_priority)),
+          priority_to_original_(std::move(priority_to_original)),
+          basis_(rows),
+          coefficient_(rows),
+          nonzero_words_((rows + 63) / 64, 0) {}
+
+    void set_original_value(std::uint32_t original_row, const Element& value) {
+        if (is_zero(value)) {
+            throw std::runtime_error("zero matrix entry");
+        }
+        const auto row = original_to_priority_.at(original_row);
+        if (!is_zero(coefficient_[row])) {
+            throw std::runtime_error("duplicate target coordinate in source row");
+        }
+        coefficient_[row] = value;
+        nonzero_words_[row / 64] |= std::uint64_t{1} << (row % 64);
+        ++current_nonzeros_;
+    }
+
+    bool insert(
+        std::uint32_t source_row,
+        std::vector<std::uint32_t>& selected_source_rows,
+        std::vector<std::uint32_t>& pivot_original_rows,
+        std::vector<Element>& pivot_coefficients) {
+        maximum_working_terms_ = std::max(maximum_working_terms_, current_nonzeros_);
+        std::size_t search_from = 0;
+        while (current_nonzeros_ != 0) {
+            const auto pivot = first_nonzero(search_from);
+            if (pivot >= rows_) {
+                throw std::runtime_error("bitset/coefficient inconsistency");
+            }
+            if (basis_[pivot].empty()) {
+                const Element pivot_coefficient = coefficient_[pivot];
+                const Element pivot_inverse = inverse(pivot_coefficient);
+                auto& new_basis = basis_[pivot];
+                new_basis.reserve(current_nonzeros_);
+                for (std::size_t word_index = pivot / 64;
+                     word_index < nonzero_words_.size(); ++word_index) {
+                    auto word = nonzero_words_[word_index];
+                    while (word != 0) {
+                        const auto bit = static_cast<unsigned>(__builtin_ctzll(word));
+                        const auto row =
+                            static_cast<std::uint32_t>(word_index * 64 + bit);
+                        if (row < rows_) {
+                            new_basis.push_back(
+                                Entry{row, multiply(coefficient_[row], pivot_inverse)});
+                            coefficient_[row] = Element{};
+                        }
+                        word &= word - 1;
+                    }
+                    nonzero_words_[word_index] = 0;
+                }
+                basis_terms_ += new_basis.size();
+                current_nonzeros_ = 0;
+                selected_source_rows.push_back(source_row);
+                pivot_original_rows.push_back(priority_to_original_.at(pivot));
+                pivot_coefficients.push_back(pivot_coefficient);
+                ++rank_;
+                return true;
+            }
+
+            const Element factor = coefficient_[pivot];
+            const auto& pivot_basis = basis_[pivot];
+            if (pivot_basis.size() >= 32) {
+                const MultiplicationMap map(factor);
+                for (const auto& entry : pivot_basis) {
+                    apply_update(entry, map.apply(entry.value));
+                }
+            } else {
+                for (const auto& entry : pivot_basis) {
+                    apply_update(entry, multiply(factor, entry.value));
+                }
+            }
+            ++reductions_;
+            coefficient_updates_ += pivot_basis.size();
+            maximum_working_terms_ = std::max(maximum_working_terms_, current_nonzeros_);
+            search_from = pivot;
+        }
+        return false;
+    }
+
+    std::size_t rank() const { return rank_; }
+    std::uint64_t basis_terms() const { return basis_terms_; }
+    std::uint64_t reductions() const { return reductions_; }
+    std::uint64_t coefficient_updates() const { return coefficient_updates_; }
+    std::size_t maximum_working_terms() const { return maximum_working_terms_; }
+
+    std::pair<std::uint32_t, std::vector<Element>> quotient_functional() const {
+        if (rank_ + 1 != rows_) {
+            throw std::runtime_error(
+                "a unique quotient functional requires target rank rows-1");
+        }
+        std::size_t free_priority = rows_;
+        for (std::size_t row = 0; row < rows_; ++row) {
+            if (basis_[row].empty()) {
+                if (free_priority != rows_) {
+                    throw std::runtime_error("more than one free target coordinate");
+                }
+                free_priority = row;
+            }
+        }
+        if (free_priority == rows_) {
+            throw std::runtime_error("missing free target coordinate");
+        }
+
+        std::vector<Element> priority_functional(rows_);
+        priority_functional[free_priority] = one();
+        for (std::size_t reverse = rows_; reverse-- > 0;) {
+            if (basis_[reverse].empty()) {
+                continue;
+            }
+            Element sum;
+            for (const auto& entry : basis_[reverse]) {
+                if (entry.row == reverse) {
+                    if (!(entry.value == one())) {
+                        throw std::runtime_error("non-unit normalized pivot");
+                    }
+                    continue;
+                }
+                if (entry.row < reverse) {
+                    throw std::runtime_error("basis row violates echelon order");
+                }
+                sum = add(
+                    sum, multiply(entry.value, priority_functional[entry.row]));
+            }
+            priority_functional[reverse] = negate(sum);
+        }
+        for (std::size_t pivot = 0; pivot < rows_; ++pivot) {
+            if (basis_[pivot].empty()) {
+                continue;
+            }
+            Element dot;
+            for (const auto& entry : basis_[pivot]) {
+                dot = add(dot, multiply(entry.value, priority_functional[entry.row]));
+            }
+            if (!is_zero(dot)) {
+                throw std::runtime_error("quotient functional basis replay failed");
+            }
+        }
+        std::vector<Element> original_functional(rows_);
+        for (std::size_t priority = 0; priority < rows_; ++priority) {
+            original_functional[priority_to_original_[priority]] =
+                priority_functional[priority];
+        }
+        return {
+            priority_to_original_[free_priority], std::move(original_functional)};
+    }
+
+private:
+    void apply_update(const Entry& entry, const Element& product) {
+        const bool old_nonzero = !is_zero(coefficient_[entry.row]);
+        const Element updated = subtract(coefficient_[entry.row], product);
+        const bool new_nonzero = !is_zero(updated);
+        if (!old_nonzero && new_nonzero) {
+            nonzero_words_[entry.row / 64] |=
+                std::uint64_t{1} << (entry.row % 64);
+            ++current_nonzeros_;
+        } else if (old_nonzero && !new_nonzero) {
+            nonzero_words_[entry.row / 64] &=
+                ~(std::uint64_t{1} << (entry.row % 64));
+            --current_nonzeros_;
+        }
+        coefficient_[entry.row] = updated;
+    }
+
+    std::size_t first_nonzero(std::size_t start) const {
+        std::size_t word_index = start / 64;
+        if (word_index >= nonzero_words_.size()) {
+            return rows_;
+        }
+        auto word = nonzero_words_[word_index];
+        word &= (~std::uint64_t{0}) << (start % 64);
+        while (true) {
+            if (word != 0) {
+                return word_index * 64 + static_cast<unsigned>(__builtin_ctzll(word));
+            }
+            ++word_index;
+            if (word_index >= nonzero_words_.size()) {
+                return rows_;
+            }
+            word = nonzero_words_[word_index];
+        }
+    }
+
+    std::size_t rows_;
+    std::vector<std::uint32_t> original_to_priority_;
+    std::vector<std::uint32_t> priority_to_original_;
+    std::vector<std::vector<Entry>> basis_;
+    std::vector<Element> coefficient_;
+    std::vector<std::uint64_t> nonzero_words_;
+    std::size_t current_nonzeros_{};
+    std::size_t rank_{};
+    std::uint64_t basis_terms_{};
+    std::uint64_t reductions_{};
+    std::uint64_t coefficient_updates_{};
+    std::size_t maximum_working_terms_{};
+};
+
+void self_test_multiplication_map() {
+    std::uint64_t state = 0x9e3779b97f4a7c15ULL;
+    for (std::size_t trial = 0; trial < 2048; ++trial) {
+        state ^= state << 7;
+        state ^= state >> 9;
+        state ^= state << 8;
+        const Element factor = unpack(state % kFieldOrder);
+        state ^= state << 7;
+        state ^= state >> 9;
+        state ^= state << 8;
+        const Element value = unpack(state % kFieldOrder);
+        const MultiplicationMap map(factor);
+        if (!(map.apply(value) == multiply(factor, value))) {
+            throw std::runtime_error("multiplication-map equivalence self-test failed");
+        }
+    }
+}
+
+}  // namespace
+
+#define ExactEliminator MappedExactEliminator
+#define main ust_f1016_sparse_column_minor_weighted_fast_inner_main
+#include "ust_f1016_sparse_column_minor_weighted.cpp"
+#undef main
+#undef ExactEliminator
+
+int main(int argc, char** argv) {
+    try {
+        self_test_multiplication_map();
+    } catch (const std::exception& error) {
+        std::cerr << "ERROR " << error.what() << '\n';
+        return 1;
+    }
+    return ust_f1016_sparse_column_minor_weighted_fast_inner_main(argc, argv);
+}

@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""Promote the exact/modular residual cutset to the component-16 decision."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+G3EJ = ROOT / "state/ust_g3ej_h02_component12_exact_kernel_promotion.packet.json"
+G3DX = ROOT / "state/ust_g3dx_h02_prefix_structural_gap_localization.packet.json"
+G3EK = ROOT / "evidence/ust_g3ek/H02.component16.cohomological_source_cutset.json"
+G3EL = ROOT / "evidence/ust_g3el/H02.component16.unit_pivot_reduction.json"
+G3EQ = ROOT / "evidence/ust_g3eq/H02.component16.independent_rows.json"
+G3ET = ROOT / "evidence/ust_g3et/H02.component16.checkpoint_recovery_rows.json"
+G3ET_RECOVERY = ROOT / "evidence/ust_g3et/H02.component16.recovered_kernel_certificate.json"
+CUTSET = ROOT / "evidence/ust_g3eu/H02.component16.omitted_rows.txt"
+AUDIT = ROOT / "evidence/ust_g3eu/H02.component16.exact_audit_rows.json"
+MODULAR_MAP = ROOT / "evidence/ust_g3eu/H02.component16.residual_mod_p80021_g8288.nmr"
+MODULAR_CERTIFICATE = ROOT / "evidence/ust_g3eu/H02.component16.modular_residual_witness.json"
+MODULAR_CAMPAIGN = ROOT / "evidence/ust_g3eu/H02.component16.modular_residual_campaign.json"
+EXACT_RANK_CERTIFICATE = ROOT / "evidence/ust_g3eu/H02.component16.exact_residual_rank_certificate.json"
+EXACT_MAP_CANDIDATES = (
+    ROOT / "evidence/ust_g3et/H02.component16.exact_residual_map.nfr",
+    ROOT / "evidence/ust_g3eu/H02.component16.exact_residual_map.no_rank.nfr",
+)
+NATIVE_REPLAY = ROOT / "native/ust_nf_kernel_replay.c"
+OUT = ROOT / "state/ust_g3eu_h02_component16_exact_residual_adjudication.packet.json"
+
+ROWS = 1238
+COLUMNS = 1221
+RELATIONS = 21
+DEGREE = 6
+SUBSYSTEM_RANK = 1200
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_cutset() -> list[int]:
+    values = [int(value) for value in CUTSET.read_text(encoding="ascii").split()]
+    require(values and values[0] == len(values) - 1, "cutset count")
+    rows = [value - 1 for value in values[1:]]
+    require(rows == sorted(set(rows)), "cutset ordered unique rows")
+    return rows
+
+
+def select_exact_map() -> Path:
+    complete: list[Path] = []
+    for path in EXACT_MAP_CANDIDATES:
+        if not path.is_file():
+            continue
+        with path.open("r", encoding="ascii") as handle:
+            header = handle.readline().split()
+            if len(header) != 4:
+                continue
+            defect_rows, relations, degree, _ = map(int, header)
+            lines = sum(1 for _ in handle)
+        if relations == RELATIONS and degree == DEGREE and lines == defect_rows * RELATIONS:
+            complete.append(path)
+    require(bool(complete), "complete exact residual map")
+    return complete[0]
+
+
+def load_exact_map(path: Path) -> tuple[int, list[int], dict[int, list[list[tuple[int, int]]]], int]:
+    with path.open("r", encoding="ascii") as handle:
+        defect_rows, relations, degree, declared_rank = map(int, handle.readline().split())
+        require(relations == RELATIONS and degree == DEGREE, "exact map shape")
+        source_rows: list[int] = []
+        payload: dict[int, list[list[tuple[int, int]]]] = {}
+        lines = 0
+        for line in handle:
+            values = line.split()
+            require(len(values) == 2 + DEGREE, "exact map line width")
+            source_row = int(values[0]) - 1
+            relation = int(values[1]) - 1
+            require(relation == lines % RELATIONS, "exact map relation order")
+            if relation == 0:
+                source_rows.append(source_row)
+                payload[source_row] = [[] for _ in range(RELATIONS)]
+            require(source_rows[-1] == source_row, "exact map source grouping")
+            coefficients: list[tuple[int, int]] = []
+            for value in values[2:]:
+                numerator, denominator = value.split("/", maxsplit=1)
+                coefficients.append((int(numerator), int(denominator)))
+            payload[source_row][relation] = coefficients
+            lines += 1
+    require(len(source_rows) == defect_rows, "exact map defect count")
+    require(source_rows == sorted(set(source_rows)), "exact map ordered source rows")
+    require(lines == defect_rows * RELATIONS, "complete exact map")
+    nonzero_slots = sum(
+        any(numerator != 0 for numerator, _ in coefficients)
+        for row in payload.values()
+        for coefficients in row
+    )
+    return declared_rank, source_rows, payload, nonzero_slots
+
+
+def load_modular_map() -> tuple[int, int, int, list[int], dict[int, list[int]]]:
+    with MODULAR_MAP.open("r", encoding="ascii") as handle:
+        rows, relations, prime, gamma, rank, _ = map(int, handle.readline().split())
+        require(relations == RELATIONS, "modular relation count")
+        source_rows: list[int] = []
+        payload: dict[int, list[int]] = {}
+        lines = 0
+        for line in handle:
+            source_row_one, relation_one, value = map(int, line.split())
+            source_row = source_row_one - 1
+            relation = relation_one - 1
+            require(relation == lines % RELATIONS, "modular relation order")
+            if relation == 0:
+                source_rows.append(source_row)
+                payload[source_row] = [0] * RELATIONS
+            require(source_rows[-1] == source_row, "modular source grouping")
+            payload[source_row][relation] = value
+            lines += 1
+    require(len(source_rows) == rows, "modular row count")
+    require(lines == rows * RELATIONS, "complete modular map")
+    return prime, gamma, rank, source_rows, payload
+
+
+def specialize(coefficients: list[tuple[int, int]], prime: int, gamma: int) -> int:
+    value = 0
+    for numerator, denominator in reversed(coefficients):
+        denominator_mod = denominator % prime
+        require(denominator_mod != 0, "specialization denominator")
+        coefficient = numerator % prime * pow(denominator_mod, -1, prime) % prime
+        value = (value * gamma + coefficient) % prime
+    return value
+
+
+def main() -> None:
+    g3ej, g3dx, g3ek, g3el, g3eq, g3et, g3et_recovery, audit = map(
+        load, (G3EJ, G3DX, G3EK, G3EL, G3EQ, G3ET, G3ET_RECOVERY, AUDIT)
+    )
+    modular_campaign = load(MODULAR_CAMPAIGN)
+    modular_certificate = load(MODULAR_CERTIFICATE)
+    exact_rank_certificate = load(EXACT_RANK_CERTIFICATE)
+    cutset = load_cutset()
+    exact_map = select_exact_map()
+    declared_exact_rank, exact_source_rows, exact_payload, exact_nonzero_slots = load_exact_map(exact_map)
+    prime, gamma, modular_rank, modular_source_rows, modular_payload = load_modular_map()
+
+    require(g3ej["rank_promotion"]["promoted_global_Q_rank_interval"] == [4748, 5102], "incoming interval")
+    require(g3ek["exact_presentation"]["shape"] == [42706, 1829], "G3EK shape")
+    require(g3el["output"]["shape"] == [ROWS, COLUMNS], "G3EL reduced shape")
+    contractions = int(g3el["paired_v_elimination"]["pivots"]) + int(g3el["monic_w_square_elimination"]["pivots"])
+    require(contractions == 608, "kernel-preserving contractions")
+    require(g3eq["theorem_status"]["exact_lower_rank"] == SUBSYSTEM_RANK, "subsystem exact lower rank")
+    selected_rows = set(g3eq["specialization"]["selected_source_rows_zero_based"])
+    require(len(selected_rows) == SUBSYSTEM_RANK, "selected subsystem rows")
+    require(set(cutset) == set(range(ROWS)) - selected_rows, "exact omitted-row complement")
+    recovery_rows = set(g3et["selected_source_rows_zero_based"])
+    selected_audit_rows = set(audit["selected_audit_rows_zero_based"])
+    require(len(recovery_rows) == 800, "exact recovery rows")
+    require(all(g3et_recovery["checks"].values()), "recovered kernel certificate")
+    require(len(selected_audit_rows) == 400, "selected audit rows")
+    require(recovery_rows | selected_audit_rows == selected_rows, "selected row partition")
+    require(recovery_rows.isdisjoint(selected_audit_rows), "selected partition disjoint")
+    require(set(audit["omitted_rows_zero_based"]) == set(cutset), "audit omitted rows")
+
+    require(set(exact_source_rows) <= set(cutset), "exact defects confined to omitted rows")
+    require(modular_source_rows == cutset, "modular map cutset")
+    require(declared_exact_rank in (-1, RELATIONS), "exact map rank marker")
+    require(0 <= modular_rank <= RELATIONS, "modular residual rank")
+    require(
+        modular_certificate["residual_map"]["native_rank"] == modular_rank,
+        "modular archive certificate rank",
+    )
+    require(
+        modular_certificate["witness_sha256"] == sha256(MODULAR_MAP),
+        "modular archive certificate map",
+    )
+    require(modular_campaign["exact_residual_rank_lower_bound"] >= modular_rank, "campaign lower bound")
+    exact_residual_rank = int(
+        exact_rank_certificate["rank_certificate"][
+            "independent_python_flint_quotient_rank"
+        ]
+    )
+    require(modular_rank <= exact_residual_rank <= RELATIONS, "exact residual rank bounds")
+    require(
+        exact_rank_certificate["residual_map_sha256"] == sha256(exact_map),
+        "exact rank certificate residual map",
+    )
+
+    comparison_slots = 0
+    for source_row in cutset:
+        exact_row = exact_payload.get(source_row)
+        for relation in range(RELATIONS):
+            expected = 0 if exact_row is None else specialize(exact_row[relation], prime, gamma)
+            require(expected == modular_payload[source_row][relation], "literal exact/modular residual agreement")
+            comparison_slots += 1
+    require(comparison_slots == len(cutset) * RELATIONS == 798, "comparison slot count")
+
+    exact_subsystem_rank = SUBSYSTEM_RANK
+    exact_subsystem_nullity = RELATIONS
+    exact_full_reduced_rank = exact_subsystem_rank + exact_residual_rank
+    exact_full_reduced_nullity = COLUMNS - exact_full_reduced_rank
+    exact_source_rank = exact_full_reduced_rank + contractions
+    component16_rank = exact_source_rank - 1670
+    require(exact_full_reduced_rank + exact_full_reduced_nullity == COLUMNS, "full reduced rank-nullity")
+    require(exact_source_rank == 1808 + exact_residual_rank, "source rank")
+    require(component16_rank == 138 + exact_residual_rank, "component16 rank")
+    global_upper = 5081 + exact_residual_rank
+    global_gap = global_upper - 4748
+    lifted_directions = RELATIONS - exact_residual_rank
+    nonlifting_directions = exact_residual_rank
+    if exact_residual_rank == 0:
+        lift_label = "FULL_LIFT"
+    elif exact_residual_rank == RELATIONS:
+        lift_label = "NO_LIFT"
+    else:
+        lift_label = "PARTIAL_LIFT"
+
+    component20 = next(row for row in g3dx["prefix_gap_localization"]["component_rows"] if int(row["component"]) == 20)
+    require(component20["gap_increment"] == 100, "next component20 gap")
+
+    packet = {
+        "schema": "mtt.unified-source.g3eu-h02-component16-exact-residual-adjudication.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3EU",
+        "status": (
+            f"CLOSED_EXACT_H02_COMPONENT16_{lift_label}_RANK"
+            f"{component16_rank}_GLOBAL_UPPER{global_upper}"
+        ),
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3EJ": record(G3EJ),
+            "G3DX": record(G3DX),
+            "G3EK": record(G3EK),
+            "G3EL": record(G3EL),
+            "G3EQ": record(G3EQ),
+            "G3ET": record(G3ET),
+            "G3ET_recovered_kernel": record(G3ET_RECOVERY),
+            "cutset": record(CUTSET),
+            "audit_rows": record(AUDIT),
+            "exact_residual_map": record(exact_map),
+            "modular_residual_map": record(MODULAR_MAP),
+            "modular_witness_certificate": record(MODULAR_CERTIFICATE),
+            "modular_residual_campaign": record(MODULAR_CAMPAIGN),
+            "exact_residual_rank_certificate": record(EXACT_RANK_CERTIFICATE),
+            "native_replay_source": record(NATIVE_REPLAY),
+        },
+        "exact_subsystem_certificate": {
+            "matrix_shape": [ROWS, COLUMNS],
+            "selected_rows": SUBSYSTEM_RANK,
+            "exact_recovery_rows": 800,
+            "literal_exact_audit_rows": 400,
+            "exact_rank": exact_subsystem_rank,
+            "exact_nullity": exact_subsystem_nullity,
+            "free_coordinate_identity_checked_by_native_replay": True,
+            "literal_selected_audit_residual_nonzero_slots": 0,
+            "combined_selected_row_residual_nonzero_slots": 0,
+        },
+        "residual_adjudication": {
+            "exact_defect_rows": len(exact_source_rows),
+            "exact_defect_source_rows_zero_based": exact_source_rows,
+            "exact_nonzero_slots": exact_nonzero_slots,
+            "all_exact_defects_are_omitted_rows": True,
+            "good_specialization": {"prime": prime, "gamma": gamma},
+            "exact_to_modular_comparison_slots": comparison_slots,
+            "exact_to_modular_mismatches": 0,
+            "displayed_specialized_residual_rank": modular_rank,
+            "residual_column_upper_bound": RELATIONS,
+            "exact_residual_rank": exact_residual_rank,
+        },
+        "rank_adjudication": {
+            "exact_full_reduced_rank": exact_full_reduced_rank,
+            "exact_full_reduced_nullity": exact_full_reduced_nullity,
+            "kernel_preserving_contractions_reversed": contractions,
+            "exact_source_presentation_rank": exact_source_rank,
+            "component16_dimension": 159,
+            "exact_component16_rank_increment": component16_rank,
+            "finite_component16_rank_increment": 138,
+            "finite_kernel_directions_that_lift": lifted_directions,
+            "finite_kernel_directions_that_do_not_lift": nonlifting_directions,
+            "previous_global_Q_rank_interval": [4748, 5102],
+            "certified_global_Q_rank_interval": [4748, global_upper],
+            "remaining_global_gap": global_gap,
+            "next_positive_gap_component": 20,
+            "next_positive_gap_units": 100,
+        },
+        "checks": {
+            "rank1200_subsystem_is_exact_and_has21_independent_kernel_columns": True,
+            "exact_recovery_and_literal_complement_audit_cover_all1200_selected_rows": True,
+            "all_exact_defects_are_confined_to_the38_omitted_rows": True,
+            "new_good_specialization_matches_the_exact_residual_map_in798_slots": True,
+            "exact_adjugate_or_quotient_elimination_proves_the_residual_rank": True,
+            "component16_rank_and_nullity_follow_by_exact_rank_nullity": True,
+            "global_upper_endpoint_uses_the_exact_component16_increment": True,
+        },
+        "guardrails": {
+            "claims_all21_finite_kernel_directions_lift_to_Qgamma": False,
+            "claims_global_H02_rank_equals4748": False,
+            "claims_remaining_global_gap_is_closed": False,
+            "claims_selected_evolving_source_or_path_execution": False,
+            "claims_physical_endpoint_or_master_operator": False,
+        },
+        "theorem": {
+            "statement": (
+                "The selected1200-row component16 subsystem has exact rank1200 and a "
+                "displayed21-column kernel basis. Exact recovery enforces800 selected "
+                "rows and literal Q(gamma) replay vanishes on the complementary400; "
+                "all exact defects lie in the38 omitted rows. Exact quotient-field "
+                f"factorization gives residual rank{exact_residual_rank}. The full "
+                f"reduced matrix therefore has rank{exact_full_reduced_rank} and "
+                f"nullity{exact_full_reduced_nullity}; reversing608 exact contractions "
+                f"gives component16 rank{component16_rank}. Exactly{lifted_directions} "
+                f"of the21 finite kernel directions lift to characteristic zero and "
+                f"{nonlifting_directions} do not, tightening the global interval to"
+                f"4748..{global_upper}."
+            ),
+            "tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_COMPONENT_LIFT_ADJUDICATION",
+        },
+        "frontier_delta": {
+            "before": "Component16 had finite rank138 and nullity21, but the characteristic-zero fate of those21 relations was undecided.",
+            "after": (
+                f"The exact residual map has rank{exact_residual_rank}; "
+                f"{lifted_directions} finite relations lift and {nonlifting_directions} "
+                f"do not. Component16 is frozen at exact rank{component16_rank}, and "
+                f"the global interval is4748..{global_upper}."
+            ),
+        },
+        "next_required_object": (
+            "Freeze components0,9,12,16. Inspect only ordered component20's100-unit "
+            "gap and require the same exact lift-or-no-lift adjudication before any "
+            "later component or global-rank claim."
+        ),
+    }
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3EU component16 exact residual adjudication: PASS")
+    print(
+        f"residual_rank={exact_residual_rank} full_reduced_rank={exact_full_reduced_rank} "
+        f"component16_rank={component16_rank}"
+    )
+    print(
+        f"global_interval=4748..{global_upper} remaining_gap={global_gap} "
+        "next=component20:100"
+    )
+
+
+if __name__ == "__main__":
+    main()

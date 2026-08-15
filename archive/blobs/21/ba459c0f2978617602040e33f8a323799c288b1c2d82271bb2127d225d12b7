@@ -1,0 +1,514 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3cn"
+OUT = ROOT / "state" / "ust_g3cn_pole_six_family_transform_first_jet.packet.json"
+PRIME = 11
+GAMMA_ROOT = 3
+ACTIVE_GENERATORS = {
+    "dPhi/dx": 0,
+    "dPhi/dy": 1,
+    "dPhi/dz": 2,
+    "dPhi/dt0": 4,
+    "dPhi/ds": 9,
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "q79_eta9_targeted_original_jacobian_macaulay_schedule.packet.json").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def evaluate_gamma(coefficients: list[int]) -> int:
+    return sum(
+        int(value) * pow(GAMMA_ROOT, degree, PRIME)
+        for degree, value in enumerate(coefficients)
+    ) % PRIME
+
+
+def correction_derivatives(
+    g3bi: dict[str, Any],
+) -> tuple[
+    dict[str, list[tuple[int, tuple[int, ...]]]],
+    dict[str, int],
+    list[int],
+]:
+    derivatives: dict[str, list[tuple[int, tuple[int, ...]]]] = {
+        name: [] for name in ACTIVE_GENERATORS
+    }
+    seen: dict[str, set[tuple[int, ...]]] = {name: set() for name in ACTIVE_GENERATORS}
+    exact_counts = {name: 0 for name in ACTIVE_GENERATORS}
+    vanished_source_rows: list[int] = []
+    for source_row, row in enumerate(g3bi["exact_construction"]["right_inverse_rows"]):
+        exact_coordinates = [int(value) for value in row["correction_gamma_coordinates"]]
+        require(any(exact_coordinates), "nonzero exact correction coefficient")
+        coefficient = evaluate_gamma(
+            exact_coordinates
+        )
+        if coefficient == 0:
+            vanished_source_rows.append(source_row)
+        xyz = tuple(int(value) for value in row["source_monomial"])
+        exponent = xyz + (0, 1, 0, 0, 0, 0, 1)
+        require(len(exponent) == 10, "ten-variable correction exponent")
+        for name, variable in ACTIVE_GENERATORS.items():
+            power = exponent[variable]
+            if power == 0:
+                continue
+            exact_counts[name] += 1
+            derived = list(exponent)
+            derived[variable] -= 1
+            derived_tuple = tuple(derived)
+            if coefficient == 0:
+                continue
+            require(derived_tuple not in seen[name], f"distinct {name} derivative terms")
+            seen[name].add(derived_tuple)
+            derivatives[name].append(((coefficient * power) % PRIME, derived_tuple))
+    expected = {
+        "dPhi/dx": 17,
+        "dPhi/dy": 9,
+        "dPhi/dz": 17,
+        "dPhi/dt0": 19,
+        "dPhi/ds": 19,
+    }
+    require(exact_counts == expected, "exact derivative support counts")
+    require(len(vanished_source_rows) == 1, "one correction coefficient vanishes at proof place")
+    require(sum(1 for row in g3bi["exact_construction"]["right_inverse_rows"] if evaluate_gamma([int(value) for value in row["correction_gamma_coordinates"]])) == 18, "eighteen correction terms at proof place")
+    return derivatives, exact_counts, vanished_source_rows
+
+
+def normalized(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc().astype(np.int32)
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def exact_difference_nonzeros(left: sparse.spmatrix, right: sparse.spmatrix) -> int:
+    return int(normalized(left.astype(np.int32) - right.astype(np.int32)).nnz)
+
+
+def build_selected_update(
+    group: dict[str, Any],
+    selected_columns: list[int],
+    derivatives: dict[str, list[tuple[int, tuple[int, ...]]]],
+    exact_derivative_counts: dict[str, int],
+    macaulay: Any,
+) -> tuple[sparse.csc_matrix, dict[str, int], int]:
+    target_monomials = macaulay.monomials_of_cox_degree(tuple(group["Cox_degree"]))
+    target_lookup = {tuple(row): index for index, row in enumerate(target_monomials)}
+    require(
+        len(target_lookup) == int(group["target_monomial_basis"]["dimension"]),
+        "target basis dimension",
+    )
+    selected_position = {int(column): index for index, column in enumerate(selected_columns)}
+    require(len(selected_position) == len(selected_columns), "distinct selected columns")
+
+    row_indices: list[int] = []
+    column_indices: list[int] = []
+    data: list[int] = []
+    active_counts = {name: 0 for name in ACTIVE_GENERATORS}
+    for block in group["Macaulay_matrix"]["column_blocks"]:
+        name = block["generator_name"]
+        if name not in ACTIVE_GENERATORS:
+            continue
+        multipliers = macaulay.monomials_of_cox_degree(
+            tuple(int(value) for value in block["coefficient_Cox_degree"])
+        )
+        require(len(multipliers) == int(block["multiplier_monomials"]), "multiplier count")
+        first = int(block["first_column"])
+        for offset, multiplier in enumerate(multipliers):
+            position = selected_position.get(first + offset)
+            if position is None:
+                continue
+            active_counts[name] += 1
+            multiplier_tuple = tuple(int(value) for value in multiplier)
+            for coefficient, derivative_exponent in derivatives[name]:
+                product = tuple(
+                    multiplier_tuple[index] + derivative_exponent[index]
+                    for index in range(10)
+                )
+                target_row = target_lookup.get(product)
+                require(target_row is not None, "family update product target")
+                row_indices.append(target_row)
+                column_indices.append(position)
+                data.append(coefficient)
+
+    update = sparse.csc_matrix(
+        (
+            np.asarray(data, dtype=np.int32),
+            (
+                np.asarray(row_indices, dtype=np.int32),
+                np.asarray(column_indices, dtype=np.int32),
+            ),
+        ),
+        shape=(len(target_monomials), len(selected_columns)),
+        dtype=np.int32,
+    )
+    update = normalized(update)
+    expected_nonzeros = sum(
+        active_counts[name] * len(derivatives[name]) for name in ACTIVE_GENERATORS
+    )
+    require(update.nnz == expected_nonzeros, "exact selected update nonzeros")
+    exact_nonzeros = sum(
+        active_counts[name] * exact_derivative_counts[name]
+        for name in ACTIVE_GENERATORS
+    )
+    return update, active_counts, exact_nonzeros
+
+
+def solve_coordinates(
+    mld: Path,
+    source: Path,
+    factorization: Path,
+    rhs_path: Path,
+    output_path: Path,
+    log_path: Path,
+    solver_io: Any,
+    timeout: float,
+) -> sparse.csc_matrix:
+    solver = mld / "solve_q79_eta9_original_jacobian_coordinates"
+    require(solver.is_file(), "coordinate solver")
+    command = " ".join(
+        shlex.quote(value)
+        for value in (
+            solver_io.wsl_path(solver),
+            "--source",
+            solver_io.wsl_path(source),
+            "--factorization",
+            solver_io.wsl_path(factorization),
+            "--rhs",
+            solver_io.wsl_path(rhs_path),
+            "--output",
+            solver_io.wsl_path(output_path),
+            "--progress-seconds",
+            "30",
+        )
+    )
+    completed = subprocess.run(
+        ["wsl", "sh", "-lc", command],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    combined = completed.stdout + completed.stderr
+    log_path.write_text(combined, encoding="utf-8")
+    require("SUCCESS" in combined, "coordinate solver success")
+    coordinates, _, _ = solver_io.read_coordinates(output_path)
+    return coordinates
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--group-start", type=int, default=0)
+    parser.add_argument("--group-stop", type=int, default=30)
+    parser.add_argument("--timeout", type=float, default=1800.0)
+    args = parser.parse_args()
+    require(0 <= args.group_start < args.group_stop <= 30, "group interval")
+
+    mld = resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_original_jacobian_macaulay as macaulay
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    schedule_path = mld / "q79_eta9_targeted_original_jacobian_macaulay_schedule.packet.json"
+    schedule = load(schedule_path)
+    g3bi = load(G3BI)
+    require(all(schedule["checks"].values()) and all(g3bi["checks"].values()), "input checks")
+    groups = schedule["groups_in_selected_order"]
+    require(len(groups) == 30, "thirty transform groups")
+    derivatives, exact_derivative_counts, vanished_source_rows = correction_derivatives(g3bi)
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+
+    summaries: list[dict[str, Any]] = []
+    total_active = 0
+    total_exact_update_nonzeros = 0
+    total_good_reduction_update_nonzeros = 0
+    total_quotient_nonzeros = 0
+    groups_with_quotient_jet: list[int] = []
+    for group in groups[args.group_start : args.group_stop]:
+        index = int(group["group_index"])
+        if index == 0:
+            summaries.append(
+                {
+                    "group_index": 0,
+                    "Cox_degree": group["Cox_degree"],
+                    "ambient_dimension": int(group["ambient_monomials"]),
+                    "selected_generators": int(group["selected_generator_count"]),
+                    "quotient_units": int(group["standard_monomial_quotient_dimension"]),
+                    "active_update_columns": 0,
+                    "update_nonzero_entries": 0,
+                    "first_jet_quotient_nonzero_entries": 0,
+                "reason": "the unique image column belongs to dPhi/du, which the selected correction does not change",
+                }
+            )
+            continue
+
+        stem = f"group_{index:02d}"
+        group_path = mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"{stem}.packet.json"
+        factor_packet_path = mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"{stem}.factor.packet.json"
+        solution_packet_path = mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"{stem}.solution.packet.json"
+        group_packet = load(group_path)
+        factor_packet = load(factor_packet_path)
+        solution_packet = load(solution_packet_path)
+        require(all(group_packet["checks"].values()), f"group {index} checks")
+        require(all(factor_packet["checks"].values()), f"factor {index} checks")
+        require(all(solution_packet["checks"].values()), f"solution {index} checks")
+        require(group_packet["Cox_degree"] == group["Cox_degree"], f"group {index} degree")
+
+        selected_columns = [
+            int(value)
+            for value in factor_packet["selected_original_Jacobian_matrix_columns_zero_based"]
+        ]
+        quotient_units = int(factor_packet["dimensions"]["quotient_units"])
+        image_rank = int(factor_packet["dimensions"]["certified_image_rank"])
+        require(len(selected_columns) == image_rank, f"group {index} selected image rank")
+        update, active_counts, exact_update_nonzeros = build_selected_update(
+            group_packet,
+            selected_columns,
+            derivatives,
+            exact_derivative_counts,
+            macaulay,
+        )
+        active_columns = sum(active_counts.values())
+        require(active_columns == int(np.count_nonzero(np.diff(update.indptr))), f"group {index} active columns")
+
+        old_coordinates_path = mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"{stem}.coordinates.cscbin"
+        old_coordinates, old_q, old_rank = solver_io.read_coordinates(old_coordinates_path)
+        require((old_q, old_rank) == (quotient_units, image_rank), f"group {index} coordinate split")
+        require(old_coordinates.shape[0] == quotient_units + image_rank, f"group {index} coordinate rows")
+        image_coordinates = old_coordinates[quotient_units:, :]
+        rhs = normalized(-(update.astype(np.int32) @ image_coordinates.astype(np.int32)))
+
+        update_path = EVIDENCE / f"{stem}.family_update.mod11.npz"
+        rhs_path = EVIDENCE / f"{stem}.first_jet.rhs.cscbin"
+        coordinate_path = EVIDENCE / f"{stem}.first_jet.coordinates.cscbin"
+        log_path = EVIDENCE / f"{stem}.first_jet.solver.out"
+        sparse.save_npz(update_path, update.astype(np.uint8), compressed=True)
+        solver_io.write_rhs(rhs_path, rhs)
+        source_path = mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"{stem}.cscbin"
+        factorization_path = Path(factor_packet["inputs"]["factorization_binary"]["path"])
+        first_jet = solve_coordinates(
+            mld,
+            source_path,
+            factorization_path,
+            rhs_path,
+            coordinate_path,
+            log_path,
+            solver_io,
+            args.timeout,
+        )
+        jet_q, jet_rank = solver_io.read_coordinates(coordinate_path)[1:]
+        require((jet_q, jet_rank) == (quotient_units, image_rank), f"group {index} jet split")
+
+        matrix_path = mld / "eta9_targeted_original_jacobian_macaulay_groups" / f"{stem}.macaulay.npz"
+        matrix = sparse.load_npz(matrix_path).tocsc()
+        quotient_rows = np.asarray(
+            group_packet["Macaulay_matrix"]["quotient_unit_rows_zero_based"],
+            dtype=np.int32,
+        )
+        quotient = sparse.csc_matrix(
+            (
+                np.ones(quotient_units, dtype=np.uint8),
+                (quotient_rows, np.arange(quotient_units, dtype=np.int32)),
+            ),
+            shape=(matrix.shape[0], quotient_units),
+        )
+        chart = sparse.hstack([quotient, matrix[:, selected_columns]], format="csc")
+        reconstruction = normalized(chart.astype(np.int32) @ first_jet.astype(np.int32))
+        residual_nonzeros = exact_difference_nonzeros(reconstruction, rhs)
+        require(residual_nonzeros == 0, f"group {index} first-jet reconstruction")
+        quotient_nonzeros = int(first_jet[:quotient_units, :].nnz)
+        if quotient_nonzeros:
+            groups_with_quotient_jet.append(index)
+
+        total_active += active_columns
+        total_exact_update_nonzeros += exact_update_nonzeros
+        total_good_reduction_update_nonzeros += int(update.nnz)
+        total_quotient_nonzeros += quotient_nonzeros
+        summaries.append(
+            {
+                "group_index": index,
+                "Cox_degree": group["Cox_degree"],
+                "ambient_dimension": int(group["ambient_monomials"]),
+                "selected_generators": int(group["selected_generator_count"]),
+                "quotient_units": quotient_units,
+                "active_update_columns": active_columns,
+                "active_columns_by_generator": active_counts,
+                "woodbury_core_dimension_upper_bound": active_columns,
+                "exact_update_nonzero_entries_over_Q_gamma": exact_update_nonzeros,
+                "good_reduction_update_nonzero_entries": int(update.nnz),
+                "first_jet_rhs_columns": int(rhs.shape[1]),
+                "first_jet_rhs_nonzero_entries": int(rhs.nnz),
+                "first_jet_coordinate_nonzero_entries": int(first_jet.nnz),
+                "first_jet_quotient_nonzero_entries": quotient_nonzeros,
+                "first_jet_reconstruction_residual_nonzeros": residual_nonzeros,
+                "inputs": {
+                    "group": external_record(group_path, mld),
+                    "factorization": external_record(factorization_path, mld),
+                    "old_coordinates": external_record(old_coordinates_path, mld),
+                },
+                "artifacts": {
+                    "family_update_mod11": local_record(update_path),
+                    "first_jet_rhs": local_record(rhs_path),
+                    "first_jet_coordinates": local_record(coordinate_path),
+                    "solver_log": local_record(log_path),
+                },
+            }
+        )
+
+    partial = args.group_start != 0 or args.group_stop != 30
+    packet = {
+        "schema": "mtt.unified-source.g3cn-pole-six-family-transform-first-jet.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CN",
+        "status": (
+            "PARTIAL_EXACT_GF11_POLE_SIX_FAMILY_TRANSFORM_FIRST_JET"
+            if partial
+            else "CLOSED_EXACT_POLE_SIX_THIRTY_CHART_WOODBURY_ATLAS_AND_GF11_FIRST_JET"
+        ),
+        "field": "structural identities over Q(gamma)(a); executed first jet at GF(11), gamma=3, a=0",
+        "inputs": {
+            "G3BI": local_record(G3BI),
+            "targeted_transform_schedule": external_record(schedule_path, mld),
+        },
+        "family": {
+            "formula": "Phi(a)=Phi_B89+a*s*t0*C, with C the 19-term G3BI correction",
+            "changed_original_Jacobian_generators": list(ACTIVE_GENERATORS),
+            "unchanged_original_Jacobian_generators": [
+                "dPhi/dw",
+                "dPhi/dt1",
+                "dPhi/dt2",
+                "dPhi/du",
+                "dPhi/dv",
+            ],
+            "exact_derivative_support_counts": exact_derivative_counts,
+            "good_reduction_derivative_support_counts": {
+                name: len(rows) for name, rows in derivatives.items()
+            },
+            "correction_source_rows_vanishing_at_proof_place": vanished_source_rows,
+        },
+        "woodbury_atlas": {
+            "chart_count": len(summaries),
+            "selected_Groebner_generators": sum(row["selected_generators"] for row in summaries),
+            "identity": "C_delta(a)=C_delta(0)+a U_delta E_delta^T",
+            "inverse_formula": "C_delta(a)^-1=C0^-1-a C0^-1 U_delta (I+a E_delta^T C0^-1 U_delta)^-1 E_delta^T C0^-1",
+            "determinant_formula": "det C_delta(a)=det C0 * det(I+a E_delta^T C0^-1 U_delta)",
+            "total_active_update_columns": total_active,
+            "maximum_core_dimension_upper_bound": max(
+                row["active_update_columns"] for row in summaries
+            ),
+            "total_exact_update_nonzero_entries_over_Q_gamma": total_exact_update_nonzeros,
+            "total_good_reduction_update_nonzero_entries": total_good_reduction_update_nonzeros,
+            "interior_domain": "every 0<t<1 G3BJ value is transcendental and avoids the algebraic zeros of each nonzero chart determinant",
+            "endpoint_note": "a=0 is the certified base chart; the algebraic a=1 endpoint requires a direct unit test or alternate initializer for any chart used there",
+        },
+        "first_jet": {
+            "equation": "C_delta(0) X_delta'(0)=-U_delta E_delta^T X_delta(0)",
+            "groups_with_nonzero_quotient_jet": groups_with_quotient_jet,
+            "group_count_with_nonzero_quotient_jet": len(groups_with_quotient_jet),
+            "total_quotient_jet_nonzero_entries": total_quotient_nonzeros,
+            "interpretation": (
+                "Nonzero quotient jets prove that the frozen original-Jacobian transform cannot be promoted by changing only its ten coefficient rows; the emitted quotient defect must be composed and reduced in the pole-six target."
+                if total_quotient_nonzeros
+                else "All selected transform generators remain in the moving Jacobian ideal to first order at this proof place."
+            ),
+        },
+        "groups": summaries,
+        "checks": {
+            "the_G3BI_correction_changes_exactly_five_of_ten_Jacobian_generators": True,
+            "all_selected_chart_updates_are_built_from_the_exact_correction": True,
+            "every_chart_update_has_an_explicit_column_selector_factorization": True,
+            "all_first_jet_coordinate_equations_reconstruct_with_zero_residual": True,
+            "the_thirty_chart_interior_domain_follows_from_G3BJ_transcendence": True,
+            "no_208570_square_family_matrix_is_required_for_this_transform_layer": True,
+            "no_characteristic_zero_first_jet_zero_is_inferred_from_modular_zero": True,
+            "no_integrated_transport_or_beta_C_value_is_claimed": True,
+        },
+        "guardrails": {
+            "claims_the_full_family_pole_six_return_is_executed": False,
+            "claims_the_composed_quotient_defect_is_zero": False,
+            "claims_the_a1_endpoint_is_covered_by_every_fixed_transform_chart": False,
+            "claims_characteristic_zero_coordinates_from_one_prime": False,
+            "claims_integral_transport_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "PoleSixSelectedTransformWoodburyAtlasAndFirstJetTheorem",
+            "statement": "The selected G3BI family changes only five original-Jacobian generator lanes. On each of the thirty already certified targeted-transform charts this gives the exact column-selected update C_delta(a)=C_delta(0)+a U_delta E_delta^T and the displayed finite Woodbury core. Since every base determinant is nonzero, every chart determinant is a nonzero polynomial and the G3BJ transcendental interior avoids all its zeros. At the selected GF(11) proof place, the differentiated coordinate equations are solved and replayed exactly. Any emitted quotient-coordinate jet is a rigorous obstruction to promoting the frozen ten-row transform without carrying its induced quotient defect.",
+            "tier": "EXACT_STRUCTURAL_FAMILY_ATLAS_WITH_EXACT_GOOD_REDUCTION_FIRST_JET",
+        },
+        "next_required_object": "Compose the emitted groupwise quotient jets with the exact G3BM division multipliers for all 248 H02 source directions. Decide whether the target-degree quotient defect cancels; if it does not, reduce that explicit defect through the pole-six target chart before recursive H02/H11/H20 completion.",
+    }
+    require(all(packet["checks"].values()), "packet checks")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3CN pole-six family transform first jet: PASS")
+    print(
+        f"groups={len(summaries)} active_columns={total_active} "
+        f"exact_update_nnz={total_exact_update_nonzeros} "
+        f"mod11_update_nnz={total_good_reduction_update_nonzeros} "
+        f"quotient_jet_nnz={total_quotient_nonzeros}"
+    )
+
+
+if __name__ == "__main__":
+    main()

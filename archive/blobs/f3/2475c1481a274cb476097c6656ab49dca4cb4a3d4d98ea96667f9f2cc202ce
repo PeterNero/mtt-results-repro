@@ -1,0 +1,73 @@
+# UST.G3CV Selected H11 Fraction-Free Path Woodbury Theorem
+
+## Status
+
+`CLOSED_EXACT_SELECTED_H11_FRACTION_FREE_PATH_WOODBURY_FACTORIZATION`
+
+## Exact factorization
+
+Let `Delta_H11,C(gamma)` be the selected affine correction update from
+UST.G3CU. Its exact rank is 988. The G3CU rank-revealing rows and columns
+select polynomial matrices
+
+```text
+U in Z[gamma]^(4426 x 988),
+W in Z[gamma]^(988 x 4426),
+S in Z[gamma]^(988 x 988).
+```
+
+Here `U` consists of the selected columns, `W` of the selected rows and `S`
+is their intersection. The reduction of `det(S)` modulo 21,817 is nonzero,
+so `S` is invertible over `Q(gamma)`. Since `U` already has the full G3CU
+rank, exact linear algebra gives
+
+```text
+Delta_H11,C = U S^-1 W,
+```
+
+or, without division,
+
+```text
+Delta_H11,C det(S) = U adj(S) W.
+```
+
+All eighteen coefficient matrices for `U`, `S` and `W` are emitted. A
+componentwise split-place solve independently reconstructs every entry of
+`Delta_H11,C` with zero mismatch.
+
+## Reduced path equation
+
+For
+
+```text
+A(a)=A0+a U S^-1 W,
+P=A0^-1 U,
+x0=A0^-1 b,
+```
+
+the full equation `A(a)x=b` is exactly equivalent to
+
+```text
+(S+a W P) z = a W x0,
+x = x0-Pz.
+```
+
+The varying solve is therefore 988-dimensional. This is an exact selected
+factorization, not a numerical low-rank approximation.
+
+## Remaining boundary
+
+The two B89 actions `P=A0^-1 U` and `x0=A0^-1 b` are not yet emitted for the
+evolving path source. Their exact or Arb-certified evaluation is the next
+H11 execution step. No path integration, integral marking, terminal readout
+or `beta_C` value is claimed.
+
+## Reproduction
+
+```text
+python build_ust_g3cv_h11_fraction_free_path_woodbury.py
+python verify_ust_g3cv_h11_fraction_free_path_woodbury.py
+```
+
+The packet is
+`state/ust_g3cv_h11_fraction_free_path_woodbury.packet.json`.

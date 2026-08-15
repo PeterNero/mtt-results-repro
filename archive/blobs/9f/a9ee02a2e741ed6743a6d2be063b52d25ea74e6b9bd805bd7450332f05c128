@@ -1,0 +1,428 @@
+#!/usr/bin/env python3
+"""Emit the selected normalized-delta H02 source at the G3BI endpoint."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from sympy import Poly, sympify, symbols
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3ca"
+OUT = ROOT / "state" / "ust_g3ca_selected_delta_correction_h02_source.packet.json"
+PRIME = 21817
+DIMENSION = 42706
+QUOTIENT_UNITS = 248
+IMAGE_RANK = 42458
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    repository = repository.resolve()
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository),
+        "repository_relative_path": resolved.relative_to(repository).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def cox_degree(exponent: tuple[int, ...]) -> tuple[int, int, int]:
+    x, y, z, w, t0, t1, t2, u, v, s = exponent
+    xi = u + v + s
+    return (
+        x + y + z + 3 * w - 6 * u - 9 * s,
+        t0 + t1 + t2 - 3 * v - s,
+        xi,
+    )
+
+
+def selected_source_terms(
+    g3bi: dict[str, Any], pdelta: dict[str, Any]
+) -> list[tuple[tuple[int, ...], tuple[Fraction, ...]]]:
+    x, y, z, w = symbols("x y z w")
+    polynomial = Poly(
+        sympify(pdelta["residue_polynomial"]["expanded"], locals={"x": x, "y": y, "z": z, "w": w}),
+        x,
+        y,
+        z,
+        w,
+    )
+    pdelta_terms = [
+        (
+            tuple(int(value) for value in exponent),
+            Fraction(int(coefficient.p), int(coefficient.q)),
+        )
+        for exponent, coefficient in polynomial.terms()
+    ]
+    require(len(pdelta_terms) == 27, "27 normalized P_delta terms")
+    fixed = (0, 0, 0, 0, 1, 1, 1, 1, 1, 0)
+    combined: dict[tuple[int, ...], list[Fraction]] = {}
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        section = tuple(int(value) for value in row["source_monomial"]) + (
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        coordinates = tuple(
+            Fraction(int(value)) for value in row["correction_gamma_coordinates"]
+        )
+        for p_exponent, p_coefficient in pdelta_terms:
+            p_full = p_exponent + (0, 0, 0, 0, 0, 0)
+            exponent = tuple(
+                a + b + c for a, b, c in zip(p_full, section, fixed, strict=True)
+            )
+            values = combined.setdefault(exponent, [Fraction(0) for _ in range(6)])
+            for degree, coordinate in enumerate(coordinates):
+                values[degree] += p_coefficient * coordinate
+    result = [
+        (exponent, tuple(coordinates))
+        for exponent, coordinates in sorted(combined.items())
+        if any(coordinates)
+    ]
+    require(result and all(cox_degree(exponent) == (9, 1, 2) for exponent, _ in result), "H02 source degree")
+    return result
+
+
+def evaluate_fraction(value: Fraction, prime: int) -> int:
+    return value.numerator % prime * pow(value.denominator % prime, -1, prime) % prime
+
+
+def evaluate_source(
+    terms: list[tuple[tuple[int, ...], tuple[Fraction, ...]]],
+    target_lookup: dict[tuple[int, ...], int],
+    gamma_root: int,
+) -> sparse.csc_matrix:
+    rows = []
+    values = []
+    for exponent, coordinates in terms:
+        row = target_lookup.get(exponent)
+        require(row is not None, "source monomial in H02 ambient basis")
+        value = 0
+        for coordinate in reversed(coordinates):
+            value = (value * gamma_root + evaluate_fraction(coordinate, PRIME)) % PRIME
+        if value:
+            rows.append(row)
+            values.append(value)
+    matrix = sparse.csc_matrix(
+        (
+            np.asarray(values, dtype=np.uint32),
+            (np.asarray(rows, dtype=np.int32), np.zeros(len(rows), dtype=np.int32)),
+        ),
+        shape=(DIMENSION, 1),
+        dtype=np.uint32,
+    )
+    matrix.sum_duplicates()
+    matrix.data %= PRIME
+    matrix.eliminate_zeros()
+    return matrix
+
+
+def source_payload(
+    terms: list[tuple[tuple[int, ...], tuple[Fraction, ...]]]
+) -> dict[str, Any]:
+    return {
+        "variable_order": ["x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s"],
+        "formula": "u*v*P_delta*(t0*t1*t2)*C_section",
+        "C_section_role": "the selected G3BI correction with its Cayley s factor removed",
+        "Cox_degree": [9, 1, 2],
+        "term_count_after_collection": len(terms),
+        "terms": [
+            {
+                "exponent": list(exponent),
+                "gamma_coordinates_ascending": [
+                    str(value.numerator)
+                    if value.denominator == 1
+                    else f"{value.numerator}/{value.denominator}"
+                    for value in coordinates
+                ],
+            }
+            for exponent, coordinates in terms
+        ],
+    }
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    qg = Path(os.environ.get("MTT_QG_ROOT", ROOT.parent / "12 Quantum Gravity"))
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bj_path = ROOT / "state" / "ust_g3bj_transcendental_arc_path.packet.json"
+    g3br_path = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+    g3bt_path = ROOT / "state" / "ust_g3bt_h02_endpoint_action_one_split_prime.packet.json"
+    g3bz_path = ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json"
+    pdelta_path = qg / "q79_splitting_conic_delta_residue_polynomial.packet.json"
+    affine_path = mld / "q79_eta9_affine_B_sweep_source_equation.packet.json"
+    b103_path = mld / "q79_eta9_full_vanishing_residue_basis.packet.json"
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+
+    g3bi = load(g3bi_path)
+    g3bj = load(g3bj_path)
+    g3br = load(g3br_path)
+    g3bt = load(g3bt_path)
+    g3bz = load(g3bz_path)
+    pdelta = load(pdelta_path)
+    affine = load(affine_path)
+    b103 = load(b103_path)
+    macaulay = load(macaulay_path)
+    for packet, label in (
+        (g3bi, "G3BI"),
+        (g3bj, "G3BJ"),
+        (g3br, "G3BR"),
+        (g3bt, "G3BT"),
+        (g3bz, "G3BZ"),
+        (pdelta, "P_delta"),
+        (affine, "affine source"),
+        (b103, "B103"),
+        (macaulay, "H02 Macaulay"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+    require(
+        affine["relative_residue_source"]["formula"].startswith(
+            "sigma_delta,r(s)=Tr_R(Phi_s)(u*v*P_delta"
+        ),
+        "upstream source formula",
+    )
+    require(g3bz["affine_path_update"]["exact_rank_over_Q_gamma"] == 6022, "G3BZ rank")
+
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    require(len(target_lookup) == DIMENSION, "H02 ambient dimension")
+    terms = selected_source_terms(g3bi, pdelta)
+    payload = source_payload(terms)
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    exact_path = EVIDENCE / "selected_delta_correction_H02_source.exact.json"
+    exact_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+    roots = [int(value) for value in g3bt["field"]["roots_of_selected_sextic"]]
+    require(len(roots) == 6 and len(set(roots)) == 6, "six split roots")
+    root_records_by_value = {int(row["gamma_root"]): row for row in g3bt["root_solves"]}
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    quotient_values = []
+    root_solves = []
+    total_residual = 0
+    for root in roots:
+        source = evaluate_source(terms, target_lookup, root)
+        prior = root_records_by_value[root]
+        chart_path = ROOT / prior["endpoint_chart"]["path"]
+        require(chart_path.is_file() and sha256(chart_path) == prior["endpoint_chart"]["sha256"], "root chart")
+        rhs_path = EVIDENCE / f"H02.p{PRIME}.g{root}.selected_delta_correction_source.rhs.bin"
+        solution_path = EVIDENCE / f"H02.p{PRIME}.g{root}.selected_delta_correction_source.solution.bin"
+        log_path = EVIDENCE / f"H02.p{PRIME}.g{root}.selected_delta_correction_source.solve.log"
+        exporter.write_rhs(
+            rhs_path,
+            PRIME,
+            DIMENSION,
+            source.indptr.astype(np.uint64).tolist(),
+            source.indices.astype(np.uint32).tolist(),
+            source.data.astype(np.uint32).tolist(),
+        )
+        reusable = (
+            solution_path.is_file()
+            and log_path.is_file()
+            and initializer.parse_log(log_path).get("STATUS") == "SUCCESS"
+        )
+        if not reusable:
+            command = [
+                "wsl",
+                runtime.wsl_path(solver),
+                "--chart",
+                runtime.wsl_path(chart_path),
+                "--rhs",
+                runtime.wsl_path(rhs_path),
+                "--output",
+                runtime.wsl_path(solution_path),
+                "--log",
+                runtime.wsl_path(log_path),
+            ]
+            completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+            require(completed.returncode == 0, completed.stdout + completed.stderr)
+            solver_stdout = completed.stdout.strip()
+        else:
+            solver_stdout = "reused exact zero-residual source checkpoint"
+        chart = split_io.as_scipy(arithmetic.read_csc(chart_path, b"MTTSPC1\0", 6))
+        stored_rhs = split_io.as_scipy(arithmetic.read_csc(rhs_path, b"MTTSRH1\0", 4))
+        solution = split_io.as_scipy(
+            arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+        )
+        require((stored_rhs != source).nnz == 0, "stored source")
+        residual = split_io.residual_nonzeros(chart, solution, stored_rhs, PRIME)
+        total_residual += residual
+        fields = initializer.parse_log(log_path)
+        determinant = int(fields["CHART_DETERMINANT"])
+        require(determinant == int(prior["endpoint_determinant_mod21817"]), "determinant")
+        quotient = solution[:QUOTIENT_UNITS, :].toarray().reshape(QUOTIENT_UNITS)
+        require(np.count_nonzero(quotient) > 0, "nonzero H02 quotient class")
+        quotient_values.append(quotient.astype(np.uint32))
+        root_solves.append(
+            {
+                "gamma_root": root,
+                "source_nonzero_entries": int(source.nnz),
+                "solution_nonzero_entries": int(solution.nnz),
+                "quotient_nonzero_entries": int(np.count_nonzero(quotient)),
+                "preimage_nonzero_entries": int(solution[QUOTIENT_UNITS:, :].nnz),
+                "endpoint_determinant_mod21817": determinant,
+                "residual_nonzeros": residual,
+                "endpoint_chart": record(chart_path),
+                "RHS": record(rhs_path),
+                "solution": record(solution_path),
+                "solver_log": record(log_path),
+                "solver_stdout": solver_stdout,
+            }
+        )
+        print(
+            f"G3CA root gamma={root}: source_nnz={source.nnz} "
+            f"quotient_nnz={np.count_nonzero(quotient)} residual={residual}",
+            flush=True,
+        )
+
+    lagrange = np.asarray(g3bt["field"]["lagrange_rows_root_to_power_basis"], dtype=np.uint64)
+    root_matrix = np.stack(quotient_values, axis=1).astype(np.uint64)
+    power_basis = (root_matrix @ lagrange % PRIME).astype(np.uint32)
+    evaluation_mismatches = 0
+    for root_index, root in enumerate(roots):
+        evaluated = np.zeros(QUOTIENT_UNITS, dtype=np.uint64)
+        for degree in reversed(range(6)):
+            evaluated = (evaluated * root + power_basis[:, degree]) % PRIME
+        evaluation_mismatches += int(
+            np.count_nonzero(evaluated.astype(np.uint32) != quotient_values[root_index])
+        )
+    root_values_path = EVIDENCE / "selected_delta_correction_H02_source.root_values.p21817.npy"
+    power_basis_path = EVIDENCE / "selected_delta_correction_H02_source.power_basis.p21817.npy"
+    np.save(root_values_path, root_matrix.astype(np.uint32), allow_pickle=False)
+    np.save(power_basis_path, power_basis, allow_pickle=False)
+
+    checks = {
+        "the_normalized_Pdelta_and_selected_G3BI_section_are_hash_bound": True,
+        "removing_the_Cayley_s_factor_from_the_G3BI_correction_emits_C_section": True,
+        "u_v_Pdelta_t0t1t2_C_section_has_exact_Cox_degree9_1_2": True,
+        "every_exact_source_term_lies_in_the_frozen_H02_ambient_basis": True,
+        "all_six_selected_endpoint_chart_solves_have_zero_residual": total_residual == 0,
+        "the_selected_H02_source_class_is_nonzero_at_every_split_root": all(
+            row["quotient_nonzero_entries"] > 0 for row in root_solves
+        ),
+        "six_root_interpolation_reconstructs_all248_quotient_coordinates": (
+            evaluation_mismatches == 0
+        ),
+        "the_trace_test_frame_is_not_identified_with_the_B103_coordinate_order": True,
+        "no_integral_transport_period_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CA checks")
+    packet = {
+        "schema": "mtt.unified-source.g3ca-selected-delta-correction-h02-source.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3CA",
+        "status": "CLOSED_EXACT_SELECTED_H02_SOURCE_CLASS_AND_ONE_SPLIT_PRIME_COORDINATES",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BJ": record(g3bj_path),
+            "G3BR": record(g3br_path),
+            "G3BT": record(g3bt_path),
+            "G3BZ": record(g3bz_path),
+            "P_delta": external_record(pdelta_path, qg),
+            "affine_source_equation": external_record(affine_path, mld),
+            "B103": external_record(b103_path, mld),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+        },
+        "selected_source": {
+            "formula": payload["formula"],
+            "interpretation": "the unscaled selected G3BJ deformation-direction source at the G3BI endpoint",
+            "Cox_degree": [9, 1, 2],
+            "exact_term_count": len(terms),
+            "exact_polynomial": record(exact_path),
+            "coefficient_field": "Q(gamma)",
+            "split_prime": PRIME,
+            "roots": roots,
+            "B103_H02_coordinate_shape": [248, 6],
+            "B103_H02_nonzero_power_basis_coefficients": int(np.count_nonzero(power_basis)),
+            "root_values": record(root_values_path),
+            "power_basis_coordinates": record(power_basis_path),
+            "root_evaluation_mismatches": evaluation_mismatches,
+        },
+        "root_solves": root_solves,
+        "path_binding": {
+            "pencil": "F(a)=F_B89+a*C_section",
+            "selected_path": g3bj["selected_path"]["formula"],
+            "velocity": "dotF(t)=a'(t)*C_section",
+            "calculated_vector": "the unscaled C_section source; multiply by a'(t) after continuation to the path point",
+            "selected_path_update_exact_rank_G3BZ": 6022,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_characteristic_zero_B103_coordinate_reconstruction": False,
+            "claims_a_flat_rank1509_relative_de_Rham_lift_along_the_full_path": False,
+            "identifies_spectral_trace_rows_with_B103_coordinates": False,
+            "claims_integral_Gauss_Manin_transport": False,
+            "claims_terminal248_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3caSelectedDeltaCorrectionH02Source",
+            "tier": "CLOSED_EXACT_SOURCE_CLASS_AND_SPLIT_PRIME_COORDINATES",
+            "statement": "The torically normalized class u v P_delta(t0 t1 t2)C_section has Cox degree (9,1,2) and is therefore a canonical H02 source representative for the selected correction direction. Exact reduction through the selected G3BI endpoint chart at all six roots modulo 21817 gives nonzero 248-coordinate B103 quotient vectors with zero residual. Lagrange interpolation emits their complete power-basis representation modulo that split prime. This proves the characteristic-zero source class is nonzero, but does not reconstruct its Q(gamma) coordinates or its flat rank-1509 continuation.",
+        },
+        "next_required_object": "Apply the A_B89-anchored rank-6022 selected-path resolvent to continue this one H02 source class along G3BJ, then promote the resulting coordinates from split-prime data to Q(gamma) or certified interval transport. Separately bind the spectral trace-test frame to B103 before identifying terminal 248 readouts.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CA selected normalized-delta H02 source: PASS")
+    print(
+        f"exact_terms={len(terms)} roots={len(roots)} quotient_shape=248x6 "
+        f"power_nnz={np.count_nonzero(power_basis)} residual={total_residual}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

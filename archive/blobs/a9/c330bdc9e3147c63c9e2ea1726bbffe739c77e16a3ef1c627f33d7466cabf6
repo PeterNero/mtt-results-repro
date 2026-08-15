@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""Certify equality of the selected G3AP base ideal and its cached basis."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import certify_ust_g3ap_selected_cayley_target_macaulay_candidate as legacy
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+BASE_PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay_base.packet.json"
+SCRIPT = STATE / "ust_g3ap_selected_cayley_target_macaulay_base_certify.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_target_macaulay_base_certify.singular.out"
+CACHE = STATE / "ust_g3ap_selected_cayley_target_macaulay_base_certified.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay_base_certified.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def parse_required_integer(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(\d+)$", output, re.MULTILINE)
+    require(match is not None, label)
+    return int(match.group(1))
+
+
+def validate_output(output: str, base_packet: dict[str, object]) -> dict[str, object]:
+    require(
+        not any(line.lstrip().startswith("?") for line in output.splitlines()),
+        "base certification Singular errors",
+    )
+    for label in (
+        "G3AP_MACAULAY_BASECERT_CACHE_IN_SELECTED",
+        "G3AP_MACAULAY_BASECERT_SELECTED_IN_CACHE",
+        "G3AP_MACAULAY_BASECERT_CACHE_LEADING_IN_CHECK",
+        "G3AP_MACAULAY_BASECERT_CHECK_LEADING_IN_CACHE",
+    ):
+        require(parse_required_integer(output, label) == 1, label)
+    require("G3AP_MACAULAY_BASECERT_PASS" in output, "base certification pass")
+
+    cache_size = parse_required_integer(output, "G3AP_MACAULAY_BASECERT_CACHE_SIZE")
+    selected_size = parse_required_integer(
+        output, "G3AP_MACAULAY_BASECERT_SELECTED_GB_SIZE"
+    )
+    recomputed_size = parse_required_integer(
+        output, "G3AP_MACAULAY_BASECERT_CACHE_GB_SIZE"
+    )
+    leaders = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(
+            r"^G3AP_MACAULAY_BASECERT_CACHE_LEADER_(\d+)=([0-9,]+)$",
+            output,
+            re.MULTILINE,
+        )
+    }
+    expected_leaders = [
+        tuple(int(value) for value in item)
+        for item in base_packet["base_leading_exponents"]
+    ]
+    require(
+        cache_size == selected_size == recomputed_size == len(expected_leaders)
+        and set(leaders) == set(range(1, cache_size + 1))
+        and [leaders[index] for index in range(1, cache_size + 1)]
+        == expected_leaders,
+        "certified base coordinate leaders",
+    )
+    return {
+        "cached_generators": cache_size,
+        "selected_standard_basis_generators": selected_size,
+        "recomputed_cached_standard_basis_generators": recomputed_size,
+        "leading_exponents_sha256": hashlib.sha256(
+            json.dumps(expected_leaders, separators=(",", ":")).encode("ascii")
+        ).hexdigest(),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--reuse-output", action="store_true")
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+
+    base_packet = json.loads(BASE_PACKET.read_text(encoding="ascii"))
+    require(
+        base_packet["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-base.v1",
+        "base coordinate packet",
+    )
+    source = macaulay.SOURCE.read_text(encoding="ascii")
+    SCRIPT.write_text(legacy.base_certification_script(source), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {relative(SCRIPT)}")
+        return
+
+    if not args.reuse_output:
+        completed = subprocess.run(
+            singular_command(ROOT, SCRIPT),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        OUTPUT.write_text(completed.stdout, encoding="utf-8")
+        require(completed.returncode == 0, "base certification execution")
+    require(OUTPUT.is_file() and CACHE.is_file(), "base certification artifacts")
+    summary = validate_output(OUTPUT.read_text(encoding="utf-8"), base_packet)
+
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "base-certified.v1"
+        ),
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AP.SELECTED-BASE-IDEAL-EQUALITY",
+        "status": "CLOSED_EXACT_SELECTED_BASE_IDEAL_AND_LEADING_IDEAL_EQUALITY",
+        "inputs": {
+            "selected_source": record(macaulay.SOURCE),
+            "base_coordinate_packet": record(BASE_PACKET),
+            "original_cache": record(macaulay.BASE_CACHE),
+        },
+        "execution": {
+            "script": record(SCRIPT),
+            "output": record(OUTPUT),
+            "certified_cache": record(CACHE),
+            **summary,
+        },
+        "checks": {
+            "every_cached_generator_reduces_to_zero_modulo_the_selected_ideal": True,
+            "every_selected_standard_basis_generator_reduces_to_zero_modulo_the_recomputed_cache": True,
+            "the_cached_and_recomputed_leading_monomial_ideals_are_equal": True,
+            "the_recomputed_cache_is_written_as_a_hash_bound_standard_basis": True,
+            "all_target_coordinate_leaders_match_the_certified_cache": True,
+        },
+        "guardrails": {
+            "claims_the_relation_matrix_has_full_selected_source_provenance": False,
+            "claims_matrix_rank": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Combine this selected-base certificate with the full-source relation "
+            "certificate and an independently replayed rank-39,725 minor."
+        ),
+    }
+    require(all(packet["checks"].values()), "base certificate checks")
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP selected base-ideal certification: PASS "
+        f"generators={summary['cached_generators']} rank=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

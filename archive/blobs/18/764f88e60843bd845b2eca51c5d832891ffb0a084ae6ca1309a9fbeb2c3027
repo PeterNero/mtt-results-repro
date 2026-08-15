@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Certify a rank-39,725 minor from an exact incremental full-map submatrix."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_incremental_full_submap as incremental
+import build_ust_f1016_native_tools as native_tools
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import extract_ust_g3ap_selected_cayley_target_macaulay_minor as extractor
+import run_ust_g3ap_selected_cayley_target_macaulay_full_minor as full_runner
+import run_ust_g3ap_selected_cayley_target_macaulay_minor as shared_runner
+import ust_f1016_sparse_minor as minor
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+LATEST = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_incremental_rank_witness.latest.json"
+)
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def checked(item: dict[str, object], label: str) -> Path:
+    path = ROOT / str(item["path"])
+    require(
+        path.is_file()
+        and sha256(path) == item["sha256"]
+        and path.stat().st_size == item.get("bytes", path.stat().st_size),
+        label,
+    )
+    return path
+
+
+def artifact_paths(matrix: Path) -> dict[str, Path]:
+    require(matrix.name.endswith(".packed-sms"), "incremental matrix suffix")
+    stem = matrix.name[: -len(".packed-sms")]
+    return {
+        "custom_output": STATE / f"{stem}.weighted-free-fast-native.minor.out",
+        "custom_log": STATE / f"{stem}.weighted-free-fast-native.minor.log",
+        "minor_matrix": STATE / f"{stem}.minor.packed-sms",
+        "functional": STATE / f"{stem}.quotient-functional.packed-vector",
+        "minor_body": STATE / f"{stem}.minor.body.tmp",
+        "extraction_packet": STATE / f"{stem}.minor.packet.json",
+        "linbox_output": STATE / f"{stem}.minor.linbox.out",
+        "functional_output": STATE / f"{stem}.quotient-functional.givaro.out",
+        "packet": STATE / f"{stem}.rank-witness.packet.json",
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--skip-custom", action="store_true")
+    args = parser.parse_args()
+
+    locator = json.loads(incremental.LATEST.read_text(encoding="ascii"))
+    campaign_path = checked(locator["packet"], "incremental campaign")
+    matrix_path = checked(locator["matrix"], "incremental matrix")
+    campaign = json.loads(campaign_path.read_text(encoding="ascii"))
+    require(
+        campaign["schema"].endswith("incremental-full-submap.v1")
+        and all(campaign["checks"].values())
+        and not any(campaign["guardrails"].values())
+        and ROOT / campaign["matrix"]["path"] == matrix_path
+        and campaign["matrix"]["rows"] == 92979
+        and campaign["matrix"]["columns"] == macaulay.EXPECTED_TARGET_COORDINATES
+        and campaign["selection"]["selected_sources_are_a_subset_of_the_full_map"],
+        "incremental full-map submatrix",
+    )
+    paths = artifact_paths(matrix_path)
+
+    subprocess.run(
+        [sys.executable, str(ROOT / "build_ust_f1016_native_tools.py")],
+        cwd=ROOT,
+        check=True,
+    )
+    require(native_tools.current(), "hash-current native exact engines")
+    field_selftest = full_runner.run_field_selftests()
+    if not args.skip_custom:
+        custom_raw = shared_runner.run_exact(
+            shared_runner.WEIGHTED_FREE_FAST_BINARY,
+            [
+                relative(matrix_path),
+                "--target-rank",
+                str(TARGET_RANK),
+                "--output",
+                relative(paths["custom_output"]),
+                "--progress-seconds",
+                "10",
+            ],
+            paths["custom_log"],
+            args.timeout,
+        )
+        require(
+            "SUCCESS" in custom_raw and f"rank={TARGET_RANK}" in custom_raw,
+            "incremental target minor",
+        )
+    else:
+        require(
+            paths["custom_output"].is_file() and paths["custom_log"].is_file(),
+            "existing incremental target minor",
+        )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "extract_ust_g3ap_selected_cayley_target_macaulay_minor.py"),
+            "--campaign",
+            str(campaign_path),
+            "--minor-output",
+            str(paths["custom_output"]),
+            "--matrix-output",
+            str(paths["minor_matrix"]),
+            "--functional-output",
+            str(paths["functional"]),
+            "--body-output",
+            str(paths["minor_body"]),
+            "--packet-output",
+            str(paths["extraction_packet"]),
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    extraction = json.loads(paths["extraction_packet"].read_text(encoding="ascii"))
+    require(extraction["minor"]["size"] == TARGET_RANK, "incremental minor size")
+
+    linbox_raw = shared_runner.run_exact(
+        shared_runner.LINBOX_BINARY,
+        [relative(paths["minor_matrix"])],
+        paths["linbox_output"],
+        args.timeout,
+    )
+    rows, columns, nonzeros, rank = shared_runner.parse_linbox(linbox_raw)
+    require(
+        rows == columns == rank == TARGET_RANK
+        and nonzeros == extraction["minor"]["nonzeros"],
+        "independent incremental minor rank",
+    )
+    functional_raw = shared_runner.run_exact(
+        shared_runner.FUNCTIONAL_BINARY,
+        [relative(matrix_path), relative(paths["functional"])],
+        paths["functional_output"],
+        args.timeout,
+    )
+    functional_shape = shared_runner.parse_functional_replay(functional_raw)
+    require(
+        functional_shape[0] == campaign["matrix"]["rows"]
+        and functional_shape[1] == macaulay.EXPECTED_TARGET_COORDINATES
+        and functional_shape[2] == campaign["matrix"]["nonzeros"]
+        and functional_shape[3] == campaign["matrix"]["rows"],
+        "independent incremental functional replay",
+    )
+
+    custom_scalars, custom_vectors = minor.parse_output(paths["custom_output"])
+    require(
+        int(custom_scalars["MINOR_SIZE"]) == TARGET_RANK
+        and minor.determinant(
+            custom_vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"],
+            custom_vectors["PIVOT_COEFFICIENTS_PACKED"],
+        )
+        == int(custom_scalars["MINOR_DETERMINANT_PACKED"])
+        != 0,
+        "incremental determinant replay",
+    )
+    selected_rows = custom_vectors["SELECTED_SOURCE_ROWS_ZERO_BASED"]
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "incremental-rank-witness.v1"
+        ),
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AP.INCREMENTAL-FULL-MAP-RANK-WITNESS",
+        "status": (
+            "CLOSED_EXACT_RANK39725_MINOR_IN_SELECTED_FULL_MAP_SUBSET_"
+            "NOT_YET_FULL_SOURCE_FUNCTIONAL_REPLAY"
+        ),
+        "inputs": {
+            "native_tools_build": record(native_tools.RECEIPT),
+            "incremental_campaign": record(campaign_path),
+            "incremental_matrix": record(matrix_path),
+            "minor_extraction": record(paths["extraction_packet"]),
+            "selected_minor": record(paths["minor_matrix"]),
+        },
+        "engines": {
+            "custom_sparse_column_elimination": {
+                "scheduler": "weighted-free-fast",
+                "source": record(shared_runner.WEIGHTED_FREE_FAST_SOURCE),
+                "source_dependencies": [
+                    record(shared_runner.CUSTOM_SOURCE),
+                    record(shared_runner.GREEDY_SOURCE),
+                    record(shared_runner.WEIGHTED_FREE_SOURCE),
+                ],
+                "binary": record(shared_runner.WEIGHTED_FREE_FAST_BINARY),
+                "output": record(paths["custom_output"]),
+                "log": record(paths["custom_log"]),
+            },
+            "linbox_givaro_sparse_elimination": {
+                "source": record(shared_runner.LINBOX_SOURCE),
+                "binary": record(shared_runner.LINBOX_BINARY),
+                "output": record(paths["linbox_output"]),
+            },
+            "givaro_incremental_matrix_functional_replay": {
+                "source": record(shared_runner.FUNCTIONAL_SOURCE),
+                "binary": record(shared_runner.FUNCTIONAL_BINARY),
+                "functional": record(paths["functional"]),
+                "output": record(paths["functional_output"]),
+            },
+        },
+        "field_self_test": field_selftest,
+        "rank": {
+            "ambient_target_coordinates": macaulay.EXPECTED_TARGET_COORDINATES,
+            "selected_minor_size": TARGET_RANK,
+            "independent_linbox_rank": rank,
+            "selected_source_rows_zero_based_sha256": hashlib.sha256(
+                json.dumps(selected_rows, separators=(",", ":")).encode("ascii")
+            ).hexdigest(),
+            "quotient_functional": extraction["minor"]["quotient_functional"],
+        },
+        "checks": {
+            "the_incremental_rows_are_an_exact_subset_of_the_full_selected_map": True,
+            "the_custom_engine_emits_a_nonzero_rank39725_minor": True,
+            "the_pivot_determinant_is_independently_recomputed": True,
+            "independent_LinBox_Givaro_elimination_finds_minor_rank39725": True,
+            "the_normalized_quotient_functional_annihilates_the_incremental_submap": True,
+            "independent_Givaro_arithmetic_replays_the_incremental_functional": True,
+            "therefore_the_full_selected_map_has_rank_at_least39725": True,
+        },
+        "guardrails": {
+            "claims_every_incremental_raw_source_stream_is_independently_replayed": False,
+            "claims_the_functional_annihilates_all_92979_rows": False,
+            "claims_the_full_map_rank_is_at_most39725": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Combine this monotone rank lower witness with the independently selected "
+            "ordinary-top dimension lower bound, certify all full source rows, and "
+            "replay this functional on the assembled 92,979-row map."
+        ),
+    }
+    require(all(packet["checks"].values()), "incremental rank witness checks")
+    paths["packet"].write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    LATEST.write_text(
+        json.dumps({"packet": record(paths["packet"])}, indent=2) + "\n",
+        encoding="ascii",
+    )
+    print(
+        "G3AP incremental full-map rank witness: PASS "
+        f"selected_rows={campaign['selection']['selected_nonzero_source_rows']} "
+        f"minor={TARGET_RANK} LinBox_rank={rank} full_functional_replay=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""Assemble enough disjoint exact G3AP rows to certify the target rank.
+
+The target codimension theorem needs a 39,725-minor.  It does not require
+executing every row in the larger deterministic 50,000-row schedule.  This
+assembler keeps the schedule's global row labels, chooses a maximum-coverage
+nonoverlapping family of completed fixed/adaptive packets, and emits a sparse
+matrix with explicit zero rows in any omitted ranges.
+"""
+
+from __future__ import annotations
+
+import argparse
+from bisect import bisect_right
+import hashlib
+import json
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_adaptive_campaign as adaptive
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as fixed_chunk
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import build_ust_g3ap_selected_cayley_target_macaulay_range as range_builder
+import run_ust_g3ap_selected_cayley_target_macaulay_campaign as campaign_builder
+
+
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def artifact(path) -> dict[str, object]:
+    return {
+        "path": macaulay.relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def maximum_nonoverlap(
+    candidates: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Return a maximum-total-length family of nonoverlapping intervals."""
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            int(item["stop"]),
+            int(item["start"]),
+            -int(item["stop"]) + int(item["start"]),
+        ),
+    )
+    stops = [int(item["stop"]) for item in ordered]
+    best_coverage = [0] * (len(ordered) + 1)
+    best_pieces = [0] * (len(ordered) + 1)
+    take = [False] * (len(ordered) + 1)
+    predecessor = [0] * (len(ordered) + 1)
+    for index, item in enumerate(ordered, start=1):
+        previous = bisect_right(stops, int(item["start"]), hi=index - 1)
+        include_coverage = (
+            best_coverage[previous] + int(item["stop"]) - int(item["start"])
+        )
+        include_pieces = best_pieces[previous] + 1
+        exclude_coverage = best_coverage[index - 1]
+        exclude_pieces = best_pieces[index - 1]
+        choose_include = include_coverage > exclude_coverage or (
+            include_coverage == exclude_coverage
+            and include_pieces < exclude_pieces
+        )
+        if choose_include:
+            best_coverage[index] = include_coverage
+            best_pieces[index] = include_pieces
+            take[index] = True
+            predecessor[index] = previous
+        else:
+            best_coverage[index] = exclude_coverage
+            best_pieces[index] = exclude_pieces
+            predecessor[index] = index - 1
+
+    selected: list[dict[str, object]] = []
+    index = len(ordered)
+    while index:
+        if take[index]:
+            selected.append(ordered[index - 1])
+        index = predecessor[index]
+    selected.reverse()
+    selected.sort(key=lambda item: int(item["start"]))
+    return selected
+
+
+def self_test_interval_selection() -> None:
+    cover = maximum_nonoverlap(
+        [
+            {"start": 0, "stop": 4},
+            {"start": 0, "stop": 2},
+            {"start": 2, "stop": 5},
+            {"start": 4, "stop": 6},
+            {"start": 5, "stop": 9},
+        ]
+    )
+    require(
+        [(item["start"], item["stop"]) for item in cover]
+        == [(0, 2), (2, 5), (5, 9)],
+        "maximum-coverage interval self-test",
+    )
+    tied = maximum_nonoverlap(
+        [
+            {"start": 0, "stop": 2},
+            {"start": 2, "stop": 4},
+            {"start": 0, "stop": 4},
+        ]
+    )
+    require(
+        [(item["start"], item["stop"]) for item in tied] == [(0, 4)],
+        "fewest-pieces interval self-test",
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--balanced-rows", type=int, default=50000)
+    parser.add_argument("--fixed-chunk-count", type=int, default=12)
+    parser.add_argument("--minimum-executed-rows", type=int, default=TARGET_RANK)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    self_test_interval_selection()
+    require(
+        TARGET_RANK <= args.minimum_executed_rows <= args.balanced_rows,
+        "executed-row threshold",
+    )
+
+    leaders, _ = fixed_chunk.load_coordinates()
+    all_sources, _ = macaulay.source_data(leaders)
+    selected, quotas = macaulay.balanced_source_subset(
+        all_sources, args.balanced_rows
+    )
+    selection_hash = fixed_chunk.selection_hash(selected)
+    paths = [
+        fixed_chunk.paths(args.balanced_rows, index, args.fixed_chunk_count)[
+            "packet"
+        ]
+        for index in range(args.fixed_chunk_count)
+    ]
+    paths.extend(
+        sorted(
+            range_builder.RANGE_ROOT.glob(
+                f"balanced{args.balanced_rows}_rows*.packet.json"
+            )
+        )
+    )
+    candidates = [
+        item
+        for path in paths
+        if path.is_file()
+        for item in [
+            adaptive.candidate(path, args.balanced_rows, selection_hash)
+        ]
+        if item is not None
+    ]
+    cover = maximum_nonoverlap(candidates)
+    executed_rows = sum(
+        int(item["stop"]) - int(item["start"]) for item in cover
+    )
+    executed_per_generator = [0] * len(quotas)
+    for item in cover:
+        for generator, _ in selected[int(item["start"]) : int(item["stop"])]:
+            executed_per_generator[generator] += 1
+    reference_quotient, reference_remainder = divmod(TARGET_RANK, len(quotas))
+    reference_balanced_rows = [
+        reference_quotient + (generator < reference_remainder)
+        for generator in range(len(quotas))
+    ]
+    reference_deficits = [
+        max(0, target - actual)
+        for target, actual in zip(reference_balanced_rows, executed_per_generator)
+    ]
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "available_certified_rows": executed_rows,
+                    "required_rows": args.minimum_executed_rows,
+                    "pieces": [
+                        [int(item["start"]), int(item["stop"])]
+                        for item in cover
+                    ],
+                    "executed_per_generator": executed_per_generator,
+                    "reference_rank_balanced_rows": reference_balanced_rows,
+                    "reference_rank_balanced_deficits": reference_deficits,
+                    "ready": executed_rows >= args.minimum_executed_rows,
+                },
+                separators=(",", ":"),
+            )
+        )
+        return
+    require(
+        executed_rows >= args.minimum_executed_rows,
+        f"only {executed_rows} certified rows are currently available",
+    )
+    require(
+        all(
+            int(left["stop"]) <= int(right["start"])
+            for left, right in zip(cover, cover[1:])
+        ),
+        "nonoverlapping ordered cover",
+    )
+
+    nonzeros = sum(
+        int(item["packet"]["execution"]["nonzeros"]) for item in cover
+    )
+    with campaign_builder.ASSEMBLED.open("wb") as output:
+        output.write(
+            f"{args.balanced_rows} {macaulay.EXPECTED_TARGET_COORDINATES} "
+            f"{nonzeros}\n".encode("ascii")
+        )
+        for item in cover:
+            with item["triples"].open("rb") as source:
+                while block := source.read(8 * 1024 * 1024):
+                    output.write(block)
+
+    ranges = [
+        [int(item["start"]), int(item["stop"])] for item in cover
+    ]
+    range_hash = hashlib.sha256(
+        json.dumps(ranges, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "campaign.v3"
+        ),
+        "date": "2026-08-10",
+        "status": "CANDIDATE_EXACT_SELECTED_RANK_SUBCAMPAIGN_REQUIRES_MINOR_CERTIFICATE",
+        "inputs": {
+            "selected_source": {
+                "path": macaulay.relative(macaulay.SOURCE),
+                "sha256": macaulay.sha256(macaulay.SOURCE),
+            },
+            "base_coordinate_packet": {
+                "path": macaulay.relative(macaulay.INSPECT_PACKET),
+                "sha256": sha256(macaulay.INSPECT_PACKET),
+            },
+        },
+        "selection": {
+            "kind": "balanced_quantiles_across_all_21_selected_derivative_generators",
+            "rows": args.balanced_rows,
+            "executed_rows": executed_rows,
+            "minimum_executed_rows": args.minimum_executed_rows,
+            "selection_sha256": selection_hash,
+            "executed_ranges_sha256": range_hash,
+            "pieces": len(cover),
+            "per_generator_quotas": quotas,
+            "executed_per_generator": executed_per_generator,
+            "reference_rank_balanced_rows": reference_balanced_rows,
+            "reference_rank_balanced_deficits": reference_deficits,
+        },
+        "matrix": {
+            **artifact(campaign_builder.ASSEMBLED),
+            "rows": args.balanced_rows,
+            "nonempty_source_rows": executed_rows,
+            "columns": macaulay.EXPECTED_TARGET_COORDINATES,
+            "nonzeros": nonzeros,
+        },
+        "chunks": [
+            {
+                "packet": artifact(item["path"]),
+                "global_range_zero_based": [
+                    int(item["start"]),
+                    int(item["stop"]),
+                ],
+            }
+            for item in cover
+        ],
+        "checks": {
+            "every_piece_is_hash_bound": True,
+            "piece_ranges_are_ordered_and_nonoverlapping": True,
+            "at_least_39725_selected_relation_rows_are_executed": (
+                executed_rows >= TARGET_RANK
+            ),
+            "omitted_schedule_rows_are_explicit_zero_rows": True,
+            "all_pieces_use_one_selected_balanced_schedule": True,
+            "assembled_matrix_is_the_ordered_piece_concatenation": True,
+        },
+        "guardrails": {
+            "claims_every_scheduled_row_is_executed": False,
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Run the two exact rank engines. The subcampaign closes the upper "
+            "bound only if it emits and independently replays a nonzero "
+            "39,725-minor."
+        ),
+    }
+    require(all(packet["checks"].values()), "subcampaign checks")
+    campaign_builder.PACKET.write_text(
+        json.dumps(packet, indent=2) + "\n", encoding="ascii"
+    )
+    print(
+        "G3AP target Macaulay rank subcampaign: PASS "
+        f"pieces={len(cover)} executed={executed_rows}/{args.balanced_rows} "
+        f"nonzeros={nonzeros}"
+    )
+
+
+if __name__ == "__main__":
+    main()

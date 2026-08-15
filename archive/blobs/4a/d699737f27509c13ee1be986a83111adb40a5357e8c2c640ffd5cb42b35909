@@ -1,0 +1,108 @@
+{
+  "schema": "BEQ.FMOPhysicalRootReadoutSU29ReachabilityCertificate.v1",
+  "all_checks_pass": true,
+  "checks": {
+    "bounded_and_SU29_Hilbert_orders_match": true,
+    "both_use_carrier_rotating_frame": true,
+    "both_use_rotating_wave_approximation": true,
+    "bounded_fixture_has_Kij_zero": true,
+    "both_packets_lock_the_same_optical_manifold_certificate": true,
+    "both_packets_lock_the_same_dipole_control_certificate": true,
+    "fixed_witness_polarization_is_available_in_the_three_axis_control_set": true,
+    "SU29_certificate_has_declared_dimension": true,
+    "SU29_controllability_criterion_passes": true,
+    "finite_piecewise_control_existence_is_certified": true,
+    "all_embedded_targets_are_unitary": true,
+    "all_embedded_targets_have_determinant_one": true,
+    "all_single_sector_compressions_match": true
+  },
+  "source_provenance": {
+    "source_lock_sha256": "3b360bfd97202f3cab31a533a9405aac2e404a4f683ada31e93912d713093958",
+    "source_lock_canonical_json_sha256": "bcf56d48c28c2adf6c189352731670594ad1d23f394e1098e23d940201cde70e",
+    "upstream": {
+      "physical_readout_synthesis_certificate": {
+        "path": "research/fmo-physical-readout-synthesis/results/physical_readout_synthesis_certificate.json",
+        "sha256": "e45a8c2551a6679af16175735b41b0c23a73b56affd8b4a8a99d383f0047e4ec",
+        "canonical_json_sha256": "e6a47ac75daabd37f766fe1e0cac15226a76b8ff5b1fa5a9eeaf528a6b2f1b79"
+      },
+      "optical_filter_dilation_source_lock": {
+        "path": "research/fmo-optical-filter-dilation/source_lock.json",
+        "sha256": "8a853d899b4f7da122318b43851ad584d501fbf99ebb6831b8388a254cb96988",
+        "canonical_json_sha256": "b59998c8e848b9554b651a9bacec9a16d177df749b023191914f83360b12e93a"
+      },
+      "optical_filter_dilation_certificate": {
+        "path": "research/fmo-optical-filter-dilation/results/optical_filter_dilation_certificate.json",
+        "sha256": "470e3d0016d6e0360c2292c31b590c489a97fa12352d3259f400ba0f81f959e4",
+        "canonical_json_sha256": "c4c912c15d1c592ee8d6775345af4c7673e3502e876400d22bdd5ec557312b2f"
+      },
+      "bounded_pulse_source_lock": {
+        "path": "research/fmo-physical-readout-synthesis/bounded_pulse_source_lock.json",
+        "sha256": "0a4a5ecf4cf0e2a640eacaa7ab0ae4eb301022dd46256b19f58d677372bddf66",
+        "canonical_json_sha256": "4a2b8413d07ca871523917a8ef8c3da1898108c8f2be91b6f4127e7aa31aa704"
+      }
+    }
+  },
+  "fixture": {
+    "hilbert_order": "ground; seven energy-ordered single excitons; twenty-one energy-ordered double excitons",
+    "hilbert_dimension": 29,
+    "single_exciton_indices_zero_based": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "pair_interactions_K_ij": 0,
+    "carrier_rotating_frame": true,
+    "rotating_wave_approximation": true,
+    "target_lie_algebra": "su(29)",
+    "target_lie_dimension": 840
+  },
+  "embedded_root_readout_targets": [
+    {
+      "target_index": 0,
+      "construction": "embedded_SU8 direct sum identity_21",
+      "unitarity_residual": 9.312724262127648e-16,
+      "determinant_residual": 1.368925914290105e-16,
+      "single_exciton_compression_residual": 0.0
+    },
+    {
+      "target_index": 1,
+      "construction": "embedded_SU8 direct sum identity_21",
+      "unitarity_residual": 1.5528082428107698e-15,
+      "determinant_residual": 4.572379743710881e-16,
+      "single_exciton_compression_residual": 0.0
+    },
+    {
+      "target_index": 2,
+      "construction": "embedded_SU8 direct sum identity_21",
+      "unitarity_residual": 1.4228362626864194e-15,
+      "determinant_residual": 7.771561172376096e-16,
+      "single_exciton_compression_residual": 0.0
+    },
+    {
+      "target_index": 3,
+      "construction": "embedded_SU8 direct sum identity_21",
+      "unitarity_residual": 4.9960788312126724e-15,
+      "determinant_residual": 2.262665771919311e-16,
+      "single_exciton_compression_residual": 0.0
+    }
+  ],
+  "controllability_inference": {
+    "premise_1": "Each desired root-readout basis change embeds in SU(29).",
+    "premise_2": "The locked drift and one fixed-polarization control generate su(29).",
+    "conclusion": "Every desired root-readout basis change has a finite piecewise-constant control realization on the declared frozen K_ij=0 fixture.",
+    "proof_source": "Exact rational characteristic-polynomial isolation proves that every unordered Bohr-gap interval is positive and disjoint from every other. Pairwise-distinct nonzero Bohr frequencies make the even and odd iterated drift commutators a nonsingular Vandermonde system that isolates both quadratures of every nonzero control edge. A connected edge graph then generates all off-diagonal matrix units and Cartan differences, hence su(29)."
+  },
+  "promotion": {
+    "closed_system_root_readout_SU29_embedding": "CLOSED_EXACT",
+    "finite_piecewise_control_existence_for_all_four_root_readouts": "CLOSED_FOR_DECLARED_KIJ0_FIXTURE",
+    "fixed_1ps_amplitude_bounded_pulse_witnesses": "OPEN",
+    "bath_active_root_readout": "OPEN",
+    "physical_Kij_robustness": "OPEN",
+    "calibrated_population_or_heterodyne_readout": "OPEN"
+  },
+  "scope_warning": "Lie controllability proves existence of some finite piecewise-constant control on the frozen K_ij=0 relative-dipole fixture. It supplies no fixed duration, amplitude, fluence, bath-on, physical-pair-interaction, orientation, disorder, or detector-calibration bound."
+}

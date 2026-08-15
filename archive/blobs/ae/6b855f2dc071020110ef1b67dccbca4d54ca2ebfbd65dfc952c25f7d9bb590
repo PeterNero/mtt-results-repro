@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Independently verify the G3EU rejected-recovery certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state/ust_g3eu_component16_recovery_basis_mismatch_audit.packet.json"
+RELATIONS = 21
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, object]) -> Path:
+    path = ROOT / str(record["path"])
+    require(path.is_file(), f"input exists: {path.name}")
+    require(path.stat().st_size == int(record["bytes"]), f"input size: {path.name}")
+    if "sha256" in record:
+        require(sha256(path) == record["sha256"], f"input hash: {path.name}")
+    return path
+
+
+def exact_map_rows(path: Path) -> list[int]:
+    result: list[int] = []
+    with path.open("rb") as handle:
+        require(
+            [int(value) for value in handle.readline().split()]
+            == [120, RELATIONS, 6, -1],
+            "exact-map header",
+        )
+        lines = 0
+        for line in handle:
+            prefix = line.split(b" ", 2)
+            require(len(prefix) == 3, "exact-map prefix")
+            row = int(prefix[0]) - 1
+            relation = int(prefix[1]) - 1
+            require(relation == lines % RELATIONS, "exact-map relation order")
+            if relation == 0:
+                result.append(row)
+            else:
+                require(result[-1] == row, "exact-map row grouping")
+            lines += 1
+    require(lines == 120 * RELATIONS, "exact-map completeness")
+    return result
+
+
+def main() -> None:
+    require(PACKET.is_file(), "packet exists")
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3eu-component16-recovery-basis-mismatch-audit.v1",
+        "packet schema",
+    )
+    require(packet["status"] == "CLOSED_EXACT_RECOVERY_BASIS_MISMATCH_NOGO", "status")
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+
+    paths = {name: verify_record(record) for name, record in packet["inputs"].items()}
+    g3eq = json.loads(paths["G3EQ"].read_text(encoding="utf-8"))
+    g3et = json.loads(paths["corrected_G3ET_selection"].read_text(encoding="utf-8"))
+    campaign = json.loads(paths["rejected_modular_campaign"].read_text(encoding="utf-8"))
+    selected = set(
+        int(value)
+        for value in g3eq["specialization"]["selected_source_rows_zero_based"]
+    )
+    require(len(selected) == 1200, "selected subsystem")
+    omitted = set(range(1238)) - selected
+    require(len(omitted) == 38, "omitted subsystem")
+
+    rows = exact_map_rows(paths["rejected_exact_residual_map"])
+    stdout = paths["rejected_native_audit_stdout"].read_text(encoding="utf-8")
+    match = re.search(
+        r"NONZERO checked=(\d+) defects=(\d+) slots=(\d+).*source_rows=([0-9,]+)",
+        stdout,
+    )
+    require(match is not None, "native summary")
+    require(tuple(map(int, match.groups()[:3])) == (438, 120, 2072), "native counts")
+    require([int(value) - 1 for value in match.group(4).split(",")] == rows, "row agreement")
+    require(sum(row in selected for row in rows) == 101, "selected failures")
+    require(sum(row in omitted for row in rows) == 19, "omitted failures")
+
+    mismatch = packet["basis_mismatch"]
+    require(mismatch["profiles_equal"] is False, "basis mismatch")
+    require(
+        mismatch["corrected_standard_free_columns_zero_based"]
+        == g3et["free_columns_zero_based"],
+        "corrected profile binding",
+    )
+    require(campaign["ranks"] == [4, 4, 4, 4], "rejected campaign ranks")
+    require(
+        packet["adjudication"]["recovered_archive_is_a_kernel_of_the_selected1200_row_subsystem"]
+        is False,
+        "candidate rejection",
+    )
+    require(packet["adjudication"]["four_rank_omitted_slice_is_promotable"] is False, "rank-four retirement")
+    print(
+        "UST.G3EU independent recovery-basis audit: PASS "
+        "selected_defects=101 omitted_defects=19"
+    )
+
+
+if __name__ == "__main__":
+    main()

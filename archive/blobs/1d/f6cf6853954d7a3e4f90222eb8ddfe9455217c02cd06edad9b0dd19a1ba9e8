@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+"""Compose the G3CN transform first jet on the selected G3CC H02 source."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cq"
+OUT = ROOT / "state" / "ust_g3cq_selected_source_transform_defect.packet.json"
+G3BM = ROOT / "state" / "ust_g3bm_correction_toric_return.packet.json"
+G3CC = ROOT / "state" / "ust_g3cc_selected_source_terminal_b89_dualization.packet.json"
+G3CN = ROOT / "state" / "ust_g3cn_pole_six_family_transform_first_jet.packet.json"
+G3CO = ROOT / "state" / "ust_g3co_pole_six_automatic_open_arc_exactness.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "build_q79_eta9_toric_return_stage1_chunk.py").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def polynomial_text(polynomial: dict[tuple[int, ...], int], ordinary) -> str:
+    pieces = []
+    for exponent, coefficient in sorted(polynomial.items()):
+        coefficient %= PRIME
+        if not coefficient:
+            continue
+        monomial = ordinary.monomial_text(exponent)
+        pieces.append(monomial if coefficient == 1 else f"{coefficient}*{monomial}")
+    return "+".join(pieces) if pieces else "0"
+
+
+def sparse_polynomial(polynomial: dict[tuple[int, ...], int]) -> list[dict[str, Any]]:
+    return [
+        {"exponent": list(exponent), "coefficient_mod11": int(coefficient % PRIME)}
+        for exponent, coefficient in sorted(polynomial.items())
+        if coefficient % PRIME
+    ]
+
+
+def derivative(
+    polynomial: dict[tuple[int, ...], int], variable_index: int
+) -> dict[tuple[int, ...], int]:
+    result: dict[tuple[int, ...], int] = {}
+    for exponent, coefficient in polynomial.items():
+        power = int(exponent[variable_index])
+        if power == 0:
+            continue
+        target = list(exponent)
+        target[variable_index] -= 1
+        value = int(coefficient) * power % PRIME
+        key = tuple(target)
+        result[key] = (result.get(key, 0) + value) % PRIME
+        if result[key] == 0:
+            del result[key]
+    return result
+
+
+def parse_marker(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, flags=re.MULTILINE)
+    require(match is not None, f"missing {label}")
+    return int(match.group(1))
+
+
+def quotient_jet_polynomials(
+    g3cn: dict[str, Any], schedule: dict[str, Any], solver_io
+) -> list[dict[tuple[int, ...], int]]:
+    result: list[dict[tuple[int, ...], int]] = [dict() for _ in range(225)]
+    groups = schedule["groups_in_selected_order"]
+    require(len(groups) == len(g3cn["groups"]) == 30, "30 group records")
+    for group, summary in zip(groups, g3cn["groups"], strict=True):
+        require(int(group["group_index"]) == int(summary["group_index"]), "group order")
+        start = int(group["selected_column_start"])
+        stop = int(group["selected_column_stop"])
+        q = int(group["standard_monomial_quotient_dimension"])
+        require(stop - start == int(group["selected_generator_count"]), "group width")
+        if q == 0 or int(summary["first_jet_quotient_nonzero_entries"]) == 0:
+            continue
+        path = ROOT / summary["artifacts"]["first_jet_coordinates"]["path"]
+        require(path.is_file(), f"missing coordinates for group {group['group_index']}")
+        require(sha256(path) == summary["artifacts"]["first_jet_coordinates"]["sha256"], "coordinate hash")
+        coordinates, quotient_rows, _ = solver_io.read_coordinates(path)
+        require(quotient_rows == q, "quotient split")
+        quotient = coordinates[:q, :].tocsc()
+        basis = [tuple(int(value) for value in row) for row in group["quotient_standard_exponent_vectors"]]
+        require(len(basis) == q and quotient.shape[1] == stop - start, "quotient shape")
+        for local_column in range(stop - start):
+            column = quotient.getcol(local_column)
+            polynomial: dict[tuple[int, ...], int] = {}
+            for row, value in zip(column.indices, column.data, strict=True):
+                coefficient = int(value) % PRIME
+                if coefficient:
+                    polynomial[basis[int(row)]] = coefficient
+            result[start + local_column] = polynomial
+    require(sum(len(row) for row in result) == 15211, "G3CN quotient nnz")
+    return result
+
+
+def make_script(
+    selected_source: str,
+    correction_b0: str,
+    quotient_jets: list[dict[tuple[int, ...], int]],
+    selected_indices: list[int],
+    ordinary,
+    targeted,
+    cayley_reducer,
+    transform_cache: Path,
+    ls_cache: Path,
+    defect_cache: Path,
+    correction_cache: Path,
+    correction_return_cache: Path,
+    correction_normal_cache: Path,
+    correction_next_cache: Path,
+    degree_check_prelude: str,
+) -> str:
+    assignments = "\n".join(
+        f"Q[1,{index + 1}]={polynomial_text(polynomial, ordinary)};"
+        for index, polynomial in enumerate(quotient_jets)
+        if polynomial
+    )
+    support_text = ",".join(str(value) for value in selected_indices)
+    return targeted.model_prefix() + degree_check_prelude + f'''// G3CQ selected-source transform-defect composition.
+def cachedBasis=read("ssi:r {cayley_reducer.wsl_path(cayley_reducer.BASIS_CACHE)}");
+ideal G=cachedBasis;
+attrib(G,"isSB",1);
+def cachedTransform=read("ssi:r {cayley_reducer.wsl_path(transform_cache)}");
+matrix T=cachedTransform;
+intvec selectedIndices={support_text};
+poly selectedSource={selected_source};
+poly B0={correction_b0};
+poly poleSixRow=selectedSource*s*(B0*t0);
+ideal poleSixRows=poleSixRow;
+list poleSixDivision=division(poleSixRows,G);
+matrix L=poleSixDivision[1];
+matrix poleSixResidual=matrix(poleSixRows)-matrix(G)*L;
+matrix LS[225][1];
+int si; int gi; int sj; int selected;
+for (si=1;si<=225;si++) {{ LS[si,1]=L[selectedIndices[si],1]; }}
+matrix Q[1][225];
+{assignments}
+matrix defectMatrix=Q*LS;
+poly composedDefect=defectMatrix[1,1];
+ideal defectIdeal=composedDefect;
+list defectDivision=division(defectIdeal,G);
+matrix DL=defectDivision[1];
+matrix defectResidual=matrix(defectIdeal)-matrix(G)*DL;
+int outsideSelected=0; int used=0; int found;
+string usedIndices=""; string outsideIndices="";
+for (gi=1;gi<=size(G);gi++)
+{{
+  if (DL[gi,1]!=0)
+  {{
+    used++;
+    if (usedIndices!="") {{ usedIndices=usedIndices+","; }}
+    usedIndices=usedIndices+string(gi);
+    found=0;
+    for (si=1;si<=225;si++) {{ if (selectedIndices[si]==gi) {{ found=1; }} }}
+    if (found==0)
+    {{
+      outsideSelected++;
+      if (outsideIndices!="") {{ outsideIndices=outsideIndices+","; }}
+      outsideIndices=outsideIndices+string(gi);
+    }}
+  }}
+}}
+matrix DLS[225][1];
+for (si=1;si<=225;si++) {{ DLS[si,1]=DL[selectedIndices[si],1]; }}
+matrix correctionCoefficients=T*DLS;
+matrix selectedReconstruction=matrix(J)*correctionCoefficients;
+int selectedReconstructionZero=(matrix(defectIdeal)-selectedReconstruction==0);
+int coefficientDegreesOK=1;
+intvec coefficientDegree0=10,1,2;
+intvec coefficientDegree1=10,1,2;
+intvec coefficientDegree2=10,1,2;
+intvec coefficientDegree3=12,1,2;
+intvec coefficientDegree4=9,2,2;
+intvec coefficientDegree5=9,2,2;
+intvec coefficientDegree6=9,2,2;
+intvec coefficientDegree7=3,1,3;
+intvec coefficientDegree8=9,-2,3;
+intvec coefficientDegree9=0,0,3;
+list coefficientDegrees=coefficientDegree0,coefficientDegree1,coefficientDegree2,coefficientDegree3,coefficientDegree4,coefficientDegree5,coefficientDegree6,coefficientDegree7,coefficientDegree8,coefficientDegree9;
+int vi;
+for (vi=1;vi<=10;vi++)
+{{
+  if (coxDegreeCheck(correctionCoefficients[vi,1],coefficientDegrees[vi][1],coefficientDegrees[vi][2],coefficientDegrees[vi][3])==0) {{ coefficientDegreesOK=0; }}
+}}
+poly correctionReturn=0;
+for (vi=1;vi<=10;vi++)
+{{
+  correctionReturn=correctionReturn-diff(correctionCoefficients[vi,1],var(vi));
+}}
+int correctionReturnDegreeOK=coxDegreeCheck(correctionReturn,9,1,2);
+ideal correctionReturnIdeal=correctionReturn;
+list correctionReturnDivision=division(correctionReturnIdeal,G);
+matrix correctionNextL=correctionReturnDivision[1];
+matrix correctionReturnResidual=matrix(correctionReturnIdeal)-matrix(G)*correctionNextL;
+poly correctionNormalForm=correctionReturnResidual[1,1];
+write("ssi:w {cayley_reducer.wsl_path(ls_cache)}",LS);
+write("ssi:w {cayley_reducer.wsl_path(defect_cache)}",defectIdeal);
+write("ssi:w {cayley_reducer.wsl_path(correction_cache)}",correctionCoefficients);
+write("ssi:w {cayley_reducer.wsl_path(correction_return_cache)}",correctionReturnIdeal);
+write("ssi:w {cayley_reducer.wsl_path(correction_normal_cache)}",ideal(correctionNormalForm));
+write("ssi:w {cayley_reducer.wsl_path(correction_next_cache)}",correctionNextL);
+int lsTerms=0; int lsUsed=0;
+for (si=1;si<=225;si++)
+{{
+  if (LS[si,1]!=0) {{ lsUsed++; lsTerms=lsTerms+size(LS[si,1]); }}
+  print("G3CQ_LS_"+string(si-1)+"="+string(LS[si,1]));
+}}
+int correctionCoefficientTerms=0; int correctionCoefficientRowsUsed=0;
+for (vi=1;vi<=10;vi++)
+{{
+  if (correctionCoefficients[vi,1]!=0)
+  {{
+    correctionCoefficientRowsUsed++;
+    correctionCoefficientTerms=correctionCoefficientTerms+size(correctionCoefficients[vi,1]);
+  }}
+  print("G3CQ_CORRECTION_COEFFICIENT_"+string(vi-1)+"="+string(correctionCoefficients[vi,1]));
+}}
+int correctionNextUsed=0; int correctionNextTerms=0;
+string correctionNextIndices="";
+for (gi=1;gi<=size(G);gi++)
+{{
+  if (correctionNextL[gi,1]!=0)
+  {{
+    correctionNextUsed++;
+    correctionNextTerms=correctionNextTerms+size(correctionNextL[gi,1]);
+    if (correctionNextIndices!="") {{ correctionNextIndices=correctionNextIndices+","; }}
+    correctionNextIndices=correctionNextIndices+string(gi);
+  }}
+}}
+print("G3CQ_DEFECT="+string(composedDefect));
+print("G3CQ_CORRECTION_RETURN="+string(correctionReturn));
+print("G3CQ_CORRECTION_NORMAL_FORM="+string(correctionNormalForm));
+print("G3CQ_GAMMA_REL="+string(gammaRelation));
+print("G3CQ_SOURCE_DIVISION_RESIDUAL_ZERO="+string(poleSixResidual[1,1]==0));
+print("G3CQ_LS_USED="+string(lsUsed));
+print("G3CQ_LS_TERMS="+string(lsTerms));
+print("G3CQ_DEFECT_TERMS="+string(size(composedDefect)));
+print("G3CQ_DEFECT_IS_ZERO="+string(composedDefect==0));
+print("G3CQ_DEFECT_REDUCTION_RESIDUAL_ZERO="+string(defectResidual[1,1]==0));
+print("G3CQ_DEFECT_GB_USED="+string(used));
+print("G3CQ_DEFECT_GB_INDICES="+usedIndices);
+print("G3CQ_DEFECT_OUTSIDE_SELECTED="+string(outsideSelected));
+print("G3CQ_DEFECT_OUTSIDE_INDICES="+outsideIndices);
+print("G3CQ_SELECTED_RECONSTRUCTION_ZERO="+string(selectedReconstructionZero));
+print("G3CQ_CORRECTION_COEFFICIENT_ROWS_USED="+string(correctionCoefficientRowsUsed));
+print("G3CQ_CORRECTION_COEFFICIENT_TERMS="+string(correctionCoefficientTerms));
+print("G3CQ_CORRECTION_COEFFICIENT_DEGREES_OK="+string(coefficientDegreesOK));
+print("G3CQ_CORRECTION_RETURN_TERMS="+string(size(correctionReturn)));
+print("G3CQ_CORRECTION_RETURN_DEGREE_OK="+string(correctionReturnDegreeOK));
+print("G3CQ_CORRECTION_NORMAL_FORM_TERMS="+string(size(correctionNormalForm)));
+print("G3CQ_CORRECTION_NEXT_USED="+string(correctionNextUsed));
+print("G3CQ_CORRECTION_NEXT_TERMS="+string(correctionNextTerms));
+print("G3CQ_CORRECTION_NEXT_INDICES="+correctionNextIndices);
+print("G3CQ_PASS");
+quit;
+'''
+
+
+def main() -> None:
+    mld = resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_cayley_jacobian_reducer as cayley_reducer
+    import build_q79_eta9_cayley_ordinary_top_dimension as ordinary
+    import build_q79_eta9_smooth_graph_slice_witness as residue
+    import build_q79_eta9_targeted_original_jacobian_transform as targeted
+    import build_q79_eta9_toric_return_stage1_chunk as stage
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    g3bm = load(G3BM)
+    g3cc = load(G3CC)
+    g3cn = load(G3CN)
+    g3co = load(G3CO)
+    for label, packet in (("G3BM", g3bm), ("G3CC", g3cc), ("G3CN", g3cn), ("G3CO", g3co)):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    schedule_path = mld / "q79_eta9_targeted_original_jacobian_macaulay_schedule.packet.json"
+    schedule = load(schedule_path)
+    b103 = load(stage.B103)
+    quotient_jets = quotient_jet_polynomials(g3cn, schedule, solver_io)
+    selected_indices = [int(value) for value in schedule["inputs"]["support_union"]["support_indices_one_based"]] if "support_indices_one_based" in schedule["inputs"]["support_union"] else [
+        int(value)
+        for group in schedule["groups_in_selected_order"]
+        for value in group["selected_Groebner_indices_one_based"]
+    ]
+    require(len(selected_indices) == 225, "selected support")
+    require(selected_indices == [int(value) for value in load(stage.SUPPORT)["support_union_indices_one_based"]], "support order")
+
+    h02 = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    source_record = g3cc["terminal_source"]["B103_H02_vector"]
+    source_path = ROOT / source_record["path"]
+    require(source_path.is_file() and sha256(source_path) == source_record["sha256"], "G3CC source vector")
+    source_vector = np.load(source_path).astype(np.uint8)
+    require(source_vector.shape == (248,), "source vector shape")
+    source_polynomial = {
+        tuple(int(value) for value in exponent): int(coefficient)
+        for exponent, coefficient in zip(h02["basis_exponent_vectors"], source_vector, strict=True)
+        if int(coefficient) % PRIME
+    }
+    require(len(source_polynomial) == 229, "selected source nnz")
+    source_text = polynomial_text(source_polynomial, ordinary)
+
+    g3bi = load(ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json")
+    correction_b0, correction_terms = __import__(
+        "probe_ust_g3bm_correction_toric_return_chunk"
+    ).correction_b0(g3bi, ordinary)
+    require(len(correction_terms) == 18, "correction terms")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    script_path = EVIDENCE / "selected_source_transform_defect.sing"
+    output_path = EVIDENCE / "selected_source_transform_defect.singular.out"
+    ls_cache = EVIDENCE / "selected_source_pole_six_division_LS.ssi"
+    defect_cache = EVIDENCE / "selected_source_composed_quotient_defect.ssi"
+    correction_cache = EVIDENCE / "selected_source_original_partial_correction.ssi"
+    correction_return_cache = EVIDENCE / "selected_source_correction_return.ssi"
+    correction_normal_cache = EVIDENCE / "selected_source_correction_H02_normal_form.ssi"
+    correction_next_cache = EVIDENCE / "selected_source_correction_next_quotient.ssi"
+    ls_json_path = EVIDENCE / "selected_source_pole_six_division_LS.json"
+    defect_json_path = EVIDENCE / "selected_source_composed_quotient_defect.json"
+    correction_json_path = EVIDENCE / "selected_source_original_partial_correction.json"
+    correction_return_json_path = EVIDENCE / "selected_source_correction_return.json"
+    correction_normal_json_path = EVIDENCE / "selected_source_correction_H02_normal_form.json"
+    correction_normal_binary_path = EVIDENCE / "selected_source_correction_H02_normal_form.u8"
+    correction_ambient_rhs_path = EVIDENCE / "selected_source_correction_H02_ambient.rhs.cscbin"
+    correction_ambient_npz_path = EVIDENCE / "selected_source_correction_H02_ambient.npz"
+    script_path.write_text(
+        make_script(
+            source_text,
+            correction_b0,
+            quotient_jets,
+            selected_indices,
+            ordinary,
+            targeted,
+            cayley_reducer,
+            stage.TRANSFORM_CACHE,
+            ls_cache,
+            defect_cache,
+            correction_cache,
+            correction_return_cache,
+            correction_normal_cache,
+            correction_next_cache,
+            stage.make_degree_check_procedure(),
+        ),
+        encoding="utf-8",
+    )
+    output, engine, timed_out, elapsed = residue.run_singular(script_path, 1800.0)
+    output_path.write_text(output, encoding="utf-8")
+    require(not timed_out, f"Singular timeout after {elapsed:.1f}s")
+    require("G3CQ_PASS" in output, output[-4000:])
+    require(parse_marker(output, "G3CQ_GAMMA_REL") == 0, "gamma relation")
+    require(parse_marker(output, "G3CQ_SOURCE_DIVISION_RESIDUAL_ZERO") == 1, "source division")
+    require(parse_marker(output, "G3CQ_DEFECT_REDUCTION_RESIDUAL_ZERO") == 1, "defect reduction")
+    require(parse_marker(output, "G3CQ_SELECTED_RECONSTRUCTION_ZERO") == 1, "selected reconstruction")
+    require(parse_marker(output, "G3CQ_CORRECTION_COEFFICIENT_DEGREES_OK") == 1, "correction coefficient degrees")
+    require(parse_marker(output, "G3CQ_CORRECTION_RETURN_DEGREE_OK") == 1, "correction return degree")
+
+    ls_polynomials: list[dict[tuple[int, ...], int]] = []
+    for index in range(225):
+        match = re.search(rf"^G3CQ_LS_{index}=(.*)$", output, flags=re.MULTILINE)
+        require(match is not None, f"LS row {index}")
+        parsed = stage.strict.parse_normal_form(match.group(1).strip())
+        ls_polynomials.append({tuple(key): int(value) % PRIME for key, value in parsed.items() if int(value) % PRIME})
+    defect_match = re.search(r"^G3CQ_DEFECT=(.*)$", output, flags=re.MULTILINE)
+    require(defect_match is not None, "defect polynomial")
+    singular_defect = {
+        tuple(key): int(value) % PRIME
+        for key, value in stage.strict.parse_normal_form(defect_match.group(1).strip()).items()
+        if int(value) % PRIME
+    }
+
+    python_defect: defaultdict[tuple[int, ...], int] = defaultdict(int)
+    for quotient, multiplier in zip(quotient_jets, ls_polynomials, strict=True):
+        for left_exp, left_coefficient in quotient.items():
+            for right_exp, right_coefficient in multiplier.items():
+                exponent = tuple(left + right for left, right in zip(left_exp, right_exp, strict=True))
+                python_defect[exponent] = (
+                    python_defect[exponent] + left_coefficient * right_coefficient
+                ) % PRIME
+    python_defect = defaultdict(int, {key: value for key, value in python_defect.items() if value})
+    require(dict(python_defect) == singular_defect, "independent defect convolution")
+    require(len(singular_defect) == parse_marker(output, "G3CQ_DEFECT_TERMS"), "defect term count")
+
+    correction_coefficients: list[dict[tuple[int, ...], int]] = []
+    for index in range(10):
+        match = re.search(rf"^G3CQ_CORRECTION_COEFFICIENT_{index}=(.*)$", output, flags=re.MULTILINE)
+        require(match is not None, f"correction coefficient {index}")
+        parsed = stage.strict.parse_normal_form(match.group(1).strip())
+        correction_coefficients.append(
+            {tuple(key): int(value) % PRIME for key, value in parsed.items() if int(value) % PRIME}
+        )
+    correction_return_match = re.search(r"^G3CQ_CORRECTION_RETURN=(.*)$", output, flags=re.MULTILINE)
+    correction_normal_match = re.search(r"^G3CQ_CORRECTION_NORMAL_FORM=(.*)$", output, flags=re.MULTILINE)
+    require(correction_return_match is not None and correction_normal_match is not None, "correction returns")
+    correction_return = {
+        tuple(key): int(value) % PRIME
+        for key, value in stage.strict.parse_normal_form(correction_return_match.group(1).strip()).items()
+        if int(value) % PRIME
+    }
+    correction_normal = {
+        tuple(key): int(value) % PRIME
+        for key, value in stage.strict.parse_normal_form(correction_normal_match.group(1).strip()).items()
+        if int(value) % PRIME
+    }
+    python_return: dict[tuple[int, ...], int] = {}
+    for variable_index, coefficient in enumerate(correction_coefficients):
+        for exponent, value in derivative(coefficient, variable_index).items():
+            python_return[exponent] = (python_return.get(exponent, 0) - value) % PRIME
+            if python_return[exponent] == 0:
+                del python_return[exponent]
+    require(python_return == correction_return, "independent minus-divergence")
+    require(len(correction_return) == parse_marker(output, "G3CQ_CORRECTION_RETURN_TERMS"), "correction return terms")
+    require(len(correction_normal) == parse_marker(output, "G3CQ_CORRECTION_NORMAL_FORM_TERMS"), "normal form terms")
+    h02_lookup = {
+        tuple(int(value) for value in exponent): index
+        for index, exponent in enumerate(h02["basis_exponent_vectors"])
+    }
+    require(all(exponent in h02_lookup for exponent in correction_normal), "correction normal form in H02 basis")
+    correction_normal_vector = np.zeros(248, dtype=np.uint8)
+    for exponent, coefficient in correction_normal.items():
+        correction_normal_vector[h02_lookup[exponent]] = coefficient % PRIME
+    correction_normal_binary_path.write_bytes(correction_normal_vector.tobytes(order="C"))
+    h02_macaulay = load(stage.H02_MACAULAY)
+    require(all(h02_macaulay["checks"].values()), "H02 Macaulay checks")
+    h02_ambient_vectors = [
+        tuple(int(value) for value in exponent)
+        for exponent in h02_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    h02_ambient_lookup = {exponent: index for index, exponent in enumerate(h02_ambient_vectors)}
+    require(len(h02_ambient_vectors) == len(h02_ambient_lookup) == 42706, "H02 ambient basis")
+    require(all(exponent in h02_ambient_lookup for exponent in correction_return), "correction return in H02 ambient basis")
+    ambient_rows = np.asarray(
+        [h02_ambient_lookup[exponent] for exponent in correction_return], dtype=np.int32
+    )
+    ambient_data = np.asarray(
+        [correction_return[exponent] for exponent in correction_return], dtype=np.uint8
+    )
+    correction_ambient_rhs = sparse.csc_matrix(
+        (ambient_data, (ambient_rows, np.zeros(len(ambient_rows), dtype=np.int32))),
+        shape=(42706, 1),
+        dtype=np.uint8,
+    )
+    correction_ambient_rhs.sum_duplicates()
+    correction_ambient_rhs.data %= PRIME
+    correction_ambient_rhs.eliminate_zeros()
+    require(correction_ambient_rhs.nnz == len(correction_return), "H02 ambient RHS nnz")
+    solver_io.write_rhs(correction_ambient_rhs_path, correction_ambient_rhs)
+    sparse.save_npz(correction_ambient_npz_path, correction_ambient_rhs, compressed=True)
+
+    ls_payload = {
+        "schema": "mtt.unified-source.g3cq-selected-source-ls.v1",
+        "source": record(source_path),
+        "selected_support_indices_one_based": selected_indices,
+        "rows": [sparse_polynomial(row) for row in ls_polynomials],
+    }
+    defect_payload = {
+        "schema": "mtt.unified-source.g3cq-selected-source-defect.v1",
+        "sign_convention": "g_j=J(a)T_j(a)+a*q_j+O(a^2); defect=sum_j q_j*LS_j",
+        "Cox_degree": [9, 1, 3],
+        "terms": sparse_polynomial(singular_defect),
+    }
+    ls_json_path.write_text(json.dumps(ls_payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    defect_json_path.write_text(json.dumps(defect_payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    correction_payload = {
+        "schema": "mtt.unified-source.g3cq-selected-source-original-partial-correction.v1",
+        "identity": "d_selected=J(0)*c_selected",
+        "sign_rule": "N=J(a)*h_base(a)+a*d_selected+O(a^2), so h_corrected(a)=h_base(a)+a*c_selected+O(a^2)",
+        "rows_in_original_variable_order": [
+            {"variable": variable, "terms": sparse_polynomial(row)}
+            for variable, row in zip(ordinary.VARIABLES, correction_coefficients, strict=True)
+        ],
+    }
+    correction_return_payload = {
+        "schema": "mtt.unified-source.g3cq-selected-source-correction-return.v1",
+        "formula": "R_correction=-sum_i partial_i(c_selected_i)",
+        "Cox_degree": [9, 1, 2],
+        "terms": sparse_polynomial(correction_return),
+    }
+    correction_normal_payload = {
+        "schema": "mtt.unified-source.g3cq-selected-source-correction-h02-normal-form.v1",
+        "basis": "B103 H02",
+        "dimension": 248,
+        "nonzero_coordinates": int(np.count_nonzero(correction_normal_vector)),
+        "terms": sparse_polynomial(correction_normal),
+    }
+    correction_json_path.write_text(json.dumps(correction_payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    correction_return_json_path.write_text(json.dumps(correction_return_payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    correction_normal_json_path.write_text(json.dumps(correction_normal_payload, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+    used_match = re.search(r"^G3CQ_DEFECT_GB_INDICES=([^\r\n]*)$", output, flags=re.MULTILINE)
+    outside_match = re.search(r"^G3CQ_DEFECT_OUTSIDE_INDICES=([^\r\n]*)$", output, flags=re.MULTILINE)
+    require(used_match is not None and outside_match is not None, "support markers")
+    used_indices = [int(value) for value in used_match.group(1).split(",") if value]
+    outside_indices = [int(value) for value in outside_match.group(1).split(",") if value]
+    defect_zero = parse_marker(output, "G3CQ_DEFECT_IS_ZERO") == 1
+    selected_reconstruction = parse_marker(output, "G3CQ_SELECTED_RECONSTRUCTION_ZERO") == 1
+    correction_next_match = re.search(r"^G3CQ_CORRECTION_NEXT_INDICES=([^\r\n]*)$", output, flags=re.MULTILINE)
+    require(correction_next_match is not None, "correction next support")
+    correction_next_indices = [int(value) for value in correction_next_match.group(1).split(",") if value]
+    checks = {
+        "G3BM_G3CC_G3CN_and_G3CO_are_hash_bound_and_passing": True,
+        "the_selected_terminal_source_has229_nonzero_H02_coordinates": True,
+        "all225_selected_Groebner_multipliers_are_emitted": True,
+        "the_source_pole_six_division_has_zero_residual": True,
+        "the_G3CN_quotient_jet_has15211_entries": True,
+        "Python_and_Singular_composed_defect_polynomials_agree_exactly": True,
+        "the_composed_defect_has_Cox_degree9_1_3": True,
+        "the_composed_defect_reduces_to_zero_by_the_complete_B69_Groebner_basis": True,
+        "the_complete_support_needed_for_its_reduction_is_emitted": True,
+        "the_defect_is_reconstructed_by_the_frozen225_original_partial_transform": selected_reconstruction,
+        "all_ten_original_partial_correction_rows_are_emitted": True,
+        "Python_and_Singular_minus_divergence_returns_agree_exactly": True,
+        "the_correction_return_has_Cox_degree9_1_2": True,
+        "the_correction_return_lies_in_the_complete42706_row_H02_ambient_basis": True,
+        "the_correction_normal_form_lies_in_the_complete_B103_H02_basis": True,
+        "no_characteristic_zero_action_path_integration_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CQ checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cq-selected-source-transform-defect.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CQ",
+        "status": "CLOSED_EXACT_GF11_SELECTED_SOURCE_TRANSFORM_DEFECT_COMPOSITION_COMMON_CORRECTION_EXECUTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BM": record(G3BM),
+            "G3CC": record(G3CC),
+            "G3CN": record(G3CN),
+            "G3CO": record(G3CO),
+            "schedule": external_record(schedule_path, mld),
+            "B103": external_record(stage.B103, mld),
+            "B69_basis_cache": external_record(cayley_reducer.BASIS_CACHE, mld),
+            "targeted_transform_cache": external_record(stage.TRANSFORM_CACHE, mld),
+        },
+        "selected_source": {
+            "frame": "B103 H02 at B89 good reduction",
+            "dimension": 248,
+            "nonzero_coordinates": int(np.count_nonzero(source_vector)),
+            "vector": record(source_path),
+            "pole_six_formula": "selectedSource*s*(B0*t0)",
+        },
+        "division_multipliers": {
+            "selected_Groebner_columns": 225,
+            "nonzero_columns": parse_marker(output, "G3CQ_LS_USED"),
+            "coefficient_terms": parse_marker(output, "G3CQ_LS_TERMS"),
+            "json": record(ls_json_path),
+            "Singular_SSI": record(ls_cache),
+        },
+        "composed_quotient_defect": {
+            "formula": "d_selected=sum_(j=1)^225 q_j_prime*LS_j",
+            "sign_convention": defect_payload["sign_convention"],
+            "is_zero": defect_zero,
+            "nonzero_terms": len(singular_defect),
+            "complete_Groebner_reduction_residual_nonzeros": 0,
+            "Groebner_generators_used": len(used_indices),
+            "Groebner_generator_indices_one_based": used_indices,
+            "generators_outside_frozen225": len(outside_indices),
+            "outside_indices_one_based": outside_indices,
+            "reconstructible_by_frozen225_transform": selected_reconstruction,
+            "json": record(defect_json_path),
+            "Singular_SSI": record(defect_cache),
+        },
+        "selected_first_order_coefficient_correction": {
+            "identity": correction_payload["identity"],
+            "sign_rule": correction_payload["sign_rule"],
+            "original_partial_rows": 10,
+            "nonzero_rows": parse_marker(output, "G3CQ_CORRECTION_COEFFICIENT_ROWS_USED"),
+            "coefficient_terms": parse_marker(output, "G3CQ_CORRECTION_COEFFICIENT_TERMS"),
+            "json": record(correction_json_path),
+            "Singular_SSI": record(correction_cache),
+        },
+        "H02_return_correction": {
+            "formula": correction_return_payload["formula"],
+            "ambient_nonzero_terms": len(correction_return),
+            "normal_form_nonzero_terms": len(correction_normal),
+            "B103_nonzero_coordinates": int(np.count_nonzero(correction_normal_vector)),
+            "next_lower_pole_Groebner_generators_used": len(correction_next_indices),
+            "next_lower_pole_Groebner_generator_indices_one_based": correction_next_indices,
+            "next_lower_pole_coefficient_terms": parse_marker(output, "G3CQ_CORRECTION_NEXT_TERMS"),
+            "ambient_json": record(correction_return_json_path),
+            "ambient_Singular_SSI": record(correction_return_cache),
+            "ambient_solver_RHS": record(correction_ambient_rhs_path),
+            "ambient_scipy_NPZ": record(correction_ambient_npz_path),
+            "normal_form_json": record(correction_normal_json_path),
+            "normal_form_binary_uint8": record(correction_normal_binary_path),
+            "normal_form_Singular_SSI": record(correction_normal_cache),
+            "next_quotient_Singular_SSI": record(correction_next_cache),
+        },
+        "execution": {
+            "engine": engine,
+            "elapsed_seconds": elapsed,
+            "script": record(script_path),
+            "output": record(output_path),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_defect_vanishes_without_checking_is_zero": False,
+            "claims_the_frozen225_transform_is_complete_if_outside_support_is_nonzero": False,
+            "claims_characteristic_zero_right_inverse_action": False,
+            "claims_complete_connection_derivative_or_path_integration": False,
+            "claims_the_emitted_H02_return_is_already_recursively_completed_through_H11_and_H20": False,
+            "claims_integral_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3cqSelectedSourceTransformDefect",
+            "tier": "CLOSED_EXACT_SELECTED_SOURCE_FIRST_JET_CORRECTION_AND_H02_RETURN_AT_GF11",
+            "statement": "For the exact 229-coordinate G3CC terminal H02 source, the cached B69 division emits 225 selected Groebner multipliers LS_j with zero source residual. Composing those multipliers with all G3CN quotient first jets gives one explicit degree-(9,1,3) polynomial d_selected. It is nonzero, but complete reduction uses only the frozen 225 generators, so the targeted transform emits an exact ten-row original-partial correction c_selected with J(0)c_selected=d_selected. Its minus divergence is independently replayed in Python and Singular and its normal form is emitted in the complete B103 H02 basis. This closes the selected-source first-order quotient repair at the proof fiber; it is not yet a characteristic-zero family action or recursive H11/H20 derivative.",
+        },
+        "frontier_delta": {
+            "before": "G3CN exposed 15211 groupwise quotient-jet entries but had not composed them with even one physical selected H02 source.",
+            "after": "The exact G3CC selected source is composed through its 225 B69 multipliers into one explicit 705-term defect. Its reduction stays entirely inside the frozen transform, which now emits the exact ten original-partial correction, minus-divergence return and B103 H02 normal coordinates. The remaining derivative work starts from this one emitted H02 row rather than all groupwise jets.",
+        },
+        "next_required_object": "Feed the emitted correction H02 ambient row through the certified H02 coordinate factorization, retain its original-Jacobian preimage, and recursively differentiate/diverge through H11 and H20. Then combine it with the other family-derivative terms; do not rerun the 225-generator defect search.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CQ selected-source transform defect: PASS")
+    print(
+        f"source_nnz=229 ls_used={packet['division_multipliers']['nonzero_columns']} "
+        f"defect_terms={len(singular_defect)} defect_zero={str(defect_zero).lower()} "
+        f"outside_frozen225={len(outside_indices)}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

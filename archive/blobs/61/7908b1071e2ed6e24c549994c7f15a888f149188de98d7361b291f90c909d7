@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Run all resumable rectangles for the direct 215x89 selected Schur response."""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import ust_cayley_fiber2_reduction as fiber2
+
+
+ROOT = Path(__file__).resolve().parent
+BUILDER = ROOT / "build_ust_g3an_selected_cayley_schur_chunk.py"
+ASSEMBLER = ROOT / "assemble_ust_g3an_selected_cayley_direct_schur.py"
+CAMPAIGN = ROOT / "state" / "g3an_cayley_schur_chunks"
+G3AL = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+G3AM = ROOT / "state" / "ust_g3am_selected_cayley_principal_response.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def certified(
+    path: Path,
+    g3al_hash: str,
+    g3am_hash: str,
+    reduction: dict[str, object],
+    quotient_hash: str,
+) -> bool:
+    if not path.is_file():
+        return False
+    packet = json.loads(path.read_text(encoding="ascii"))
+    inputs = packet.get("inputs", {})
+    return (
+        packet.get("status") == "CLOSED_EXACT_SELECTED_CARRIER_FINITE_RESIDUE_SCHUR_RECTANGLE"
+        and all(packet.get("checks", {}).values())
+        and inputs.get("G3AL", {}).get("sha256") == g3al_hash
+        and inputs.get("G3AM", {}).get("sha256") == g3am_hash
+        and inputs.get("G3AP") == reduction["certificate"]
+        and inputs.get("G3AP_source") == reduction["source_certificate"]
+        and inputs.get("module_cache", {}).get("sha256")
+        == reduction["module_cache_record"]["sha256"]
+        and packet.get("reduction_basis", {}).get("kind") == reduction["kind"]
+        and packet.get("reduction_basis", {}).get("valid_through_scalar_degree")
+        == reduction["valid_through_scalar_degree"]
+        and packet.get("reduction_basis", {}).get("maximum_reduced_scalar_degree")
+        == reduction.get("maximum_target_scalar_degree", 44)
+        and packet.get("reduction_basis", {}).get("Cox_functional")
+        == reduction.get("Cox_functional", "H+L")
+        and packet.get("reduction_basis", {}).get("is_full_standard_basis")
+        == reduction.get("is_full_standard_basis", True)
+        and packet.get("reduction_basis", {}).get("component_coordinates")
+        == reduction["fiber_coordinates"]
+        and (
+            inputs.get("base_cache") is None
+            if reduction["base_cache_record"] is None
+            else inputs.get("base_cache", {}).get("sha256")
+            == reduction["base_cache_record"]["sha256"]
+        )
+        and inputs.get("principal_quotient", {}).get("sha256") == quotient_hash
+    )
+
+
+def run_chunk(stem: str, command: list[str]) -> str:
+    print(f"run {stem}", flush=True)
+    subprocess.run(command, cwd=ROOT, check=True)
+    return stem
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rows-per-chunk", type=int, default=4)
+    parser.add_argument("--timeout-per-chunk", type=int, default=7200)
+    parser.add_argument("--workers", type=int, default=1)
+    args = parser.parse_args()
+    require(1 <= args.rows_per_chunk <= 215, "rows per chunk")
+    require(1 <= args.workers <= 16, "workers")
+    g3am = json.loads(G3AM.read_text(encoding="ascii"))
+    require(g3am["principal_response"]["rank"] == 33, "selected rank(D0)=33")
+    quotient = g3am["principal_response"]["quotient_artifact"]
+    require(quotient is not None, "selected N0")
+    reduction = fiber2.selected_fiber2_reduction()
+    hashes = (
+        sha256(G3AL),
+        sha256(G3AM),
+        reduction,
+        quotient["sha256"],
+    )
+    jobs: list[tuple[str, list[str]]] = []
+    for row_start in range(0, 215, args.rows_per_chunk):
+        row_count = min(args.rows_per_chunk, 215 - row_start)
+        stem = f"r{row_start:03d}-{row_start + row_count - 1:03d}_c000-088"
+        packet_path = CAMPAIGN / f"{stem}.packet.json"
+        if certified(packet_path, *hashes):
+            print(f"skip {stem}: certified")
+            continue
+        command = [
+            sys.executable,
+            str(BUILDER),
+            "--row-start", str(row_start),
+            "--row-count", str(row_count),
+            "--timeout", str(args.timeout_per_chunk),
+        ]
+        jobs.append((stem, command))
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(run_chunk, stem, command): stem
+            for stem, command in jobs
+        }
+        for future in as_completed(futures):
+            stem = future.result()
+            print(f"done {stem}", flush=True)
+    subprocess.run([sys.executable, str(ASSEMBLER)], cwd=ROOT, check=True)
+    print("G3AN direct 215x89 selected Schur campaign and assembly complete")
+
+
+if __name__ == "__main__":
+    main()

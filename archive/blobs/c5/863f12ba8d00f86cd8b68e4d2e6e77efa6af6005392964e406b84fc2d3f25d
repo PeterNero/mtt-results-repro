@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""Independently verify UST.G3AI's residue chart and descent contract."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Iterable
+
+
+ROOT = Path(__file__).resolve().parent
+MLD_ROOT = Path(
+    os.environ.get(
+        "MTT_MLD_ROOT", ROOT.parent / "20 Mathematical Language Discovery Program"
+    )
+)
+PACKET = ROOT / "state" / "ust_g3ai_second_h_marked_map_all_orders.packet.json"
+G3AH = ROOT / "state" / "ust_g3ah_formal_coefficient_kernel.packet.json"
+RESIDUE = MLD_ROOT / "q79_primitive_h_second_curve_marked_fermat_map.packet.json"
+P = 101
+RELATION = (31, 69, 12)
+ZERO = (0, 0, 0)
+ONE = (1, 0, 0)
+EXPECTED_MLD_HASHES = {
+    "q79_primitive_h_hesse_hurwitz_promotion.packet.json": "b54039ae562c8f31172a01daa993c366f9e9361a459374de865519dd349847a1",
+    "q79_primitive_h_second_curve_marked_fermat_map.packet.json": "9659da2b89e5758865db9d3be46abe118052a6d0acd7081689398d8ca0fe4db6",
+    "q79_primitive_h_marked_map_hensel_seed.packet.json": "081209d11a635d2294ecf8fe66cc9439eefc0e4674e8401094aa9563461a4cd9",
+    "q79_primitive_h_marked_map_padic_compiler.packet.json": "f2ceee38d9469411b57f82ecaa8613435ef6654c88bce9ffe993a215eca3421d",
+    "q79_primitive_h_second_curve_hensel_lift.packet.json": "8c985a3af66bfe8fa611a4eba63cd5f78e516ac723c77b98a811221971bc6b98",
+}
+
+Element = tuple[int, int, int]
+Polynomial = list[Element]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def normalized_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def elt(values: Iterable[int]) -> Element:
+    result = [int(value) % P for value in values]
+    require(len(result) <= 3, "field element length")
+    result += [0] * (3 - len(result))
+    return tuple(result)  # type: ignore[return-value]
+
+
+def add(left: Element, right: Element) -> Element:
+    return elt(a + b for a, b in zip(left, right))
+
+
+def neg(value: Element) -> Element:
+    return elt(-entry for entry in value)
+
+
+def sub(left: Element, right: Element) -> Element:
+    return add(left, neg(right))
+
+
+def mul(left: Element, right: Element) -> Element:
+    work = [0] * 5
+    for i, a in enumerate(left):
+        for j, b in enumerate(right):
+            work[i + j] = (work[i + j] + a * b) % P
+    for degree in (4, 3):
+        coefficient = work[degree] % P
+        work[degree] = 0
+        work[degree - 3] -= RELATION[0] * coefficient
+        work[degree - 2] -= RELATION[1] * coefficient
+        work[degree - 1] -= RELATION[2] * coefficient
+    return elt(work[:3])
+
+
+def power(value: Element, exponent: int) -> Element:
+    result = ONE
+    base = value
+    while exponent:
+        if exponent & 1:
+            result = mul(result, base)
+        base = mul(base, base)
+        exponent //= 2
+    return result
+
+
+def inverse(value: Element) -> Element:
+    require(value != ZERO, "field inverse of zero")
+    result = power(value, P**3 - 2)
+    require(mul(value, result) == ONE, "field inverse check")
+    return result
+
+
+def trim(values: Polynomial) -> Polynomial:
+    values = list(values)
+    while len(values) > 1 and values[-1] == ZERO:
+        values.pop()
+    return values or [ZERO]
+
+
+def pad(values: Polynomial, size: int) -> Polynomial:
+    return list(values) + [ZERO] * max(0, size - len(values))
+
+
+def poly_add(left: Polynomial, right: Polynomial) -> Polynomial:
+    size = max(len(left), len(right))
+    return trim([add(a, b) for a, b in zip(pad(left, size), pad(right, size))])
+
+
+def poly_neg(value: Polynomial) -> Polynomial:
+    return trim([neg(entry) for entry in value])
+
+
+def poly_sub(left: Polynomial, right: Polynomial) -> Polynomial:
+    return poly_add(left, poly_neg(right))
+
+
+def poly_scale(value: Polynomial, scalar: Element) -> Polynomial:
+    return trim([mul(entry, scalar) for entry in value])
+
+
+def poly_mul(left: Polynomial, right: Polynomial) -> Polynomial:
+    result = [ZERO] * (len(left) + len(right) - 1)
+    for i, a in enumerate(left):
+        for j, b in enumerate(right):
+            result[i + j] = add(result[i + j], mul(a, b))
+    return trim(result)
+
+
+def poly_power(value: Polynomial, exponent: int) -> Polynomial:
+    result = [ONE]
+    base = value
+    while exponent:
+        if exponent & 1:
+            result = poly_mul(result, base)
+        base = poly_mul(base, base)
+        exponent //= 2
+    return result
+
+
+def polynomial(rows: list[list[int]]) -> Polynomial:
+    return trim([elt(row) for row in rows])
+
+
+def rank(matrix: list[list[Element]]) -> int:
+    work = [row[:] for row in matrix]
+    result = 0
+    for column in range(len(work[0])):
+        pivot = next((row for row in range(result, len(work)) if work[row][column] != ZERO), None)
+        if pivot is None:
+            continue
+        work[result], work[pivot] = work[pivot], work[result]
+        pivot_inverse = inverse(work[result][column])
+        work[result] = [mul(value, pivot_inverse) for value in work[result]]
+        for row in range(len(work)):
+            if row == result or work[row][column] == ZERO:
+                continue
+            factor = work[row][column]
+            work[row] = [sub(a, mul(factor, b)) for a, b in zip(work[row], work[result])]
+        result += 1
+    return result
+
+
+def det(matrix: list[list[Element]]) -> Element:
+    work = [row[:] for row in matrix]
+    result = ONE
+    sign = 1
+    for column in range(len(work)):
+        pivot = next(row for row in range(column, len(work)) if work[row][column] != ZERO)
+        if pivot != column:
+            work[column], work[pivot] = work[pivot], work[column]
+            sign *= -1
+        pivot_value = work[column][column]
+        result = mul(result, pivot_value)
+        pivot_inverse = inverse(pivot_value)
+        for row in range(column + 1, len(work)):
+            factor = mul(work[row][column], pivot_inverse)
+            for slot in range(column, len(work)):
+                work[row][slot] = sub(work[row][slot], mul(factor, work[column][slot]))
+    return neg(result) if sign < 0 else result
+
+
+def main() -> None:
+    packet = load(PACKET)
+    residue = load(RESIDUE)
+    require(packet["schema"] == "mtt.unified-source.g3ai-second-h-marked-map-all-orders.v1", "schema")
+    require(packet["theorem_id"] == "UST.G3AI", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+
+    for source in packet["inputs"].values():
+        if source.get("repository") != "20 Mathematical Language Discovery Program":
+            continue
+        name = source["source_path"]
+        require(source["sha256"] == EXPECTED_MLD_HASHES[name], f"packet source hash {name}")
+        require(normalized_sha(MLD_ROOT / name) == EXPECTED_MLD_HASHES[name], f"live source hash {name}")
+    require(
+        packet["inputs"]["local_G3AH_formal_kernel"]["sha256"] == normalized_sha(G3AH),
+        "local G3AH hash",
+    )
+
+    selected = residue["selected_marked_map"]
+    p_value = polynomial(selected["P_coefficients_ascending"])
+    q_value = polynomial(selected["Q_coefficients_ascending"])
+    r_value = polynomial(selected["R_complement_coefficients_ascending"])
+    s_value = polynomial(selected["S_coefficients_ascending"])
+    h_value = polynomial(residue["residue_field"]["line_sextic_coefficients_ascending"])
+    lambda_value = elt(selected["lambda"])
+    k_value = elt(selected["Fermat_conversion_k"])
+    line_unit = elt(residue["residue_field"]["line_sextic_factorization"][-1]["unit"])
+    require(poly_scale(poly_mul(q_value, r_value), line_unit) == h_value, "line factorization")
+
+    identity = poly_sub(
+        poly_mul(
+            q_value,
+            poly_add(poly_power(p_value, 3), poly_scale(poly_power(q_value, 3), elt((16,)))),
+        ),
+        poly_scale(poly_mul(h_value, poly_power(s_value, 2)), lambda_value),
+    )
+    require(identity == [ZERO], "thirteen-row residue identity")
+    require(power(k_value, 2) == neg(mul(elt((3,)), lambda_value)), "Fermat root")
+
+    p_column = poly_scale(poly_mul(q_value, poly_power(p_value, 2)), elt((3,)))
+    s_column = poly_scale(poly_mul(h_value, s_value), mul(elt((-2,)), lambda_value))
+    columns = [[ZERO] * degree + p_column for degree in range(4)]
+    columns += [[ZERO] * degree + s_column for degree in range(3)]
+    columns.append(poly_neg(poly_mul(h_value, poly_power(s_value, 2))))
+    columns = [pad(column, 13) for column in columns]
+    jacobian = [[columns[column][row] for column in range(8)] for row in range(13)]
+    pivot = jacobian[:8]
+    determinant = det(pivot)
+    require(rank(jacobian) == rank(pivot) == 8, "Jacobian ranks")
+    require(determinant == elt((73, 52, 83)), "determinant")
+    require(inverse(determinant) == elt((56, 76, 13)), "determinant inverse")
+    require(power(determinant, (P**3 - 1) // (P - 1)) == elt((57,)), "determinant norm")
+
+    require(
+        packet["theorem"]["tier"]
+        == "CLOSED_EXACT_ALL_ORDERS_SELECTED_SECOND_H_MARKED_MAP_OVER_ORIGINAL_UNRAMIFIED_DVR",
+        "theorem tier",
+    )
+    require(packet["G3AH_consequence"]["second_H_formal_map_condition"] == "DISCHARGED", "G3AH condition")
+    require(packet["G3AH_consequence"]["formal_eta9_coefficient_kernel_rank"] == 123, "kernel rank")
+    require(packet["frontier_delta"]["five_surplus_rows_all_orders"] == "CLOSED_EXACT_BY_UNIQUE_HENSEL_DESCENT", "surplus closure")
+    require(packet["guardrails"]["claims_beta_C_is_zero"] is False, "beta guardrail")
+    require(packet["guardrails"]["closes_B_ETA9_01"] is False, "ETA9 blocker guardrail")
+    require(packet["parameter_ledger"]["new_continuous_fit_parameters"] == 0, "parameter ledger")
+    print("UST.G3AI independent verifier: PASS")
+    print("first eight coefficient rows: determinant norm 57 mod101")
+    print("all-orders surplus closure and G3AH discharge contract: VERIFIED")
+    print("smooth existence closes downstream in G3AJ; explicit selection and beta_C remain open")
+
+
+if __name__ == "__main__":
+    main()

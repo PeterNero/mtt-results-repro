@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""Assemble the complete G3BM correction-direction first toric return."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bm_correction_toric_return_chunk as chunk_builder
+
+
+ROOT = Path(__file__).resolve().parent
+CHUNK_DIR = ROOT / "evidence" / "ust_g3bm"
+MATRIX = CHUNK_DIR / "g3bm_correction_first_return_H02_mod11.u8"
+AMBIENT_MATRIX = CHUNK_DIR / "g3bm_correction_first_return_H02_ambient.npz"
+AMBIENT_RHS = CHUNK_DIR / "g3bm_correction_first_return_H02_ambient.rhs.cscbin"
+OUT = ROOT / "state" / "ust_g3bm_correction_toric_return.packet.json"
+PRIME = 11
+DIMENSION = 248
+AMBIENT_DIMENSION = 42706
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def chunk_path(start: int, stop: int) -> Path:
+    return CHUNK_DIR / f"rows_{start:04d}_{stop - 1:04d}.packet.json"
+
+
+def local_record_path(item: dict[str, Any]) -> Path:
+    return ROOT / item["path"]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--chunk-size", type=int, default=8)
+    args = parser.parse_args()
+    require(args.chunk_size > 0, "positive chunk size")
+
+    mld = chunk_builder.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import assemble_q79_eta9_gauss_manin_strict_blocks as linear
+    import build_q79_eta9_toric_return_stage1_chunk as stage
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bk_path = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+    g3bi = load(g3bi_path)
+    g3bk = load(g3bk_path)
+    b103 = load(stage.B103)
+    h02_macaulay = load(stage.H02_MACAULAY)
+    require(all(g3bi["checks"].values()) and all(g3bk["checks"].values()), "G3BI/G3BK checks")
+    require(all(h02_macaulay["checks"].values()), "H02 Macaulay checks")
+    source = next(block for block in b103["basis_blocks"] if block["name"] == "H02")
+    require(int(source["dimension"]) == DIMENSION, "H02 residue dimension")
+    require(
+        int(h02_macaulay["target_monomial_basis"]["dimension"]) == AMBIENT_DIMENSION,
+        "H02 ambient dimension",
+    )
+    expected_hashes = {
+        "G3BI": sha256(g3bi_path),
+        "G3BK": sha256(g3bk_path),
+        "B103_sha256": sha256(stage.B103),
+        "B69_sha256": sha256(stage.B69),
+        "support_sha256": sha256(stage.SUPPORT),
+        "transform_sha256": sha256(stage.TRANSFORM),
+        "contract_sha256": sha256(stage.CONTRACT),
+        "H02_macaulay_sha256": sha256(stage.H02_MACAULAY),
+        "basis_cache_sha256": sha256(stage.BASIS_CACHE),
+        "transform_cache_sha256": sha256(stage.TRANSFORM_CACHE),
+    }
+
+    matrix = np.zeros((DIMENSION, DIMENSION), dtype=np.uint8)
+    ambient_chunks = []
+    covered: list[int] = []
+    next_support: set[int] = set()
+    next_terms = 0
+    chunks = []
+    correction_terms = None
+    for start in range(0, DIMENSION, args.chunk_size):
+        stop = min(start + args.chunk_size, DIMENSION)
+        path = chunk_path(start, stop)
+        packet = load(path)
+        require(
+            packet["schema"] == "mtt.unified-source.g3bm-correction-toric-return-chunk.v1",
+            "chunk schema",
+        )
+        require(packet["row_start"] == start and packet["row_stop"] == stop, "chunk range")
+        require(all(packet["checks"].values()), "chunk checks")
+        require(packet["inputs"]["G3BI"]["sha256"] == expected_hashes["G3BI"], "G3BI binding")
+        require(packet["inputs"]["G3BK"]["sha256"] == expected_hashes["G3BK"], "G3BK binding")
+        for key in expected_hashes:
+            if key in ("G3BI", "G3BK"):
+                continue
+            require(packet["inputs"][key] == expected_hashes[key], f"{key} binding")
+        if correction_terms is None:
+            correction_terms = packet["correction"]["terms"]
+        require(packet["correction"]["terms"] == correction_terms, "common correction direction")
+        for section in ("execution", "serialized_exact_objects", "coordinate_objects"):
+            for item in packet[section].values():
+                if not isinstance(item, dict) or "path" not in item:
+                    continue
+                object_path = local_record_path(item)
+                require(object_path.is_file() and sha256(object_path) == item["sha256"], "chunk object hash")
+
+        h02_record = packet["coordinate_objects"]["H02_normal_form"]
+        h02_path = local_record_path(h02_record)
+        local_h02 = np.frombuffer(h02_path.read_bytes(), dtype=np.uint8).reshape((stop - start, DIMENSION))
+        require(int(np.count_nonzero(local_h02)) == h02_record["nonzero_entries"], "H02 chunk nnz")
+        matrix[start:stop, :] = local_h02
+        ambient_record = packet["coordinate_objects"]["ambient_return"]
+        local_ambient = sparse.load_npz(local_record_path(ambient_record)).tocsc()
+        require(local_ambient.shape == (AMBIENT_DIMENSION, stop - start), "ambient chunk shape")
+        require(local_ambient.nnz == ambient_record["nonzero_entries"], "ambient chunk nnz")
+        ambient_chunks.append(local_ambient)
+
+        require(len(packet["sparse_rows"]) == stop - start, "chunk row summaries")
+        for row in packet["sparse_rows"]:
+            source_index = int(row["source_index"])
+            require(start <= source_index < stop, "source in chunk")
+            covered.append(source_index)
+            recursive = row["next_lower_pole_Groebner_support"]
+            next_support.update(int(value) for value in recursive["Groebner_generator_indices_one_based"])
+            next_terms += int(recursive["coefficient_terms"])
+        chunks.append(
+            {
+                **record(path),
+                "rows": [start, stop],
+                "coordinate_objects": packet["coordinate_objects"],
+                "serialized_exact_objects": packet["serialized_exact_objects"],
+            }
+        )
+
+    require(covered == list(range(DIMENSION)), "complete ordered H02 source coverage")
+    ambient_matrix = sparse.hstack(ambient_chunks, format="csc")
+    require(ambient_matrix.shape == (AMBIENT_DIMENSION, DIMENSION), "assembled ambient shape")
+    MATRIX.write_bytes(matrix.tobytes(order="C"))
+    sparse.save_npz(AMBIENT_MATRIX, ambient_matrix, compressed=True)
+    solver_io.write_rhs(AMBIENT_RHS, ambient_matrix)
+    rank, pivot_columns = linear.echelon_pivot_columns(matrix)
+    determinant = linear.determinant_mod_prime(matrix) if rank == DIMENSION else 0
+    checks = {
+        "all248_H02_source_rows_are_covered_once_in_order": True,
+        "all_chunks_use_one_hash_bound_18_term_correction_direction": True,
+        "every_chunk_retains_its_exact_Singular_return_and_recursive_quotient": True,
+        "the_exact248_by248_H02_first_normal_form_block_is_serialized": True,
+        "the_complete42706_by248_ambient_return_matrix_is_serialized": True,
+        "the_full_next_lower_pole_support_union_is_emitted": True,
+        "the_solver_ready_CSC_right_hand_side_is_serialized": True,
+        "no_characteristic_zero_connection_transport_or_period_is_inferred": True,
+    }
+    require(all(checks.values()), "G3BM assembly checks")
+    packet = {
+        "schema": "mtt.unified-source.g3bm-correction-toric-return.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_GF11_CORRECTION_DIRECTION_FIRST_TORIC_RETURN_CLOSED_RECURSIVE_H11_H20_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BK": record(g3bk_path),
+            "B69": external_record(stage.B69, mld),
+            "B103": external_record(stage.B103, mld),
+            "support_union": external_record(stage.SUPPORT, mld),
+            "targeted_transform": external_record(stage.TRANSFORM, mld),
+            "toric_contract": external_record(stage.CONTRACT, mld),
+            "H02_original_Jacobian_Macaulay": external_record(stage.H02_MACAULAY, mld),
+            "B69_basis_cache": external_record(stage.BASIS_CACHE, mld),
+            "targeted_transform_cache": external_record(stage.TRANSFORM_CACHE, mld),
+        },
+        "correction_direction": {
+            "field": "GF(11) at gamma=3",
+            "nonzero_terms": len(correction_terms or []),
+            "terms": correction_terms,
+        },
+        "chunks": chunks,
+        "H02_first_normal_form_block": {
+            "shape": [DIMENSION, DIMENSION],
+            "row_convention": "source rows, H02 residue target columns",
+            "field": "GF(11)",
+            "rank": rank,
+            "pivot_columns": pivot_columns,
+            "determinant_mod11": determinant,
+            "nonzero_entries": int(np.count_nonzero(matrix)),
+            "binary": {
+                **record(MATRIX),
+                "dtype": "uint8",
+                "order": "C",
+            },
+        },
+        "H02_ambient_return": {
+            "shape": [AMBIENT_DIMENSION, DIMENSION],
+            "row_convention": "complete H02 ambient monomial rows",
+            "column_convention": "H02 residue source columns",
+            "field": "GF(11)",
+            "nonzero_entries": int(ambient_matrix.nnz),
+            "scipy_npz": {**record(AMBIENT_MATRIX), "format": "scipy sparse CSC npz"},
+            "solver_CSC": {**record(AMBIENT_RHS), "format": "MTTRHS1 little-endian GF11 CSC"},
+        },
+        "next_recursive_stage": {
+            "source_pole_order": 5,
+            "target_pole_order": 4,
+            "cohomological_factor": "1/4",
+            "required_output_block": "H11",
+            "Groebner_support_union_count": len(next_support),
+            "Groebner_support_union_indices_one_based": sorted(next_support),
+            "quotient_coefficient_terms_with_multiplicity": next_terms,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_recursive_H11_or_H20_return_is_complete": False,
+            "claims_characteristic_zero_inverse_action": False,
+            "claims_integral_parallel_transport": False,
+            "claims_terminal_248_readout": False,
+        },
+        "next_required_object": (
+            "Apply the exact H02 B103-plus-original-Jacobian coordinate solver to the emitted "
+            "42706 by 248 ambient matrix, retain the original-partial preimages, and execute "
+            "the factor-1/4 recursive return to H11 and then H20."
+        ),
+    }
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BM correction toric return assembly: PASS")
+    print(
+        f"H02_rank={rank} det_mod11={determinant} H02_nnz={np.count_nonzero(matrix)} "
+        f"ambient_nnz={ambient_matrix.nnz} next_support={len(next_support)} next_terms={next_terms}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

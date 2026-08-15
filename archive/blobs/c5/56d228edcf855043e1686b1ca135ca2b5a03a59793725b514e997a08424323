@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Run all exact fiber-two rectangles for the 248x33 G3AM response."""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import ust_cayley_fiber2_reduction as fiber2
+
+
+ROOT = Path(__file__).resolve().parent
+CHUNK = ROOT / "build_ust_g3am_selected_cayley_fiber2_response_chunk.py"
+CAMPAIGN = ROOT / "state" / "g3am_cayley_fiber2_response_chunks"
+G3AL = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+ASSEMBLER = ROOT / "assemble_ust_g3am_selected_cayley_principal_response.py"
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def certified(path: Path, g3al_hash: str, reduction: dict[str, object]) -> bool:
+    if not path.is_file():
+        return False
+    packet = json.loads(path.read_text(encoding="ascii"))
+    expected_scope = fiber2.response_reduction_basis(reduction)
+    module_matches = (
+        packet.get("inputs", {}).get("module_cache") is None
+        and packet.get("inputs", {}).get("quotient_functional", {}).get("sha256")
+        == reduction["quotient_functional_record"]["sha256"]
+        if reduction["module_cache_record"] is None
+        else packet.get("inputs", {}).get("module_cache", {}).get("sha256")
+        == reduction["module_cache_record"]["sha256"]
+    )
+    return (
+        packet.get("status")
+        == "CLOSED_EXACT_SELECTED_CARRIER_FIBER2_RESIDUE_RECTANGLE"
+        and all(packet.get("checks", {}).values())
+        and packet.get("inputs", {}).get("G3AL", {}).get("sha256") == g3al_hash
+        and packet.get("inputs", {}).get("G3AP") == reduction["certificate"]
+        and packet.get("inputs", {}).get("G3AP_source")
+        == reduction["source_certificate"]
+        and module_matches
+        and all(
+            packet.get("reduction_basis", {}).get(key) == value
+            for key, value in expected_scope.items()
+        )
+        and (
+            packet.get("inputs", {}).get("base_cache") is None
+            if reduction["base_cache_record"] is None
+            else packet.get("inputs", {}).get("base_cache", {}).get("sha256")
+            == reduction["base_cache_record"]["sha256"]
+        )
+    )
+
+
+def run_chunk(stem: str, command: list[str]) -> str:
+    print(f"run {stem}", flush=True)
+    subprocess.run(command, cwd=ROOT, check=True)
+    return stem
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rows-per-chunk", type=int, default=8)
+    parser.add_argument("--timeout-per-chunk", type=int, default=7200)
+    parser.add_argument("--workers", type=int, default=1)
+    args = parser.parse_args()
+    if not 1 <= args.rows_per_chunk <= 248:
+        raise ValueError("rows-per-chunk")
+    if not 1 <= args.workers <= 16:
+        raise ValueError("workers")
+    reduction = fiber2.selected_fiber2_reduction()
+    g3al_hash = sha256(G3AL)
+    jobs: list[tuple[str, list[str]]] = []
+    for row_start in range(0, 248, args.rows_per_chunk):
+        row_count = min(args.rows_per_chunk, 248 - row_start)
+        stem = f"r{row_start:03d}-{row_start + row_count - 1:03d}_c000-032"
+        packet_path = CAMPAIGN / f"{stem}.packet.json"
+        if certified(packet_path, g3al_hash, reduction):
+            print(f"skip {stem}: certified")
+            continue
+        command = [
+            sys.executable,
+            str(CHUNK),
+            "--row-start", str(row_start),
+            "--row-count", str(row_count),
+            "--column-start", "0",
+            "--column-count", "33",
+            "--timeout", str(args.timeout_per_chunk),
+        ]
+        jobs.append((stem, command))
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(run_chunk, stem, command): stem
+            for stem, command in jobs
+        }
+        for future in as_completed(futures):
+            stem = future.result()
+            print(f"done {stem}", flush=True)
+    subprocess.run([sys.executable, str(ASSEMBLER)], cwd=ROOT, check=True)
+    print("G3AM fiber-two principal 248x33 campaign and assembly complete")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""Emit the correction-direction H20 and H11 ambient source blocks at GF(11)."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bk_correction_pencil_operator_compiler as compiler
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cd"
+G3BI = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+G3BK = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+OUT = EVIDENCE / "g3cd_correction_direct_sources.packet.json"
+PRIME = 11
+SPECS = {
+    "H20": {"target": "H11", "pole_order": 3},
+    "H11": {"target": "H02", "pole_order": 4},
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def upstream_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": "20 Mathematical Language Discovery Program",
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def canonical_reduced_digest(
+    source_vectors: list[tuple[int, ...]],
+    target_lookup: dict[tuple[int, ...], int],
+    terms: list[dict[str, Any]],
+    pole_order: int,
+) -> str:
+    digest = hashlib.sha256()
+    for column, source in enumerate(source_vectors):
+        for term in terms:
+            product = tuple(a + b for a, b in zip(source, term["sF_exponent"]))
+            row = target_lookup.get(product)
+            require(row is not None, "canonical source product in target")
+            value = (-pole_order * int(term["mod11"])) % PRIME
+            if value:
+                digest.update(f"{column}:{row}:{value}\n".encode("ascii"))
+    return digest.hexdigest()
+
+
+def build_block(
+    source_name: str,
+    b103: dict[str, Any],
+    target_macaulay: dict[str, Any],
+    terms: list[dict[str, Any]],
+    solver_io: Any,
+) -> tuple[sparse.csc_matrix, dict[str, Any]]:
+    spec = SPECS[source_name]
+    target_name = str(spec["target"])
+    pole_order = int(spec["pole_order"])
+    source_block = next(block for block in b103["basis_blocks"] if block["name"] == source_name)
+    source_vectors = [
+        tuple(int(value) for value in row)
+        for row in source_block["basis_exponent_vectors"]
+    ]
+    target_vectors = [
+        tuple(int(value) for value in row)
+        for row in target_macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {row: index for index, row in enumerate(target_vectors)}
+    require(len(target_lookup) == len(target_vectors), f"unique {target_name} target basis")
+    require(
+        int(source_block["Cox_degree"][2]) + 1
+        == int(target_macaulay["target_Cox_degree"][2]),
+        f"{source_name} Cayley degree transition",
+    )
+
+    rows: list[int] = []
+    columns: list[int] = []
+    values: list[int] = []
+    for column, source in enumerate(source_vectors):
+        seen: set[int] = set()
+        for term in terms:
+            product = tuple(a + b for a, b in zip(source, term["sF_exponent"]))
+            row = target_lookup.get(product)
+            require(row is not None, f"{source_name} source product in {target_name}")
+            require(row not in seen, f"{source_name} no within-column collision")
+            seen.add(row)
+            value = (-pole_order * int(term["mod11"])) % PRIME
+            if value:
+                rows.append(row)
+                columns.append(column)
+                values.append(value)
+
+    matrix = sparse.csc_matrix(
+        (
+            np.asarray(values, dtype=np.uint8),
+            (np.asarray(rows, dtype=np.int32), np.asarray(columns, dtype=np.int32)),
+        ),
+        shape=(len(target_vectors), len(source_vectors)),
+        dtype=np.uint8,
+    )
+    matrix.sum_duplicates()
+    matrix.data %= PRIME
+    matrix.eliminate_zeros()
+    expected = load(G3BK)["characteristic_zero_derivative_sources"][
+        f"{source_name}_to_{target_name}"
+    ]
+    require(matrix.nnz == int(expected["good_reduction_nonzero_entries"]), f"{source_name} nnz")
+    digest = canonical_reduced_digest(source_vectors, target_lookup, terms, pole_order)
+    require(digest == expected["canonical_good_reduction_source_sha256"], f"{source_name} G3BK digest")
+
+    stem = f"g3cd_correction_{source_name}_to_{target_name}_ambient"
+    npz_path = EVIDENCE / f"{stem}.npz"
+    rhs_path = EVIDENCE / f"{stem}.rhs.cscbin"
+    sparse.save_npz(npz_path, matrix, compressed=True)
+    solver_io.write_rhs(rhs_path, matrix)
+    record = {
+        "source_Hodge_block": source_name,
+        "target_ambient_Hodge_degree": target_name,
+        "source_dimension": len(source_vectors),
+        "target_ambient_dimension": len(target_vectors),
+        "source_pole_order": pole_order,
+        "formula": f"-{pole_order}*P*s*C_section",
+        "good_reduction_nonzero_entries": int(matrix.nnz),
+        "canonical_good_reduction_source_sha256": digest,
+        "G3BK_expected_source_sha256": expected["canonical_good_reduction_source_sha256"],
+        "NPZ": local_record(npz_path),
+        "solver_CSC": local_record(rhs_path),
+    }
+    return matrix, record
+
+
+def main() -> None:
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    g3bi = load(G3BI)
+    g3bk = load(G3BK)
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3bk["checks"].values()), "G3BK checks")
+    b103_path = mld / "q79_eta9_full_vanishing_residue_basis.packet.json"
+    b103 = load(b103_path)
+    require(all(b103["checks"].values()), "B103 checks")
+    terms = compiler.correction_terms(g3bi)
+    require(len(terms) == 19, "19 characteristic-zero correction terms")
+    require(sum(int(term["mod11"]) != 0 for term in terms) == 18, "18 GF11 correction terms")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    blocks: dict[str, Any] = {}
+    macaulay_records: dict[str, Any] = {}
+    for source_name, spec in SPECS.items():
+        target_name = str(spec["target"])
+        macaulay_path = mld / f"q79_eta9_original_jacobian_macaulay_{target_name}.packet.json"
+        macaulay = load(macaulay_path)
+        require(all(macaulay["checks"].values()), f"{target_name} Macaulay checks")
+        _, blocks[source_name] = build_block(source_name, b103, macaulay, terms, solver_io)
+        macaulay_records[target_name] = upstream_record(macaulay_path, mld)
+
+    checks = {
+        "G3BI_and_G3BK_are_hash_bound_and_passing": True,
+        "the_same_exact_19_term_correction_direction_is_used": True,
+        "exactly18_correction_terms_survive_at_11_gamma3": True,
+        "the_complete_B103_H20_and_H11_source_bases_are_used": True,
+        "the_exact_minus_pole_order_factors_are_applied": True,
+        "all_products_land_in_the_frozen_target_ambient_bases": True,
+        "both_good_reduction_source_hashes_equal_the_G3BK_compiler_hashes": True,
+        "both_NPZ_and_solver_CSC_payloads_are_emitted": True,
+        "no_F1_direction_source_block_is_substituted": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3cd-correction-direct-source-blocks.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_GF11_CORRECTION_H20_AND_H11_DIRECT_SOURCE_BLOCKS_CLOSED",
+        "field": "GF(11) at gamma=3",
+        "inputs": {
+            "G3BI": local_record(G3BI),
+            "G3BK": local_record(G3BK),
+            "B103": upstream_record(b103_path, mld),
+            "target_Macaulay": macaulay_records,
+        },
+        "correction_direction": {
+            "formula": "s*C_section",
+            "characteristic_zero_terms": 19,
+            "good_reduction_terms": 18,
+        },
+        "blocks": blocks,
+        "checks": checks,
+        "guardrails": {
+            "claims_coordinate_reduction_or_recursive_return": False,
+            "claims_characteristic_zero_connection": False,
+            "claims_integral_or_horizontal_transport": False,
+        },
+        "next_required_object": "Solve both blocks in the frozen B103-plus-original-Jacobian charts and retain every lower-pole return.",
+    }
+    require(all(checks.values()), "G3CD direct source checks")
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CD correction direct source blocks: PASS")
+    print(
+        f"H20_nnz={blocks['H20']['good_reduction_nonzero_entries']} "
+        f"H11_nnz={blocks['H11']['good_reduction_nonzero_entries']}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

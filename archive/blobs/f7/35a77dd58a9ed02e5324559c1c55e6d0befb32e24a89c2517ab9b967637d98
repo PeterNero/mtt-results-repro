@@ -1,0 +1,522 @@
+#!/usr/bin/env python3
+"""Emit the exact cohomological source cutset for H02 component 16.
+
+This probe uses the already selected gamma=5 relation space only to locate a
+finite source, lift, and quotient support.  It then rebuilds the corresponding
+presentation over Q(gamma) from the exact correction and endpoint generators.
+No finite relation is promoted until a characteristic-zero kernel replays with
+literal zero residual in that exact presentation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as dm_runtime
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    ONE,
+    add_entry,
+    exact_action,
+    load,
+    write_number_field_matrix,
+)
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3ek"
+OUT = EVIDENCE / "H02.component16.cohomological_source_cutset.json"
+BASE_CHART = ROOT / "evidence/ust_g3eb_probe/H02.p21817.g5.base_chart.bin"
+RHS = EVIDENCE / "H02.component16.observed_action.rhs.bin"
+SOLUTION = EVIDENCE / "H02.component16.observed_action.solution.bin"
+SOLVE_LOG = EVIDENCE / "H02.component16.observed_action.solve.log"
+MATRIX = EVIDENCE / "H02.component16.cohomological.number_field.sms"
+INDICES = EVIDENCE / "H02.component16.cohomological.indices.npz"
+
+PRIME = 21817
+GAMMA_ROOT = 5
+AMBIENT_DIMENSION = 42706
+QUOTIENT_DIMENSION = 248
+COMPLEMENT_DIMENSION = 42458
+UPDATE_DIMENSION = 6022
+COMPONENT = 16
+COMPONENT_START = 3668
+COMPONENT_PAST = 3827
+DEPENDENT_START = 3806
+DEPENDENT_PAST = 3827
+RELATION_DIMENSION = 21
+SOURCE_COMPONENTS = (4, 6, 14, 16)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def evaluate(value: tuple[int, ...], root: int = GAMMA_ROOT) -> int:
+    result = 0
+    for coefficient in reversed(value):
+        result = (result * root + coefficient) % PRIME
+    return result
+
+
+def evaluate_sparse(
+    coefficients: list[sparse.spmatrix], root: int = GAMMA_ROOT
+) -> sparse.csc_matrix:
+    result = sparse.csc_matrix(coefficients[0].shape, dtype=np.int64)
+    power = 1
+    for matrix in coefficients:
+        term = matrix.copy().tocsc().astype(np.int64)
+        term.data %= PRIME
+        term.data = term.data * power % PRIME
+        result = result + term
+        power = power * root % PRIME
+    result = result.tocsc()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def rank_mod(matrix: np.ndarray) -> int:
+    work = matrix.astype(np.int64) % PRIME
+    row = 0
+    for column in range(work.shape[1]):
+        choices = np.flatnonzero(work[row:, column] % PRIME)
+        if choices.size == 0:
+            continue
+        pivot = row + int(choices[0])
+        if pivot != row:
+            work[[row, pivot]] = work[[pivot, row]]
+        work[row] = work[row] * pow(int(work[row, column]), -1, PRIME) % PRIME
+        for target in range(work.shape[0]):
+            if target == row:
+                continue
+            factor = int(work[target, column] % PRIME)
+            if factor:
+                work[target] = (work[target] - factor * work[row]) % PRIME
+        row += 1
+        if row == work.shape[0]:
+            break
+    return row
+
+
+def finite_matrix(
+    entries: dict[tuple[int, int], tuple[int, ...]], shape: tuple[int, int]
+) -> sparse.csc_matrix:
+    triples = [
+        (row, column, evaluate(value))
+        for (row, column), value in entries.items()
+        if evaluate(value)
+    ]
+    rows, columns, values = zip(*triples, strict=True)
+    result = sparse.csc_matrix(
+        (np.asarray(values, dtype=np.int64), (rows, columns)), shape=shape
+    )
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def sparse_rank_mod(
+    entries: dict[tuple[int, int], tuple[int, ...]], rows_count: int
+) -> tuple[int, int]:
+    rows: list[dict[int, int]] = [dict() for _ in range(rows_count)]
+    for (row, column), value in entries.items():
+        scalar = evaluate(value)
+        if scalar:
+            rows[row][column] = scalar
+    pivots: dict[int, dict[int, int]] = {}
+    eliminations = 0
+    for row in rows:
+        while row:
+            column = min(row)
+            value = row[column]
+            pivot = pivots.get(column)
+            if pivot is None:
+                inverse = pow(value, -1, PRIME)
+                pivots[column] = {
+                    key: item * inverse % PRIME for key, item in row.items() if item
+                }
+                break
+            for key, item in pivot.items():
+                reduced = (row.get(key, 0) - value * item) % PRIME
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+            eliminations += 1
+    return len(pivots), eliminations
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force-solve", action="store_true")
+    arguments = parser.parse_args()
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+
+    g3bi = load(ROOT / "state/ust_g3bi_explicit_root_start.packet.json")
+    g3br = load(ROOT / "state/ust_g3br_h02_alternate_split_prime_initializer.packet.json")
+    g3bw = load(ROOT / "state/ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json")
+    g3de = load(ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json")
+    g3di = load(ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json")
+    g3dx = load(ROOT / "state/ust_g3dx_h02_prefix_structural_gap_localization.packet.json")
+    require(
+        all(all(packet["checks"].values()) for packet in (g3bi, g3br, g3bw, g3de, g3di, g3dx)),
+        "input packet checks",
+    )
+
+    component = g3dx["prefix_gap_localization"]["component_rows"][COMPONENT]
+    require(
+        (
+            component["coordinate_start"],
+            component["coordinate_past"],
+            component["dimension"],
+            component["finite_rank_increment"],
+            component["structural_rank_increment"],
+        )
+        == (COMPONENT_START, COMPONENT_PAST, 159, 138, 159),
+        "component16 ledger",
+    )
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json")
+    factor = load(mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json")
+    csc = load(mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json")
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    require(len(descriptors) == COMPLEMENT_DIMENSION, "complement descriptors")
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+
+    selection = np.load(
+        ROOT / g3de["factorization"]["selection"]["path"], allow_pickle=False
+    )
+    selected_updates = selection["selected_columns"].astype(np.int32)
+    update_descriptors = [descriptors[int(value)] for value in selected_updates]
+
+    kernel_row = next(
+        row for row in g3di["root_kernels"]
+        if int(row["gamma_root"]) == GAMMA_ROOT
+    )
+    kernel = kernel_runtime.read_kernel(ROOT / kernel_row["kernel"]["path"])
+    relation_indices = np.flatnonzero(
+        (kernel["dependent"] >= DEPENDENT_START)
+        & (kernel["dependent"] < DEPENDENT_PAST)
+    ).astype(np.int32)
+    require(relation_indices.size == RELATION_DIMENSION, "component16 relation count")
+    dependent_coordinates = kernel["dependent"][relation_indices].astype(np.int32)
+    require(
+        np.array_equal(dependent_coordinates, np.arange(DEPENDENT_START, DEPENDENT_PAST)),
+        "component16 dependent run",
+    )
+    relations = kernel["matrix"][:, relation_indices].tocsc().astype(np.int64)
+    source_support = np.unique(relations.nonzero()[0]).astype(np.int32)
+    boundaries = [
+        (int(row["coordinate_start"]), int(row["coordinate_past"]))
+        for row in g3dx["prefix_gap_localization"]["component_rows"]
+    ]
+    source_component_set = {
+        component_index
+        for coordinate in source_support
+        for component_index, (start, past) in enumerate(boundaries)
+        if start <= int(coordinate) < past
+    }
+    require(source_component_set == set(SOURCE_COMPONENTS), "component16 source components")
+    require(source_support.size == 1007, "component16 finite source support")
+    source_descriptors = [update_descriptors[int(coordinate)] for coordinate in source_support]
+
+    u_coefficients = [
+        sparse.load_npz(ROOT / row["path"]).tocsc().astype(np.int64)
+        for row in g3de["factorization"]["U_gamma_coefficients"]
+    ]
+    update = evaluate_sparse(u_coefficients)
+    observed = (update @ relations).tocsc()
+    observed.data %= PRIME
+    observed.eliminate_zeros()
+    require(observed.shape == (COMPLEMENT_DIMENSION, RELATION_DIMENSION), "observed shape")
+
+    dm_arrays = np.load(
+        ROOT / g3bw["DM_reduction"]["arrays"]["path"], allow_pickle=False
+    )
+    complement_rows = dm_arrays["complement_rows"].astype(np.int32)
+    require(complement_rows.size == COMPLEMENT_DIMENSION, "complement row count")
+    observed_coo = observed.tocoo()
+    rhs = sparse.csc_matrix(
+        (
+            (-observed_coo.data.astype(np.int64)) % PRIME,
+            (complement_rows[observed_coo.row], observed_coo.col),
+        ),
+        shape=(AMBIENT_DIMENSION, RELATION_DIMENSION),
+    )
+    rhs.sum_duplicates()
+    rhs.data %= PRIME
+    rhs.eliminate_zeros()
+    exporter.write_rhs(
+        RHS,
+        PRIME,
+        AMBIENT_DIMENSION,
+        rhs.indptr.astype(np.uint64).tolist(),
+        rhs.indices.astype(np.uint32).tolist(),
+        rhs.data.astype(np.uint32).tolist(),
+    )
+
+    require(BASE_CHART.is_file(), "selected base chart")
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    require(solver.is_file(), "selected chart solver")
+    if arguments.force_solve and SOLUTION.exists():
+        SOLUTION.unlink()
+    if not SOLUTION.is_file():
+        completed = subprocess.run(
+            [
+                "wsl",
+                runtime.wsl_path(solver),
+                "--chart",
+                runtime.wsl_path(BASE_CHART),
+                "--rhs",
+                runtime.wsl_path(RHS),
+                "--output",
+                runtime.wsl_path(SOLUTION),
+                "--log",
+                runtime.wsl_path(SOLVE_LOG),
+            ],
+            cwd=mld,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+
+    base_chart = split_io.as_scipy(
+        arithmetic.read_csc(BASE_CHART, b"MTTSPC1\0", 6)
+    ).tocsc().astype(np.int64)
+    stored_rhs = split_io.as_scipy(
+        arithmetic.read_csc(RHS, b"MTTSRH1\0", 4)
+    ).tocsc().astype(np.int64)
+    solution = split_io.as_scipy(
+        arithmetic.read_csc(SOLUTION, b"MTTSCO1\0", 6)
+    ).tocsc().astype(np.int64)
+    require(
+        split_io.residual_nonzeros(base_chart, solution, stored_rhs, PRIME) == 0,
+        "base-chart solution residual",
+    )
+    quotient = solution[:QUOTIENT_DIMENSION, :].tocsc()
+    lift = solution[QUOTIENT_DIMENSION:, :].tocsc()
+    quotient_support = np.unique(quotient.nonzero()[0]).astype(np.int32)
+    lift_support = np.unique(lift.nonzero()[0]).astype(np.int32)
+
+    w_coefficients = [
+        sparse.load_npz(ROOT / row["path"]).tocsr().astype(np.int64)
+        for row in g3de["factorization"]["W_gamma_coefficients"]
+    ]
+    w_at_root = evaluate_sparse(w_coefficients)
+    w_lift = (w_at_root @ lift).tocsc()
+    w_lift.data %= PRIME
+    w_lift.eliminate_zeros()
+    require(w_lift.nnz == 0, "selected lift lies in W-kernel")
+
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    correction = dm_runtime.correction_derivatives_exact(g3bi)
+    source_identity = {
+        (index, index): ONE for index in range(int(source_support.size))
+    }
+    lift_identity = {
+        (int(coordinate), index): ONE
+        for index, coordinate in enumerate(lift_support)
+    }
+    source_action = exact_action(
+        source_identity, source_descriptors, correction, target_lookup
+    )
+    lift_action = exact_action(
+        lift_identity, descriptors, generators0, target_lookup
+    )
+    entries = dict(source_action)
+    lift_offset = int(source_support.size)
+    quotient_offset = lift_offset + int(lift_support.size)
+    for (row, column), value in lift_action.items():
+        add_entry(entries, (row, lift_offset + column), value)
+    quotient_rows = [int(value) for value in csc["binary"]["quotient_unit_rows"]]
+    for local, coordinate in enumerate(quotient_support):
+        add_entry(
+            entries,
+            (quotient_rows[int(coordinate)], quotient_offset + local),
+            ONE,
+        )
+    columns = quotient_offset + int(quotient_support.size)
+    write_number_field_matrix(MATRIX, entries, (AMBIENT_DIMENSION, columns))
+
+    active_rows = np.asarray(sorted({row for row, _ in entries}), dtype=np.int32)
+    active_lookup = {int(row): index for index, row in enumerate(active_rows)}
+    pattern_rows = np.asarray(
+        [active_lookup[int(row)] for row, _ in entries], dtype=np.int32
+    )
+    pattern_columns = np.asarray([column for _, column in entries], dtype=np.int32)
+    pattern = sparse.csr_matrix(
+        (
+            np.ones(len(entries), dtype=np.uint8),
+            (pattern_rows, pattern_columns),
+        ),
+        shape=(active_rows.size, columns),
+    )
+    structural_rank = int(
+        np.count_nonzero(
+            maximum_bipartite_matching(pattern, perm_type="column") >= 0
+        )
+    )
+    finite_rank, eliminations = sparse_rank_mod(entries, AMBIENT_DIMENSION)
+
+    source_vectors = relations[source_support, :].toarray().astype(np.int64) % PRIME
+    lift_vectors = lift[lift_support, :].toarray().astype(np.int64) % PRIME
+    quotient_vectors = quotient[quotient_support, :].toarray().astype(np.int64) % PRIME
+    selected_vectors = np.concatenate(
+        (source_vectors, lift_vectors, quotient_vectors), axis=0
+    )
+    require(selected_vectors.shape == (columns, RELATION_DIMENSION), "selected vector shape")
+    evaluated = finite_matrix(entries, (AMBIENT_DIMENSION, columns))
+    replay = (evaluated @ selected_vectors).astype(np.int64) % PRIME
+    replay_nonzeros = int(np.count_nonzero(replay))
+    require(replay_nonzeros == 0, "selected component16 replay")
+
+    source_lookup = {
+        int(coordinate): local for local, coordinate in enumerate(source_support)
+    }
+    dependent_local = [source_lookup[int(value)] for value in dependent_coordinates]
+    projection = selected_vectors[dependent_local, :]
+    projection_rank = rank_mod(projection)
+    require(projection_rank == RELATION_DIMENSION, "component16 projection rank")
+
+    np.savez_compressed(
+        INDICES,
+        source_support=source_support,
+        lift_support=lift_support,
+        quotient_support=quotient_support,
+        relation_indices=relation_indices,
+        dependent_coordinates=dependent_coordinates,
+        dependent_local_columns=np.asarray(dependent_local, dtype=np.int32),
+        selected_vectors_mod21817_gamma5=selected_vectors.astype(np.uint16),
+    )
+    payload = {
+        "schema": "ust.g3ek.h02.component16.cohomological-source-cutset.v1",
+        "date": "2026-08-14",
+        "component": COMPONENT,
+        "field": {
+            "prime": PRIME,
+            "gamma_root": GAMMA_ROOT,
+            "use": "support discovery and good-reduction lower bound only",
+        },
+        "source": {
+            "components": list(SOURCE_COMPONENTS),
+            "support_coordinates": int(source_support.size),
+            "component16_dimension": 159,
+            "component16_finite_rank": 138,
+            "component16_finite_nullity": RELATION_DIMENSION,
+            "dependent_run": [DEPENDENT_START, DEPENDENT_PAST - 1],
+        },
+        "selected_chart_lift": {
+            "quotient_support": int(quotient_support.size),
+            "lift_support": int(lift_support.size),
+            "lift_generator_counts": {
+                str(generator): sum(
+                    descriptors[int(coordinate)][0] == generator
+                    for coordinate in lift_support
+                )
+                for generator in sorted(
+                    {descriptors[int(coordinate)][0] for coordinate in lift_support}
+                )
+            },
+            "W_lift_nonzeros": int(w_lift.nnz),
+            "rhs": record(RHS),
+            "solution": record(SOLUTION),
+            "solve_log": record(SOLVE_LOG),
+            "base_chart": record(BASE_CHART),
+        },
+        "exact_presentation": {
+            "shape": [AMBIENT_DIMENSION, columns],
+            "active_rows": int(active_rows.size),
+            "nonzero_entries": len(entries),
+            "columns": {
+                "source": int(source_support.size),
+                "lift": int(lift_support.size),
+                "quotient_units": int(quotient_support.size),
+            },
+            "structural_rank": structural_rank,
+            "good_reduction_rank": finite_rank,
+            "good_reduction_nullity": columns - finite_rank,
+            "finite_eliminations": eliminations,
+            "matrix": record(MATRIX),
+            "indices_and_selected_vectors": record(INDICES),
+        },
+        "selected_vector_replay": {
+            "vectors": RELATION_DIMENSION,
+            "replay_nonzero_slots": replay_nonzeros,
+            "component16_projection_rank": projection_rank,
+        },
+        "claim_boundary": {
+            "exact_source_presentation_emitted": True,
+            "selected_finite_kernel_replayed": True,
+            "characteristic_zero_kernel_promoted": False,
+            "component16_rank_over_Qgamma_claimed": False,
+            "global_upper5081_claimed": False,
+        },
+        "next_required_object": (
+            "Reduce this exact presentation by certified unit pivots, then emit 21 "
+            "Q(gamma)-independent vectors with literal zero replay."
+        ),
+    }
+    OUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii", newline="\n")
+    print(
+        "G3EK component16 source cutset: PASS "
+        f"source={source_support.size} lift={lift_support.size} quotient={quotient_support.size} "
+        f"presentation={AMBIENT_DIMENSION}x{columns} structural={structural_rank} "
+        f"finite_rank={finite_rank} nullity={columns-finite_rank} replay=0/{AMBIENT_DIMENSION*RELATION_DIMENSION}",
+        flush=True,
+    )
+    print(f"output={OUT.relative_to(ROOT).as_posix()} sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

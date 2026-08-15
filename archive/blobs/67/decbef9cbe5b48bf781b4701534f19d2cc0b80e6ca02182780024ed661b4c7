@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Verify G3DB archives, sampled identities and whole-path certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_mat, acb_poly, arb, ctx
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3db_h11_selected_710_path_kernel.packet.json"
+MINPOLY = [64, 16, 33, 44, 89, 24, 1]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, Any]) -> Path:
+    path = ROOT / item["path"]
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size: {path}")
+    require(sha256(path) == item["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_archive(path: Path) -> dict[str, np.ndarray]:
+    npz = np.load(path, allow_pickle=False)
+    arrays = {key: npz[key] for key in npz.files}
+    npz.close()
+    return arrays
+
+
+def ball(arrays: dict[str, np.ndarray], row: int, column: int) -> acb:
+    real = (
+        arb(float(arrays["real_high"][row, column]))
+        + arb(float(arrays["real_low"][row, column]))
+        + arb(0, float(arrays["real_radius"][row, column]))
+    )
+    imag = (
+        arb(float(arrays["imag_high"][row, column]))
+        + arb(float(arrays["imag_low"][row, column]))
+        + arb(0, float(arrays["imag_radius"][row, column]))
+    )
+    return acb(real, imag)
+
+
+def evaluate(coefficients: list[int], gamma: acb) -> acb:
+    value = acb(0)
+    for coefficient in reversed(coefficients):
+        value = value * gamma + coefficient
+    return value
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["theorem_id"] == "UST.G3DB", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_CERTIFIED_SELECTED_H11_710_PATH_KERNEL_ON_ONE_CONJUGATE_ARCHIMEDEAN_PAIR",
+        "status",
+    )
+    require(all(packet["checks"].values()), "checks")
+    require(
+        not any(bool(value) for value in packet["guardrails"].values()),
+        "guardrails",
+    )
+    for item in packet["inputs"].values():
+        verify_record(item)
+
+    p_arrays = load_archive(
+        verify_record(packet["first_base_action"]["persisted_P_Q"]["archive"])
+    )
+    r_arrays = load_archive(
+        verify_record(packet["selected_path_kernel"]["persisted_R_Q"]["archive"])
+    )
+    q_arrays = load_archive(ROOT / packet["inputs"]["G3DA_Q_archive"]["path"])
+    for arrays, shape, label in (
+        (p_arrays, (988, 710), "P_Q"),
+        (r_arrays, (710, 710), "R_Q"),
+    ):
+        for key in (
+            "real_high",
+            "real_low",
+            "real_radius",
+            "imag_high",
+            "imag_low",
+            "imag_radius",
+        ):
+            require(arrays[key].shape == shape, f"{label} {key} shape")
+            require(bool(np.all(np.isfinite(arrays[key]))), f"{label} finite")
+        require(bool(np.all(arrays["real_radius"] >= 0)), f"{label} real radii")
+        require(bool(np.all(arrays["imag_radius"] >= 0)), f"{label} imag radii")
+
+    ctx.prec = int(packet["field"]["precision_bits"])
+    roots = acb_poly(MINPOLY).roots(
+        tol=arb(2) ** (-int(packet["field"]["root_isolation_bits"])),
+        maxprec=1024,
+    )
+    roots = sorted(
+        roots,
+        key=lambda value: (float(value.real.mid()), float(value.imag.mid())),
+    )
+    gamma = roots[4]
+    require(acb_poly(MINPOLY)(gamma).contains(0), "root residual")
+    require(roots[5].overlaps(gamma.conjugate()), "conjugate root")
+    require(str(gamma) == packet["field"]["gamma_ball"], "root replay")
+
+    g3cv = load(ROOT / packet["inputs"]["G3CV"]["path"])
+    g3cw = load(ROOT / packet["inputs"]["G3CW"]["path"])
+    g3bj = load(ROOT / packet["inputs"]["G3BJ"]["path"])
+    require(
+        g3bj["selected_path"]["formula"] == "a(t)=1-t+i*pi*t*(1-t)",
+        "path replay",
+    )
+    require(
+        g3cw["checks"][
+            "the_fraction_free_determinant_lemma_matches_independent_endpoint_determinants_at_all_six_roots"
+        ],
+        "exact endpoint certificate",
+    )
+    s_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr()
+        for item in g3cv["factorization"]["S_gamma_coefficients"]
+    ]
+    active_columns = q_arrays["active_kernel_columns"].astype(np.int32)
+    minor_rows = q_arrays["selected_minor_rows"].astype(np.int32)
+    minor_columns = q_arrays["selected_minor_columns"].astype(np.int32)
+    active_lookup = {
+        int(column): position
+        for position, column in enumerate(active_columns.tolist())
+    }
+    minor_active_positions = [
+        active_lookup[int(column)] for column in minor_columns.tolist()
+    ]
+
+    sampled_p_residuals = 0
+    for row in (0, 494, 987):
+        support = sorted(
+            set(
+                int(column)
+                for matrix in s_coefficients
+                for column in matrix[row, :].nonzero()[1].tolist()
+            )
+        )
+        for selected_column in (0, 354, 709):
+            lhs = acb(0)
+            for column in support:
+                lhs += evaluate(
+                    [int(matrix[row, column]) for matrix in s_coefficients], gamma
+                ) * ball(p_arrays, column, selected_column)
+            rhs = ball(q_arrays, row, minor_active_positions[selected_column])
+            require((lhs - rhs).contains(0), "sample P_Q residual")
+            sampled_p_residuals += 1
+    require(sampled_p_residuals == 9, "nine P_Q residuals")
+
+    sampled_r_relations = 0
+    for row in (0, 355, 709):
+        q_row = int(minor_rows[row])
+        for selected_column in (0, 354, 709):
+            product = acb(0)
+            for active_position, kernel_column in enumerate(active_columns.tolist()):
+                product += ball(q_arrays, q_row, active_position) * ball(
+                    p_arrays, int(kernel_column), selected_column
+                )
+            require(
+                (product - ball(r_arrays, row, selected_column)).contains(0),
+                "sample R_Q relation",
+            )
+            sampled_r_relations += 1
+    require(sampled_r_relations == 9, "nine R_Q relations")
+
+    t_q = acb_mat(
+        710,
+        710,
+        [
+            ball(q_arrays, int(row), int(column))
+            for row in minor_rows.tolist()
+            for column in minor_active_positions
+        ],
+    )
+    t_determinant = t_q.det()
+    require(not t_determinant.contains(0), "persisted base determinant")
+    require(
+        not bool(packet["selected_path_kernel"]["endpoint_a1_determinant_excludes_zero"]),
+        "endpoint interval is honestly marked inconclusive",
+    )
+    print("UST.G3DB independent verifier: PASS")
+    print(
+        "P_Q_sample_residuals=9 R_Q_sample_relations=9 "
+        "base_determinant_excludes_zero=true endpoint_exact_certificate=true"
+    )
+
+
+if __name__ == "__main__":
+    main()

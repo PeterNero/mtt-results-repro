@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Regrade the predecessor fiber-two Hilbert hint by the positive Cox weight 5H+18L."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_predecessor_hilbert_hint as predecessor
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint.singular.out"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint.packet.json"
+
+H_WEIGHT = 5
+L_WEIGHT = 18
+BASE_WEIGHTS = (5, 5, 5, 15, 18, 18, 18)
+CAYLEY_WEIGHT = 64
+CAYLEY_VARIABLE_WEIGHTS = (34, 10, 1)
+COMPONENT_SHIFTS = (68, 44, 35, 20, 11, 2)
+TARGET_SCALAR_DEGREE = 254
+WEIGHTED_MODULE_RING = (
+    "ring r=(101,g),(x,y,z,w,t0,t1,t2),"
+    "(wp(5,5,5,15,18,18,18),C);"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def validate_grading() -> None:
+    require(all(value > 0 for value in BASE_WEIGHTS), "positive base weights")
+    require(all(value > 0 for value in CAYLEY_VARIABLE_WEIGHTS), "positive Cayley weights")
+    k_weight = 6 * H_WEIGHT
+    e_weight = 3 * L_WEIGHT
+    c_weight = 9 * H_WEIGHT + L_WEIGHT
+    require(
+        (
+            CAYLEY_VARIABLE_WEIGHTS[0] + k_weight,
+            CAYLEY_VARIABLE_WEIGHTS[1] + e_weight,
+            CAYLEY_VARIABLE_WEIGHTS[2] + c_weight,
+        )
+        == (CAYLEY_WEIGHT,) * 3,
+        "weighted Phi homogeneity",
+    )
+    require(
+        tuple(
+            H_WEIGHT * h_degree + L_WEIGHT * l_degree + shift
+            for (_, _, (h_degree, l_degree), _), shift in zip(
+                fiber2.COMPONENTS, COMPONENT_SHIFTS
+            )
+        )
+        == (TARGET_SCALAR_DEGREE,) * 6,
+        "common weighted target degree",
+    )
+
+
+def weighted_base_prefix(source: str) -> str:
+    prefix = fiber2.selected_base_prefix(source)
+    require(prefix.count(fiber2.MODULE_RING) == 1, "ordinary module ring marker")
+    return prefix.replace(fiber2.MODULE_RING, WEIGHTED_MODULE_RING, 1)
+
+
+def hint_script(leaders: list[tuple[int, tuple[int, ...]]]) -> str:
+    generators = ",\n  ".join(
+        f"{predecessor.monomial(exponent)}*gen({component})"
+        for component, exponent in leaders
+    )
+    shifts = ",".join(str(value) for value in COMPONENT_SHIFTS)
+    weights = ",".join(str(value) for value in BASE_WEIGHTS)
+    return f'''{WEIGHTED_MODULE_RING}
+module H=
+  {generators};
+intvec componentShifts={shifts};
+attrib(H,"isHomog",componentShifts);
+attrib(H,"isSB",1);
+intvec selectedWeights={weights};
+bigintvec predecessorHilbert=hilb(H,1);
+print("G3AP_F2_WEIGHTED_HINT_MODULE_LEADERS="+string(size(H)));
+print("G3AP_F2_WEIGHTED_HINT_HILBERT="+string(predecessorHilbert));
+print("G3AP_F2_WEIGHTED_HINT_PASS");
+quit;
+'''
+
+
+def load_hint() -> tuple[dict, list[int]]:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3ap-fiber2-weighted-hilbert-hint.v1",
+        "weighted hint schema",
+    )
+    require(
+        packet["status"] == "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE",
+        "weighted hint status",
+    )
+    require(not any(packet["guardrails"].values()), "weighted hint guardrails")
+    return packet, packet["fiber_degree_two"]["hilbert_numerator"]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    validate_grading()
+    source = Path(
+        os.environ.get("MTT_PREDECESSOR_CAYLEY_LEADERS", predecessor.DEFAULT_SOURCE)
+    )
+    require(
+        source.is_file() and sha256(source) == predecessor.SOURCE_SHA256,
+        "predecessor source hash",
+    )
+    leaders = predecessor.induced_module_leaders(predecessor.parse_source(source))
+    SCRIPT.write_text(hint_script(leaders), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)} leaders={len(leaders)}")
+        return
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "weighted Hilbert hint execution")
+    require("G3AP_F2_WEIGHTED_HINT_PASS" in completed.stdout, "weighted hint pass")
+    match = re.search(
+        r"^G3AP_F2_WEIGHTED_HINT_HILBERT=([0-9, -]+)$",
+        completed.stdout,
+        re.MULTILINE,
+    )
+    require(match is not None, "weighted Hilbert numerator export")
+    hilbert = [int(value.strip()) for value in match.group(1).split(",")]
+    require(hilbert and hilbert[0] == 1, "normalized weighted Hilbert numerator")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-fiber2-weighted-hilbert-hint.v1",
+        "date": "2026-08-10",
+        "status": "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE",
+        "predecessor": {
+            "sha256": predecessor.SOURCE_SHA256,
+            "source_repository_commit": predecessor.SOURCE_COMMIT,
+            "ordinary_basis_leaders": 26883,
+            "induced_module_leaders": len(leaders),
+        },
+        "grading": {
+            "Cox_functional": "5H+18L",
+            "base_weights": list(BASE_WEIGHTS),
+            "Cayley_common_weight": CAYLEY_WEIGHT,
+            "Cayley_variable_weights": list(CAYLEY_VARIABLE_WEIGHTS),
+            "component_shifts": list(COMPONENT_SHIFTS),
+            "target_scalar_degree": TARGET_SCALAR_DEGREE,
+            "strictly_positive_on_all_ten_variables": True,
+        },
+        "execution": {
+            "script": {
+                "path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SCRIPT),
+            },
+            "output": {
+                "path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(OUTPUT),
+            },
+            "returncode": completed.returncode,
+        },
+        "fiber_degree_two": {
+            "components": [name for _, name, _, _ in fiber2.COMPONENTS],
+            "component_shifts": list(COMPONENT_SHIFTS),
+            "minimal_leaders_by_component": [45, 45, 57, 330, 4850, 12156],
+            "hilbert_numerator": hilbert,
+        },
+        "checks": {
+            "same_predecessor_multigraded_initial_module_is_used": True,
+            "positive_Cox_regrading_preserves_each_multigraded_Hilbert_coefficient": True,
+            "all_three_terms_of_Phi_have_weight_64": True,
+            "all_six_target_components_have_weight_254": True,
+        },
+        "guardrails": {
+            "claims_selected_F1016_flatness": False,
+            "claims_selected_G3AP_dimension": False,
+            "may_be_used_without_independent_selected_source_certification": False,
+        },
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP weighted predecessor Hilbert hint: PASS "
+        f"leaders={len(leaders)} numerator_terms={len(hilbert)} target=254"
+    )
+
+
+if __name__ == "__main__":
+    main()

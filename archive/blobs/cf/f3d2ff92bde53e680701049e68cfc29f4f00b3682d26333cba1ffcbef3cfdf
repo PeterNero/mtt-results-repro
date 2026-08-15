@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Independent replay of the UST.G3GH component cutset."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3gh/H02.rank_jump_component_localization.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, object]) -> Path:
+    path = ROOT / str(item["path"])
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size: {path}")
+    require(sha256(path) == item["sha256"], f"record hash: {path}")
+    return path
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3GH", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    paths = {key: verify_record(item) for key, item in packet["inputs"].items()}
+    g3dw = json.loads(paths["G3DW"].read_text(encoding="utf-8"))
+    old = kernel_io.read_kernel(paths["old_kernel"])
+    generic = kernel_io.read_kernel(paths["generic_kernel"])
+    old_set = set(int(value) for value in old["dependent"])
+    generic_set = set(int(value) for value in generic["dependent"])
+    require(len(old_set) == 1274 and len(generic_set) == 1270, "kernel sizes")
+    require(len(old_set & generic_set) == 1269, "common coordinates")
+    require(sorted(old_set - generic_set) == [4937, 4938, 4939, 5151, 5152], "old-only")
+    require(sorted(generic_set - old_set) == [5061], "generic-only")
+    changed = []
+    for row in g3dw["component_partition"]["component_rows"]:
+        component = int(row["component"])
+        start = int(row["coordinate_start"])
+        past = int(row["coordinate_past"])
+        old_local = {value for value in old_set if start <= value < past}
+        generic_local = {value for value in generic_set if start <= value < past}
+        if old_local != generic_local:
+            changed.append(
+                (
+                    component,
+                    len(generic_local) - len(old_local),
+                    sorted(value - start for value in old_local - generic_local),
+                    sorted(value - start for value in generic_local - old_local),
+                )
+            )
+        if component == 20:
+            require(old_local == generic_local and len(old_local) == 100, "component20")
+    require(
+        changed == [
+            (23, -3, [202, 203, 204], []),
+            (24, -1, [163, 164], [73]),
+        ],
+        "localized changes",
+    )
+    arrays_path = verify_record(packet["coordinate_comparison"]["artifact"])
+    arrays = np.load(arrays_path, allow_pickle=False)
+    require(np.array_equal(arrays["old_only_dependent_coordinates"], [4937, 4938, 4939, 5151, 5152]), "artifact old-only")
+    require(np.array_equal(arrays["generic_only_dependent_coordinates"], [5061]), "artifact generic-only")
+    print(
+        "UST.G3GH independent verification: PASS "
+        "changed_components=23,24 component20=100-identical"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Independent checks for the G3BA topological Gram compiler."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ba_common_fiber_face_cover_gram as builder
+import run_ust_g3ba_common_fiber_face_cover_gram as runner
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ba_common_fiber_face_cover_gram.packet.json"
+SYNTHETIC_RESULT = ROOT / "state" / "ust_g3ba_synthetic_gram.test-only.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def determinant3(matrix: list[list[int]]) -> int:
+    return (
+        matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0])
+    )
+
+
+def matmul(left: list[list[int]], right: list[list[int]]) -> list[list[int]]:
+    return [
+        [sum(left[i][k] * right[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+
+
+def transpose(matrix: list[list[int]]) -> list[list[int]]:
+    return [list(row) for row in zip(*matrix)]
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3ba-common-fiber-face-cover-gram.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_FACE_COVER_TO_TOPOLOGICAL_GRAM_COMPILER_THREE_COVERS_OPEN",
+        "G3BA readiness packet",
+    )
+    require(all(packet["checks"].values()), "G3BA checks")
+    require(not any(packet["guardrails"].values()), "G3BA guardrails")
+    require(packet["selected_source_hashes"] == builder.EXPECTED_INPUTS, "selected source hashes")
+    require(
+        sha256(builder.B87) == builder.EXPECTED_B87_SHA256
+        and packet["inputs"]["B87"]["sha256"] == builder.EXPECTED_B87_SHA256,
+        "B87 evidence lock",
+    )
+    b87 = load(builder.B87)
+    require(
+        all(b87["checks"].values())
+        and b87["checks"]["each_minus2_vanishing_sphere_is_integrally_primitive"],
+        "B87 primitive minus-two clause",
+    )
+    require(
+        packet["artifacts"]["synthetic_complete_projection"]["sha256"]
+        == sha256(builder.SYNTHETIC),
+        "synthetic projection hash",
+    )
+
+    synthetic = load(SYNTHETIC_RESULT)
+    require(
+        synthetic["schema"] == runner.SCHEMA
+        and synthetic["status"]
+        == "CLOSED_EXACT_THREE_NODE_COMMON_FIBER_GRAM_AND_DETECTOR_NOGO",
+        "synthetic execution status",
+    )
+    replay = runner.execute(
+        synthetic["input_projection"],
+        allow_incomplete_audit=False,
+        allow_test_fixture=True,
+    )
+    require(
+        replay["cross_cycle_box_comparisons"]
+        == synthetic["cross_cycle_box_comparisons"],
+        "independent separation replay",
+    )
+    require(
+        replay["global_component_separators"]
+        == synthetic["global_component_separators"]
+        and all(
+            row["strict_global_component_separators"]
+            for row in synthetic["global_component_separators"]
+        ),
+        "independent global-separator replay",
+    )
+    require(replay["total_nonseparated_cross_cell_pairs"] == 0, "synthetic separation")
+    gram = synthetic["result"]["integral_Gram"]
+    require(gram == [[-2, 0, 0], [0, -2, 0], [0, 0, -2]], "integral Gram")
+    require(determinant3(gram) == synthetic["result"]["determinant"] == -8, "Gram determinant")
+    identity = [[1 if i == j else 0 for j in range(3)] for i in range(3)]
+    for reflection in synthetic["result"]["reflection_matrices"]:
+        require(matmul(reflection, reflection) == identity, "reflection involution")
+        require(
+            matmul(matmul(transpose(reflection), gram), reflection) == gram,
+            "reflection preserves Gram",
+        )
+
+    incomplete = json.loads(json.dumps(synthetic["input_projection"]))
+    incomplete["status"] = "CERTIFIED_INCOMPLETE_CAMPAIGN_PROJECTION"
+    incomplete["cycles"][0]["status"] = "RUNNING"
+    audit = runner.execute(incomplete, allow_incomplete_audit=True, allow_test_fixture=True)
+    require(audit["result"] is None and audit["status"].startswith("PARTIAL_AUDIT_ONLY"), "partial nonpromotion")
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BA"]["state"]
+        == "closed_exact_face_cover_to_topological_gram_compiler_three_covers_open"
+        and gates["UST.G3BA"]["depends_on"] == ["UST.G3AT", "UST.G3AW", "B.ETA9.01"],
+        "G3BA frontier gate",
+    )
+    require(
+        "-2 I3" in frontier["frontier_delta_g3ba"]
+        and "retires those local nodes" in frontier["next_action"]
+        and "G3BC" in frontier["next_action"],
+        "G3BA frontier decision",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BA" in document.read_text(encoding="utf-8"), f"G3BA integration {document.name}")
+    print("UST.G3BA common-fiber Gram compiler: PASS strict complete-cover promotion and three-node no-go")
+
+
+if __name__ == "__main__":
+    main()

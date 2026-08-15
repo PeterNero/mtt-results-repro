@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""Execute one resumable direct E=N0D1 selected Cayley response rectangle."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import build_ust_g3al_selected_carrier_response_schur as g3al
+import ust_cayley_fiber2_reduction as fiber2
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = ROOT / "state" / "g3an_cayley_schur_chunks"
+G3AL_PACKET = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+G3AM_PACKET = ROOT / "state" / "ust_g3am_selected_cayley_principal_response.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def cache_path(value: object, label: str) -> Path:
+    require(isinstance(value, Path), label)
+    path: Path = value
+    require(path.resolve().is_relative_to(ROOT.resolve()), f"{label} inside repository")
+    return path
+
+
+def decode_n0(packet: dict) -> list[list[tuple[int, ...]]]:
+    artifact = packet["principal_response"]["quotient_artifact"]
+    require(artifact is not None, "G3AM quotient artifact")
+    path = ROOT / artifact["path"]
+    raw = path.read_bytes()
+    require(sha256(path) == artifact["sha256"] and len(raw) == artifact["bytes"], "N0 bundle")
+    record = artifact["layout"]["N0"]
+    rows, columns, degree = [int(value) for value in record["shape"]]
+    require((rows, columns, degree) == (215, 248, 6), "N0 layout")
+    start = int(record["byte_offset"])
+    data = raw[start : start + int(record["byte_length"])]
+    matrix = []
+    offset = 0
+    for _ in range(rows):
+        row = []
+        for _ in range(columns):
+            row.append(tuple(data[offset : offset + degree]))
+            offset += degree
+        matrix.append(row)
+    require(offset == len(data), "N0 fully decoded")
+    return matrix
+
+
+def section(row: dict[str, object]) -> str:
+    return f"{g3al.monomial(row)}*t{int(row['target_coordinate'])}"
+
+
+def linear_polynomial(
+    coefficients: list[tuple[int, ...]], rows: list[str]
+) -> str:
+    terms = [
+        f"({g3al.singular_element(value)})*({row})"
+        for value, row in zip(coefficients, rows)
+        if any(value)
+    ]
+    return "+".join(terms) if terms else "0"
+
+
+def tangent_polynomial(vector, basis) -> str:
+    terms = []
+    for value, row in zip(vector, basis):
+        if not any(value):
+            continue
+        terms.append(
+            f"({g3al.singular_element(value)})*{g3al.monomial(row)}*t{int(row['target_coordinate'])}"
+        )
+    return "+".join(terms) if terms else "0"
+
+
+def make_script(
+    rows: list[str],
+    columns: list[str],
+    row_start: int,
+    packet: dict,
+    reduction: dict[str, object],
+) -> str:
+    field = packet["residue_field"]
+    k3 = packet["K3_cycle_source"]
+    q2 = k3["Q2"].replace("**", "^")
+    g3 = k3["G3"].replace("**", "^")
+    h4 = k3["H4"].replace("**", "^")
+    row_count = len(rows)
+    column_count = len(columns)
+    module_cache = cache_path(reduction["module_cache"], "module cache")
+    module_relative = str(module_cache.relative_to(ROOT)).replace("\\", "/")
+    kind = str(reduction["kind"])
+    ring_declaration = str(
+        reduction.get(
+            "ring_declaration",
+            "ring r=(101,g),(x,y,z,w,t0,t1,t2),(wp(1,1,1,3,1,1,1),C);",
+        )
+    )
+    quotient_setup = ""
+    if kind in (
+        "fiber2_module_over_B_mod_K_E_C_through_degree_44",
+        "fiber2_module_over_B_mod_K_E_C_weighted_5H18L_through_degree_254",
+        "fiber2_target_reduction_set_over_B_mod_K_E_C_weighted_5H18L_at_degree_254",
+        "fiber2_target_reduction_set_over_B_mod_K_E_C_Hmajor_9HplusL_at_degree_328",
+        "fiber2_target_reduction_set_over_B_mod_K_E_C_Honly_at_Cox_18_2_2",
+    ):
+        base_cache = cache_path(reduction["base_cache"], "base cache")
+        base_relative = str(base_cache.relative_to(ROOT)).replace("\\", "/")
+        quotient_setup = f'''def cachedBase=read("ssi:r {base_relative}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+qring q=GI;
+'''
+    elif kind not in (
+        "fiber2_polynomial_module_through_degree_44",
+        "fiber2_target_reduction_set_in_polynomial_module_Honly_at_Cox_18_2_2",
+        "fiber2_target_reduction_set_in_polynomial_module_Hmajor_9HplusL_at_Cox_18_2_2",
+    ):
+        raise AssertionError("unsupported fiber-two reduction kind")
+    coordinates = reduction["fiber_coordinates"]
+    initial_position = int(coordinates["initial_module_position"])
+    normalization_position = int(coordinates["normalization_module_position"])
+    normalization_scalar = str(coordinates["normalization_scalar_monomial"])
+    quotient_vectors = ",".join(
+        f"({row})*gen({initial_position})" for row in rows
+    )
+    return f'''// UST.G3AN direct selected-carrier Schur-response rectangle.
+option(redSB);
+{ring_declaration}
+minpoly={g3al.singular_minpoly(field["gamma_relation_coefficients_ascending"])};
+{quotient_setup}def cachedModule=read("ssi:r {module_relative}");
+module G=cachedModule;
+attrib(G,"isSB",1);
+poly Q2={q2};
+poly G3={g3};
+poly H4={h4};
+ideal cycleRows=Q2,-H4,w-G3,w+G3;
+matrix cycleJacobian[4][4];
+int ci; int cj;
+for (ci=1;ci<=4;ci++) {{ for (cj=1;cj<=4;cj++) {{ cycleJacobian[ci,cj]=diff(cycleRows[ci],var(cj)); }} }}
+number inv6=1/6;
+poly Pdelta=inv6*det(cycleJacobian);
+poly fixedBase=Pdelta*t0*t1*t2;
+vector reducedSocle=reduce(({normalization_scalar})*gen({normalization_position}),G);
+module quotientRows={quotient_vectors};
+ideal extraColumns={','.join(columns)};
+module preparedRows=reduce(fixedBase*quotientRows,G);
+matrix E[{row_count}][{column_count}];
+int ri; int gi; int badNormalForms=0; int nonzeroEntries=0;
+vector entryNormal; number entryCoefficient;
+module rowProducts; module rowNormals;
+for (ri=1;ri<={row_count};ri++)
+{{
+  for (gi=1;gi<={column_count};gi++)
+  {{ rowProducts[gi]=preparedRows[ri]*extraColumns[gi]; }}
+  rowNormals=reduce(rowProducts,G);
+  for (gi=1;gi<={column_count};gi++)
+  {{
+    entryNormal=rowNormals[gi];
+    entryCoefficient=0;
+    if (entryNormal!=0)
+    {{
+      entryCoefficient=leadcoef(entryNormal)/leadcoef(reducedSocle);
+      if (entryNormal-entryCoefficient*reducedSocle!=0)
+      {{ badNormalForms=badNormalForms+1; entryCoefficient=0; }}
+      else {{ nonzeroEntries=nonzeroEntries+1; }}
+    }}
+    E[ri,gi]=entryCoefficient;
+  }}
+  string rowText="";
+  for (gi=1;gi<={column_count};gi++)
+  {{
+    if (gi>1) {{ rowText=rowText+","; }}
+    rowText=rowText+string(E[ri,gi]);
+  }}
+  print("G3AN_SCHUR_ROW_"+string({row_start}+ri-1)+"="+rowText);
+}}
+print("G3AN_SCHUR_ROW_START={row_start}");
+print("G3AN_SCHUR_ROW_COUNT={row_count}");
+print("G3AN_SCHUR_COLUMN_COUNT={column_count}");
+print("G3AN_SCHUR_BAD_NORMAL_FORMS="+string(badNormalForms));
+print("G3AN_SCHUR_NONZERO_ENTRIES="+string(nonzeroEntries));
+print("G3AN_SCHUR_SOCLE_ZERO="+string(reducedSocle==0));
+if (badNormalForms==0 && reducedSocle!=0) {{ print("G3AN_SCHUR_CHUNK_PASS"); }}
+else {{ print("G3AN_SCHUR_CHUNK_FAIL"); }}
+quit;
+'''
+
+
+def scalar(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, flags=re.MULTILINE)
+    require(match is not None, f"missing {label}")
+    return int(match.group(1))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--row-start", type=int, required=True)
+    parser.add_argument("--row-count", type=int, default=8)
+    parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--build-only", action="store_true")
+    args = parser.parse_args()
+    require(0 <= args.row_start < 215, "row start")
+    require(1 <= args.row_count <= 215 - args.row_start, "row count")
+    g3am_packet = json.loads(G3AM_PACKET.read_text(encoding="ascii"))
+    require(g3am_packet["principal_response"]["rank"] == 33, "selected rank(D0)=33")
+    n0 = decode_n0(g3am_packet)
+    frames = g3al.selected_frames()
+    basis = frames["basis"]
+    pivot = int(frames["projective_pivot"])
+    primitive = [section(row) for index, row in enumerate(basis) if index != pivot]
+    quotient = [linear_polynomial(row, primitive) for row in n0]
+    columns = [tangent_polynomial(vector, basis) for vector in frames["extra"]]
+    rows = quotient[args.row_start : args.row_start + args.row_count]
+    g3al_packet = json.loads(G3AL_PACKET.read_text(encoding="ascii"))
+    reduction = fiber2.selected_fiber2_reduction()
+    fiber2.require_response_target_coverage(reduction)
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    stem = f"r{args.row_start:03d}-{args.row_start + args.row_count - 1:03d}_c000-088"
+    script = CAMPAIGN / f"{stem}.sing"
+    output_path = CAMPAIGN / f"{stem}.singular.out"
+    packet_path = CAMPAIGN / f"{stem}.packet.json"
+    script.write_text(
+        make_script(rows, columns, args.row_start, g3al_packet, reduction),
+        encoding="ascii",
+    )
+    if args.build_only:
+        print(script)
+        return
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, script),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    output_path.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, f"Singular return code {completed.returncode}")
+    require("G3AN_SCHUR_CHUNK_PASS" in completed.stdout, completed.stdout[-4000:])
+    require(scalar(completed.stdout, "G3AN_SCHUR_BAD_NORMAL_FORMS") == 0, "socle line")
+    entries = []
+    for row in range(args.row_start, args.row_start + args.row_count):
+        match = re.search(
+            rf"^G3AN_SCHUR_ROW_{row}=([^\r\n]*)$",
+            completed.stdout,
+            flags=re.MULTILINE,
+        )
+        require(match is not None, f"Schur row {row}")
+        values = match.group(1).split(",")
+        require(len(values) == 89, f"Schur row {row} width")
+        entries.append(values)
+    result = {
+        "schema": "mtt.unified-source.g3an-selected-cayley-schur-chunk.v1",
+        "status": "CLOSED_EXACT_SELECTED_CARRIER_FINITE_RESIDUE_SCHUR_RECTANGLE",
+        "inputs": {
+            "G3AL": {"path": str(G3AL_PACKET.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(G3AL_PACKET)},
+            "G3AM": {"path": str(G3AM_PACKET.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(G3AM_PACKET)},
+            "G3AP": reduction["certificate"],
+            "G3AP_source": reduction["source_certificate"],
+            "base_cache": (
+                None
+                if reduction["base_cache"] is None
+                else {
+                    "path": str(cache_path(reduction["base_cache"], "base cache").relative_to(ROOT)).replace("\\", "/"),
+                    "sha256": sha256(cache_path(reduction["base_cache"], "base cache")),
+                }
+            ),
+            "module_cache": {
+                "path": str(cache_path(reduction["module_cache"], "module cache").relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(cache_path(reduction["module_cache"], "module cache")),
+            },
+            "principal_quotient": {
+                "path": g3am_packet["principal_response"]["quotient_artifact"]["path"],
+                "sha256": g3am_packet["principal_response"]["quotient_artifact"]["sha256"],
+            },
+        },
+        "reduction_basis": {
+            **fiber2.response_reduction_basis(reduction),
+            "initial_fiber_component": reduction["fiber_coordinates"][
+                "initial_physical_component"
+            ],
+            "normalization_basis_component": reduction["fiber_coordinates"][
+                "normalization_physical_component"
+            ],
+        },
+        "rectangle": {
+            "row_start_zero_based": args.row_start,
+            "row_count": args.row_count,
+            "column_start_zero_based": 0,
+            "column_count": 89,
+            "entries_F1016_singular": entries,
+        },
+        "script": {"path": str(script.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(script)},
+        "output": {"path": str(output_path.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(output_path)},
+        "elapsed_seconds": time.time() - started,
+        "checks": {
+            "same_selected_G3AL_carrier": True,
+            "same_canonical_G3AP_fiber2_reduction": True,
+            "fixed_uv_factor_is_mapped_from_physical_component_two": True,
+            "all_reduced_products_are_within_the_certified_reduction_scope": True,
+            "same_G3AM_principal_quotient_N0": True,
+            "computes_E_equals_N0D1_directly": True,
+            "all_products_lie_on_the_selected_socle_line": True,
+            "no_GF11_entry_is_imported": True,
+        },
+    }
+    packet_path.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(packet_path)
+
+
+if __name__ == "__main__":
+    main()

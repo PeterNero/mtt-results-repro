@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""Rebuild component 20's selected source presentation over Q(gamma)."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as dm_runtime
+import probe_ust_g3bl_endpoint_chart_unit as chart_runtime
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    ONE,
+    add_entry,
+    exact_action,
+    load,
+    write_number_field_matrix,
+)
+from probe_ust_g3ek_component16_cohomological_source import (
+    evaluate_sparse,
+    finite_matrix,
+    rank_mod,
+    sparse_rank_mod,
+)
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3ex"
+OUTPUT = EVIDENCE / "H02.component20.cohomological_source_presentation.json"
+MATRIX = EVIDENCE / "H02.component20.cohomological.number_field.sms"
+INDICES = EVIDENCE / "H02.component20.cohomological.indices.npz"
+
+LOCALIZATION = ROOT / "evidence/ust_g3ew/H02.component20.finite_source_localization.json"
+FINITE_INDICES = ROOT / "evidence/ust_g3ew/H02.component20.finite_source_indices.npz"
+RHS = ROOT / "evidence/ust_g3ew/H02.component20.observed_action.rhs.bin"
+SOLUTION = ROOT / "evidence/ust_g3ew/H02.component20.observed_action.solution.bin"
+SOLVE_LOG = ROOT / "evidence/ust_g3ew/H02.component20.observed_action.solve.log"
+BASE_CHART = ROOT / "evidence/ust_g3eb_probe/H02.p21817.g5.base_chart.bin"
+
+PRIME = 21817
+GAMMA = 5
+AMBIENT_DIMENSION = 42706
+QUOTIENT_DIMENSION = 248
+COMPLEMENT_DIMENSION = 42458
+UPDATE_DIMENSION = 6022
+RELATIONS = 100
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    localization = load(LOCALIZATION)
+    g3bi = load(ROOT / "state/ust_g3bi_explicit_root_start.packet.json")
+    g3bw = load(ROOT / "state/ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json")
+    g3de = load(ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json")
+    require(all(localization["checks"].values()), "finite localization")
+    require(all(all(packet["checks"].values()) for packet in (g3bi, g3bw, g3de)), "state inputs")
+    for path in (FINITE_INDICES, RHS, SOLUTION, SOLVE_LOG, BASE_CHART):
+        require(path.is_file(), f"finite input exists: {path.name}")
+
+    finite = np.load(FINITE_INDICES, allow_pickle=False)
+    source_support = finite["source_support"].astype(np.int32)
+    relation_indices = finite["relation_indices"].astype(np.int32)
+    dependent_coordinates = finite["dependent_coordinates"].astype(np.int32)
+    selected_source_vectors = finite["selected_vectors_mod21817_gamma5"].astype(np.int64)
+    require(source_support.size == 2523, "source support")
+    require(relation_indices.size == dependent_coordinates.size == RELATIONS, "relations")
+    require(selected_source_vectors.shape == (source_support.size, RELATIONS), "source vectors")
+
+    mld = chart_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+
+    base_chart = split_io.as_scipy(
+        arithmetic.read_csc(BASE_CHART, b"MTTSPC1\0", 6)
+    ).tocsc().astype(np.int64)
+    stored_rhs = split_io.as_scipy(
+        arithmetic.read_csc(RHS, b"MTTSRH1\0", 4)
+    ).tocsc().astype(np.int64)
+    solution = split_io.as_scipy(
+        arithmetic.read_csc(SOLUTION, b"MTTSCO1\0", 6)
+    ).tocsc().astype(np.int64)
+    require(solution.shape == (AMBIENT_DIMENSION, RELATIONS), "solution shape")
+    require(
+        split_io.residual_nonzeros(base_chart, solution, stored_rhs, PRIME) == 0,
+        "selected-chart residual",
+    )
+    quotient = solution[:QUOTIENT_DIMENSION, :].tocsc()
+    lift = solution[QUOTIENT_DIMENSION:, :].tocsc()
+    quotient_support = np.unique(quotient.nonzero()[0]).astype(np.int32)
+    lift_support = np.unique(lift.nonzero()[0]).astype(np.int32)
+    require(quotient_support.size == 227, "quotient support")
+    require(lift_support.size == 6523, "lift support")
+
+    w_coefficients = [
+        sparse.load_npz(ROOT / row["path"]).tocsr().astype(np.int64)
+        for row in g3de["factorization"]["W_gamma_coefficients"]
+    ]
+    w_lift = (evaluate_sparse(w_coefficients) @ lift).tocsc()
+    w_lift.data %= PRIME
+    w_lift.eliminate_zeros()
+    require(w_lift.nnz == 0, "selected lift lies in W-kernel")
+
+    macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json")
+    factor = load(mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json")
+    csc = load(mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json")
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    require(len(descriptors) == COMPLEMENT_DIMENSION, "complement descriptors")
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    selection = np.load(ROOT / g3de["factorization"]["selection"]["path"], allow_pickle=False)
+    selected_updates = selection["selected_columns"].astype(np.int32)
+    require(selected_updates.size == UPDATE_DIMENSION, "selected updates")
+    update_descriptors = [descriptors[int(value)] for value in selected_updates]
+    source_descriptors = [update_descriptors[int(coordinate)] for coordinate in source_support]
+
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    correction = dm_runtime.correction_derivatives_exact(g3bi)
+    source_action = exact_action(
+        {(index, index): ONE for index in range(source_support.size)},
+        source_descriptors,
+        correction,
+        target_lookup,
+    )
+    lift_action = exact_action(
+        {(int(coordinate), index): ONE for index, coordinate in enumerate(lift_support)},
+        descriptors,
+        generators0,
+        target_lookup,
+    )
+    entries = dict(source_action)
+    lift_offset = int(source_support.size)
+    quotient_offset = lift_offset + int(lift_support.size)
+    for (row, column), value in lift_action.items():
+        add_entry(entries, (row, lift_offset + column), value)
+    quotient_rows = [int(value) for value in csc["binary"]["quotient_unit_rows"]]
+    for local, coordinate in enumerate(quotient_support):
+        add_entry(entries, (quotient_rows[int(coordinate)], quotient_offset + local), ONE)
+    columns = quotient_offset + int(quotient_support.size)
+    require(columns == 9273, "presentation columns")
+    write_number_field_matrix(MATRIX, entries, (AMBIENT_DIMENSION, columns))
+
+    active_rows = np.asarray(sorted({row for row, _ in entries}), dtype=np.int32)
+    active_lookup = {int(row): index for index, row in enumerate(active_rows)}
+    pattern = sparse.csr_matrix(
+        (
+            np.ones(len(entries), dtype=np.uint8),
+            (
+                np.asarray([active_lookup[int(row)] for row, _ in entries], dtype=np.int32),
+                np.asarray([column for _, column in entries], dtype=np.int32),
+            ),
+        ),
+        shape=(active_rows.size, columns),
+    )
+    structural_rank = int(
+        np.count_nonzero(maximum_bipartite_matching(pattern, perm_type="column") >= 0)
+    )
+    finite_rank, eliminations = sparse_rank_mod(entries, AMBIENT_DIMENSION)
+
+    lift_vectors = lift[lift_support, :].toarray().astype(np.int64) % PRIME
+    quotient_vectors = quotient[quotient_support, :].toarray().astype(np.int64) % PRIME
+    selected_vectors = np.concatenate(
+        (selected_source_vectors, lift_vectors, quotient_vectors), axis=0
+    )
+    require(selected_vectors.shape == (columns, RELATIONS), "selected vectors")
+    evaluated = finite_matrix(entries, (AMBIENT_DIMENSION, columns))
+    replay = (evaluated @ selected_vectors).astype(np.int64) % PRIME
+    replay_nonzeros = int(np.count_nonzero(replay))
+    require(replay_nonzeros == 0, "selected finite replay")
+    source_lookup = {int(coordinate): local for local, coordinate in enumerate(source_support)}
+    dependent_local = [source_lookup[int(value)] for value in dependent_coordinates]
+    projection_rank = rank_mod(selected_vectors[dependent_local, :])
+    require(projection_rank == RELATIONS, "component projection rank")
+    finite_nullity = columns - finite_rank
+    print(
+        "G3EX component20 finite-rank diagnostic "
+        f"columns={columns} structural={structural_rank} "
+        f"finite_rank={finite_rank} finite_nullity={finite_nullity}",
+        flush=True,
+    )
+    require(finite_nullity >= RELATIONS, "target relations fit in finite nullity")
+
+    np.savez_compressed(
+        INDICES,
+        source_support=source_support,
+        lift_support=lift_support,
+        quotient_support=quotient_support,
+        relation_indices=relation_indices,
+        dependent_coordinates=dependent_coordinates,
+        dependent_local_columns=np.asarray(dependent_local, dtype=np.int32),
+        selected_vectors_mod21817_gamma5=selected_vectors.astype(np.uint16),
+    )
+    packet = {
+        "schema": "ust.g3ex.h02.component20.cohomological-source-presentation.v1",
+        "date": "2026-08-14",
+        "status": "CLOSED_EXACT_COMPONENT20_PRESENTATION_CHARZERO_KERNEL_OPEN",
+        "inputs": {
+            "finite_localization": record(LOCALIZATION),
+            "finite_indices": record(FINITE_INDICES),
+            "selected_chart_rhs": record(RHS),
+            "selected_chart_solution": record(SOLUTION),
+            "selected_chart_solve_log": record(SOLVE_LOG),
+            "selected_base_chart": record(BASE_CHART),
+        },
+        "selected_chart_lift": {
+            "solution_nonzeros": int(solution.nnz),
+            "lift_support": int(lift_support.size),
+            "quotient_support": int(quotient_support.size),
+            "W_lift_nonzeros": int(w_lift.nnz),
+        },
+        "exact_presentation": {
+            "shape": [AMBIENT_DIMENSION, columns],
+            "columns": {
+                "source": int(source_support.size),
+                "lift": int(lift_support.size),
+                "quotient_units": int(quotient_support.size),
+            },
+            "active_rows": int(active_rows.size),
+            "nonzero_entries": len(entries),
+            "structural_rank": structural_rank,
+            "good_reduction_rank": finite_rank,
+            "good_reduction_nullity": finite_nullity,
+            "target_relation_dimension": RELATIONS,
+            "additional_finite_nullity": finite_nullity - RELATIONS,
+            "finite_eliminations": eliminations,
+            "matrix": record(MATRIX),
+            "indices_and_selected_vectors": record(INDICES),
+        },
+        "selected_vector_replay": {
+            "vectors": RELATIONS,
+            "replay_nonzero_slots": replay_nonzeros,
+            "component20_projection_rank": projection_rank,
+        },
+        "checks": {
+            "the_selected_chart_solution_has_zero_finite_residual": True,
+            "the_selected_lift_lies_in_the_W_kernel": True,
+            "the9273_column_Qgamma_presentation_is_emitted": True,
+            "the100_selected_finite_vectors_replay_with_zero_residual": True,
+            "the_component20_projection_has_rank100": True,
+            "the_good_reduction_nullity_contains_the100_target_relations": True,
+        },
+        "guardrails": {
+            "claims_the100_vectors_lift_to_Qgamma": False,
+            "claims_the_raw_presentation_has_no_additional_kernel": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Apply certified unit pivots and kernel-preserving contractions to the "
+            "9273-column exact presentation, separate the target100-dimensional "
+            "component projection from any additional finite kernel, then construct "
+            "and literally replay its characteristic-zero kernel before promoting "
+            "component 20."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    OUTPUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3EX component20 exact presentation: PASS "
+        f"shape={AMBIENT_DIMENSION}x{columns} entries={len(entries)} "
+        f"structural={structural_rank} finite_rank={finite_rank} nullity={finite_nullity}"
+    )
+
+
+if __name__ == "__main__":
+    main()

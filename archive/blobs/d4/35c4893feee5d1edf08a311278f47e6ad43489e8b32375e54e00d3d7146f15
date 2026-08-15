@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Independently replay the G3FN component-20 Hilbert--Burch source."""
+
+from __future__ import annotations
+
+import hashlib
+import itertools
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fn/H02.component20.hilbert_burch_source.json"
+EXPECTED_STATUS = "CLOSED_EXACT_48_FIBER_HILBERT_BURCH_SOURCE_QGAMMA_IDENTIFICATION_OPEN"
+EXPECTED_NULLITIES = (0, 1, 4, 9, 16, 25, 36, 49, 65)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound path exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def lift_syzygy(
+    syzygy: np.ndarray, source_degree: int, target_degree: int, prime: int
+) -> np.ndarray:
+    source = graded.homogeneous_exponents(source_degree)
+    target = graded.homogeneous_exponents(target_degree)
+    lookup = {exponent: row for row, exponent in enumerate(target)}
+    multipliers = graded.homogeneous_exponents(target_degree - source_degree)
+    result = np.zeros((4 * len(target), len(multipliers)), dtype=np.int64)
+    for column, multiplier in enumerate(multipliers):
+        for generator in range(4):
+            for row, exponent in enumerate(source):
+                shifted = tuple(exponent[index] + multiplier[index] for index in range(3))
+                result[generator * len(target) + lookup[shifted], column] = syzygy[
+                    generator * len(source) + row
+                ]
+    return result % prime
+
+
+def multiply(
+    left: np.ndarray,
+    left_degree: int,
+    right: np.ndarray,
+    right_degree: int,
+    prime: int,
+) -> np.ndarray:
+    left_basis = graded.homogeneous_exponents(left_degree)
+    right_basis = graded.homogeneous_exponents(right_degree)
+    target = graded.homogeneous_exponents(left_degree + right_degree)
+    lookup = {exponent: row for row, exponent in enumerate(target)}
+    result = np.zeros(len(target), dtype=np.int64)
+    for i, first in enumerate(left_basis):
+        for j, second in enumerate(right_basis):
+            if left[i] and right[j]:
+                exponent = tuple(first[k] + second[k] for k in range(3))
+                result[lookup[exponent]] += int(left[i]) * int(right[j])
+    return result % prime
+
+
+def determinant3(rows: list[list[np.ndarray]], prime: int) -> np.ndarray:
+    degrees = (1, 2, 8)
+    result = np.zeros(78, dtype=np.int64)
+    for permutation in itertools.permutations(range(3)):
+        inversions = sum(
+            permutation[i] > permutation[j]
+            for i in range(3)
+            for j in range(i + 1, 3)
+        )
+        first = multiply(
+            rows[0][permutation[0]], degrees[permutation[0]],
+            rows[1][permutation[1]], degrees[permutation[1]], prime,
+        )
+        product = multiply(
+            first, degrees[permutation[0]] + degrees[permutation[1]],
+            rows[2][permutation[2]], degrees[permutation[2]], prime,
+        )
+        result = (result + (-1 if inversions % 2 else 1) * product) % prime
+    return result
+
+
+def maximal_minors(
+    syzygy1: np.ndarray, syzygy2: np.ndarray, syzygy8: np.ndarray, prime: int
+) -> np.ndarray:
+    vectors = (syzygy1, syzygy2, syzygy8)
+    sizes = (3, 6, 45)
+    matrix = [
+        [vectors[column][row * sizes[column] : (row + 1) * sizes[column]] for column in range(3)]
+        for row in range(4)
+    ]
+    return np.stack(
+        [
+            ((-1) ** omitted * determinant3(
+                [matrix[row] for row in range(4) if row != omitted], prime
+            ))
+            % prime
+            for omitted in range(4)
+        ],
+        axis=1,
+    )
+
+
+def line_restriction(polynomial: np.ndarray, prime: int) -> np.ndarray:
+    result = np.zeros(12, dtype=np.int64)
+    for coefficient, (_a, b, c) in zip(
+        polynomial, graded.homogeneous_exponents(11), strict=True
+    ):
+        for power in range(c + 1):
+            result[b + power] += int(coefficient) * math.comb(c, power) * 2**power
+    return result % prime
+
+
+def polynomial_gcd(left: np.ndarray, right: np.ndarray, prime: int) -> np.ndarray:
+    def trim(value: np.ndarray) -> np.ndarray:
+        support = np.flatnonzero(value % prime)
+        return np.zeros(1, dtype=np.int64) if support.size == 0 else value[: int(support[-1]) + 1] % prime
+
+    a, b = trim(left), trim(right)
+    while np.any(b):
+        remainder = a.copy()
+        inverse = pow(int(b[-1]), -1, prime)
+        while remainder.size >= b.size and np.any(remainder):
+            shift = remainder.size - b.size
+            coefficient = int(remainder[-1]) * inverse % prime
+            remainder[shift : shift + b.size] = (
+                remainder[shift : shift + b.size] - coefficient * b
+            ) % prime
+            remainder = trim(remainder)
+        a, b = b, remainder
+    return a * pow(int(a[-1]), -1, prime) % prime
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["status"] == EXPECTED_STATUS, "status")
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    bound_path(packet["inputs"]["G3FE"])
+    bound_path(packet["inputs"]["G3FK"])
+    arrays_path = bound_path(packet["campaign"]["artifact"])
+    arrays = np.load(arrays_path, allow_pickle=False)
+
+    split_paths = [bound_path(row) for row in packet["inputs"]["split_prime_packets"]]
+    split_packets = [json.loads(path.read_text(encoding="utf-8")) for path in split_paths]
+    primes = tuple(int(value) for value in arrays["primes"])
+    require(primes == conic.EXPECTED_PRIMES, "prime order")
+    degree8_values = arrays["degree8_syzygy_values"].astype(np.int64)
+    residues = arrays["degree8_syzygy_power_basis_residues"].astype(np.int64)
+    scalars = arrays["maximal_minor_scalars"].astype(np.int64)
+    require(degree8_values.shape == (8, 6, 180), "degree8 values shape")
+    require(residues.shape == (8, 1080), "residue shape")
+
+    reconstructed_residues: list[np.ndarray] = []
+    profiles: list[tuple[tuple[int, ...], int]] = []
+    for prime_index, (split, prime) in enumerate(zip(split_packets, primes, strict=True)):
+        roots = tuple(int(value) for value in split["field"]["roots"])
+        rows = {int(row["gamma_root"]): row for row in split["root_kernels"]}
+        local_values: list[np.ndarray] = []
+        for root_index, root in enumerate(roots):
+            generators, syzygy_block, _ = g3fe.extract_fiber(
+                ROOT / rows[root]["kernel"]["path"], prime
+            )
+            generators11 = generators[11]
+            syzygy1 = syzygy_block[:12]
+            syzygy2 = syzygy_block[12:]
+            syzygy8 = degree8_values[prime_index, root_index] % prime
+
+            nullities = []
+            for degree in range(9):
+                matrix = graded.multiply_space(generators11, 11, 11 + degree, prime)
+                nullities.append(matrix.shape[1] - graded.rref(matrix, prime)[0])
+            require(tuple(nullities) == EXPECTED_NULLITIES, "nullity profile")
+            map19 = graded.multiply_space(generators11, 11, 19, prime)
+            require(np.count_nonzero(map19 @ syzygy8 % prime) == 0, "stored degree8 syzygy")
+            inherited = np.concatenate(
+                (lift_syzygy(syzygy1, 1, 8, prime), lift_syzygy(syzygy2, 2, 8, prime)),
+                axis=1,
+            )
+            rank, pivot_rows, _ = graded.rref(inherited.T, prime)
+            require(rank == 64, "inherited rank")
+            require(
+                graded.rref(np.concatenate((inherited, syzygy8[:, None]), axis=1), prime)[0] == 65,
+                "new degree8 class",
+            )
+            outside = [row for row in range(180) if row not in set(pivot_rows)]
+            normalization = next(row for row in outside if syzygy8[row])
+            require(syzygy8[normalization] == 1, "canonical normalization")
+            profiles.append((tuple(int(value) for value in pivot_rows), normalization))
+
+            minors = maximal_minors(syzygy1, syzygy2, syzygy8, prime)
+            scalar = int(scalars[prime_index, root_index]) % prime
+            require(scalar != 0, "minor scalar unit")
+            require(np.array_equal(minors, scalar * generators11 % prime), "minor replay")
+            restrictions = [line_restriction(generators11[:, column], prime) for column in range(4)]
+            require(any(restriction[11] for restriction in restrictions), "no common s factor")
+            gcd = restrictions[0]
+            for restriction in restrictions[1:]:
+                gcd = polynomial_gcd(gcd, restriction, prime)
+            require(gcd.size == 1, "grade-two line gcd")
+            local_values.append(syzygy8)
+
+        coefficients = g3fe.interpolate(np.stack(local_values), roots, prime)
+        reconstructed_residues.append(coefficients.ravel())
+        print(f"G3FN verify p={prime}: six Hilbert-Burch fibers PASS", flush=True)
+
+    require(len(set(profiles)) == 1, "common normalization profile")
+    replayed = np.stack(reconstructed_residues)
+    require(np.array_equal(replayed, residues), "power-basis residue replay")
+    audit = g3fe.reconstruction_audit(replayed, primes)
+    require(
+        audit["coefficients"] == 1080
+        and audit["holdout_passes"] == packet["numeric_promotion_audit"]["holdout_passes"]
+        and audit["passing_nontrivial_coefficients"] == 0,
+        "promotion audit replay",
+    )
+    print(
+        "UST.G3FN independent replay: PASS "
+        "fibers=48 resolution=R(-12)+R(-13)+R(-19)->R(-11)^4",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Independently verify UST.G3EJ and its ten exact kernel vectors."""
+
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from build_ust_g3ej_h02_component12_exact_kernel_promotion import (
+    PRIME,
+    ROOT,
+    ROOT_VALUE,
+    determinant_mod_prime,
+)
+from probe_ust_g3ec_component12_padic_kernel import invert_matrix_mod
+from probe_ust_g3ef_component12_six_embedding_lattice import (
+    exact_replay,
+    independent_candidates,
+    interpolate_vectors,
+)
+from verify_ust_g3eg_h02_component12_adaptive_exactness_cutset import (
+    matrix_rank_at_good_reduction,
+)
+
+
+PACKET = ROOT / "state/ust_g3ej_h02_component12_exact_kernel_promotion.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checked(record: dict[str, Any]) -> Path:
+    path = ROOT / str(record["path"])
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def load_checked(record: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(checked(record).read_text(encoding="utf-8"))
+
+
+def load_gzip_checked(record: dict[str, Any]) -> dict[str, Any]:
+    path = checked(record)
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3ej-h02-component12-exact-kernel-promotion.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    g3ei = load_gzip_checked(packet["inputs"]["G3EI"])
+    require(g3ei["exact_kernel_closed"], "G3EI closure")
+    require(
+        [row["exact_replay_nonzero_slots"] for row in g3ei["rounds"]]
+        == [2861, 2020, 0],
+        "residual trend",
+    )
+    require(
+        [row["coefficients_over_threshold"] for row in g3ei["rounds"]]
+        == [760, 157, 0],
+        "coefficient trend",
+    )
+
+    residue = load_gzip_checked(packet["inputs"]["p_adic_residue"])
+    candidates = [
+        [int(value) for value in row]
+        for row in g3ei["selected_candidate_free_coefficients"]
+    ]
+    require(independent_candidates(candidates) == list(range(10)), "independence")
+    determinant = determinant_mod_prime(candidates)
+    require(determinant == 1071 and determinant % PRIME != 0, "determinant")
+    modulus = int(residue["modulus"])
+    roots = [int(value) for value in residue["lifted_roots"]]
+    inverse_vandermonde = invert_matrix_mod(
+        [[pow(root, degree, modulus) for degree in range(6)] for root in roots],
+        modulus,
+    )
+    vectors = interpolate_vectors(
+        candidates,
+        residue["kernels"],
+        roots,
+        inverse_vandermonde,
+        modulus,
+    )
+    require(exact_replay(vectors) == (0, 13240), "independent exact replay")
+
+    vector_evidence = load_gzip_checked(packet["exact_kernel_certificate"]["vectors"])
+    serialized_vectors = [
+        [[int(value) for value in coefficient] for coefficient in vector]
+        for vector in vectors
+    ]
+    require(vector_evidence["vectors"] == serialized_vectors, "emitted vectors")
+    require(vector_evidence["coefficient_bit_min"] == 127, "minimum bits")
+    require(vector_evidence["coefficient_bit_max"] == 164, "maximum bits")
+    free_columns = residue["free_columns"]
+    require(free_columns == list(range(531, 541)), "component12 free columns")
+    for vector_index, vector in enumerate(vectors):
+        for relation, column in enumerate(free_columns):
+            require(
+                vector[column]
+                == tuple(candidates[vector_index][relation * 6 : (relation + 1) * 6]),
+                "free projection",
+            )
+
+    g3ec = load_checked(packet["inputs"]["G3EC_certificate"])
+    matrix_path = checked(packet["inputs"]["G3EC_matrix"])
+    rows, columns, nonzeros, finite_rank = matrix_rank_at_good_reduction(matrix_path)
+    require((rows, columns, nonzeros, finite_rank) == (1324, 956, 76549, 946), "finite rank replay")
+    exact_pivots = (
+        int(g3ec["quotient_unit_elimination"]["columns"])
+        + int(g3ec["paired_v_elimination"]["pivots"])
+        + int(g3ec["monic_w_square_elimination"]["pivots"])
+    )
+    require(exact_pivots == 1157, "exact pivots")
+    promotion = packet["rank_promotion"]
+    require(promotion["exact_reduced_matrix_rank_over_Qgamma"] == 946, "exact reduced rank")
+    require(promotion["exact_post_G3DZ_presentation_rank_over_Qgamma"] == 2103, "exact original rank")
+    require(promotion["exact_component12_rank_increment_over_Qgamma"] == 71, "component12 rank")
+    require(promotion["promoted_global_Q_rank_interval"] == [4748, 5102], "global interval")
+    require(promotion["remaining_global_gap"] == 354, "remaining gap")
+    require(ROOT_VALUE == 5, "selected good-reduction root")
+    print("UST.G3EJ independent component12 promotion verifier: PASS")
+    print("exact_vectors=10 exact_replay=0/13240 determinant_mod21817=1071")
+    print("component12_rank=71 global_interval=4748..5102 next_component=16")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,70 @@
+# UST.G3CB B69-B103 H20 Frame Intertwiner
+
+## Status
+
+`CLOSED_EXACT_GOOD_REDUCTION_FRAME_ISOMORPHISM_AND_CHARACTERISTIC_ZERO_INVERTIBILITY_VALUES_OPEN`
+
+## Theorem
+
+The frozen B69 spectral trace-test frame and the B103 H20 residue frame each
+contain 248 ordered monomial classes, but they are not the same ordered list.
+Direct comparison gives
+
+```text
+shared monomials: 215
+B69-only monomials: 33
+B103-only monomials: 33.
+```
+
+At the common good-reduction fiber `(11,gamma-3)`, reduce all 248 B69
+primitive rows through the frozen original-Jacobian H20 coordinate solver.
+The resulting matrix `M` has columns equal to the B69 rows expressed in the
+B103 H20 basis. The full 282-row ambient reconstruction has zero residual,
+and all 215 shared monomials give the expected identity columns.
+
+Exact elimination over `GF(11)` gives
+
+```text
+shape(M) = 248 x 248,
+rank(M) = 248,
+det(M) = 5 mod 11.
+```
+
+The emitted inverse satisfies both `M M^{-1}=I` and `M^{-1} M=I`. Because the
+determinant is a unit at the common good-reduction place, the two lifted row
+sets are bases of the same rank-248 H20 module over the local DVR and hence
+over `Q(gamma)`.
+
+## Consequence
+
+The former row-order ambiguity is closed without relabeling either frame. If
+`b` is a covector evaluated on the B103 H20 basis and `c` is the same covector
+evaluated on the B69 spectral rows, then
+
+```text
+c = M^T b,
+b = M^{-T} c.
+```
+
+Thus any selected source whose 248 B69 trace values are known can be moved
+exactly into the B103 H20-dual frame at the good fiber.
+
+## Boundary
+
+The theorem emits the matrix entries only modulo 11. It proves generic
+characteristic-zero invertibility, but does not reconstruct the
+characteristic-zero matrix entries, identify the terminal G3BI and B89
+fibers, continue a source along G3BJ, produce an integral marking, or decide
+`beta_C`.
+
+## Reproduction
+
+```powershell
+python build_ust_g3cb_b69_b103_h20_frame_intertwiner.py
+python verify_ust_g3cb_b69_b103_h20_frame_intertwiner.py
+```
+
+The packet is
+`state/ust_g3cb_b69_b103_h20_frame_intertwiner.packet.json`; the matrix,
+inverse, complete coordinate solve and 33-for-33 monomial replacement ledger
+are under `evidence/ust_g3cb/`.

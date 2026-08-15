@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Independently replay the finite algebra in UST.G3CH."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ch_cancelled_h02_riccati_source_jet.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def local(record: dict) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record["bytes"], f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_GF11_CANCELLED_H02_RICCATI_SOURCE_JET_TARGET_FIXED_COORDINATE_SOURCE_REJECTED_SELECTED_SOURCE_JET_OPEN",
+        "status",
+    )
+    g3cd = load(local(packet["inputs"]["G3CD"]))
+    g3ce = load(local(packet["inputs"]["G3CE"]))
+    require(all(g3cd["checks"].values()) and all(g3ce["checks"].values()), "upstream checks")
+
+    operator_path = ROOT / g3cd["correction_operator"]["dense_uint8"]["path"]
+    require(sha256(operator_path) == g3cd["correction_operator"]["dense_uint8"]["sha256"], "operator hash")
+    operator = np.fromfile(operator_path, dtype=np.uint8).reshape(1509, 1509).astype(np.int64)
+    J = operator[248:, 248:]
+
+    X = np.load(ROOT / g3ce["block_decomposition"]["lower_response"]["path"], allow_pickle=False).astype(np.int64)
+    y = np.load(ROOT / g3ce["block_decomposition"]["lower_selected_source_solution"]["path"], allow_pickle=False).astype(np.int64)
+    S = np.load(ROOT / g3ce["schur_operator"]["operator"]["path"], allow_pickle=False).astype(np.int64)
+    b_eff = np.load(ROOT / g3ce["effective_affine_source"]["source"]["path"], allow_pickle=False).astype(np.int64)
+
+    v = np.load(local(packet["cancellation"]["v"]), allow_pickle=False).astype(np.int64)
+    w = np.load(local(packet["cancellation"]["w"]), allow_pickle=False).astype(np.int64)
+    require(not np.any((X[1013:] @ v - y[1013:]) % PRIME), "H02 cancellation equation")
+    require(not np.any((w - (X @ v - y)) % PRIME), "w definition")
+    require(not np.any(w[1013:]), "w H02 vanishing")
+
+    l_prime = np.load(
+        local(packet["differentiated_connection"]["actual_L_prime_v"]), allow_pickle=False
+    ).astype(np.int64)
+    j_prime = np.load(
+        local(packet["differentiated_connection"]["actual_J_prime_w"]), allow_pickle=False
+    ).astype(np.int64)
+    w_prime = np.load(
+        local(packet["source_jet_cutset"]["required_w_prime"]), allow_pickle=False
+    ).astype(np.int64)
+    b_prime = np.load(
+        local(packet["source_jet_cutset"]["unique_required_source_jet"]), allow_pickle=False
+    ).astype(np.int64)
+    expected_w_prime = X @ ((b_eff - S @ v) % PRIME) % PRIME
+    expected_b_prime = (l_prime - j_prime - J @ expected_w_prime) % PRIME
+    require(not np.any((w_prime - expected_w_prime) % PRIME), "required w prime")
+    require(not np.any((b_prime - expected_b_prime) % PRIME), "required b prime")
+    require(not np.any((J @ w_prime + j_prime + b_prime - l_prime) % PRIME), "differentiated identity")
+    require(
+        np.count_nonzero(b_prime)
+        == packet["source_jet_cutset"]["required_source_jet_nonzero_entries"]
+        == packet["source_jet_cutset"]["fixed_coordinate_source_jet_residual_nonzeros"]
+        == 1147,
+        "source-jet residual count",
+    )
+    for key in ("H02_solver_log", "H11_solver_log"):
+        log = local(packet["execution"][key]).read_text(encoding="utf-8")
+        require("SUCCESS" in log, key)
+    require(not packet["guardrails"]["claims_the_249_dimensional_transport_is_valid"], "transport guardrail")
+    print("UST.G3CH cancelled-H02 Riccati source-jet verifier: PASS")
+    print(
+        f"det_X02={packet['cancellation']['determinant_X_H02_mod11']} "
+        f"required_source_jet_nnz={np.count_nonzero(b_prime)} fixed_source_residual=1147"
+    )
+
+
+if __name__ == "__main__":
+    main()

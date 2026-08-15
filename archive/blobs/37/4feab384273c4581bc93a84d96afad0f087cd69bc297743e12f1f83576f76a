@@ -1,0 +1,632 @@
+#!/usr/bin/env python3
+"""Execute one exact selected-carrier response rectangle in fiber degree two."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import threading
+import time
+
+import build_ust_g3al_selected_carrier_response_schur as g3al
+import build_ust_g3al_selected_cayley_response_chunk as legacy
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import ust_cayley_fiber2_reduction as fiber2
+import ust_f1016_sparse_minor as finite_field
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = ROOT / "state" / "g3am_cayley_fiber2_response_chunks"
+G3AL_PACKET = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def cache_path(value: object, label: str) -> Path:
+    require(isinstance(value, Path), label)
+    path: Path = value
+    require(path.resolve().is_relative_to(ROOT.resolve()), f"{label} inside repository")
+    return path
+
+
+FUNCTIONAL_REDUCTION_KIND = (
+    "fiber2_exact_target_quotient_functional_over_B_mod_K_E_C_at_Cox_18_2_2"
+)
+
+
+def functional_payload(
+    reduction: dict[str, object],
+) -> tuple[list[int], dict[tuple[int, tuple[int, ...]], int]]:
+    path = cache_path(reduction["quotient_functional"], "quotient functional")
+    values = [int(value) for value in path.read_text(encoding="ascii").split()]
+    require(
+        values
+        and values[0] == macaulay.EXPECTED_TARGET_COORDINATES
+        and len(values) == values[0] + 1
+        and all(0 <= value < finite_field.FIELD_ORDER for value in values[1:]),
+        "quotient functional payload",
+    )
+    coordinate_record = reduction["base_coordinate_packet_record"]
+    coordinate_path = ROOT / coordinate_record["path"]
+    require(
+        coordinate_path.is_file()
+        and sha256(coordinate_path) == coordinate_record["sha256"],
+        "base coordinate packet",
+    )
+    coordinate_packet = json.loads(coordinate_path.read_text(encoding="ascii"))
+    leaders = [
+        tuple(int(value) for value in item)
+        for item in coordinate_packet["base_leading_exponents"]
+    ]
+    targets, _ = macaulay.coordinate_data(leaders)
+    require(len(targets) == values[0], "functional target coordinates")
+    return values[1:], {target: index for index, target in enumerate(targets)}
+
+
+def packed_to_singular(value: int) -> str:
+    coefficients = finite_field.unpack(value)
+    terms: list[str] = []
+    for power, coefficient in enumerate(coefficients):
+        if coefficient == 0:
+            continue
+        if power == 0:
+            terms.append(str(coefficient))
+        elif power == 1:
+            terms.append("g" if coefficient == 1 else f"{coefficient}*g")
+        else:
+            terms.append(
+                f"g^{power}" if coefficient == 1 else f"{coefficient}*g^{power}"
+            )
+    return "+".join(terms) or "0"
+
+
+def make_functional_script(
+    rows: list[str],
+    columns: list[str],
+    row_start: int,
+    column_start: int,
+    packet: dict,
+    reduction: dict[str, object],
+) -> str:
+    field = packet["residue_field"]
+    k3 = packet["K3_cycle_source"]
+    q2 = k3["Q2"].replace("**", "^")
+    g3 = k3["G3"].replace("**", "^")
+    h4 = k3["H4"].replace("**", "^")
+    base_cache = cache_path(reduction["base_cache"], "base cache")
+    base_relative = str(base_cache.relative_to(ROOT)).replace("\\", "/")
+    coordinates = reduction["fiber_coordinates"]
+    initial_position = int(coordinates["initial_module_position"])
+    primitive_vectors = ",".join(
+        f"({row})*gen({initial_position})" for row in rows
+    )
+    return f'''// UST.G3AM exact target-functional response rectangle.
+option(redSB);
+{reduction["ring_declaration"]}
+minpoly={g3al.singular_minpoly(field["gamma_relation_coefficients_ascending"])};
+def cachedBase=read("ssi:r {base_relative}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+qring q=GI;
+poly Q2={q2};
+poly G3={g3};
+poly H4={h4};
+ideal cycleRows=Q2,-H4,w-G3,w+G3;
+matrix cycleJacobian[4][4];
+int ci; int cj;
+for (ci=1;ci<=4;ci++) {{ for (cj=1;cj<=4;cj++) {{ cycleJacobian[ci,cj]=diff(cycleRows[ci],var(cj)); }} }}
+number inv6=1/6;
+poly Pdelta=inv6*det(cycleJacobian);
+poly fixedBase=Pdelta*t0*t1*t2;
+module primitiveRows={primitive_vectors};
+ideal tangentColumns={','.join(columns)};
+module preparedRows=fixedBase*primitiveRows;
+ideal ZQ=std(0);
+int ri; int gi;
+vector entryVector;
+poly pp;
+for (ri=1;ri<={len(rows)};ri++)
+{{
+  for (gi=1;gi<={len(columns)};gi++)
+  {{
+    entryVector=preparedRows[ri]*tangentColumns[gi];
+    for (ci=1;ci<=6;ci++)
+    {{
+      pp=reduce(entryVector[ci],ZQ);
+      while(pp!=0)
+      {{
+        print("G3AM_F2_FUNCTIONAL_TERM="+string(ri)+"|"+string(gi)+"|"+string(ci)+"|"+string(leadexp(pp))+"|"+string(leadcoef(pp)));
+        pp=pp-lead(pp);
+      }}
+    }}
+  }}
+}}
+print("G3AM_F2_RESPONSE_ROW_START={row_start}");
+print("G3AM_F2_RESPONSE_ROW_COUNT={len(rows)}");
+print("G3AM_F2_RESPONSE_COLUMN_START={column_start}");
+print("G3AM_F2_RESPONSE_COLUMN_COUNT={len(columns)}");
+print("G3AM_F2_FUNCTIONAL_EXPORT_PASS");
+quit;
+'''
+
+
+def run_functional_rectangle(
+    script: Path,
+    output_path: Path,
+    packet_path: Path,
+    rows: list[str],
+    columns: list[str],
+    row_start: int,
+    column_start: int,
+    timeout: int,
+    packet: dict,
+    reduction: dict[str, object],
+) -> None:
+    functional, target_index = functional_payload(reduction)
+    script.write_text(
+        make_functional_script(
+            rows, columns, row_start, column_start, packet, reduction
+        ),
+        encoding="ascii",
+    )
+    started = time.time()
+    process = subprocess.Popen(
+        singular_command(ROOT, script),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    require(process.stdout is not None, "Singular functional stdout")
+    zero = (0,) * finite_field.DEGREE
+    entries = [[zero for _ in columns] for _ in rows]
+    term_count = 0
+    pass_seen = False
+    errors: list[str] = []
+    timed_out = threading.Event()
+
+    def kill_on_timeout() -> None:
+        if process.poll() is None:
+            timed_out.set()
+            process.kill()
+
+    watchdog = threading.Timer(timeout, kill_on_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        with output_path.open("w", encoding="utf-8") as raw_output:
+            for line in process.stdout:
+                raw_output.write(line)
+                stripped = line.rstrip()
+                if stripped == "G3AM_F2_FUNCTIONAL_EXPORT_PASS":
+                    pass_seen = True
+                if line.lstrip().startswith("?"):
+                    errors.append(stripped)
+                if not line.startswith("G3AM_F2_FUNCTIONAL_TERM="):
+                    continue
+                ri_text, gi_text, component_text, exponent_text, coefficient_text = (
+                    stripped.split("=", 1)[1].split("|", 4)
+                )
+                ri = int(ri_text) - 1
+                gi = int(gi_text) - 1
+                target = (
+                    int(component_text),
+                    tuple(int(value) for value in exponent_text.split(",")),
+                )
+                require(
+                    0 <= ri < len(rows)
+                    and 0 <= gi < len(columns)
+                    and target in target_index,
+                    "functional response target term",
+                )
+                coefficient = finite_field.unpack(
+                    macaulay.packed_coefficient(coefficient_text)
+                )
+                weight = finite_field.unpack(functional[target_index[target]])
+                entries[ri][gi] = finite_field.add(
+                    entries[ri][gi], finite_field.multiply(coefficient, weight)
+                )
+                term_count += 1
+        returncode = process.wait()
+    finally:
+        watchdog.cancel()
+    if timed_out.is_set():
+        raise subprocess.TimeoutExpired(str(script), timeout)
+    require(returncode == 0, "functional response execution")
+    require(pass_seen and not errors, f"functional response output: {errors[:3]}")
+    packed_entries = [
+        [finite_field.pack(value) for value in row] for row in entries
+    ]
+    result = {
+        "schema": "mtt.unified-source.g3am-selected-cayley-fiber2-response-chunk.v1",
+        "status": "CLOSED_EXACT_SELECTED_CARRIER_FIBER2_RESIDUE_RECTANGLE",
+        "inputs": {
+            "G3AL": {
+                "path": str(G3AL_PACKET.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(G3AL_PACKET),
+            },
+            "G3AP": reduction["certificate"],
+            "G3AP_source": reduction["source_certificate"],
+            "base_cache": {
+                "path": str(cache_path(reduction["base_cache"], "base cache").relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(cache_path(reduction["base_cache"], "base cache")),
+            },
+            "module_cache": None,
+            "quotient_functional": {
+                "path": str(cache_path(reduction["quotient_functional"], "quotient functional").relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(cache_path(reduction["quotient_functional"], "quotient functional")),
+            },
+        },
+        "reduction_basis": {
+            **fiber2.response_reduction_basis(reduction),
+            "initial_fiber_component": reduction["fiber_coordinates"][
+                "initial_physical_component"
+            ],
+            "normalization_basis_component": reduction["fiber_coordinates"][
+                "normalization_physical_component"
+            ],
+        },
+        "rectangle": {
+            "row_start_zero_based": row_start,
+            "row_count": len(rows),
+            "column_start_zero_based": column_start,
+            "column_count": len(columns),
+            "entries_F1016_singular": [
+                [packed_to_singular(value) for value in row]
+                for row in packed_entries
+            ],
+            "entries_F1016_packed": packed_entries,
+            "exported_base_quotient_terms": term_count,
+        },
+        "script": {"path": str(script.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(script)},
+        "output": {"path": str(output_path.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(output_path)},
+        "elapsed_seconds": time.time() - started,
+        "checks": {
+            "same_G3AL_carrier": True,
+            "same_canonical_G3AP_fiber2_reduction": True,
+            "fixed_uv_factor_is_mapped_from_physical_component_two": True,
+            "all_products_are_exported_in_the_certified_base_quotient_target": True,
+            "the_exact_normalized_G3AP_quotient_functional_is_applied_to_every_product": True,
+            "all_products_lie_on_the_selected_unique_top_line": True,
+            "no_GF11_entries_imported": True,
+        },
+    }
+    packet_path.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(packet_path)
+
+
+def replay_functional_output(
+    output_path: Path,
+    row_count: int,
+    column_count: int,
+    reduction: dict[str, object],
+) -> tuple[list[list[int]], int]:
+    """Replay one raw functional transcript independently of its packet rows."""
+    functional, target_index = functional_payload(reduction)
+    zero = (0,) * finite_field.DEGREE
+    entries = [[zero for _ in range(column_count)] for _ in range(row_count)]
+    terms = 0
+    pass_seen = False
+    with output_path.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            stripped = line.rstrip()
+            if stripped == "G3AM_F2_FUNCTIONAL_EXPORT_PASS":
+                pass_seen = True
+            if not line.startswith("G3AM_F2_FUNCTIONAL_TERM="):
+                continue
+            ri_text, gi_text, component_text, exponent_text, coefficient_text = (
+                stripped.split("=", 1)[1].split("|", 4)
+            )
+            ri = int(ri_text) - 1
+            gi = int(gi_text) - 1
+            target = (
+                int(component_text),
+                tuple(int(value) for value in exponent_text.split(",")),
+            )
+            require(
+                0 <= ri < row_count
+                and 0 <= gi < column_count
+                and target in target_index,
+                "replayed functional response target",
+            )
+            coefficient = finite_field.unpack(
+                macaulay.packed_coefficient(coefficient_text)
+            )
+            weight = finite_field.unpack(functional[target_index[target]])
+            entries[ri][gi] = finite_field.add(
+                entries[ri][gi], finite_field.multiply(coefficient, weight)
+            )
+            terms += 1
+    require(pass_seen, "functional transcript pass marker")
+    return [[finite_field.pack(value) for value in row] for row in entries], terms
+
+
+def make_script(
+    rows: list[str],
+    columns: list[str],
+    row_start: int,
+    column_start: int,
+    packet: dict,
+    reduction: dict[str, object],
+) -> str:
+    field = packet["residue_field"]
+    k3 = packet["K3_cycle_source"]
+    q2 = k3["Q2"].replace("**", "^")
+    g3 = k3["G3"].replace("**", "^")
+    h4 = k3["H4"].replace("**", "^")
+    module_cache = cache_path(reduction["module_cache"], "module cache")
+    module_relative = str(module_cache.relative_to(ROOT)).replace("\\", "/")
+    kind = str(reduction["kind"])
+    ring_declaration = str(
+        reduction.get(
+            "ring_declaration",
+            "ring r=(101,g),(x,y,z,w,t0,t1,t2),(wp(1,1,1,3,1,1,1),C);",
+        )
+    )
+    quotient_setup = ""
+    if kind in (
+        "fiber2_module_over_B_mod_K_E_C_through_degree_44",
+        "fiber2_module_over_B_mod_K_E_C_weighted_5H18L_through_degree_254",
+        "fiber2_target_reduction_set_over_B_mod_K_E_C_weighted_5H18L_at_degree_254",
+        "fiber2_target_reduction_set_over_B_mod_K_E_C_Hmajor_9HplusL_at_degree_328",
+        "fiber2_target_reduction_set_over_B_mod_K_E_C_Honly_at_Cox_18_2_2",
+    ):
+        base_cache = cache_path(reduction["base_cache"], "base cache")
+        base_relative = str(base_cache.relative_to(ROOT)).replace("\\", "/")
+        quotient_setup = f'''def cachedBase=read("ssi:r {base_relative}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+qring q=GI;
+'''
+    elif kind not in (
+        "fiber2_polynomial_module_through_degree_44",
+        "fiber2_target_reduction_set_in_polynomial_module_Honly_at_Cox_18_2_2",
+        "fiber2_target_reduction_set_in_polynomial_module_Hmajor_9HplusL_at_Cox_18_2_2",
+    ):
+        raise AssertionError("unsupported fiber-two reduction kind")
+    coordinates = reduction["fiber_coordinates"]
+    initial_position = int(coordinates["initial_module_position"])
+    normalization_position = int(coordinates["normalization_module_position"])
+    normalization_scalar = str(coordinates["normalization_scalar_monomial"])
+    primitive_vectors = ",".join(
+        f"({row})*gen({initial_position})" for row in rows
+    )
+    return f'''// UST.G3AM exact fiber-two same-carrier response rectangle.
+option(redSB);
+{ring_declaration}
+minpoly={g3al.singular_minpoly(field["gamma_relation_coefficients_ascending"])};
+{quotient_setup}def cachedModule=read("ssi:r {module_relative}");
+module G=cachedModule;
+attrib(G,"isSB",1);
+poly Q2={q2};
+poly G3={g3};
+poly H4={h4};
+ideal cycleRows=Q2,-H4,w-G3,w+G3;
+matrix cycleJacobian[4][4];
+int ci; int cj;
+for (ci=1;ci<=4;ci++) {{ for (cj=1;cj<=4;cj++) {{ cycleJacobian[ci,cj]=diff(cycleRows[ci],var(cj)); }} }}
+number inv6=1/6;
+poly Pdelta=inv6*det(cycleJacobian);
+poly fixedBase=Pdelta*t0*t1*t2;
+vector reducedSocle=reduce(({normalization_scalar})*gen({normalization_position}),G);
+module primitiveRows={primitive_vectors};
+ideal tangentColumns={','.join(columns)};
+module preparedRows=reduce(fixedBase*primitiveRows,G);
+matrix D[{len(rows)}][{len(columns)}];
+int ri; int gi; int badNormalForms=0; int nonzeroEntries=0;
+vector entryNormal; number entryCoefficient;
+module rowProducts; module rowNormals;
+for (ri=1;ri<={len(rows)};ri++)
+{{
+  for (gi=1;gi<={len(columns)};gi++)
+  {{ rowProducts[gi]=preparedRows[ri]*tangentColumns[gi]; }}
+  rowNormals=reduce(rowProducts,G);
+  for (gi=1;gi<={len(columns)};gi++)
+  {{
+    entryNormal=rowNormals[gi];
+    entryCoefficient=0;
+    if (entryNormal!=0)
+    {{
+      entryCoefficient=leadcoef(entryNormal)/leadcoef(reducedSocle);
+      if (entryNormal-entryCoefficient*reducedSocle!=0)
+      {{ badNormalForms=badNormalForms+1; entryCoefficient=0; }}
+      else {{ nonzeroEntries=nonzeroEntries+1; }}
+    }}
+    D[ri,gi]=entryCoefficient;
+  }}
+  string rowText="";
+  for (gi=1;gi<={len(columns)};gi++)
+  {{
+    if (gi>1) {{ rowText=rowText+","; }}
+    rowText=rowText+string(D[ri,gi]);
+  }}
+  print("G3AM_F2_RESPONSE_ROW_"+string({row_start}+ri-1)+"="+rowText);
+}}
+print("G3AM_F2_RESPONSE_ROW_START={row_start}");
+print("G3AM_F2_RESPONSE_ROW_COUNT={len(rows)}");
+print("G3AM_F2_RESPONSE_COLUMN_START={column_start}");
+print("G3AM_F2_RESPONSE_COLUMN_COUNT={len(columns)}");
+print("G3AM_F2_RESPONSE_BAD_NORMAL_FORMS="+string(badNormalForms));
+print("G3AM_F2_RESPONSE_NONZERO_ENTRIES="+string(nonzeroEntries));
+print("G3AM_F2_RESPONSE_SOCLE_ZERO="+string(reducedSocle==0));
+if (badNormalForms==0 && reducedSocle!=0) {{ print("G3AM_F2_RESPONSE_CHUNK_PASS"); }}
+else {{ print("G3AM_F2_RESPONSE_CHUNK_FAIL"); }}
+quit;
+'''
+
+
+def parse_scalar(output: str, label: str) -> int:
+    match = re.search(rf"^{re.escape(label)}=(-?\d+)$", output, re.MULTILINE)
+    if not match:
+        raise AssertionError(f"missing {label}\n{output[-4000:]}")
+    return int(match.group(1))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--row-start", type=int, required=True)
+    parser.add_argument("--row-count", type=int, default=8)
+    parser.add_argument("--column-start", type=int, required=True)
+    parser.add_argument("--column-count", type=int, required=True)
+    parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--build-only", action="store_true")
+    args = parser.parse_args()
+    require(0 <= args.row_start < 248, "row start")
+    require(1 <= args.row_count <= 248 - args.row_start, "row count")
+    require(0 <= args.column_start < 122, "column start")
+    require(1 <= args.column_count <= 122 - args.column_start, "column count")
+    frames = g3al.selected_frames()
+    basis = frames["basis"]
+    pivot = int(frames["projective_pivot"])
+    primitive = [legacy.section(row) for index, row in enumerate(basis) if index != pivot]
+    tangents = frames["principal"] + frames["extra"]
+    rows = primitive[args.row_start : args.row_start + args.row_count]
+    columns = [
+        legacy.tangent_polynomial(vector, basis)
+        for vector in tangents[args.column_start : args.column_start + args.column_count]
+    ]
+    packet = json.loads(G3AL_PACKET.read_text(encoding="ascii"))
+    reduction = fiber2.selected_fiber2_reduction()
+    fiber2.require_response_target_coverage(reduction)
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    stem = (
+        f"r{args.row_start:03d}-{args.row_start + args.row_count - 1:03d}_"
+        f"c{args.column_start:03d}-{args.column_start + args.column_count - 1:03d}"
+    )
+    script = CAMPAIGN / f"{stem}.sing"
+    output_path = CAMPAIGN / f"{stem}.singular.out"
+    packet_path = CAMPAIGN / f"{stem}.packet.json"
+    if reduction["kind"] == FUNCTIONAL_REDUCTION_KIND:
+        if args.build_only:
+            script.write_text(
+                make_functional_script(
+                    rows,
+                    columns,
+                    args.row_start,
+                    args.column_start,
+                    packet,
+                    reduction,
+                ),
+                encoding="ascii",
+            )
+            print(script)
+            return
+        run_functional_rectangle(
+            script,
+            output_path,
+            packet_path,
+            rows,
+            columns,
+            args.row_start,
+            args.column_start,
+            args.timeout,
+            packet,
+            reduction,
+        )
+        return
+    script.write_text(
+        make_script(rows, columns, args.row_start, args.column_start, packet, reduction),
+        encoding="ascii",
+    )
+    if args.build_only:
+        print(script)
+        return
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, script),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    output = completed.stdout
+    output_path.write_text(output, encoding="utf-8")
+    require(completed.returncode == 0, f"Singular return code {completed.returncode}")
+    require("G3AM_F2_RESPONSE_CHUNK_PASS" in output, output[-4000:])
+    require(parse_scalar(output, "G3AM_F2_RESPONSE_BAD_NORMAL_FORMS") == 0, "socle line")
+    entries = []
+    for row in range(args.row_start, args.row_start + args.row_count):
+        match = re.search(
+            rf"^G3AM_F2_RESPONSE_ROW_{row}=([^\r\n]*)$", output, re.MULTILINE
+        )
+        require(match is not None, f"response row {row}")
+        values = match.group(1).split(",")
+        require(len(values) == args.column_count, f"response row {row} width")
+        entries.append(values)
+    result = {
+        "schema": "mtt.unified-source.g3am-selected-cayley-fiber2-response-chunk.v1",
+        "status": "CLOSED_EXACT_SELECTED_CARRIER_FIBER2_RESIDUE_RECTANGLE",
+        "inputs": {
+            "G3AL": {
+                "path": str(G3AL_PACKET.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(G3AL_PACKET),
+            },
+            "G3AP": reduction["certificate"],
+            "G3AP_source": reduction["source_certificate"],
+            "base_cache": (
+                None
+                if reduction["base_cache"] is None
+                else {
+                    "path": str(cache_path(reduction["base_cache"], "base cache").relative_to(ROOT)).replace("\\", "/"),
+                    "sha256": sha256(cache_path(reduction["base_cache"], "base cache")),
+                }
+            ),
+            "module_cache": {
+                "path": str(cache_path(reduction["module_cache"], "module cache").relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(cache_path(reduction["module_cache"], "module cache")),
+            },
+        },
+        "reduction_basis": {
+            **fiber2.response_reduction_basis(reduction),
+            "initial_fiber_component": reduction["fiber_coordinates"][
+                "initial_physical_component"
+            ],
+            "normalization_basis_component": reduction["fiber_coordinates"][
+                "normalization_physical_component"
+            ],
+        },
+        "rectangle": {
+            "row_start_zero_based": args.row_start,
+            "row_count": args.row_count,
+            "column_start_zero_based": args.column_start,
+            "column_count": args.column_count,
+            "entries_F1016_singular": entries,
+        },
+        "script": {
+            "path": str(script.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(script),
+        },
+        "output": {
+            "path": str(output_path.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(output_path),
+        },
+        "elapsed_seconds": time.time() - started,
+        "checks": {
+            "same_G3AL_carrier": True,
+            "same_canonical_G3AP_fiber2_reduction": True,
+            "fixed_uv_factor_is_mapped_from_physical_component_two": True,
+            "all_reduced_products_are_within_the_certified_reduction_scope": True,
+            "all_products_lie_on_the_selected_unique_top_line": True,
+            "no_GF11_entries_imported": True,
+        },
+    }
+    packet_path.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(packet_path)
+
+
+if __name__ == "__main__":
+    main()

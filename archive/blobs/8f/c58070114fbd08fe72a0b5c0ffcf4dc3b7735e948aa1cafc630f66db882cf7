@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Verify reconstruction of the nine full original G3AO vs flex systems."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+import build_ust_g3ao_selected_cayley_toric_uvs_cusp_original_msolve_inputs as flex
+import build_ust_g3ao_selected_cayley_toric_uvs_cusp_split_msolve_inputs as split
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import build_ust_g3ao_selected_cayley_toric_vs_flex_msolve_inputs as builder
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = json.loads(builder.OUT.read_text(encoding="ascii"))
+    require(packet["source_sha256"] == sha256(direct.SOURCE), "selected source")
+    require(all(packet["checks"].values()), "input checks")
+    polynomials = direct.selected_polynomials()
+    split.verify_cube_roots(polynomials)
+    flex.verify_component_coordinates(polynomials)
+    dependency = packet["dependencies"]["elliptic_bidual_identity"]
+    dependency_path = builder.ROOT / dependency["path"]
+    require(
+        dependency_path.is_file() and sha256(dependency_path) == dependency["sha256"],
+        "bidual identity",
+    )
+    identity = json.loads(dependency_path.read_text(encoding="ascii"))
+    require(
+        identity["theorem_id"] == dependency["theorem_id"]
+        and all(identity["checks"].values()),
+        "bidual identity checks",
+    )
+    script = direct.CAMPAIGN / packet["export_script"]["path"]
+    raw_path = direct.CAMPAIGN / packet["raw_output"]["path"]
+    require(script.is_file() and sha256(script) == packet["export_script"]["sha256"], "export script")
+    require(raw_path.is_file() and sha256(raw_path) == packet["raw_output"]["sha256"], "raw export")
+    require(script.read_text(encoding="ascii") == builder.make_export_script(polynomials), "exact script")
+    raw = raw_path.read_text(encoding="utf-8")
+    require("G3AO_MSOLVE_EXPORT_PASS" in raw, "export marker")
+    for case in split.CASES:
+        for root in split.ROOTS:
+            label = f"{case}_{root}"
+            generators = common.parse_locus(raw, label)
+            nonzero_generators = [value for value in generators if value.strip() != "0"]
+            record = packet["components"][label]
+            require(record["case"] == case and record["root"] == root, f"{label} coordinates")
+            require(
+                record["ell_and_t_coordinates"] == flex.component_coordinates(case, root),
+                f"{label} flex",
+            )
+            path = direct.CAMPAIGN / record["input"]["path"]
+            require(path.is_file() and sha256(path) == record["input"]["sha256"], f"{label} input")
+            require(
+                path.read_text(encoding="ascii") == builder.make_msolve_input(polynomials, generators),
+                f"{label} reconstruction",
+            )
+            require(
+                record["generator_count_including_minpoly"] == len(nonzero_generators) + 1,
+                f"{label} count",
+            )
+    print("UST.G3AO vs original-flex input verifier: PASS")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""Construct and exactly screen a smooth eta9 member containing Rminus x p0.
+
+This is an evidence generator, not a theorem builder.  It reads the locked
+MLD source packets and reuses their exact number-field/good-reduction chart
+compiler.  The emitted characteristic-zero member contains the selected root
+curve at the Fermat point p0=[1:-1:0] by a coefficientwise identity in
+Q(gamma), and smoothness is certified at the prime (11,gamma-3).
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+DEFAULT_OUT = (
+    ROOT
+    / "evidence"
+    / "ust_g3bi"
+    / "q79_explicit_smooth_root_containing_start.v1.json.blob"
+)
+DEFAULT_CHART_DIR = ROOT / "evidence" / "ust_g3bi" / "charts"
+
+EXPECTED_HASHES = {
+    "q79_degree2_k3_base": "2f7dd722c5e387baf9438e6c2e14fe66f564de2109030ab08516552dabb86035",
+    "global_f0_lift": "e718a2c28d6394005d2430a366f7951bce0037edf216b8ce90dd06a8006e44bb",
+    "number_field_smooth_lift": "3ff964264bd0973393be80e67cf1662524d77f9ba210a7da9794cffa1ec8545c",
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def import_source_modules(source_root: Path) -> tuple[Any, Any, Any]:
+    sys.path.insert(0, str(source_root))
+    cayley = importlib.import_module("build_q79_eta9_graph_cayley_block_compiler")
+    residue = importlib.import_module("build_q79_eta9_smooth_graph_slice_witness")
+    number_lift = importlib.import_module("build_q79_eta9_number_field_smooth_lift")
+    return cayley, residue, number_lift
+
+
+def root_restriction(
+    coefficients: list[list[int]],
+    theta: int,
+    cayley: Any,
+    residue: Any,
+) -> list[list[int]]:
+    """Restrict one coefficient row under x=s^2,y=st,z=t^2,w=-G3."""
+    degree9 = cayley.monomials(9)
+    degree6 = cayley.monomials(6)
+    w_coefficients = [2, 0, 1, 0, -2, 2, 1]
+    output = [[0] * 6 for _ in range(19)]
+    offset = theta * 83
+    for local_index, (_, y_power, z_power) in enumerate(degree9):
+        t_power = y_power + 2 * z_power
+        output[t_power] = [
+            left + right
+            for left, right in zip(output[t_power], coefficients[offset + local_index])
+        ]
+    for local_index, (_, y_power, z_power) in enumerate(degree6):
+        value = coefficients[offset + 55 + local_index]
+        base_t_power = y_power + 2 * z_power
+        for shift, scalar in enumerate(w_coefficients):
+            if scalar:
+                output[base_t_power + shift] = [
+                    left + scalar * right
+                    for left, right in zip(output[base_t_power + shift], value)
+                ]
+    return output
+
+
+def canonical_root_correction(
+    coefficients: list[list[int]], cayley: Any, residue: Any
+) -> tuple[list[list[int]], list[dict[str, Any]]]:
+    """Force A0|Rminus=A1|Rminus using a fixed right inverse of restriction."""
+    result = [value[:] for value in coefficients]
+    degree9 = cayley.monomials(9)
+    row0 = root_restriction(result, 0, cayley, residue)
+    row1 = root_restriction(result, 1, cayley, residue)
+    target = [
+        [right - left for left, right in zip(left_row, right_row)]
+        for left_row, right_row in zip(row0, row1)
+    ]
+    rows = []
+    for t_power, value in enumerate(target):
+        # x^a y^b z^c restricts to s^(18-t_power)t^t_power.
+        c_power = t_power // 2
+        b_power = t_power % 2
+        a_power = 9 - b_power - c_power
+        exponent = (a_power, b_power, c_power)
+        local_index = degree9.index(exponent)
+        result[local_index] = [
+            left + right for left, right in zip(result[local_index], value)
+        ]
+        rows.append(
+            {
+                "t_power": t_power,
+                "source_monomial": list(exponent),
+                "source_index": local_index,
+                "correction_gamma_coordinates": value,
+            }
+        )
+    require(
+        root_restriction(result, 0, cayley, residue)
+        == root_restriction(result, 1, cayley, residue),
+        "coefficientwise Rminus containment at p0",
+    )
+    return result, rows
+
+
+def deterministic_preserving_perturbation(
+    coefficients: list[list[int]], candidate_index: int, cayley: Any, residue: Any
+) -> tuple[list[list[int]], list[dict[str, int]]]:
+    """Vary within A0-A1 fixed: add D to both rows and E to A2."""
+    if candidate_index == 0:
+        return [value[:] for value in coefficients], []
+    result = [value[:] for value in coefficients]
+    entries: list[dict[str, int]] = []
+    occupied: set[tuple[str, int]] = set()
+    for slot in range(16):
+        digest = hashlib.sha256(
+            f"UST.G3BI:root-preserving:{candidate_index}:{slot}".encode("ascii")
+        ).digest()
+        lane = "common_A0_A1" if slot < 8 else "A2"
+        local_index = int.from_bytes(digest[:4], "big") % 83
+        while (lane, local_index) in occupied:
+            local_index = (local_index + 1) % 83
+        occupied.add((lane, local_index))
+        scalar = 1 + int.from_bytes(digest[4:8], "big") % 100
+        theta_rows = (0, 1) if lane == "common_A0_A1" else (2,)
+        for theta in theta_rows:
+            index = theta * 83 + local_index
+            result[index][0] += scalar
+        entries.append(
+            {"lane": 0 if lane == "common_A0_A1" else 2, "local_index": local_index, "scalar": scalar}
+        )
+    require(
+        root_restriction(result, 0, cayley, residue)
+        == root_restriction(result, 1, cayley, residue),
+        "root-preserving perturbation",
+    )
+    return result, entries
+
+
+def native_number(value: list[int]) -> str:
+    pieces = []
+    for exponent, raw_coefficient in enumerate(value):
+        coefficient = raw_coefficient % 11
+        if not coefficient:
+            continue
+        if exponent == 0:
+            pieces.append(str(coefficient))
+            continue
+        power = "gamma" if exponent == 1 else f"gamma^{exponent}"
+        pieces.append(power if coefficient == 1 else f"{coefficient}*{power}")
+    return "+".join(pieces) if pieces else "0"
+
+
+def coefficient_polynomials(
+    coefficients: list[list[int]], cayley: Any, residue: Any
+) -> list[str]:
+    degree9 = cayley.monomials(9)
+    degree6 = cayley.monomials(6)
+    polynomials = []
+    for theta in range(3):
+        terms = []
+        for local_index, exponent in enumerate(degree9):
+            value = coefficients[theta * 83 + local_index]
+            if not any(coordinate % 11 for coordinate in value):
+                continue
+            base_monomial = residue.monomial(exponent, False, theta)[:-3]
+            terms.append(f"({native_number(value)})*{base_monomial}")
+        for local_index, exponent in enumerate(degree6):
+            value = coefficients[theta * 83 + 55 + local_index]
+            if not any(coordinate % 11 for coordinate in value):
+                continue
+            base_monomial = residue.monomial(exponent, True, theta)[:-3]
+            terms.append(f"({native_number(value)})*{base_monomial}")
+        polynomials.append("+".join(terms) if terms else "0")
+    return polynomials
+
+
+def audit_candidate(
+    *,
+    candidate_index: int,
+    coefficients: list[list[int]],
+    perturbation: list[dict[str, int]],
+    base: dict[str, Any],
+    cayley: Any,
+    residue: Any,
+    number_lift: Any,
+    chart_dir: Path,
+    timeout: float,
+) -> dict[str, Any]:
+    label = f"g3bi_root_start_{candidate_index}"
+    polynomials = coefficient_polynomials(coefficients, cayley, residue)
+    chart_runs = []
+    base_passes = []
+    smooth_passes = []
+    failed = False
+    for base_coordinate in ("x", "y", "z"):
+        path = chart_dir / f"candidate_{candidate_index}_base_{base_coordinate}.sing"
+        path.write_text(
+            number_lift.make_base_chart_script(base, polynomials, base_coordinate),
+            encoding="ascii",
+        )
+        output, engine, timed_out, elapsed = residue.run_singular(path, timeout)
+        passed = (
+            not timed_out
+            and f"BASEPOINT_PASS {base_coordinate}" in output
+            and "GAMMA_REL=0" in output
+        )
+        chart_runs.append(
+            {
+                "kind": "basepoint",
+                "label": base_coordinate,
+                "script": path.name,
+                "script_sha256": sha256(path),
+                "engine": engine,
+                "timed_out": timed_out,
+                "elapsed_seconds": elapsed,
+                "passed": passed,
+                "output_tail": output[-1200:],
+            }
+        )
+        if not passed:
+            failed = True
+            break
+        base_passes.append(base_coordinate)
+    if not failed:
+        for base_coordinate in ("x", "y", "z"):
+            for fiber_coordinate in ("t0", "t1", "t2"):
+                chart_label = f"{base_coordinate}_{fiber_coordinate}"
+                path = chart_dir / f"candidate_{candidate_index}_smooth_{chart_label}.sing"
+                path.write_text(
+                    number_lift.make_smooth_chart_script(
+                        base, polynomials, base_coordinate, fiber_coordinate
+                    ),
+                    encoding="ascii",
+                )
+                output, engine, timed_out, elapsed = residue.run_singular(path, timeout)
+                passed = (
+                    not timed_out
+                    and f"CHART_PASS {chart_label}" in output
+                    and "GAMMA_REL=0" in output
+                )
+                chart_runs.append(
+                    {
+                        "kind": "smoothness",
+                        "label": chart_label,
+                        "script": path.name,
+                        "script_sha256": sha256(path),
+                        "engine": engine,
+                        "timed_out": timed_out,
+                        "elapsed_seconds": elapsed,
+                        "passed": passed,
+                        "output_tail": output[-1200:],
+                    }
+                )
+                if not passed:
+                    failed = True
+                    break
+                smooth_passes.append(chart_label)
+            if failed:
+                break
+    return {
+        "candidate_index": candidate_index,
+        "label": label,
+        "preserving_perturbation": perturbation,
+        "nonzero_coefficient_count": sum(any(value) for value in coefficients),
+        "coefficient_vectors": coefficients,
+        "coefficient_polynomials": polynomials,
+        "basepoint_charts_passed": base_passes,
+        "smoothness_charts_passed": smooth_passes,
+        "chart_runs": chart_runs,
+        "passed": not failed and len(base_passes) == 3 and len(smooth_passes) == 9,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--chart-dir", type=Path, default=DEFAULT_CHART_DIR)
+    parser.add_argument("--max-candidates", type=int, default=8)
+    parser.add_argument("--timeout", type=float, default=300.0)
+    args = parser.parse_args()
+    require(args.max_candidates >= 1, "positive candidate count")
+
+    source_root = args.source_root.resolve()
+    cayley, residue, number_lift = import_source_modules(source_root)
+    base_path = (
+        source_root.parent
+        / "mtt-protospinor-gr-response-proof"
+        / "certificates"
+        / "q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json"
+    )
+    f0_path = source_root / "q79_eta9_global_f0_lift.packet.json"
+    number_field_path = source_root / "q79_eta9_number_field_smooth_lift.packet.json"
+    require(sha256(base_path) == EXPECTED_HASHES["q79_degree2_k3_base"], "base hash")
+    require(sha256(f0_path) == EXPECTED_HASHES["global_f0_lift"], "F0 hash")
+    require(
+        sha256(number_field_path) == EXPECTED_HASHES["number_field_smooth_lift"],
+        "number-field lift hash",
+    )
+    base = load(base_path)
+    f0_packet = load(f0_path)
+    number_field_packet = load(number_field_path)
+    require(all(f0_packet["checks"].values()), "F0 packet checks")
+    require(all(number_field_packet["checks"].values()), "number-field packet checks")
+
+    adapter = residue.extension_adapter()
+    require(
+        adapter["minimal_polynomial_coefficients_ascending"]
+        == number_field_packet["number_field"]["minimal_polynomial_coefficients_ascending"],
+        "common gamma number field",
+    )
+    original_mod101 = residue.f0_coefficients(f0_packet)
+    original = [residue.gamma_coordinates(value, adapter) for value in original_mod101]
+    corrected, correction_rows = canonical_root_correction(original, cayley, residue)
+    args.chart_dir.mkdir(parents=True, exist_ok=True)
+    attempts = []
+    selected = None
+    for candidate_index in range(args.max_candidates):
+        coefficients, perturbation = deterministic_preserving_perturbation(
+            corrected, candidate_index, cayley, residue
+        )
+        attempt = audit_candidate(
+            candidate_index=candidate_index,
+            coefficients=coefficients,
+            perturbation=perturbation,
+            base=base,
+            cayley=cayley,
+            residue=residue,
+            number_lift=number_lift,
+            chart_dir=args.chart_dir,
+            timeout=args.timeout,
+        )
+        attempts.append(attempt)
+        if attempt["passed"]:
+            selected = attempt
+            break
+
+    output = {
+        "schema": "mtt.unified-source.g3bi-explicit-root-start-evidence.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_GOOD_REDUCTION_CERTIFICATE" if selected else "NO_SMOOTH_CANDIDATE",
+        "source_packets": {
+            "q79_degree2_k3_base": {
+                "path": "mtt-protospinor-gr-response-proof/certificates/" + base_path.name,
+                "sha256": EXPECTED_HASHES["q79_degree2_k3_base"],
+            },
+            "global_f0_lift": {
+                "path": f0_path.name,
+                "sha256": EXPECTED_HASHES["global_f0_lift"],
+            },
+            "number_field_smooth_lift": {
+                "path": number_field_path.name,
+                "sha256": EXPECTED_HASHES["number_field_smooth_lift"],
+            },
+        },
+        "endpoint_source_certificate": {
+            "theorem_tier": number_field_packet["theorem"]["tier"],
+            "basepoint_unit_ideals": number_field_packet["good_reduction_certificate"]["basepoint_unit_ideals"],
+            "smoothness_unit_ideals": number_field_packet["good_reduction_certificate"]["smoothness_unit_ideals"],
+            "characteristic_zero_endpoint_is_smooth": True,
+        },
+        "field": {
+            "field": "Q(gamma)",
+            "minimal_polynomial_coefficients_ascending": [64, 16, 33, 44, 89, 24, 1],
+            "degree": 6,
+            "coordinate_order": ["1", "gamma", "gamma^2", "gamma^3", "gamma^4", "gamma^5"],
+            "B67_specialization_prime": 101,
+            "smooth_good_reduction_prime": 11,
+            "smooth_good_reduction_prime_ideal": "(11,gamma-3)",
+        },
+        "root": {
+            "name": "Rminus",
+            "parameterization": {"x": "s^2", "y": "s*t", "z": "t^2", "w": "-G3"},
+            "w_restriction_coefficients_by_t_power": [2, 0, 1, 0, -2, 2, 1],
+        },
+        "fermat_point": {
+            "homogeneous_coordinates": [1, -1, 0],
+            "equation_check": "1^3+(-1)^3+0^3=0",
+            "containment_equation": "(A0-A1)|Rminus=0",
+        },
+        "canonical_right_inverse": {
+            "dimension_of_restriction_target": 19,
+            "original_B67_integer_section_coefficient_vectors": original,
+            "rows": correction_rows,
+        },
+        "attempts": attempts,
+        "selected_candidate_index": selected["candidate_index"] if selected else None,
+        "checks": {
+            "locked_source_hashes_match": True,
+            "the_characteristic_zero_lift_uses_the_locked_B67_integer_section": True,
+            "all_nineteen_root_restriction_coefficients_cancel_exactly": True,
+            "the_Fermat_point_is_exact": True,
+            "one_root_containing_member_passes_all_three_basepoint_charts": bool(selected),
+            "one_root_containing_member_passes_all_nine_smoothness_charts": bool(selected),
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "scope": {
+            "closed_if_passed": "explicit smooth characteristic-zero start member containing Rminus x [1:-1:0]",
+            "not_closed": [
+                "a smooth nonconstant path to fixed B89",
+                "integral one-vector Gauss-Manin transport",
+                "the terminal 248-coordinate readout",
+                "the beta_C decision",
+            ],
+        },
+    }
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"status": output["status"], "attempts": len(attempts), "out": str(args.out)}, indent=2))
+    require(selected is not None, f"no smooth candidate among {len(attempts)} exact attempts")
+
+
+if __name__ == "__main__":
+    main()

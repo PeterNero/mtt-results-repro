@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Verify UST.G3I forward rigidity and reverse Ext nonvanishing."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3i_bidirectional_ext.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+G3F_PATH = ROOT / "state" / "ust_g3f_q79_hs_global_stability.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def locked_source(lock: dict, repository_id: str, source_path: str) -> dict:
+    repository = next(
+        item for item in lock["repositories"] if item["id"] == repository_id
+    )
+    return next(item for item in repository["sources"] if item["path"] == source_path)
+
+
+def main() -> None:
+    packet = load_json(PACKET_PATH)
+    lock = load_json(LOCK_PATH)
+    g3f = load_json(G3F_PATH)
+
+    require(
+        packet["schema"] == "mtt.unified-source.q79-bidirectional-ext.v1",
+        "bad G3I packet schema",
+    )
+    require(packet["theorem_id"] == "UST.G3I", "bad theorem id")
+
+    hs_input = packet["inputs"]["holomorphic_hartshorne_serre_source"]
+    hs_lock = locked_source(
+        lock,
+        "q79-quantum-gravity",
+        "q79_holomorphic_hartshorne_serre_qutrit_source.packet.json",
+    )
+    require(hs_input["sha256"] == hs_lock["sha256"], "HS source lock mismatch")
+    require(
+        packet["inputs"]["global_stability"]["sha256"] == sha256(G3F_PATH),
+        "G3F packet hash mismatch",
+    )
+    require(
+        g3f["stability"]["kappa_dual_stable_for_every_balanced_t"],
+        "G3F stability is required",
+    )
+
+    geometry = packet["geometry"]
+    require(geometry["canonical_bundle_trivial"], "local duality needs K_X=O")
+    require(geometry["gamma_connected_lci"], "Gamma must be connected lci")
+    require(geometry["h0_O_gamma"] == 1, "connected Gamma must have h0(O)=1")
+    require(
+        geometry["h0_omega_gamma"] == geometry["gamma_arithmetic_genus"] == 7,
+        "genus-seven duality count mismatch",
+    )
+    require(geometry["h1_OX_minusH"] == 0, "forward Ext injection needs H1(-H)=0")
+
+    forward = packet["forward_ext"]
+    local_duality_dimension = geometry["h0_O_gamma"]
+    require(forward["upper_bound"] == local_duality_dimension == 1, "bad forward bound")
+    require(forward["class_nonzero"], "forward class must be nonzero")
+    require(forward["split_would_have_rank2_slope"] == "0", "bad split slope")
+    require(forward["middle_slope"] == "-2/3", "bad middle slope")
+    require(forward["dimension"] == 1, "forward Ext must be one-dimensional")
+    require(forward["continuous_extension_parameters"] == 0, "forward knob introduced")
+
+    reverse = packet["reverse_ext"]
+    expected_source_dimension = 2 * geometry["h0_OX_H"]
+    expected_target_dimension = geometry["h0_omega_gamma"]
+    lower_bound = expected_target_dimension - min(
+        expected_source_dimension, expected_target_dimension
+    )
+    require(reverse["source_dimension"] == expected_source_dimension == 6, "bad source count")
+    require(reverse["target_dimension"] == expected_target_dimension == 7, "bad target count")
+    require(reverse["cokernel_lower_bound"] == lower_bound == 1, "bad cokernel bound")
+    require(reverse["dimension_lower_bound"] >= 1 and reverse["nonzero"], "reverse Ext empty")
+
+    same_class = packet["same_class_consequence"]
+    require(same_class["K_class_matches_kappa_hol"], "reverse K-class mismatch")
+    require(same_class["Chern_character_matches"] == "3-H-3u", "reverse Chern mismatch")
+    require(not reverse["selected_equivariant_class"], "reverse class silently selected")
+    require(not reverse["middle_locally_free"], "reverse local freeness silently promoted")
+    require(not reverse["g3g_fiber_match"], "reverse G3G match silently promoted")
+    require(not same_class["physical_hidden_W9_constructed"], "W9 silently promoted")
+    require(not packet["checks"]["B_HS_01_closed"], "B.HS.01 silently closed")
+    require(packet["observed_inputs"] == 0, "observed input used")
+
+    print("UST.G3I bidirectional Ext theorem: PASS")
+    print("dim Ext1(E,O(-H))=1; forward projective class is unique")
+    print("dim Ext1(O(-H),E)>=1 by the exact 6-to-7 section cut")
+    print("reverse equivariant selection/local freeness/W9: open")
+
+
+if __name__ == "__main__":
+    main()

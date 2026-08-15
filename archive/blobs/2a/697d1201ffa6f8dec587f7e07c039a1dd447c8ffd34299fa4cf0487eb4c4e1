@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Exhaust the available full-root height audit for the G3FZ source."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as interpolation
+import build_ust_g3ft_component20_full_relation_height_campaign as height_campaign
+import build_ust_g3ga_component20_second_jet_qgamma_promotion as prior_campaign
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3ge"
+ARRAYS = EVIDENCE / "H02.component20.eleven_prime_second_jet_height_audit.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.eleven_prime_second_jet_height_audit.json"
+PRIOR = ROOT / "evidence/ust_g3ga/H02.component20.second_jet_qgamma_promotion.npz"
+ARCHIVED_81359_ROOT = (
+    EVIDENCE / "H02.component20.p81359.g26027.second_jet_source.npz"
+)
+COMPLETE_PRIMES = (81359, 82963)
+ROOT_HOLDOUT_PRIMES = (97459, 107903, 119627, 125791, 140419)
+EXPECTED_ZERO_COORDINATES = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 18, 21, 24, 27, 30)
+EXPECTED_UNIT_COORDINATE = 10
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def source_path(prime: int, gamma: int) -> Path:
+    if (prime, gamma) == (81359, 26027):
+        return ARCHIVED_81359_ROOT
+    return (
+        ROOT
+        / "evidence/ust_g3gb"
+        / f"H02.component20.p{prime}.g{gamma}.second_jet_source.npz"
+    )
+
+
+def source_value(prime: int, gamma: int) -> np.ndarray:
+    path = source_path(prime, gamma)
+    require(path.is_file(), f"source fiber exists: p={prime}, gamma={gamma}")
+    arrays = np.load(path, allow_pickle=False)
+    value = arrays["source_coefficient"].astype(np.uint32)
+    require(value.shape == (132,), "source fiber shape")
+    return value
+
+
+def complete_prime_row(prime: int) -> tuple[np.ndarray, np.ndarray]:
+    roots = height_campaign.FIBERS[prime]
+    values = np.stack([source_value(prime, gamma) for gamma in roots])
+    residues = interpolation.interpolate(values.astype(np.int64), roots, prime)
+    require(values.shape == (6, 132), "complete source fiber")
+    require(residues.shape == (6, 132), "power-basis row")
+    return values.astype(np.uint32), residues.reshape(-1).astype(np.uint32)
+
+
+def reconstruct_all(
+    residues: np.ndarray, primes: tuple[int, ...]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int]:
+    require(residues.shape == (len(primes), 792), "all-prime residue matrix")
+    combined = [int(value) for value in residues[0]]
+    modulus = primes[0]
+    for prime, row in zip(primes[1:], residues[1:], strict=True):
+        inverse = pow(modulus % prime, -1, prime)
+        combined = [
+            value
+            + modulus * (((int(target) - value % prime) * inverse) % prime)
+            for value, target in zip(combined, row, strict=True)
+        ]
+        modulus *= prime
+    bound = math.isqrt((modulus - 1) // 2)
+    numerators = np.zeros(792, dtype=object)
+    denominators = np.zeros(792, dtype=object)
+    valid = np.zeros(792, dtype=bool)
+    for index, residue in enumerate(combined):
+        numerator, denominator, candidate = height_campaign.rational_reconstruct(
+            residue, modulus, bound
+        )
+        numerators[index] = int(numerator)
+        denominators[index] = int(denominator)
+        valid[index] = bool(candidate)
+    return numerators, denominators, valid, modulus, bound
+
+
+def evaluate_coordinates(
+    numerators: np.ndarray,
+    denominators: np.ndarray,
+    valid: np.ndarray,
+    prime: int,
+    gamma: int,
+    target: np.ndarray,
+) -> np.ndarray:
+    numerator_rows = numerators.reshape(6, 132)
+    denominator_rows = denominators.reshape(6, 132)
+    valid_rows = valid.reshape(6, 132)
+    passed = np.zeros(132, dtype=bool)
+    for coordinate in range(132):
+        if not bool(np.all(valid_rows[:, coordinate])):
+            continue
+        value = 0
+        for power in range(6):
+            denominator = int(denominator_rows[power, coordinate]) % prime
+            if denominator == 0:
+                break
+            value = (
+                value
+                + int(numerator_rows[power, coordinate])
+                * pow(denominator, -1, prime)
+                * pow(gamma, power, prime)
+            ) % prime
+        else:
+            passed[coordinate] = value == int(target[coordinate])
+    return passed
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    prior = np.load(PRIOR, allow_pickle=False)
+    primes = tuple(int(value) for value in prior["primes"]) + COMPLETE_PRIMES
+    residue_rows = [row.astype(np.uint32) for row in prior["second_jet_source_power_basis_residues"]]
+    complete_values: list[np.ndarray] = []
+    for prime in COMPLETE_PRIMES:
+        values, residues = complete_prime_row(prime)
+        complete_values.append(values)
+        residue_rows.append(residues)
+    residue_matrix = np.stack(residue_rows)
+    require(residue_matrix.shape == (11, 792), "eleven-prime matrix")
+
+    ten_prime_holdout, _, _, _ = prior_campaign.reconstruction_audit(
+        residue_matrix, primes, len(primes)
+    )
+    numerators, denominators, valid, modulus, bound = reconstruct_all(
+        residue_matrix, primes
+    )
+
+    holdout_pairs = tuple(
+        (prime, height_campaign.FIBERS[prime][0]) for prime in ROOT_HOLDOUT_PRIMES
+    )
+    holdout_targets = np.stack(
+        [source_value(prime, gamma) for prime, gamma in holdout_pairs]
+    )
+    holdout_passes = np.stack(
+        [
+            evaluate_coordinates(
+                numerators,
+                denominators,
+                valid,
+                prime,
+                gamma,
+                target,
+            )
+            for (prime, gamma), target in zip(
+                holdout_pairs, holdout_targets, strict=True
+            )
+        ]
+    )
+    common_pass = np.all(holdout_passes, axis=0)
+    expected_trivial = np.zeros(132, dtype=bool)
+    expected_trivial[list(EXPECTED_ZERO_COORDINATES)] = True
+    expected_trivial[EXPECTED_UNIT_COORDINATE] = True
+
+    require(ten_prime_holdout["holdout_passes"] == 102, "ten-prime holdout count")
+    require(
+        ten_prime_holdout["passing_nontrivial_coefficients"] == 0,
+        "ten-prime nontrivial slots",
+    )
+    require(int(np.count_nonzero(valid)) == 513, "all-prime valid slots")
+    require(
+        all(int(np.count_nonzero(row)) == 17 for row in holdout_passes),
+        "root holdout counts",
+    )
+    require(np.array_equal(common_pass, expected_trivial), "only trivial coordinates")
+
+    np.savez_compressed(
+        ARRAYS,
+        primes=np.asarray(primes, dtype=np.uint32),
+        roots=np.asarray(
+            [height_campaign.FIBERS[prime] for prime in primes], dtype=np.uint32
+        ),
+        second_jet_source_power_basis_residues=residue_matrix,
+        added_complete_prime_source_values=np.stack(complete_values),
+        reconstructed_numerators=np.asarray(
+            [str(value) for value in numerators], dtype="U64"
+        ),
+        reconstructed_denominators=np.asarray(
+            [str(value) for value in denominators], dtype="U64"
+        ),
+        reconstruction_valid=valid.astype(np.uint8),
+        root_holdout_primes=np.asarray(
+            [prime for prime, _ in holdout_pairs], dtype=np.uint32
+        ),
+        root_holdout_gamma=np.asarray(
+            [gamma for _, gamma in holdout_pairs], dtype=np.uint32
+        ),
+        root_holdout_targets=holdout_targets,
+        root_holdout_coordinate_pass=holdout_passes.astype(np.uint8),
+    )
+
+    packet = {
+        "schema": "ust.g3ge.h02.component20.eleven-prime-second-jet-height-audit.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GE",
+        "status": "CLOSED_EXACT_ELEVEN_PRIME_SECOND_JET_HEIGHT_AUDIT_QGAMMA_PROMOTION_OPEN",
+        "inputs": {
+            "G3GA_arrays": record(PRIOR),
+            "archived_p81359_first_root": record(ARCHIVED_81359_ROOT),
+            "added_root_sources": [
+                record(source_path(prime, gamma))
+                for prime in COMPLETE_PRIMES
+                for gamma in height_campaign.FIBERS[prime]
+                if (prime, gamma) != (81359, 26027)
+            ],
+            "independent_root_holdouts": [
+                record(source_path(prime, gamma)) for prime, gamma in holdout_pairs
+            ],
+        },
+        "full_root_campaign": {
+            "primes": list(primes),
+            "fibers": 66,
+            "power_basis_slots": 792,
+            "ten_construction_prime_one_prime_holdout": ten_prime_holdout,
+            "all_eleven_prime_modulus": str(modulus),
+            "all_eleven_prime_modulus_bits": modulus.bit_length(),
+            "rational_reconstruction_bound": str(bound),
+            "rational_reconstruction_bound_bits": bound.bit_length(),
+            "valid_power_basis_candidates": int(np.count_nonzero(valid)),
+            "artifact": record(ARRAYS),
+        },
+        "independent_root_validation": {
+            "pairs": [list(pair) for pair in holdout_pairs],
+            "coordinate_pass_counts": [
+                int(np.count_nonzero(row)) for row in holdout_passes
+            ],
+            "common_coordinate_pass_count": int(np.count_nonzero(common_pass)),
+            "common_passing_zero_coordinates": list(EXPECTED_ZERO_COORDINATES),
+            "common_passing_unit_coordinate": EXPECTED_UNIT_COORDINATE,
+            "common_passing_nontrivial_coordinates": 0,
+        },
+        "checks": {
+            "eleven_complete_split_primes_supply66_exact_fibers": True,
+            "ten_prime_reconstruction_against_the_eleventh_accepts_only102_trivial_power_basis_slots": True,
+            "the_all_prime_bound_is87_bits": bound.bit_length() == 87,
+            "five_independent_root_holdouts_each_accept_exactly17_trivial_coordinates": True,
+            "no_nontrivial_coordinate_is_promoted_by_the_available_height_campaign": True,
+            "the_archived_arrays_are_self_contained_for_independent_replay": True,
+        },
+        "guardrails": {
+            "claims_nonexistence_of_a_Qgamma_source": False,
+            "claims_the_87_bit_cutoff_is_an_intrinsic_height_bound": False,
+            "claims_LLL_failure_is_an_exact_SVP_certificate": False,
+            "claims_characteristic_zero_promotion": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3geElevenPrimeSecondJetHeightAudit",
+            "tier": "CLOSED_EXACT_FINITE_HEIGHT_AUDIT",
+            "statement": (
+                "The available eleven complete split primes determine an exact "
+                "174-bit CRT modulus and an 87-bit rational reconstruction bound. "
+                "The eleventh-prime holdout and five further root holdouts accept "
+                "only the structurally trivial source entries; no nontrivial "
+                "second-jet coefficient is promoted at this finite height."
+            ),
+        },
+        "next_required_object": (
+            "Derive the one-dimensional second-jet quotient by a symbolic "
+            "minor/Pluecker determinant over Q(gamma), avoiding canonical dense RREF."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3GE eleven-prime second-jet height audit: PASS "
+        "power_slots=102/792 root_coordinates=17/132 nontrivial=0"
+    )
+
+
+if __name__ == "__main__":
+    main()

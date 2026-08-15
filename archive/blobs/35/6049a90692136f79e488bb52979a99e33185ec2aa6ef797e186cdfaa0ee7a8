@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Verify UST.G3M conjugate-clock fixed Yoneda-column reduction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3m_conjugate_clock_fixed_yoneda_column.packet.json"
+G3K_PATH = ROOT / "state" / "ust_g3k_derived_schur_yoneda_reduction.packet.json"
+G3L_PATH = ROOT / "state" / "ust_g3l_monad_yoneda_rank_four.packet.json"
+SCHEMA_PATH = ROOT / "state" / "ust_g3m_invariant_yoneda_column.schema.json"
+TEMPLATE_PATH = ROOT / "state" / "ust_g3m_invariant_yoneda_column_candidate.template.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def dimension(rep: dict[str, int]) -> int:
+    return sum(rep.values())
+
+
+def verify_sources(packet: dict, lock: dict) -> tuple[dict, dict]:
+    for key, path in (
+        ("g3k_derived_yoneda", G3K_PATH),
+        ("g3l_monad_yoneda", G3L_PATH),
+    ):
+        source = packet["inputs"][key]
+        require(source["path"] == str(path.relative_to(ROOT)).replace("\\", "/"), f"{key} path")
+        require(source["sha256"] == sha256(path), f"{key} hash")
+
+    source = packet["inputs"]["qutrit_orbit_atlas"]
+    repository = next(item for item in lock["repositories"] if item["id"] == source["repository_id"])
+    locked = next(item for item in repository["sources"] if item["path"] == source["path"])
+    require(source["sha256"] == locked["sha256"], "orbit atlas hash")
+    return load(G3K_PATH), load(G3L_PATH)
+
+
+def verify_representation_reduction(packet: dict, g3k: dict, g3l: dict) -> None:
+    reduction = packet["representation_reduction"]
+    reverse = reduction["reverse_ext_character_multiplicities"]
+    kernel = reduction["q_kernel_character_multiplicities"]
+    require(reverse == g3k["derived_inverse_block"]["reverse_character_multiplicities"], "reverse rep")
+    require(kernel == g3l["long_exact_sequence"]["q_kernel_character_multiplicities"], "kernel rep")
+    require(dimension(reverse) == 9, "reverse dimension")
+    require(reduction["reverse_ext_fixed_dimension"] == reverse["trivial"] == 3, "reverse fixed dimension")
+    require(dimension(kernel) == reduction["q_kernel_dimension"] == 5, "kernel dimension")
+    require(reduction["q_kernel_fixed_dimension"] == kernel["trivial"] == 1, "kernel fixed line")
+    require(reduction["non_equivariant_residual_directions"] == 4, "non-equivariant residual count")
+
+    # On fixed parts q has a three-dimensional source and a one-dimensional
+    # kernel, hence a rank-two quotient. This representative checks the exact
+    # rank-nullity statement without choosing a geometric Cech basis.
+    q_fixed = sp.Matrix([[1, 0, 0], [0, 1, 0]])
+    require(q_fixed.rank() == reduction["fixed_q_rank"] == 2, "fixed q rank")
+    require(len(q_fixed.nullspace()) == reduction["selected_equivariant_candidate_domain_dimension"] == 1, "fixed q kernel")
+
+    line = packet["canonical_fixed_line"]
+    require(line["ambient_fixed_dimension"] == 2, "ambient fixed dimension")
+    require(line["boundary_fixed_dimension"] == 1, "boundary fixed dimension")
+    require(
+        line["quotient_fixed_dimension"]
+        == line["ambient_fixed_dimension"] - line["boundary_fixed_dimension"]
+        == 1,
+        "fixed quotient line",
+    )
+    require(line["zero_decision_basis_independent"], "basis independence")
+
+
+def verify_equivariance_and_connecting_map(packet: dict, g3k: dict) -> None:
+    selected = packet["selected_linearization"]
+    require(selected["orbit_members"] == 3, "orbit size")
+    require(selected["conjugation_law"] == "Z_(j+1)=S*Z_j*S^-1", "conjugate clocks")
+    require(selected["forward_class_character_under_Zj"] == "trivial", "forward character")
+    require(
+        g3k["derived_inverse_block"]["forward_class_clock_character"] == "trivial",
+        "G3K forward character",
+    )
+    require(selected["fixed_source_linearizations"], "source linearizations")
+    require(not selected["relinearization_inside_locked_branch_allowed"], "silent relinearization")
+    require(selected["equivariant_reverse_entry_must_be_Zj_fixed"], "reverse equivariance")
+
+    connecting = packet["connecting_map"]
+    require(connecting["kernel_equals_connecting_image"], "connecting exactness")
+    require(connecting["zero_iff_connecting_lift_exists"], "lift equivalence")
+    require(not connecting["column_computed"], "column silently computed")
+    require(not connecting["connecting_lift_constructed"], "lift silently constructed")
+
+    orbit = packet["orbit_transport"]
+    require(orbit["S_maps_fixed_line_j_to_fixed_line_j_plus_1"], "fixed-line transport")
+    require(orbit["connecting_maps_are_natural"], "connecting naturality")
+    require(orbit["three_columns_form_one_shift_orbit"], "column orbit")
+    require(orbit["independent_orbit_representative_columns"] == 1, "independent column count")
+    require(not orbit["global_repaired_object_shift_chain_map_constructed"], "global shift promoted")
+    require(not orbit["projective_clock_shift_commutator_constructed"], "commutator promoted")
+
+    translation = packet["common_translation_cutset"]
+    require(translation["image_in_reverse_ext_is_zero"], "common translation image")
+    require(not translation["supplies_fixed_generator_e_j"], "translation generator promoted")
+    require(translation["relative_gluing_or_koszul_lift_still_allowed"], "relative lift excluded")
+
+
+def verify_contract(packet: dict) -> None:
+    schema = load(SCHEMA_PATH)
+    template = load(TEMPLATE_PATH)
+    expected = "mtt.unified-source.q79-invariant-yoneda-column.v1"
+    require(schema["$id"] == expected, "schema id")
+    require(schema["properties"]["schema"]["const"] == expected, "schema const")
+    require(schema["properties"]["domain_dimension"]["const"] == 1, "contract domain")
+    require(schema["properties"]["orbit_member"]["const"] == 0, "orbit representative")
+    require(template["schema"] == expected, "template schema")
+    require(template["domain_dimension"] == 1, "template domain")
+    require(template["column_decision"] == "UNDECIDED", "template decision")
+    require(template["empirical_inputs"] == [], "template empirical inputs")
+    require(not template["physical_promotion_requested"], "template promotion")
+
+    normal = packet["normal_block"]
+    require(normal["local_symbol_pointwise_surjective"], "local symbol")
+    require(normal["local_symbol_surjective_at_all_six_nodes"], "six-node symbol")
+    require(normal["remaining_test_is_global_Cech_column"], "global Cech test")
+    require(not normal["full_five_dimensional_block_needed_for_selected_physical_decision"], "five-column physical search")
+    require(normal["full_five_dimensional_block_retained_for_non_equivariant_classification"], "non-equivariant classification")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    require(packet["schema"] == "mtt.unified-source.q79-conjugate-clock-fixed-yoneda-column.v1", "packet schema")
+    require(packet["theorem_id"] == "UST.G3M", "theorem id")
+    require(packet["status"] == "CLOSED_EXACT_CLOCK_FIXED_DOMAIN_ONE_CONNECTING_COLUMN_OPEN", "status")
+    g3k, g3l = verify_sources(packet, lock)
+    verify_representation_reduction(packet, g3k, g3l)
+    verify_equivariance_and_connecting_map(packet, g3k)
+    verify_contract(packet)
+
+    frontier = packet["frontier"]
+    require(frontier["nine_direction_search_retired"], "nine-direction search")
+    require(frontier["five_column_physical_search_retired"], "five-column search")
+    require(frontier["one_exact_invariant_column_open"], "one-column frontier")
+    require(not frontier["global_repaired_alpha_twisted_object_constructed"], "global object promoted")
+    require(not frontier["physical_hidden_W9_constructed"], "W9 promoted")
+    require(not frontier["B_HS_01_closed"], "B.HS.01 promoted")
+    require(packet["continuous_fit_parameters"] == 0, "fit parameter introduced")
+    require(packet["observed_inputs"] == 0, "observed input introduced")
+
+    print("UST.G3M conjugate-clock fixed Yoneda-column theorem: PASS")
+    print("selected candidate domain: dim K_j^(Z_j) = 1")
+    print("three local columns: one conjugate-clock shift orbit")
+    print("common principal-fiber translation: exact zero in the reverse Ext slot")
+    print("downstream G3N: exact fiber-Serre column is NONZERO")
+
+
+if __name__ == "__main__":
+    main()

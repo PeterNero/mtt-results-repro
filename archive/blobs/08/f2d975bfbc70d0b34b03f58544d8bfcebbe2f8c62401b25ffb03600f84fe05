@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""Independently verify the exact G3BY corrected-H02 uniform update rank."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
+from array import array
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as endpoint
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3by_g3bi_h02_exact_update_rank.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    repository = Path(record.get("repository_path", default_repository))
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record path: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_verified(record: dict[str, Any], default_repository: Path = ROOT) -> dict[str, Any]:
+    return json.loads(verify_record(record, default_repository).read_text(encoding="utf-8"))
+
+
+def evaluate(coefficients: tuple[int, ...], value: int, prime: int) -> int:
+    result = 0
+    for coefficient in reversed(coefficients):
+        result = (result * value + coefficient) % prime
+    return result
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"] == "mtt.unified-source.g3by-g3bi-h02-exact-update-rank.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    require(packet["rank_decision"]["exact_Q_rank_closed"] is True, "exact rank status")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    inputs = packet["inputs"]
+    g3bi = load_verified(inputs["G3BI"])
+    g3bw = load_verified(inputs["G3BW"])
+    load_verified(inputs["G3BX"])
+    load_verified(inputs["G3BT"])
+    dm_arrays_path = verify_record(inputs["G3BW_arrays"])
+    macaulay = load_verified(inputs["H02_Macaulay"], mld)
+    csc = load_verified(inputs["H02_CSC"], mld)
+    factor = load_verified(inputs["H02_factorization"], mld)
+    base_packet = load_verified(inputs["base"])
+    global_f0 = load_verified(inputs["global_F0"])
+    b89 = load_verified(inputs["B89"])
+    solver = verify_record(inputs["split_prime_solver"], mld)
+    generators0, _, _ = oracle.exact_generators(base_packet, global_f0, b89)
+    corrections = endpoint.correction_derivatives_exact(g3bi)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = {int(value) for value in csc["binary"]["quotient_unit_rows"]}
+    complement_rows = np.asarray(
+        [row for row in range(len(target)) if row not in quotient_rows], dtype=np.int32
+    )
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    dm = np.load(dm_arrays_path, allow_pickle=False)
+    require(np.array_equal(complement_rows, dm["complement_rows"]), "complement rows")
+    nontrivial = np.flatnonzero(dm["component_sizes"] > 1)
+    require(nontrivial.size == 1, "unique core")
+    core = int(nontrivial[0])
+    core_columns = np.flatnonzero(dm["component_by_column"] == core).astype(np.int32)
+    core_rows = np.flatnonzero(dm["component_by_row"] == core).astype(np.int32)
+    ambient_rows = complement_rows[core_rows]
+    row_lookup = {int(row): index for index, row in enumerate(ambient_rows.tolist())}
+    require(core_columns.size == ambient_rows.size == 24767, "core dimensions")
+
+    combined_rows = array("i")
+    combined_columns = array("i")
+    combined_values = array("I")
+    difference_rows = array("i")
+    difference_columns = array("i")
+    dependent_columns: list[int] = []
+    prime = int(packet["uniform_update"]["reduction_prime"])
+    screen = packet["independent_root_difference_screen"]
+    anchor = int(screen["anchor"])
+    specialization = int(screen["specialization"])
+    for global_column in core_columns.tolist():
+        exact = endpoint.endpoint_column(
+            descriptors[global_column], generators0, corrections, target_lookup, oracle
+        )
+        restricted = [
+            (row_lookup[ambient_row], coefficients)
+            for ambient_row, coefficients in exact.items()
+            if ambient_row in row_lookup
+        ]
+        if not any(any(coefficients[power] for power in range(1, 6)) for _, coefficients in restricted):
+            continue
+        offset = len(dependent_columns)
+        dependent_columns.append(global_column)
+        for local_row, coefficients in restricted:
+            for power in range(1, 6):
+                if coefficients[power]:
+                    combined_rows.append(local_row)
+                    combined_columns.append((power - 1) * 17676 + offset)
+                    combined_values.append(coefficients[power] % prime)
+            if (evaluate(coefficients, specialization, prime) - evaluate(coefficients, anchor, prime)) % prime:
+                difference_rows.append(local_row)
+                difference_columns.append(offset)
+    require(len(dependent_columns) == 17676, "dependent columns")
+
+    combined = sparse.csr_matrix(
+        (
+            np.frombuffer(combined_values, dtype=np.uint32),
+            (
+                np.frombuffer(combined_rows, dtype=np.int32),
+                np.frombuffer(combined_columns, dtype=np.int32),
+            ),
+        ),
+        shape=(24767, 5 * 17676),
+        dtype=np.uint32,
+    )
+    combined.sum_duplicates()
+    combined.data %= prime
+    combined.eliminate_zeros()
+    pattern = combined.copy()
+    pattern.data = np.ones(pattern.nnz, dtype=np.uint8)
+    matching = maximum_bipartite_matching(pattern, perm_type="column").astype(np.int32)
+    rank_upper = int(np.count_nonzero(matching >= 0))
+    require(rank_upper == int(packet["uniform_update"]["structural_rank_upper_bound"]) == 14419, "rank upper bound")
+    require(combined.nnz == int(packet["uniform_update"]["combined_pattern_nonzeros"]) == 7908830, "combined nnz")
+
+    difference_pattern = sparse.csr_matrix(
+        (
+            np.ones(len(difference_rows), dtype=np.uint8),
+            (
+                np.frombuffer(difference_rows, dtype=np.int32),
+                np.frombuffer(difference_columns, dtype=np.int32),
+            ),
+        ),
+        shape=(24767, 17676),
+    )
+    difference_pattern.sum_duplicates()
+    difference_pattern.data[:] = 1
+    difference_matching = maximum_bipartite_matching(
+        difference_pattern, perm_type="column"
+    ).astype(np.int32)
+    require(
+        np.count_nonzero(difference_matching >= 0)
+        == int(screen["specialization_structural_rank"])
+        == 14189,
+        "root difference screen",
+    )
+
+    matched_rows = np.flatnonzero(matching >= 0).astype(np.int32)
+    matched_columns = matching[matched_rows].astype(np.int32)
+    minor = combined[matched_rows, :][:, matched_columns].tocsc()
+    arrays = np.load(verify_record(packet["construction_arrays"]), allow_pickle=False)
+    require(np.array_equal(arrays["core_global_columns"], core_columns), "stored core columns")
+    require(np.array_equal(arrays["core_ambient_rows"], ambient_rows), "stored core rows")
+    require(np.array_equal(arrays["dependent_global_columns"], np.asarray(dependent_columns, dtype=np.int32)), "stored dependent columns")
+    require(np.array_equal(arrays["combined_matching_column_by_row"], matching), "stored matching")
+    require(np.array_equal(arrays["matched_rows"], matched_rows), "stored matched rows")
+    require(np.array_equal(arrays["matched_columns"], matched_columns), "stored matched columns")
+
+    uniform = packet["uniform_update"]
+    minor_path = verify_record(uniform["selected_minor"])
+    rhs_path = verify_record(uniform["unit_RHS"])
+    verify_record(uniform["factorization_log"])
+    stored_minor, chart_prime, quotient_units, image_rank = initializer.read_chart(minor_path)
+    require((chart_prime, quotient_units, image_rank) == (prime, 0, rank_upper), "minor header")
+    require((stored_minor != minor).nnz == 0, "selected rank minor")
+    require(minor.nnz == int(uniform["selected_minor_nonzero_entries"]), "minor nnz")
+
+    with tempfile.TemporaryDirectory(dir=minor_path.parent, prefix="verify-g3by-") as directory:
+        log_path = Path(directory) / "rank-minor.log"
+        command = [
+            "wsl",
+            runtime.wsl_path(solver),
+            "--chart",
+            runtime.wsl_path(minor_path),
+            "--rhs",
+            runtime.wsl_path(rhs_path),
+            "--log",
+            runtime.wsl_path(log_path),
+            "--determinant-only",
+        ]
+        completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        fields = initializer.parse_log(log_path)
+        require(fields.get("STATUS") == "SUCCESS", "factorization status")
+        determinant = int(fields["CHART_DETERMINANT"])
+    require(determinant == int(uniform["selected_minor_determinant_mod21817"]) == 10432, "minor determinant")
+    require(int(packet["rank_decision"]["exact_Q_rank"]) == rank_upper, "exact rational rank")
+
+    print("UST.G3BY selected G3BI H02 exact update rank verifier: PASS")
+    print(
+        f"combined=24767x88380 nnz={combined.nnz} structural_upper={rank_upper} "
+        f"minor_det={determinant} exact_Q_rank={rank_upper} difference_screen=14189"
+    )
+
+
+if __name__ == "__main__":
+    main()

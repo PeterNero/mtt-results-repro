@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mtt.unified-source.common-gauduchon-chamber-certificate.v2",
+  "title": "UST.G3D same-source common Gauduchon-HYM chamber certificate v2",
+  "description": "Separates irreducible-support strictness from direct stable-factor strictness.",
+  "type": "object",
+  "required": [
+    "schema",
+    "candidate_id",
+    "source_orbit_id",
+    "source_hash",
+    "evidence_grade",
+    "complete_physical_pair",
+    "base_geometry",
+    "factors",
+    "common_t",
+    "empirical_inputs",
+    "physical_promotion_requested"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mtt.unified-source.common-gauduchon-chamber-certificate.v2"
+    },
+    "candidate_id": {"type": "string", "minLength": 1},
+    "source_orbit_id": {"type": "string", "minLength": 1},
+    "source_hash": {"type": "string", "minLength": 1},
+    "evidence_grade": {
+      "enum": ["PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_SOURCE"]
+    },
+    "complete_physical_pair": {"type": "boolean"},
+    "base_geometry": {
+      "type": "object",
+      "required": [
+        "same_q79_principal_elliptic_fibration",
+        "H_square",
+        "H_dot_delta",
+        "delta_square",
+        "primitive_harmonic_curvature",
+        "balanced_ray_certificate"
+      ],
+      "properties": {
+        "same_q79_principal_elliptic_fibration": {"type": "boolean"},
+        "H_square": {"$ref": "#/$defs/rational"},
+        "H_dot_delta": {"$ref": "#/$defs/rational"},
+        "delta_square": {"$ref": "#/$defs/rational"},
+        "primitive_harmonic_curvature": {"type": "boolean"},
+        "balanced_ray_certificate": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "factors": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/factor"}
+    },
+    "common_t": {"$ref": "#/$defs/rational"},
+    "empirical_inputs": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "physical_promotion_requested": {"type": "boolean"}
+  },
+  "$defs": {
+    "rational": {
+      "oneOf": [
+        {"type": "integer"},
+        {"type": "string", "pattern": "^-?[0-9]+(?:/[1-9][0-9]*)?$"}
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source_hash", "artifact", "locator"],
+      "properties": {
+        "source_hash": {"type": "string", "minLength": 1},
+        "artifact": {"type": "string", "minLength": 1},
+        "locator": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "factor": {
+      "type": "object",
+      "required": [
+        "id",
+        "sector",
+        "physical_rank",
+        "twist_order",
+        "strictness_mode",
+        "orbit_factor_count",
+        "factor_rank",
+        "locally_free",
+        "determinant_trivial",
+        "relative_degree_zero_semistable",
+        "holomorphic_object_selected",
+        "factor_support_reduced",
+        "factor_support_irreducible",
+        "direct_factor_fiber_stable",
+        "strictness_certificate",
+        "physical_topology_match",
+        "physical_topology_certificate",
+        "fiber_gap",
+        "mu1_upper_bound",
+        "mu1_bound_method",
+        "mu1_bound_certificate",
+        "holomorphic_equivariant_descent",
+        "unitary_multiplier",
+        "evidence_grade",
+        "provenance"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "sector": {"enum": ["visible", "hidden"]},
+        "physical_rank": {"type": "integer", "minimum": 1},
+        "twist_order": {"type": "integer", "minimum": 1},
+        "strictness_mode": {
+          "enum": ["irreducible_spectral_cover", "direct_stable_factor_orbit", "open"]
+        },
+        "orbit_factor_count": {"type": "integer", "minimum": 1},
+        "factor_rank": {"type": "integer", "minimum": 1},
+        "locally_free": {"type": "boolean"},
+        "determinant_trivial": {"type": "boolean"},
+        "relative_degree_zero_semistable": {"type": "boolean"},
+        "holomorphic_object_selected": {"type": "boolean"},
+        "factor_support_reduced": {"type": "boolean"},
+        "factor_support_irreducible": {"type": "boolean"},
+        "direct_factor_fiber_stable": {"type": "boolean"},
+        "strictness_certificate": {"type": "string", "minLength": 1},
+        "physical_topology_match": {"type": "boolean"},
+        "physical_topology_certificate": {"type": "string", "minLength": 1},
+        "fiber_gap": {"$ref": "#/$defs/rational"},
+        "mu1_upper_bound": {"$ref": "#/$defs/rational"},
+        "mu1_bound_method": {
+          "enum": ["exact_harder_narasimhan", "reference_curvature_interval", "open"]
+        },
+        "mu1_bound_certificate": {"type": "string", "minLength": 1},
+        "holomorphic_equivariant_descent": {"type": "boolean"},
+        "unitary_multiplier": {"type": "boolean"},
+        "evidence_grade": {
+          "enum": ["PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_SOURCE"]
+        },
+        "provenance": {"$ref": "#/$defs/provenance"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

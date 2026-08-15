@@ -1,0 +1,73 @@
+# UST.G3DD H11 Selected 710 Affine RHS Theorem v1
+
+## Status
+
+`CLOSED_CERTIFIED_H11_SELECTED710_AFFINE_SOURCE_RHS_ON_EMBEDDINGS4_AND5`
+
+G3DD carries the complete G3DC source operator into the source-independent 710-dimensional path kernel selected by G3CY and certified by G3DB.
+
+## First reduction
+
+Write
+
+```text
+X_B89 = A0^-1 B_B89,
+X_C   = A0^-1 B_C,
+Y_B89 = W X_B89,
+Y_C   = W X_C,
+Z_B89 = S^-1 Y_B89,
+Z_C   = S^-1 Y_C.
+```
+
+The exact `W` support observes only 1,186 of the 4,426 base coordinates. G3DD evaluates that corridor for all 496 source columns and solves the resulting `988 x 496` system. Every one of the 490,048 `S Z = W X` residual balls contains zero.
+
+The emitted `Z_B89` and `Z_C` archives each have shape `988 x 248` and retain at least 83 relative accuracy bits away from zero.
+
+## Selected second reduction
+
+Let `R` be the 710 exact rows selected by G3CY and put
+
+```text
+V     = Q[R,:],
+H_B89 = V Z_B89,
+H_C   = V Z_C.
+```
+
+G3CX proves that 248 columns of `Q` vanish exactly, so the contraction uses the complete 740-column active support. The two emitted `H` maps each have shape `710 x 248` and retain at least 77 relative accuracy bits away from zero.
+
+## Selected source equation
+
+For the evolving selected H20 state `c20(a)`, the first reduced equation is
+
+```text
+(S + a Q) z = a (Y_B89 + a Y_C)c20(a).
+```
+
+Its base `S` solution is
+
+```text
+z0 = a (Z_B89 + a Z_C)c20(a).
+```
+
+Applying the exact G3CY second Woodbury factorization gives the selected equation
+
+```text
+(T_Q + a R_Q)q = a^2 (H_B89 + a H_C)c20(a).
+```
+
+The matrix on the left is exactly the G3DB path kernel. Therefore both the kernel and its complete selected source operator are now emitted on embeddings 4 and 5 without benchmark rows or fitted values.
+
+## Boundary
+
+G3DD does not integrate `c20(a)`, solve the selected equation along G3BJ, recover the full 4,426-coordinate H11 state, or replay G3CT. Those are execution and validation steps downstream of source selection.
+
+It does not select an Archimedean embedding physically, establish integral monodromy, or close either eta9 blocker.
+
+## Reproduction
+
+```powershell
+python build_ust_g3dd_h11_selected_710_affine_rhs.py
+python verify_ust_g3dd_h11_selected_710_affine_rhs.py
+```
+
+The independent verifier hash-checks every local input and archive, re-evaluates exact `W` and `S` rows on embedding 4, checks 20 fresh first-stage residuals, and checks 16 fresh `H=VZ` identities against the persisted G3DA coupling archive.

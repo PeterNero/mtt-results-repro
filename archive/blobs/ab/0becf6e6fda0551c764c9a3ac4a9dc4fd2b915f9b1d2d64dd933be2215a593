@@ -1,0 +1,355 @@
+#!/usr/bin/env python3
+"""Execute the G3BA common-fiber separation and topological Gram decision."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+from flint import arb
+
+import build_ust_g3ba_common_fiber_face_cover_gram as builder
+
+
+ROOT = Path(__file__).resolve().parent
+SCHEMA = "mtt.unified-source.g3ba-face-cover-gram-result.v1"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def prefix_cover(codes: list[str]) -> bool:
+    ordered = sorted(codes, key=lambda value: (len(value), value))
+    if len(ordered) != len(set(ordered)):
+        return False
+    if any(
+        other.startswith(code)
+        for index, code in enumerate(ordered)
+        for other in ordered[index + 1 :]
+    ):
+        return False
+    return sum(Fraction(1, 2 ** len(code)) for code in ordered) == 1
+
+
+def parse_endpoints(cell: dict) -> list[tuple[arb, arb]]:
+    endpoints = cell["endpoint_enclosures"]
+    require(len(endpoints) == 5, "five endpoint coordinates")
+    return [
+        (arb(coordinate["real_ball"]), arb(coordinate["imaginary_ball"]))
+        for coordinate in endpoints
+    ]
+
+
+def separated_witness(left: dict, right: dict) -> dict[str, object] | None:
+    left_values = parse_endpoints(left)
+    right_values = parse_endpoints(right)
+    for coordinate in range(5):
+        for component, index in (("real", 0), ("imaginary", 1)):
+            if not left_values[coordinate][index].overlaps(right_values[coordinate][index]):
+                return {"coordinate": coordinate, "component": component}
+    return None
+
+
+def common_component_separator(
+    left_cells: list[dict], right_cells: list[dict]
+) -> list[dict[str, object]]:
+    left_values = [parse_endpoints(cell) for cell in left_cells]
+    right_values = [parse_endpoints(cell) for cell in right_cells]
+    witnesses = []
+    for coordinate in range(5):
+        for component, index in (("real", 0), ("imaginary", 1)):
+            if all(
+                left[coordinate][index] < right[coordinate][index]
+                for left in left_values
+                for right in right_values
+            ):
+                witnesses.append(
+                    {
+                        "coordinate": coordinate,
+                        "component": component,
+                        "ordering": "left_strictly_below_right",
+                    }
+                )
+            elif all(
+                right[coordinate][index] < left[coordinate][index]
+                for left in left_values
+                for right in right_values
+            ):
+                witnesses.append(
+                    {
+                        "coordinate": coordinate,
+                        "component": component,
+                        "ordering": "right_strictly_below_left",
+                    }
+                )
+    return witnesses
+
+
+def validate_projection(projection: dict, allow_test_fixture: bool) -> None:
+    require(
+        projection["schema"] == "mtt.unified-source.g3ba-face-cover-projection.v1",
+        "projection schema",
+    )
+    if projection["source_domain"] == "test_only":
+        require(allow_test_fixture, "test fixture requires explicit opt-in")
+    else:
+        require(projection["source_domain"] == "certified_regauged_campaign", "production source domain")
+    require(len(projection["cycles"]) == 3, "three cycles")
+    for expected, cycle in enumerate(projection["cycles"], start=1):
+        require(cycle["cycle"] == expected, "cycle order")
+        require(cycle["cell_count"] == len(cycle["cells"]), "cell count")
+        for cell in cycle["cells"]:
+            require(
+                cell["cycle"] == expected
+                and 0 <= cell["face"] < 8
+                and set(cell["code"]) <= {"0", "1"}
+                and len(cell["source_packet_sha256"]) == 64,
+                "cell identity",
+            )
+            parse_endpoints(cell)
+
+
+def project_campaign(campaign: Path) -> dict[str, object]:
+    campaign = campaign.resolve()
+    require(campaign.is_dir(), "campaign directory")
+    source_root = campaign.parent
+    cycles = []
+    common_inputs = None
+    common_model = None
+    for cycle_index in (1, 2, 3):
+        cycle_dir = campaign / f"cycle_{cycle_index:02d}"
+        checkpoint_path = cycle_dir / f"cycle_{cycle_index:02d}.checkpoint.json"
+        checkpoint = load(checkpoint_path)
+        require(checkpoint["cycle"] == cycle_index, "checkpoint cycle")
+        require(not checkpoint["blocked"], "no blocked cells")
+        inputs = checkpoint["inputs"]
+        model = checkpoint["kernel_model_state_sha256"]
+        if common_inputs is None:
+            common_inputs = inputs
+            common_model = model
+        require(inputs == common_inputs and model == common_model, "same-source campaign")
+        require(
+            {key: value["sha256"] for key, value in inputs.items()}
+            == builder.EXPECTED_INPUTS,
+            "selected B97-B102 source hashes",
+        )
+        cells = []
+        for item in checkpoint["completed"]:
+            path = (source_root / item["path"]).resolve()
+            require(path.is_relative_to(source_root.resolve()), "cell inside source repository")
+            packet = load(path)
+            require(
+                packet["cycle"] == cycle_index
+                and packet["face"] == int(item["face"])
+                and packet["dyadic_cell"]["code"] == str(item["code"])
+                and all(packet["checks"].values()),
+                "cell certificate",
+            )
+            cells.append(
+                {
+                    "cycle": cycle_index,
+                    "face": int(item["face"]),
+                    "code": str(item["code"]),
+                    "source_packet_sha256": sha256(path),
+                    "endpoint_enclosures": packet["endpoint_enclosures"],
+                }
+            )
+        complete = checkpoint["status"] == "COMPLETE"
+        aggregate_record = checkpoint.get("aggregate")
+        aggregate = None
+        if complete:
+            require(not checkpoint["pending"] and aggregate_record, "complete checkpoint contract")
+            aggregate_path = (source_root / aggregate_record["path"]).resolve()
+            require(
+                aggregate_path.is_relative_to(source_root.resolve())
+                and sha256(aggregate_path) == aggregate_record["sha256"],
+                "aggregate hash",
+            )
+            aggregate_packet = load(aggregate_path)
+            require(all(aggregate_packet["checks"].values()), "aggregate checks")
+            aggregate = {
+                "path": aggregate_record["path"],
+                "sha256": aggregate_record["sha256"],
+            }
+        cycles.append(
+            {
+                "cycle": cycle_index,
+                "status": "COMPLETE" if complete else checkpoint["status"],
+                "cell_count": len(cells),
+                "pending_count": len(checkpoint["pending"]),
+                "aggregate": aggregate,
+                "cells": cells,
+            }
+        )
+    return {
+        "schema": "mtt.unified-source.g3ba-face-cover-projection.v1",
+        "status": (
+            "CERTIFIED_COMPLETE_THREE_CYCLE_PROJECTION"
+            if all(cycle["status"] == "COMPLETE" for cycle in cycles)
+            else "CERTIFIED_INCOMPLETE_CAMPAIGN_PROJECTION"
+        ),
+        "source_domain": "certified_regauged_campaign",
+        "same_source_binding": {
+            "kernel_model_state_sha256": common_model,
+            "inputs": common_inputs,
+        },
+        "cycles": cycles,
+    }
+
+
+def execute(projection: dict, allow_incomplete_audit: bool, allow_test_fixture: bool) -> dict[str, object]:
+    validate_projection(projection, allow_test_fixture)
+    complete = all(cycle["status"] == "COMPLETE" for cycle in projection["cycles"])
+    if not complete:
+        require(allow_incomplete_audit, "incomplete campaigns are audit-only")
+
+    cover_checks = {}
+    for cycle in projection["cycles"]:
+        by_face = {
+            face: [cell["code"] for cell in cycle["cells"] if cell["face"] == face]
+            for face in range(8)
+        }
+        cover_checks[str(cycle["cycle"])] = {
+            "all_faces_present": all(by_face[face] for face in range(8)),
+            "prefix_free_exact_cover": all(prefix_cover(by_face[face]) for face in range(8)),
+        }
+    if complete:
+        require(
+            all(all(check.values()) for check in cover_checks.values()),
+            "complete exact face covers",
+        )
+
+    comparisons = []
+    global_separators = []
+    total_nonseparated = 0
+    cycles = projection["cycles"]
+    for left_index, right_index in ((0, 1), (0, 2), (1, 2)):
+        separated = 0
+        nonseparated = []
+        for left_cell in cycles[left_index]["cells"]:
+            for right_cell in cycles[right_index]["cells"]:
+                witness = separated_witness(left_cell, right_cell)
+                if witness is None:
+                    if len(nonseparated) < 100:
+                        nonseparated.append(
+                            {
+                                "left": [left_cell["face"], left_cell["code"]],
+                                "right": [right_cell["face"], right_cell["code"]],
+                            }
+                        )
+                else:
+                    separated += 1
+        pair_count = len(cycles[left_index]["cells"]) * len(cycles[right_index]["cells"])
+        count = pair_count - separated
+        total_nonseparated += count
+        comparisons.append(
+            {
+                "cycle_pair": [left_index + 1, right_index + 1],
+                "cell_pair_count": pair_count,
+                "separated_pair_count": separated,
+                "nonseparated_pair_count": count,
+                "first_nonseparated_pairs": nonseparated,
+            }
+        )
+        global_separators.append(
+            {
+                "cycle_pair": [left_index + 1, right_index + 1],
+                "strict_global_component_separators": common_component_separator(
+                    cycles[left_index]["cells"], cycles[right_index]["cells"]
+                ),
+            }
+        )
+
+    closed = complete and total_nonseparated == 0
+    if closed:
+        status = "CLOSED_EXACT_THREE_NODE_COMMON_FIBER_GRAM_AND_DETECTOR_NOGO"
+        result = {
+            "integral_Gram": [[-2, 0, 0], [0, -2, 0], [0, 0, -2]],
+            "determinant": -8,
+            "rank_over_Q": 3,
+            "reflection_matrices": [
+                [[-1 if row == column == index else 1 if row == column else 0 for column in range(3)] for row in range(3)]
+                for index in range(3)
+            ],
+            "B96_outcome": "THREE_NODE_SUBSYSTEM_INDEPENDENT_ENLARGE_DETECTING_SUBSYSTEM",
+        }
+    elif complete:
+        status = "COMPLETE_COVERS_REQUIRE_INTERSECTION_ROOT_ISOLATION"
+        result = None
+    else:
+        status = "PARTIAL_AUDIT_ONLY_COMPLETE_COVER_PREMISE_OPEN"
+        result = None
+
+    return {
+        "schema": SCHEMA,
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BA",
+        "status": status,
+        "input_projection": projection,
+        "cover_checks": cover_checks,
+        "cross_cycle_box_comparisons": comparisons,
+        "global_component_separators": global_separators,
+        "total_nonseparated_cross_cell_pairs": total_nonseparated,
+        "result": result,
+        "checks": {
+            "three_same_source_cycle_projections_are_present": True,
+            "all_serialized_endpoint_balls_are_Arb_parseable": True,
+            "every_reported_separation_is_a_strict_interval_nonoverlap": True,
+            "every_global_component_separator_has_one_consistent_strict_interval_order": True,
+            "complete_cover_promotion_rule_is_enforced": True,
+            "no_complex_to_finite_reduction_is_used": True,
+        },
+        "guardrails": {
+            "partial_audit_promoted_to_theorem": False,
+            "nonseparated_boxes_declared_to_be_intersections": False,
+            "B_ETA9_01_declared_closed": False,
+        },
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--campaign-directory", type=Path)
+    source.add_argument("--projection-input", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--allow-incomplete-audit", action="store_true")
+    parser.add_argument("--allow-test-fixture", action="store_true")
+    arguments = parser.parse_args()
+    projection = (
+        project_campaign(arguments.campaign_directory)
+        if arguments.campaign_directory
+        else load(arguments.projection_input)
+    )
+    result = execute(
+        projection,
+        arguments.allow_incomplete_audit,
+        arguments.allow_test_fixture,
+    )
+    output = arguments.output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(result, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+    print(
+        f"UST.G3BA {result['status']} "
+        f"nonseparated={result['total_nonseparated_cross_cell_pairs']} output={output}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,72 @@
+#!/usr/bin/env sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+output=${1:-"$script_dir/ust_nf_kernel"}
+replay_output="${output}_replay"
+recover_output="${output}_recover"
+modular_cutset_output="${output}_modular_cutset"
+compiler=${CC:-cc}
+
+if ! command -v pkg-config >/dev/null 2>&1; then
+    printf '%s\n' "pkg-config is required" >&2
+    exit 1
+fi
+if ! pkg-config --exists flint; then
+    printf '%s\n' "FLINT development files are required (tested with FLINT 3.4.0)" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC2046
+"$compiler" -O3 -DNDEBUG -std=c11 \
+    "$script_dir/ust_nf_kernel.c" \
+    -o "$output" \
+    $(pkg-config --cflags --libs flint)
+"$compiler" -O3 -DNDEBUG -std=c11 \
+    "$script_dir/ust_nf_kernel_replay.c" \
+    -o "$replay_output" \
+    $(pkg-config --cflags --libs flint)
+"$compiler" -O3 -DNDEBUG -std=c11 \
+    "$script_dir/ust_nf_kernel_recover.c" \
+    -o "$recover_output" \
+    $(pkg-config --cflags --libs flint)
+"$compiler" -O3 -DNDEBUG -std=c11 \
+    "$script_dir/ust_nf_kernel_modular_cutset.c" \
+    -o "$modular_cutset_output" \
+    $(pkg-config --cflags --libs flint)
+
+smoke_output=$(mktemp)
+smoke_defect=$(mktemp)
+smoke_modular=$(mktemp)
+smoke_skip=$(mktemp)
+trap 'rm -f "$smoke_output" "$smoke_defect" "$smoke_modular" "$smoke_skip"' EXIT HUP INT TERM
+"$output" "$script_dir/ust_nf_kernel_smoke.sms" "$smoke_output"
+cmp "$script_dir/ust_nf_kernel_smoke.nfk" "$smoke_output"
+"$replay_output" "$script_dir/ust_nf_kernel_smoke.sms" "$smoke_output"
+if "$replay_output" \
+    "$script_dir/ust_nf_kernel_smoke.sms" \
+    "$script_dir/ust_nf_kernel_smoke_bad.nfk" \
+    "$smoke_defect"; then
+    printf '%s\n' "bad-kernel smoke fixture was incorrectly accepted" >&2
+    exit 1
+fi
+test "$(head -n 1 "$smoke_defect")" = "1 1 2 1"
+if UST_NF_SKIP_RESIDUAL_RANK=1 \
+    UST_NF_ACTIVE_ROWS="$script_dir/ust_nf_kernel_smoke.cutset" \
+    UST_NF_ACTIVE_COLUMNS="$script_dir/ust_nf_kernel_smoke.columns" \
+    "$replay_output" \
+    "$script_dir/ust_nf_kernel_smoke.sms" \
+    "$script_dir/ust_nf_kernel_smoke_bad.nfk" \
+    "$smoke_skip"; then
+    printf '%s\n' "bad-kernel skip-rank smoke fixture was incorrectly accepted" >&2
+    exit 1
+fi
+test "$(head -n 1 "$smoke_skip")" = "1 1 2 -1"
+"$modular_cutset_output" \
+    "$script_dir/ust_nf_kernel_smoke.sms" \
+    "$script_dir/ust_nf_kernel_smoke_bad.nfk" \
+    "$script_dir/ust_nf_kernel_smoke.cutset" \
+    5 2 "$smoke_modular"
+test "$(head -n 1 "$smoke_modular")" = "1 1 5 2 1 1"
+printf 'ust_nf_kernel build and exact smoke replay: PASS (%s, %s, %s, %s)\n' \
+    "$output" "$replay_output" "$recover_output" "$modular_cutset_output"

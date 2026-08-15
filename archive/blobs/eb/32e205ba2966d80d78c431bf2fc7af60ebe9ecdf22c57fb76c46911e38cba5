@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Independently verify one exact G3AM fiber-two response rectangle."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+
+import build_ust_g3al_selected_carrier_response_schur as g3al
+import build_ust_g3al_selected_cayley_response_chunk as legacy
+import build_ust_g3am_selected_cayley_fiber2_response_chunk as response
+import ust_cayley_fiber2_reduction as fiber2
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file() and sha256(path) == record["sha256"], label)
+    return path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--packet", type=Path, required=True)
+    args = parser.parse_args()
+    packet_path = args.packet.resolve()
+    require(packet_path.is_relative_to(ROOT.resolve()), "packet inside repository")
+    packet = json.loads(packet_path.read_text(encoding="ascii"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3am-selected-cayley-fiber2-response-chunk.v1",
+        "schema",
+    )
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_SELECTED_CARRIER_FIBER2_RESIDUE_RECTANGLE",
+        "status",
+    )
+    require(all(packet["checks"].values()), "checks")
+    g3al_path = checked(packet["inputs"]["G3AL"], "G3AL")
+    checked(packet["inputs"]["G3AP"], "G3AP")
+    checked(packet["inputs"]["G3AP_source"], "G3AP source")
+    module_cache = checked(packet["inputs"]["module_cache"], "module cache")
+    base_record = packet["inputs"]["base_cache"]
+    if base_record is not None:
+        checked(base_record, "base cache")
+    reduction = fiber2.selected_fiber2_reduction()
+    require(
+        all(
+            packet["reduction_basis"].get(key) == value
+            for key, value in fiber2.response_reduction_basis(reduction).items()
+        ),
+        "reduction scope",
+    )
+    require(
+        packet["reduction_basis"]["component_coordinates"]
+        == reduction["fiber_coordinates"]
+        and packet["reduction_basis"]["initial_fiber_component"]
+        == reduction["fiber_coordinates"]["initial_physical_component"]
+        and packet["reduction_basis"]["normalization_basis_component"]
+        == reduction["fiber_coordinates"]["normalization_physical_component"],
+        "fiber components",
+    )
+    require(module_cache.resolve() == reduction["module_cache"].resolve(), "selected module cache")
+    if reduction["base_cache"] is None:
+        require(base_record is None, "no base cache for polynomial module")
+    else:
+        require(base_record is not None, "quotient base cache present")
+        require(
+            (ROOT / base_record["path"]).resolve() == reduction["base_cache"].resolve(),
+            "selected base cache",
+        )
+    rectangle = packet["rectangle"]
+    row_start = int(rectangle["row_start_zero_based"])
+    row_count = int(rectangle["row_count"])
+    column_start = int(rectangle["column_start_zero_based"])
+    column_count = int(rectangle["column_count"])
+    require(0 <= row_start < 248 and 1 <= row_count <= 248 - row_start, "row range")
+    require(
+        0 <= column_start < 122 and 1 <= column_count <= 122 - column_start,
+        "column range",
+    )
+    frames = g3al.selected_frames()
+    basis = frames["basis"]
+    pivot = int(frames["projective_pivot"])
+    primitive = [legacy.section(row) for index, row in enumerate(basis) if index != pivot]
+    tangents = frames["principal"] + frames["extra"]
+    rows = primitive[row_start : row_start + row_count]
+    columns = [
+        legacy.tangent_polynomial(vector, basis)
+        for vector in tangents[column_start : column_start + column_count]
+    ]
+    g3al_packet = json.loads(g3al_path.read_text(encoding="ascii"))
+    script = checked(packet["script"], "script")
+    output = checked(packet["output"], "output")
+    script_text = script.read_text(encoding="ascii")
+    require(
+        script_text
+        == response.make_script(
+            rows,
+            columns,
+            row_start,
+            column_start,
+            g3al_packet,
+            reduction,
+        ),
+        "exact script reconstruction",
+    )
+    require("fixedBase=Pdelta*t0*t1*t2" in script_text, "fixed base factor")
+    coordinates = reduction["fiber_coordinates"]
+    require(
+        f"*gen({coordinates['initial_module_position']})" in script_text,
+        "mapped uv component",
+    )
+    require(
+        "vector reducedSocle=reduce("
+        f"({coordinates['normalization_scalar_monomial']})*"
+        f"gen({coordinates['normalization_module_position']}),G);"
+        in script_text,
+        "selected top-line normalization",
+    )
+    require('attrib(G,"isSB",1);' in script_text, "certified module cache use")
+    if base_record is not None:
+        require("qring q=GI;" in script_text, "certified base quotient use")
+    raw = output.read_text(encoding="utf-8")
+    require("G3AM_F2_RESPONSE_CHUNK_PASS" in raw, "raw pass")
+    expected_scalars = {
+        "G3AM_F2_RESPONSE_ROW_START": row_start,
+        "G3AM_F2_RESPONSE_ROW_COUNT": row_count,
+        "G3AM_F2_RESPONSE_COLUMN_START": column_start,
+        "G3AM_F2_RESPONSE_COLUMN_COUNT": column_count,
+        "G3AM_F2_RESPONSE_BAD_NORMAL_FORMS": 0,
+        "G3AM_F2_RESPONSE_SOCLE_ZERO": 0,
+    }
+    for label, value in expected_scalars.items():
+        require(
+            re.search(rf"^{label}={value}$", raw, re.MULTILINE) is not None,
+            label,
+        )
+    entries = []
+    for row in range(row_start, row_start + row_count):
+        match = re.search(rf"^G3AM_F2_RESPONSE_ROW_{row}=([^\r\n]*)$", raw, re.MULTILINE)
+        require(match is not None, f"raw row {row}")
+        values = match.group(1).split(",")
+        require(len(values) == column_count, f"raw row {row} width")
+        entries.append(values)
+    require(entries == rectangle["entries_F1016_singular"], "entry replay")
+    print(
+        "UST.G3AM fiber-two response chunk: PASS "
+        f"rows={row_start}:{row_start + row_count} "
+        f"columns={column_start}:{column_start + column_count}"
+    )
+
+
+if __name__ == "__main__":
+    main()

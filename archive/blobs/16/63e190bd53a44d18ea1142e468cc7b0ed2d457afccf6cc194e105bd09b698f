@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Emit the 38 component-16 rows omitted by the exact rank-1200 subsystem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "evidence/ust_g3eq/H02.component16.independent_rows.json"
+OUTPUT = ROOT / "evidence/ust_g3eu/H02.component16.omitted_rows.txt"
+CERTIFICATE = ROOT / "evidence/ust_g3eu/H02.component16.omitted_rows.json"
+ROWS = 1238
+SELECTED = 1200
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main() -> None:
+    source = json.loads(SOURCE.read_text(encoding="utf-8"))
+    selected = set(source["specialization"]["selected_source_rows_zero_based"])
+    if len(selected) != SELECTED:
+        raise AssertionError("selected row count")
+    omitted = sorted(set(range(ROWS)) - selected)
+    if len(omitted) != ROWS - SELECTED:
+        raise AssertionError("omitted row count")
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(
+        f"{len(omitted)}\n" + "".join(f"{row + 1}\n" for row in omitted),
+        encoding="ascii",
+    )
+    payload = {
+        "schema": "ust.g3eu.h02.component16.omitted-row-cutset.v1",
+        "date": "2026-08-14",
+        "source": SOURCE.relative_to(ROOT).as_posix(),
+        "source_sha256": sha256(SOURCE),
+        "rows": ROWS,
+        "selected_rows": SELECTED,
+        "omitted_rows": len(omitted),
+        "omitted_rows_zero_based": omitted,
+        "output": OUTPUT.relative_to(ROOT).as_posix(),
+        "output_sha256": sha256(OUTPUT),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"UST.G3EU omitted-row cutset: PASS rows={len(omitted)}")
+
+
+if __name__ == "__main__":
+    main()

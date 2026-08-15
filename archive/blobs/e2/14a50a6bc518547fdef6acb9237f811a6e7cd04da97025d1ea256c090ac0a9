@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""Independently certify the exact component-16 residual-map rank."""
+
+from __future__ import annotations
+
+import hashlib
+import itertools
+import json
+from pathlib import Path
+
+from flint import fmpq, fmpq_poly
+
+
+ROOT = Path(__file__).resolve().parent
+MATRIX = ROOT / "evidence/ust_g3el/H02.component16.unit_pivot_reduced.number_field.sms"
+ROW_CERTIFICATE = ROOT / "evidence/ust_g3eq/H02.component16.independent_rows.json"
+KERNEL = ROOT / "evidence/ust_g3et/H02.component16.exact_kernel.recovered.nfk"
+RESIDUAL_MAP_CANDIDATES = (
+    ROOT / "evidence/ust_g3et/H02.component16.exact_residual_map.nfr",
+    ROOT / "evidence/ust_g3eu/H02.component16.exact_residual_map.no_rank.nfr",
+)
+OUTPUT = ROOT / "evidence/ust_g3eu/H02.component16.exact_residual_rank_certificate.json"
+MODULAR_CAMPAIGN = ROOT / "evidence/ust_g3eu/H02.component16.modular_residual_campaign.json"
+
+ROWS = 1238
+COLUMNS = 1221
+SUBSYSTEM_RANK = 1200
+RELATIONS = COLUMNS - SUBSYSTEM_RANK
+DEGREE = 6
+MINIMAL = (64, 16, 33, 44, 89, 24, 1)
+MINIMAL_POLYNOMIAL = fmpq_poly(list(MINIMAL))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def field_reduce(value: fmpq_poly) -> fmpq_poly:
+    return value % MINIMAL_POLYNOMIAL
+
+
+def field_inverse(value: fmpq_poly) -> fmpq_poly:
+    reduced = field_reduce(value)
+    require(bool(reduced), "attempted to invert zero")
+    gcd, inverse, _ = reduced.xgcd(MINIMAL_POLYNOMIAL)
+    require(gcd == fmpq_poly([1]), "minimal polynomial field inverse")
+    return field_reduce(inverse)
+
+
+def field_sum(values: list[fmpq_poly]) -> fmpq_poly:
+    total = fmpq_poly()
+    for value in values:
+        total = field_reduce(total + value)
+    return total
+
+
+def permutation_sign(permutation: tuple[int, ...]) -> int:
+    inversions = sum(
+        permutation[i] > permutation[j]
+        for i in range(len(permutation))
+        for j in range(i + 1, len(permutation))
+    )
+    return -1 if inversions % 2 else 1
+
+
+def determinant(matrix: list[list[fmpq_poly]]) -> fmpq_poly:
+    size = len(matrix)
+    require(all(len(row) == size for row in matrix), "square determinant matrix")
+    total = fmpq_poly()
+    for permutation in itertools.permutations(range(size)):
+        term = fmpq_poly([1])
+        for row, column in enumerate(permutation):
+            term = field_reduce(term * matrix[row][column])
+        total = field_reduce(
+            total + term if permutation_sign(permutation) == 1 else total - term
+        )
+    return total
+
+
+def adjugate(matrix: list[list[fmpq_poly]]) -> list[list[fmpq_poly]]:
+    size = len(matrix)
+    result = [[fmpq_poly() for _ in range(size)] for _ in range(size)]
+    for row in range(size):
+        for column in range(size):
+            minor = [
+                [matrix[i][j] for j in range(size) if j != column]
+                for i in range(size)
+                if i != row
+            ]
+            cofactor = determinant(minor)
+            if (row + column) % 2:
+                cofactor = field_reduce(-cofactor)
+            result[column][row] = cofactor
+    return result
+
+
+def exact_row_span_rank(
+    matrix: list[list[fmpq_poly]],
+    source_rows: list[int],
+    pivot_source_rows: list[int],
+    pivot_columns: list[int],
+) -> tuple[int, fmpq_poly, int]:
+    size = len(pivot_columns)
+    require(size == len(pivot_source_rows) == 4, "rank-four pivot shape")
+    row_positions = {source_row: index for index, source_row in enumerate(source_rows)}
+    require(all(row in row_positions for row in pivot_source_rows), "exact pivot rows")
+    pivot_full = [matrix[row_positions[row]] for row in pivot_source_rows]
+    pivot = [[row[column] for column in pivot_columns] for row in pivot_full]
+    pivot_determinant = determinant(pivot)
+    require(bool(pivot_determinant), "nonzero exact pivot determinant")
+    pivot_adjugate = adjugate(pivot)
+
+    for i in range(size):
+        for j in range(size):
+            value = field_sum(
+                [pivot_adjugate[i][k] * pivot[k][j] for k in range(size)]
+            )
+            expected = pivot_determinant if i == j else fmpq_poly()
+            require(value == expected, "adjugate identity")
+
+    checked_slots = 0
+    for row in matrix:
+        selected = [row[column] for column in pivot_columns]
+        weights = [
+            field_sum([selected[j] * pivot_adjugate[j][i] for j in range(size)])
+            for i in range(size)
+        ]
+        for column in range(RELATIONS):
+            left = field_sum(
+                [weights[i] * pivot_full[i][column] for i in range(size)]
+            )
+            right = field_reduce(pivot_determinant * row[column])
+            require(left == right, "exact residual row-span identity")
+            checked_slots += 1
+    return size, pivot_determinant, checked_slots
+
+
+def exact_rank(
+    matrix: list[list[fmpq_poly]], source_rows: list[int]
+) -> tuple[int, list[int], list[int], int]:
+    """Gaussian elimination in Q[gamma]/(m_gamma), independent of native replay."""
+
+    work = [[field_reduce(value) for value in row] for row in matrix]
+    labels = list(source_rows)
+    rank = 0
+    pivot_rows: list[int] = []
+    pivot_columns: list[int] = []
+    elimination_updates = 0
+
+    for column in range(RELATIONS):
+        pivot = next(
+            (row for row in range(rank, len(work)) if bool(work[row][column])),
+            None,
+        )
+        if pivot is None:
+            continue
+        work[rank], work[pivot] = work[pivot], work[rank]
+        labels[rank], labels[pivot] = labels[pivot], labels[rank]
+
+        inverse = field_inverse(work[rank][column])
+        for j in range(column, RELATIONS):
+            work[rank][j] = field_reduce(work[rank][j] * inverse)
+        require(work[rank][column] == fmpq_poly([1]), "normalized pivot")
+
+        for row in range(rank + 1, len(work)):
+            factor = work[row][column]
+            if not factor:
+                continue
+            for j in range(column, RELATIONS):
+                work[row][j] = field_reduce(
+                    work[row][j] - factor * work[rank][j]
+                )
+                elimination_updates += 1
+            require(not work[row][column], "eliminated pivot column")
+
+        pivot_rows.append(labels[rank])
+        pivot_columns.append(column)
+        rank += 1
+        if rank == len(work):
+            break
+
+    zero_tail = all(
+        not value for row in work[rank:] for value in row
+    )
+    require(zero_tail, "rank upper-bound zero tail")
+    return rank, pivot_rows, pivot_columns, elimination_updates
+
+
+def select_residual_map() -> Path:
+    for path in RESIDUAL_MAP_CANDIDATES:
+        if not path.is_file():
+            continue
+        with path.open("r", encoding="ascii") as handle:
+            header = handle.readline().split()
+            if len(header) != 4:
+                continue
+            rows, relations, degree, _ = map(int, header)
+            if relations == RELATIONS and degree == DEGREE and sum(1 for _ in handle) == rows * relations:
+                return path
+    raise AssertionError("complete exact residual map exists")
+
+
+def load_residual_map(path: Path) -> tuple[list[int], list[list[fmpq_poly]], int]:
+    with path.open("r", encoding="ascii") as handle:
+        defect_rows, relations, degree, declared_rank = map(
+            int, handle.readline().split()
+        )
+        require(relations == RELATIONS, "residual relation count")
+        require(degree == DEGREE, "residual field degree")
+        require(0 <= defect_rows <= ROWS, "residual row count")
+
+        matrix = [
+            [fmpq_poly() for _ in range(RELATIONS)]
+            for _ in range(defect_rows)
+        ]
+        source_rows: list[int] = []
+        seen: set[tuple[int, int]] = set()
+        for index, line in enumerate(handle):
+            values = line.split()
+            require(len(values) == 2 + DEGREE, "residual line width")
+            source_row = int(values[0]) - 1
+            relation = int(values[1]) - 1
+            defect_row = index // RELATIONS
+            expected_relation = index % RELATIONS
+            require(defect_row < defect_rows, "excess residual entry")
+            require(relation == expected_relation, "residual relation order")
+            if expected_relation == 0:
+                source_rows.append(source_row)
+            else:
+                require(
+                    source_rows[defect_row] == source_row,
+                    "residual source-row grouping",
+                )
+            require((source_row, relation) not in seen, "duplicate residual entry")
+            seen.add((source_row, relation))
+            matrix[defect_row][relation] = fmpq_poly(
+                [fmpq(value) for value in values[2:]]
+            )
+
+    require(len(seen) == defect_rows * RELATIONS, "complete residual entries")
+    require(source_rows == sorted(set(source_rows)), "ordered unique source rows")
+    require(
+        all(any(bool(value) for value in row) for row in matrix),
+        "reported defect row is nonzero",
+    )
+    return source_rows, matrix, declared_rank
+
+
+def main() -> None:
+    require(MATRIX.is_file(), "source matrix exists")
+    require(ROW_CERTIFICATE.is_file(), "row certificate exists")
+    require(KERNEL.is_file(), "recovered kernel exists")
+    require(MODULAR_CAMPAIGN.is_file(), "modular residual campaign exists")
+    residual_map = select_residual_map()
+
+    with MATRIX.open("r", encoding="ascii") as handle:
+        rows, columns, degree, entries = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+    require((rows, columns, degree) == (ROWS, COLUMNS, DEGREE), "matrix shape")
+    require(minimal == MINIMAL, "matrix minimal polynomial")
+
+    row_certificate = json.loads(ROW_CERTIFICATE.read_text(encoding="utf-8"))
+    selected_rows = set(
+        row_certificate["specialization"]["selected_source_rows_zero_based"]
+    )
+    require(len(selected_rows) == SUBSYSTEM_RANK, "selected subsystem row count")
+    require(
+        row_certificate["theorem_status"]["exact_lower_rank"] == SUBSYSTEM_RANK,
+        "selected subsystem exact rank",
+    )
+    omitted_rows = sorted(set(range(ROWS)) - selected_rows)
+    require(len(omitted_rows) == ROWS - SUBSYSTEM_RANK, "omitted row count")
+
+    source_rows, residual, native_rank = load_residual_map(residual_map)
+    require(set(source_rows) <= set(omitted_rows), "defects confined to omitted rows")
+    campaign = json.loads(MODULAR_CAMPAIGN.read_text(encoding="utf-8"))
+    lower_bound = int(campaign["exact_residual_rank_lower_bound"])
+    witness = next(
+        row for row in campaign["witnesses"] if int(row["rank"]) == lower_bound
+    )
+    pivot_rows = [int(value) for value in witness["pivot_source_rows_zero_based"]]
+    pivot_columns = [int(value) for value in witness["pivot_columns_zero_based"]]
+    if lower_bound == 4:
+        rank, pivot_determinant, checked_slots = exact_row_span_rank(
+            residual, source_rows, pivot_rows, pivot_columns
+        )
+        updates = 0
+        rank_method = "rank-four exact adjugate row-span factorization"
+    else:
+        rank, pivot_rows, pivot_columns, updates = exact_rank(residual, source_rows)
+        pivot_determinant = fmpq_poly()
+        checked_slots = len(source_rows) * RELATIONS
+        rank_method = "exact quotient-field Gaussian elimination"
+    require(rank >= lower_bound, "specialized rank lower bound")
+    require(native_rank == -1 or rank == native_rank, "independent/native exact residual rank agreement")
+
+    full_rank = SUBSYSTEM_RANK + rank
+    full_nullity = RELATIONS - rank
+    component_rank = 138 + rank
+    require(full_rank + full_nullity == COLUMNS, "rank-nullity")
+    require(component_rank + full_nullity == 159, "component structural balance")
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "ust.g3eu.h02.component16.exact-residual-rank-certificate.v1",
+        "date": "2026-08-14",
+        "source_matrix": MATRIX.relative_to(ROOT).as_posix(),
+        "source_matrix_sha256": sha256(MATRIX),
+        "source_matrix_shape": [rows, columns],
+        "source_matrix_entries": entries,
+        "selected_subsystem": {
+            "rank": SUBSYSTEM_RANK,
+            "kernel_dimension": RELATIONS,
+            "selected_rows": len(selected_rows),
+            "omitted_rows_zero_based": omitted_rows,
+        },
+        "recovered_kernel": KERNEL.relative_to(ROOT).as_posix(),
+        "recovered_kernel_size_bytes": KERNEL.stat().st_size,
+        "residual_map": residual_map.relative_to(ROOT).as_posix(),
+        "residual_map_sha256": sha256(residual_map),
+        "residual_map_shape": [len(source_rows), RELATIONS],
+        "residual_source_rows_zero_based": source_rows,
+        "defects_confined_to_omitted_rows": True,
+        "rank_certificate": {
+            "native_flint_rank": None if native_rank == -1 else native_rank,
+            "independent_python_flint_quotient_rank": rank,
+            "method": rank_method,
+            "pivot_source_rows_zero_based": pivot_rows,
+            "pivot_columns_zero_based": pivot_columns,
+            "elimination_updates": updates,
+            "exact_row_span_slots": checked_slots,
+            "pivot_determinant_power_basis": [
+                str(pivot_determinant[index]) for index in range(DEGREE)
+            ],
+            "minimal_polynomial": list(MINIMAL),
+        },
+        "consequences": {
+            "full_reduced_rank": full_rank,
+            "full_reduced_nullity": full_nullity,
+            "component16_exact_rank": component_rank,
+            "component16_structural_rank": 159,
+            "global_h02_lower_rank": 4748,
+            "global_h02_upper_rank_after_component16": 5081 + rank,
+            "global_h02_gap_after_component16": 333 + rank,
+        },
+        "claim_boundary": {
+            "proved": (
+                "The exact rank of the residual map from the selected subsystem "
+                "kernel to the omitted component-16 equations, and therefore the "
+                "exact characteristic-zero rank and nullity of component 16."
+            ),
+            "not_proved": (
+                "Global H02 rank equality, a selected physical endpoint, an "
+                "evolving source theorem, or continuum-to-finite promotion."
+            ),
+        },
+    }
+    OUTPUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3EU component-16 exact residual-rank certificate: PASS "
+        f"residual_rank={rank} full_rank={full_rank} "
+        f"full_nullity={full_nullity} component_rank={component_rank}"
+    )
+
+
+if __name__ == "__main__":
+    main()

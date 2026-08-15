@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Compile G3D packets with either spectral-cover or direct-factor strictness."""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import re
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+import verify_ust_g3d_common_gauduchon_chamber as legacy
+
+
+ROOT = Path(__file__).resolve().parent
+DEFAULT_PACKET = ROOT / "state" / "ust_g3d_reference_common_chamber.v2.packet.json"
+SCHEMA_PATH = ROOT / "state" / "ust_g3d_common_gauduchon_chamber.schema.v2.json"
+SCHEMA_ID = "mtt.unified-source.common-gauduchon-chamber-certificate.v2"
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+RATIONAL = re.compile(r"^-?[0-9]+(?:/[1-9][0-9]*)?$")
+GRADES = {"PASS", "FAIL", "PARTIAL", "CONDITIONAL", "OPEN", "NOT_SOURCE"}
+MODES = {"irreducible_spectral_cover", "direct_stable_factor_orbit", "open"}
+BOUND_METHODS = {"exact_harder_narasimhan", "reference_curvature_interval", "open"}
+
+TOP_FIELDS = {
+    "schema", "candidate_id", "source_orbit_id", "source_hash",
+    "evidence_grade", "complete_physical_pair", "base_geometry", "factors",
+    "common_t", "empirical_inputs", "physical_promotion_requested",
+}
+BASE_FIELDS = {
+    "same_q79_principal_elliptic_fibration", "H_square", "H_dot_delta",
+    "delta_square", "primitive_harmonic_curvature", "balanced_ray_certificate",
+}
+FACTOR_FIELDS = {
+    "id", "sector", "physical_rank", "twist_order", "strictness_mode",
+    "orbit_factor_count", "factor_rank", "locally_free", "determinant_trivial",
+    "relative_degree_zero_semistable", "holomorphic_object_selected",
+    "factor_support_reduced", "factor_support_irreducible",
+    "direct_factor_fiber_stable", "strictness_certificate",
+    "physical_topology_match", "physical_topology_certificate", "fiber_gap",
+    "mu1_upper_bound", "mu1_bound_method", "mu1_bound_certificate",
+    "holomorphic_equivariant_descent", "unitary_multiplier", "evidence_grade",
+    "provenance",
+}
+PROVENANCE_FIELDS = {"source_hash", "artifact", "locator"}
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def q(value: str | int, label: str) -> Fraction:
+    require(not isinstance(value, bool), f"{label}: boolean is not rational data")
+    require(
+        isinstance(value, int) or (isinstance(value, str) and RATIONAL.fullmatch(value)),
+        f"{label}: expected exact integer or rational string",
+    )
+    return Fraction(value)
+
+
+def validate_factor(factor: dict[str, Any], source_hash: str) -> dict[str, Any]:
+    factor_id = factor.get("id", "<missing>")
+    require(set(factor) == FACTOR_FIELDS, f"{factor_id}: missing or unexpected fields")
+    require(factor["sector"] in {"visible", "hidden"}, f"{factor_id}: sector")
+    require(factor["evidence_grade"] in GRADES, f"{factor_id}: evidence grade")
+    require(factor["strictness_mode"] in MODES, f"{factor_id}: strictness mode")
+    require(factor["mu1_bound_method"] in BOUND_METHODS, f"{factor_id}: bound method")
+
+    for field in ("physical_rank", "twist_order", "orbit_factor_count", "factor_rank"):
+        require(
+            isinstance(factor[field], int) and not isinstance(factor[field], bool)
+            and factor[field] > 0,
+            f"{factor_id}: {field} must be a positive integer",
+        )
+
+    expected_rank = 3 if factor["sector"] == "visible" else 9
+    expected_twist = 1 if factor["sector"] == "visible" else 3
+    rank_correct = factor["physical_rank"] == expected_rank
+    twist_correct = factor["twist_order"] == expected_twist
+    rank_compiles = (
+        factor["orbit_factor_count"] * factor["factor_rank"]
+        == factor["physical_rank"]
+    )
+    require(rank_compiles, f"{factor_id}: factor ranks do not compile")
+
+    mode = factor["strictness_mode"]
+    spectral_strictness = all((
+        mode == "irreducible_spectral_cover",
+        factor["orbit_factor_count"] == 1,
+        factor["factor_rank"] == factor["physical_rank"],
+        factor["factor_support_reduced"] is True,
+        factor["factor_support_irreducible"] is True,
+    ))
+    direct_strictness = all((
+        mode == "direct_stable_factor_orbit",
+        factor["direct_factor_fiber_stable"] is True,
+        factor["unitary_multiplier"] is True,
+    ))
+    strictness_pass = spectral_strictness or direct_strictness
+
+    bool_fields = (
+        "locally_free", "determinant_trivial", "relative_degree_zero_semistable",
+        "holomorphic_object_selected", "factor_support_reduced",
+        "factor_support_irreducible", "direct_factor_fiber_stable",
+        "physical_topology_match", "holomorphic_equivariant_descent",
+        "unitary_multiplier",
+    )
+    require(
+        all(isinstance(factor[field], bool) for field in bool_fields),
+        f"{factor_id}: structural flags must be boolean",
+    )
+    for field in (
+        "strictness_certificate", "physical_topology_certificate",
+        "mu1_bound_certificate",
+    ):
+        require(isinstance(factor[field], str) and factor[field], f"{factor_id}: {field}")
+
+    provenance = factor["provenance"]
+    require(set(provenance) == PROVENANCE_FIELDS, f"{factor_id}: provenance fields")
+    require(
+        all(isinstance(provenance[field], str) and provenance[field] for field in PROVENANCE_FIELDS),
+        f"{factor_id}: incomplete provenance",
+    )
+    same_source = provenance["source_hash"] == source_hash
+
+    gap = q(factor["fiber_gap"], f"{factor_id}.fiber_gap")
+    mu_bound = q(factor["mu1_upper_bound"], f"{factor_id}.mu1_upper_bound")
+    require(gap == Fraction(2, factor["twist_order"]), f"{factor_id}: canonical gap")
+    require(mu_bound >= 0, f"{factor_id}: nonnegative mu1 bound")
+    threshold = Fraction(1) + Fraction(factor["factor_rank"] - 1) * mu_bound / gap
+
+    structural_pass = all((
+        rank_correct,
+        twist_correct,
+        strictness_pass,
+        factor["locally_free"],
+        factor["determinant_trivial"],
+        factor["relative_degree_zero_semistable"],
+        factor["holomorphic_object_selected"],
+        factor["physical_topology_match"],
+        factor["holomorphic_equivariant_descent"],
+        same_source,
+    ))
+    certified_mu_bound = factor["mu1_bound_method"] != "open"
+    accepted = all((
+        structural_pass,
+        certified_mu_bound,
+        factor["evidence_grade"] == "PASS",
+    ))
+    return {
+        "id": factor_id,
+        "sector": factor["sector"],
+        "strictness_mode": mode,
+        "spectral_strictness": spectral_strictness,
+        "direct_strictness": direct_strictness,
+        "strictness_pass": strictness_pass,
+        "same_source": same_source,
+        "structural_pass": structural_pass,
+        "certified_mu_bound": certified_mu_bound,
+        "threshold": threshold,
+        "accepted": accepted,
+    }
+
+
+def validate_packet(packet: dict[str, Any]) -> dict[str, Any]:
+    require(set(packet) == TOP_FIELDS, "missing or unexpected packet fields")
+    require(packet["schema"] == SCHEMA_ID, "candidate schema")
+    require(packet["evidence_grade"] in GRADES, "top-level evidence grade")
+    require(isinstance(packet["complete_physical_pair"], bool), "complete pair flag")
+    require(isinstance(packet["physical_promotion_requested"], bool), "promotion flag")
+    require(isinstance(packet["empirical_inputs"], list), "empirical inputs")
+
+    base = packet["base_geometry"]
+    require(set(base) == BASE_FIELDS, "base geometry fields")
+    require(base["same_q79_principal_elliptic_fibration"] is True, "q79 fibration")
+    require(q(base["H_square"], "H_square") == 2, "q79 H^2")
+    require(q(base["H_dot_delta"], "H_dot_delta") == 0, "q79 H.delta")
+    require(q(base["delta_square"], "delta_square") == -4, "q79 delta^2")
+    require(base["primitive_harmonic_curvature"] is True, "primitive curvature")
+    require(isinstance(base["balanced_ray_certificate"], str) and base["balanced_ray_certificate"], "balanced ray")
+
+    require(isinstance(packet["factors"], list) and len(packet["factors"]) == 2, "two factors")
+    factor_results = [validate_factor(factor, packet["source_hash"]) for factor in packet["factors"]]
+    require({result["sector"] for result in factor_results} == {"visible", "hidden"}, "one factor per sector")
+
+    common_t = q(packet["common_t"], "common_t")
+    require(common_t > 0, "positive common t")
+    accepted_thresholds = [result["threshold"] for result in factor_results if result["accepted"]]
+    threshold_strict = len(accepted_thresholds) == 2 and all(common_t > value for value in accepted_thresholds)
+    conditions = {
+        "top_level_pass": packet["evidence_grade"] == "PASS",
+        "source_hash_is_sha256": bool(HEX64.fullmatch(packet["source_hash"])),
+        "complete_physical_pair": packet["complete_physical_pair"] is True,
+        "both_factors_accepted": all(result["accepted"] for result in factor_results),
+        "strict_common_threshold": threshold_strict,
+        "no_empirical_inputs": packet["empirical_inputs"] == [],
+    }
+    physically_selected = all(conditions.values())
+    if packet["physical_promotion_requested"]:
+        failed = [name for name, passed in conditions.items() if not passed]
+        require(not failed, "physical promotion requested with failed conditions: " + ", ".join(failed))
+    return {
+        "factor_results": factor_results,
+        "common_t": common_t,
+        "maximum_threshold": max(accepted_thresholds) if accepted_thresholds else None,
+        "threshold_strict": threshold_strict,
+        "physically_selected": physically_selected,
+        "promotion_conditions": conditions,
+    }
+
+
+def validate_schema() -> None:
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    require(schema["$id"] == SCHEMA_ID, "schema id")
+    require(set(schema["required"]) == TOP_FIELDS, "schema top fields")
+    require(set(schema["$defs"]["factor"]["required"]) == FACTOR_FIELDS, "schema factor fields")
+    require(
+        set(schema["$defs"]["factor"]["properties"]["strictness_mode"]["enum"]) == MODES,
+        "schema strictness modes",
+    )
+
+
+def run_reference_falsifiers(packet: dict[str, Any], result: dict[str, Any]) -> None:
+    require(packet["candidate_id"] == "UST.G3D.V2.REFERENCE.TWO_SECTOR_COMPILER", "reference id")
+    require(result["physically_selected"] is False, "reference cannot promote")
+    require(result["maximum_threshold"] == Fraction(5, 2), "reference threshold")
+
+    bad_support = copy.deepcopy(packet)
+    bad_support["factors"][0]["factor_support_reduced"] = False
+    require(not validate_packet(bad_support)["factor_results"][0]["strictness_pass"], "spectral mode needs reduced support")
+
+    bad_direct = copy.deepcopy(packet)
+    bad_direct["factors"][1]["direct_factor_fiber_stable"] = False
+    require(not validate_packet(bad_direct)["factor_results"][1]["strictness_pass"], "direct mode needs stability")
+
+    nonreduced_direct = copy.deepcopy(packet)
+    hidden = validate_packet(nonreduced_direct)["factor_results"][1]
+    require(hidden["direct_strictness"] is True, "direct mode must not require reduced support")
+
+    spliced = copy.deepcopy(packet)
+    spliced["factors"][1]["provenance"]["source_hash"] = "OTHER"
+    require(not validate_packet(spliced)["factor_results"][1]["structural_pass"], "splicing rejected")
+
+    false_promotion = copy.deepcopy(packet)
+    false_promotion["physical_promotion_requested"] = True
+    try:
+        validate_packet(false_promotion)
+    except AssertionError as error:
+        require("physical promotion requested" in str(error), "promotion falsifier")
+    else:
+        raise AssertionError("reference packet must not promote")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--candidate", type=Path, default=DEFAULT_PACKET)
+    args = parser.parse_args()
+    validate_schema()
+    packet = json.loads(args.candidate.read_text(encoding="utf-8"))
+    result = validate_packet(packet)
+    legacy.validate_result_packet()
+    if args.candidate.resolve() == DEFAULT_PACKET.resolve():
+        run_reference_falsifiers(packet, result)
+
+    maximum = result["maximum_threshold"]
+    print("UST.G3D v2 common Gauduchon-HYM compiler: PASS")
+    print(f"candidate: {packet['candidate_id']}")
+    print("strictness modes: " + ", ".join(item["strictness_mode"] for item in result["factor_results"]))
+    print(f"maximum accepted threshold: {maximum if maximum is not None else 'not compiled'}")
+    print(f"physical common chamber selected: {str(result['physically_selected']).lower()}")
+
+
+if __name__ == "__main__":
+    main()

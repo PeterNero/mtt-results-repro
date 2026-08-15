@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""Extend the canonical G3EZ 100-relation chart across 16 split primes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fa_component20_two_split_prime_rank_campaign as rank_tools
+import build_ust_g3fb_component20_split_kernel_projection_campaign as kernel_tools
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as interpolation
+import build_ust_g3fg_component20_conic_graph_reconstruction as linear_tools
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3ft"
+SCRATCH = ROOT / "state/ust_g3ft_scratch"
+CERTIFICATE = EVIDENCE / "H02.component20.full_relation_height_campaign.json"
+
+G3EZ = ROOT / "evidence/ust_g3ez/H02.component20.unit_leaf_reduction.json"
+G3FB = ROOT / "evidence/ust_g3fb/H02.component20.split_kernel_projection_campaign.json"
+G3FC = ROOT / "evidence/ust_g3fc/H02.component20.third_fourth_split_prime_campaign.json"
+
+# The first four primes already have archived G3EZ kernels. The remaining
+# twelve are generated here and reduced immediately to portable residues.
+FIBERS = {
+    21817: (5, 1971, 6912, 10062, 10605, 14055),
+    33863: (3590, 4184, 6574, 9630, 19465, 24259),
+    37493: (4637, 7219, 7234, 16137, 17865, 21870),
+    38113: (8106, 8239, 12621, 23904, 24974, 36471),
+    68213: (8265, 25099, 25248, 35530, 47841, 62632),
+    69011: (25540, 36073, 44818, 45576, 61835, 62178),
+    72271: (6766, 9324, 19584, 44538, 67288, 69289),
+    73673: (5867, 13234, 32589, 48159, 51434, 69712),
+    79903: (12863, 14472, 38067, 49280, 53903, 71100),
+    81359: (26027, 47147, 53407, 59669, 65150, 74012),
+    82963: (54581, 65030, 68843, 71500, 77219, 77618),
+    97459: (15518, 28914, 71381, 81039, 95520, 97440),
+    107903: (3783, 21912, 22805, 24465, 70799, 72018),
+    119627: (22793, 33949, 35504, 79229, 80231, 107151),
+    125791: (19184, 19190, 47441, 53423, 114015, 124096),
+    140419: (68460, 73411, 75360, 86628, 120007, 137786),
+}
+ARCHIVED_PRIMES = (21817, 33863, 37493, 38113)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def rational_reconstruct(residue: int, modulus: int, bound: int) -> tuple[int, int, bool]:
+    old_remainder, remainder = modulus, residue
+    old_denominator, denominator = 0, 1
+    while abs(remainder) > bound:
+        quotient = old_remainder // remainder
+        old_remainder, remainder = remainder, old_remainder - quotient * remainder
+        old_denominator, denominator = denominator, old_denominator - quotient * denominator
+    numerator = remainder
+    if denominator < 0:
+        numerator, denominator = -numerator, -denominator
+    valid = (
+        denominator > 0
+        and denominator <= bound
+        and abs(numerator) <= bound
+        and math.gcd(numerator, denominator) == 1
+    )
+    return numerator, denominator, valid
+
+
+def normalize_kernel(
+    kernel_matrix,
+    prime: int,
+    protected: np.ndarray,
+    canonical_relations: tuple[int, ...],
+) -> np.ndarray:
+    projection = kernel_matrix[protected, :].toarray().astype(np.int64) % prime
+    chosen = tuple(kernel_tools.independent_columns(projection, prime))
+    require(chosen == canonical_relations, "canonical relation chart")
+    pivot = projection[:, np.asarray(chosen)]
+    require(pivot.shape == (100, 100), "protected pivot shape")
+    inverse = linear_tools.inverse_mod(pivot, prime)
+    selected = kernel_matrix[:, np.asarray(chosen)].toarray().astype(np.int64) % prime
+    normalized = selected @ inverse % prime
+    require(
+        np.array_equal(normalized[protected, :], np.eye(100, dtype=np.int64)),
+        "normalized protected identity",
+    )
+    return normalized
+
+
+def cache_paths(prime: int) -> tuple[Path, Path]:
+    return (
+        EVIDENCE / f"H02.component20.p{prime}.normalized_relations.npz",
+        EVIDENCE / f"H02.component20.p{prime}.normalized_relations.json",
+    )
+
+
+def write_cache(
+    prime: int,
+    roots: tuple[int, ...],
+    values: list[np.ndarray],
+    fibers: list[dict[str, object]],
+    provenance: str,
+) -> tuple[np.ndarray, dict[str, object]]:
+    residues = interpolation.interpolate(np.stack(values), roots, prime).astype(np.uint32)
+    require(residues.shape == (6, 5411, 100), "normalized residue shape")
+    cache, metadata_path = cache_paths(prime)
+    np.savez_compressed(
+        cache,
+        prime=np.asarray([prime], dtype=np.uint32),
+        roots=np.asarray(roots, dtype=np.uint32),
+        normalized_relation_power_basis_residues=residues,
+    )
+    metadata = {
+        "prime": prime,
+        "roots": list(roots),
+        "provenance": provenance,
+        "fibers": fibers,
+        "artifact": record(cache),
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return residues, metadata
+
+
+def read_cache(prime: int, roots: tuple[int, ...]) -> tuple[np.ndarray, dict[str, object]] | None:
+    cache, metadata_path = cache_paths(prime)
+    if not (cache.is_file() and metadata_path.is_file()):
+        return None
+    payload = np.load(cache, allow_pickle=False)
+    require(int(payload["prime"][0]) == prime, "cached prime")
+    require(tuple(int(value) for value in payload["roots"]) == roots, "cached roots")
+    residues = payload["normalized_relation_power_basis_residues"].astype(np.uint32)
+    require(residues.shape == (6, 5411, 100), "cached residues")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    require(metadata["artifact"]["sha256"] == sha256(cache), "cached hash")
+    return residues, metadata
+
+
+def cleanup(*paths: Path) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
+
+
+def archived_rows() -> dict[int, dict[int, dict[str, object]]]:
+    grouped: dict[int, dict[int, dict[str, object]]] = defaultdict(dict)
+    for packet_path in (G3FB, G3FC):
+        packet = load(packet_path)
+        require(all(packet["checks"].values()), f"archived checks {packet_path.name}")
+        for row in packet["campaign"]["results"]:
+            grouped[int(row["prime"])][int(row["gamma_root"])] = row
+    require(tuple(grouped) == ARCHIVED_PRIMES, "archived prime order")
+    return grouped
+
+
+def build_archived_prime(
+    prime: int,
+    roots: tuple[int, ...],
+    rows: dict[int, dict[str, object]],
+    protected: np.ndarray,
+    canonical_relations: tuple[int, ...],
+    canonical_dependent: tuple[int, ...],
+) -> tuple[np.ndarray, dict[str, object]]:
+    cached = read_cache(prime, roots)
+    if cached is not None:
+        return cached
+    values: list[np.ndarray] = []
+    fibers: list[dict[str, object]] = []
+    for root in roots:
+        row = rows[root]
+        path = ROOT / row["kernel"]["path"]
+        require(sha256(path) == row["kernel"]["sha256"], "archived kernel hash")
+        stored_prime, matrix, dependent, _ = kernel_tools.read_kernel(path)
+        require(stored_prime == prime, "archived stored prime")
+        require(
+            tuple(int(dependent[index]) for index in canonical_relations)
+            == tuple(canonical_dependent[index] for index in canonical_relations),
+            "archived selected dependent chart",
+        )
+        values.append(normalize_kernel(matrix, prime, protected, canonical_relations))
+        fibers.append(
+            {
+                "gamma_root": root,
+                "rank": 5025,
+                "nullity": 386,
+                "protected_rank": 100,
+                "full_dependent_chart_matches_anchor": tuple(
+                    int(value) for value in dependent
+                )
+                == canonical_dependent,
+                "kernel": row["kernel"],
+            }
+        )
+        print(f"G3FT archived p={prime} gamma={root}: normalized=5411x100", flush=True)
+    return write_cache(prime, roots, values, fibers, "archived_G3FB_G3FC_kernel")
+
+
+def build_new_prime(
+    prime: int,
+    roots: tuple[int, ...],
+    protected: np.ndarray,
+    canonical_relations: tuple[int, ...],
+    canonical_dependent: tuple[int, ...],
+    row_indices: np.ndarray,
+    column_indices: np.ndarray,
+    coefficients: np.ndarray,
+) -> tuple[np.ndarray, dict[str, object]]:
+    cached = read_cache(prime, roots)
+    if cached is not None:
+        return cached
+    values: list[np.ndarray] = []
+    fibers: list[dict[str, object]] = []
+    for root in roots:
+        require(rank_tools.evaluate(rank_tools.MINIMAL, prime, root) == 0, "split root")
+        stem = f"p{prime}.g{root}"
+        chart = SCRATCH / f"{stem}.chart.bin"
+        rank_log = SCRATCH / f"{stem}.rank.log"
+        kernel = SCRATCH / f"{stem}.kernel.bin"
+        kernel_log = SCRATCH / f"{stem}.kernel.log"
+        nonzeros = rank_tools.write_chart(
+            chart, prime, root, row_indices, column_indices, coefficients
+        )
+        rank_fields, _ = rank_tools.run_rank(chart, rank_log)
+        require(
+            (int(rank_fields["RANK"]), int(rank_fields["NULLITY"])) == (5025, 386),
+            "new rank profile",
+        )
+        kernel_fields, _ = kernel_tools.run_kernel(chart, kernel, kernel_log)
+        stored_prime, matrix, dependent, _ = kernel_tools.read_kernel(kernel)
+        require(stored_prime == prime, "new stored prime")
+        require(int(kernel_fields["VERIFIED_RELATIONS"]) == 386, "new kernel replay")
+        require(
+            tuple(int(dependent[index]) for index in canonical_relations)
+            == tuple(canonical_dependent[index] for index in canonical_relations),
+            "new selected dependent chart",
+        )
+        values.append(normalize_kernel(matrix, prime, protected, canonical_relations))
+        fibers.append(
+            {
+                "gamma_root": root,
+                "rank": 5025,
+                "nullity": 386,
+                "protected_rank": 100,
+                "full_dependent_chart_matches_anchor": tuple(
+                    int(value) for value in dependent
+                )
+                == canonical_dependent,
+                "nonzero_entries": nonzeros,
+                "kernel_nonzeros": int(matrix.nnz),
+                "rank_elapsed_seconds": float(rank_fields["ELAPSED_SECONDS"]),
+                "kernel_elapsed_seconds": float(kernel_fields["ELAPSED_SECONDS"]),
+                "ephemeral_chart_sha256": sha256(chart),
+                "ephemeral_kernel_sha256": sha256(kernel),
+            }
+        )
+        cleanup(chart, rank_log, kernel, kernel_log)
+        print(f"G3FT new p={prime} gamma={root}: normalized=5411x100", flush=True)
+    return write_cache(prime, roots, values, fibers, "fresh_G3EZ_split_kernel")
+
+
+def reconstruction_audit(
+    residue_arrays: list[np.ndarray], primes: tuple[int, ...], prefix: int
+) -> dict[str, object]:
+    require(2 <= prefix <= len(primes), "audit prefix")
+    flattened = [array.reshape(-1) for array in residue_arrays[:prefix]]
+    slots = flattened[0].size
+    modulus = math.prod(primes[: prefix - 1])
+    bound = math.isqrt((modulus - 1) // 2)
+    holdout_prime = primes[prefix - 1]
+    counts = {
+        "valid_candidates": 0,
+        "holdout_passes": 0,
+        "holdout_aliases": 0,
+        "outside_uniqueness_range": 0,
+        "passing_zeros": 0,
+        "passing_units": 0,
+        "passing_integers": 0,
+        "passing_nontrivial_coefficients": 0,
+    }
+    samples: list[dict[str, object]] = []
+    chunk_size = 8192
+    for first in range(0, slots, chunk_size):
+        past = min(first + chunk_size, slots)
+        combined = [int(value) for value in flattened[0][first:past]]
+        current_modulus = primes[0]
+        for prime, row in zip(
+            primes[1 : prefix - 1], flattened[1 : prefix - 1], strict=True
+        ):
+            inverse = pow(current_modulus % prime, -1, prime)
+            combined = [
+                value
+                + current_modulus
+                * (((int(target) - value % prime) * inverse) % prime)
+                for value, target in zip(combined, row[first:past], strict=True)
+            ]
+            current_modulus *= prime
+        require(current_modulus == modulus, "chunk CRT modulus")
+        for local, (value, target) in enumerate(
+            zip(combined, flattened[prefix - 1][first:past], strict=True)
+        ):
+            numerator, denominator, candidate = rational_reconstruct(value, modulus, bound)
+            if not candidate:
+                counts["outside_uniqueness_range"] += 1
+                continue
+            counts["valid_candidates"] += 1
+            if (numerator - int(target) * denominator) % holdout_prime:
+                counts["holdout_aliases"] += 1
+                continue
+            counts["holdout_passes"] += 1
+            if numerator == 0:
+                counts["passing_zeros"] += 1
+            elif abs(numerator) == 1 and denominator == 1:
+                counts["passing_units"] += 1
+            else:
+                counts["passing_nontrivial_coefficients"] += 1
+                if len(samples) < 20:
+                    power, row_index, relation = np.unravel_index(
+                        first + local, (6, 5411, 100)
+                    )
+                    samples.append(
+                        {
+                            "power_basis_degree": int(power),
+                            "row_zero_based": int(row_index),
+                            "relation_zero_based": int(relation),
+                            "numerator": str(numerator),
+                            "denominator": str(denominator),
+                        }
+                    )
+            if denominator == 1:
+                counts["passing_integers"] += 1
+        if first and first % (chunk_size * 32) == 0:
+            print(
+                f"G3FT reconstruct prefix={prefix} slots={first}/{slots} "
+                f"passes={counts['holdout_passes']}",
+                flush=True,
+            )
+    return {
+        "prime_count": prefix,
+        "construction_primes": list(primes[: prefix - 1]),
+        "holdout_prime": holdout_prime,
+        "coefficient_slots": int(slots),
+        "modulus_bits": modulus.bit_length(),
+        "uniqueness_bound_bits": bound.bit_length(),
+        **counts,
+        "complete": counts["holdout_passes"] == slots,
+        "passing_nontrivial_samples": samples,
+    }
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    reduction = load(G3EZ)
+    g3fb = load(G3FB)
+    g3fc = load(G3FC)
+    require(all(reduction["checks"].values()), "G3EZ checks")
+    require(all(g3fb["checks"].values()), "G3FB checks")
+    require(all(g3fc["checks"].values()), "G3FC checks")
+    protected = np.asarray(reduction["output"]["protected_target_columns"], dtype=np.int32)
+    canonical_relations = tuple(int(value) for value in g3fb["campaign"]["canonical_relation_indices"])
+    canonical_dependent = tuple(int(value) for value in g3fb["campaign"]["canonical_dependent_columns"])
+    require(protected.shape == (100,), "protected coordinates")
+    require(len(canonical_relations) == 100 and len(canonical_dependent) == 386, "canonical charts")
+
+    rank_tools.compile_rank_tool()
+    kernel_tools.compile_kernel_tool()
+    row_indices, column_indices, coefficients = rank_tools.parse_source()
+    archived = archived_rows()
+    residues: list[np.ndarray] = []
+    campaign: list[dict[str, object]] = []
+    for prime, roots in FIBERS.items():
+        if prime in ARCHIVED_PRIMES:
+            residue, metadata = build_archived_prime(
+                prime,
+                roots,
+                archived[prime],
+                protected,
+                canonical_relations,
+                canonical_dependent,
+            )
+        else:
+            residue, metadata = build_new_prime(
+                prime,
+                roots,
+                protected,
+                canonical_relations,
+                canonical_dependent,
+                row_indices,
+                column_indices,
+                coefficients,
+            )
+        residues.append(residue)
+        campaign.append(metadata)
+        print(f"G3FT prime={prime}: power-basis payload=6x5411x100", flush=True)
+
+    primes = tuple(FIBERS)
+    audits = [reconstruction_audit(residues, primes, prefix) for prefix in (8, 12, 16)]
+    complete = bool(audits[-1]["complete"])
+    packet = {
+        "schema": "ust.g3ft.h02.component20.full-relation-height-campaign.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FT",
+        "status": (
+            "QGAMMA_FULL_RELATION_CANDIDATE_COMPLETE_EXACT_REPLAY_OPEN"
+            if complete
+            else "CLOSED_EXACT_96_FIBER_FULL_RELATION_HEIGHT_AUDIT_QGAMMA_OPEN"
+        ),
+        "inputs": {
+            "G3EZ": record(G3EZ),
+            "G3FB": record(G3FB),
+            "G3FC": record(G3FC),
+            "rank_tool": record(rank_tools.RANK_SOURCE),
+            "kernel_tool": record(kernel_tools.KERNEL_SOURCE),
+        },
+        "canonical_relation_chart": {
+            "protected_coordinates": [int(value) for value in protected],
+            "relation_indices": list(canonical_relations),
+            "dependent_columns": list(canonical_dependent),
+            "normalization": "the protected100x100 minor is the identity",
+        },
+        "campaign": {
+            "primes": list(primes),
+            "fibers": 96,
+            "archived_fibers": 24,
+            "fresh_fibers": 72,
+            "common_matrix_rank": 5025,
+            "common_matrix_nullity": 386,
+            "common_protected_projection_rank": 100,
+            "power_basis_slots_per_prime": 6 * 5411 * 100,
+            "per_prime_artifacts": campaign,
+        },
+        "progressive_reconstruction": audits,
+        "checks": {
+            "all16_completely_split_primes_use_one_selected100_relation_chart": True,
+            "all96_fibers_have_rank5025_and_nullity386": True,
+            "all96_kernels_replay_before_projection": True,
+            "all96_protected_projections_have_rank100": True,
+            "one100_relation_minor_normalizes_every_fiber": True,
+            "all96_normalized_relations_have_identity_protected_block": True,
+            "all_large_fresh_charts_and_kernels_are_removed_after_compression": not any(SCRATCH.iterdir()),
+        },
+        "guardrails": {
+            "claims_a_modular_height_candidate_is_a_symbolic_source_derivation": False,
+            "claims_the_relation_complement_is_selected_by_G3FK": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3ftComponent20CanonicalFullRelationHeightAudit",
+            "tier": "CLOSED_EXACT_96_FIBER_CANONICAL_RELATION_CAMPAIGN",
+            "statement": (
+                "The same G3EZ dependent-column chart and protected100-relation minor "
+                "on the selected100 columns normalize a 5411x100 kernel at all96 fibers "
+                "of the first16 completely "
+                "split primes. Progressive CRT/holdout audits measure, without promotion, "
+                "whether its Q(gamma) coefficient height has been reached."
+            ),
+        },
+        "next_required_object": (
+            "If the16-prime audit completes, emit and literally replay the rational "
+            "Q(gamma) relation matrix against G3EZ. Otherwise derive the same relations "
+            "upstream from the G3FK normal/Koszul source instead of extending an "
+            "unbounded normalized elimination chart blindly."
+        ),
+    }
+    require(all(packet["checks"].values()), "G3FT checks")
+    require(not any(packet["guardrails"].values()), "G3FT guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FT: PASS primes=16 fibers=96 "
+        f"holdout={audits[-1]['holdout_passes']}/{audits[-1]['coefficient_slots']}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

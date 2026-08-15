@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Assemble an exact full G3AP campaign from fixed and adaptive row packets."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as fixed_chunk
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import build_ust_g3ap_selected_cayley_target_macaulay_range as range_builder
+import run_ust_g3ap_selected_cayley_target_macaulay_campaign as campaign_builder
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def artifact(path: Path) -> dict[str, object]:
+    return {
+        "path": macaulay.relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def artifact_current(record: dict[str, object]) -> Path | None:
+    path = ROOT / str(record.get("path", ""))
+    if not path.is_file() or record.get("sha256") != sha256(path):
+        return None
+    if "bytes" in record and record["bytes"] != path.stat().st_size:
+        return None
+    return path
+
+
+def candidate(path: Path, total: int, selection_hash: str) -> dict[str, object] | None:
+    try:
+        packet = json.loads(path.read_text(encoding="ascii"))
+        if packet.get("schema") not in (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-chunk.v1",
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-range.v1",
+        ):
+            return None
+        selection = packet["selection"]
+        start = int(selection["global_start_zero_based"])
+        stop = int(selection["global_stop_exclusive_zero_based"])
+        selected_source = packet["inputs"]["selected_source"]
+        base_packet = packet["inputs"]["base_coordinate_packet"]
+        script = artifact_current(packet["execution"]["script"])
+        raw_output = artifact_current(packet["execution"]["compressed_output"])
+        triples = artifact_current(packet["execution"]["packed_triples"])
+        if not (
+            selection["balanced_rows"] == total
+            and selection["selection_sha256"] == selection_hash
+            and 0 <= start < stop <= total
+            and selected_source["path"] == macaulay.relative(macaulay.SOURCE)
+            and selected_source["sha256"] == macaulay.sha256(macaulay.SOURCE)
+            and base_packet["path"] == macaulay.relative(macaulay.INSPECT_PACKET)
+            and base_packet["sha256"] == sha256(macaulay.INSPECT_PACKET)
+            and script is not None
+            and raw_output is not None
+            and triples is not None
+        ):
+            return None
+        return {
+            "path": path,
+            "packet": packet,
+            "start": start,
+            "stop": stop,
+            "triples": triples,
+        }
+    except (KeyError, OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def exact_cover(candidates: list[dict[str, object]], total: int) -> list[dict[str, object]]:
+    by_start: dict[int, list[dict[str, object]]] = {}
+    for item in candidates:
+        by_start.setdefault(int(item["start"]), []).append(item)
+    for values in by_start.values():
+        values.sort(
+            key=lambda item: (
+                int(item["stop"]) - int(item["start"]),
+                item["packet"]["schema"].endswith("chunk.v1"),
+            ),
+            reverse=True,
+        )
+    predecessor: dict[int, tuple[int, dict[str, object]]] = {}
+    frontier = [0]
+    seen = {0}
+    while frontier:
+        start = frontier.pop(0)
+        for item in by_start.get(start, []):
+            stop = int(item["stop"])
+            if stop in seen:
+                continue
+            seen.add(stop)
+            predecessor[stop] = (start, item)
+            if stop == total:
+                frontier.clear()
+                break
+            frontier.append(stop)
+    require(total in predecessor, "available packets do not exactly cover all rows")
+    cover: list[dict[str, object]] = []
+    endpoint = total
+    while endpoint:
+        start, item = predecessor[endpoint]
+        cover.append(item)
+        endpoint = start
+    cover.reverse()
+    return cover
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--balanced-rows", type=int, default=50000)
+    parser.add_argument("--fixed-chunk-count", type=int, default=12)
+    args = parser.parse_args()
+    require(args.balanced_rows >= 39725, "enough rows for target rank")
+    leaders, base_packet = fixed_chunk.load_coordinates()
+    all_sources, _ = macaulay.source_data(leaders)
+    selected, quotas = macaulay.balanced_source_subset(all_sources, args.balanced_rows)
+    selection_hash = fixed_chunk.selection_hash(selected)
+
+    paths = [
+        fixed_chunk.paths(args.balanced_rows, index, args.fixed_chunk_count)["packet"]
+        for index in range(args.fixed_chunk_count)
+    ]
+    paths.extend(sorted(range_builder.RANGE_ROOT.glob(f"balanced{args.balanced_rows}_rows*.packet.json")))
+    candidates = [
+        item
+        for path in paths
+        if path.is_file()
+        for item in [candidate(path, args.balanced_rows, selection_hash)]
+        if item is not None
+    ]
+    cover = exact_cover(candidates, args.balanced_rows)
+    require(
+        [int(item["start"]) for item in cover]
+        == [0] + [int(item["stop"]) for item in cover[:-1]],
+        "contiguous exact cover",
+    )
+
+    nonzeros = sum(int(item["packet"]["execution"]["nonzeros"]) for item in cover)
+    with campaign_builder.ASSEMBLED.open("wb") as output:
+        output.write(
+            f"{args.balanced_rows} {macaulay.EXPECTED_TARGET_COORDINATES} {nonzeros}\n".encode(
+                "ascii"
+            )
+        )
+        for item in cover:
+            with item["triples"].open("rb") as source:
+                while block := source.read(8 * 1024 * 1024):
+                    output.write(block)
+
+    packet: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v2",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_EXACT_SELECTED_MATRIX_REQUIRES_MINOR_CERTIFICATE",
+        "inputs": {
+            "selected_source": {
+                "path": macaulay.relative(macaulay.SOURCE),
+                "sha256": macaulay.sha256(macaulay.SOURCE),
+            },
+            "base_coordinate_packet": {
+                "path": macaulay.relative(macaulay.INSPECT_PACKET),
+                "sha256": sha256(macaulay.INSPECT_PACKET),
+            },
+        },
+        "selection": {
+            "kind": "balanced_quantiles_across_all_21_selected_derivative_generators",
+            "rows": args.balanced_rows,
+            "selection_sha256": selection_hash,
+            "pieces": len(cover),
+            "per_generator_quotas": quotas,
+        },
+        "matrix": {
+            **artifact(campaign_builder.ASSEMBLED),
+            "rows": args.balanced_rows,
+            "columns": macaulay.EXPECTED_TARGET_COORDINATES,
+            "nonzeros": nonzeros,
+        },
+        "chunks": [
+            {
+                "packet": artifact(item["path"]),
+                "global_range_zero_based": [int(item["start"]), int(item["stop"])],
+            }
+            for item in cover
+        ],
+        "checks": {
+            "every_piece_is_hash_bound": True,
+            "piece_ranges_form_an_exact_nonoverlapping_cover": True,
+            "all_pieces_use_one_selected_balanced_schedule": True,
+            "assembled_matrix_is_the_ordered_piece_concatenation": True,
+        },
+        "guardrails": {
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Run the deterministic F_101^6 sparse-column eliminator and the "
+            "independent LinBox/Givaro minor and functional replays."
+        ),
+    }
+    campaign_builder.PACKET.write_text(
+        json.dumps(packet, indent=2) + "\n", encoding="ascii"
+    )
+    print(
+        "G3AP adaptive target Macaulay campaign: PASS "
+        f"pieces={len(cover)} rows={args.balanced_rows} nonzeros={nonzeros}"
+    )
+
+
+if __name__ == "__main__":
+    main()

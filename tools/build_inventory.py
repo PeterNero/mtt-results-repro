@@ -69,6 +69,13 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
     return count
 
 
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    with path.open("r", encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
 def is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
@@ -170,10 +177,13 @@ def artifact_kind(relative: Path, source_type: str = "repository") -> str:
     return "other"
 
 
-def tracked_files(repo_path: Path) -> list[Path]:
+def tracked_files(repo_path: Path, include_untracked: bool = True) -> list[Path]:
+    arguments = ["git", "-C", str(repo_path), "ls-files", "-z", "--cached"]
+    if include_untracked:
+        arguments.extend(["--others", "--exclude-standard"])
     try:
         raw = subprocess.check_output(
-            ["git", "-C", str(repo_path), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            arguments,
             stderr=subprocess.DEVNULL,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -189,7 +199,11 @@ def tracked_files(repo_path: Path) -> list[Path]:
     return sorted(output)
 
 
-def iter_artifacts(repo_path: Path, source_type: str = "repository") -> Iterable[Path]:
+def iter_artifacts(
+    repo_path: Path,
+    source_type: str = "repository",
+    git_tracked_only: bool = False,
+) -> Iterable[Path]:
     if repo_path.is_file():
         yield repo_path
         return
@@ -200,7 +214,7 @@ def iter_artifacts(repo_path: Path, source_type: str = "repository") -> Iterable
                 yield path
         return
 
-    tracked = tracked_files(repo_path)
+    tracked = tracked_files(repo_path, include_untracked=not git_tracked_only)
     if tracked:
         yield from tracked
         return
@@ -290,9 +304,21 @@ def extract_authority_entries(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument(
+        "--repository",
+        action="append",
+        dest="repositories",
+        help="Refresh only this repository id while preserving the other indexed rows.",
+    )
     args = parser.parse_args()
     source_root = args.source_root.resolve()
     config = json.loads(CONFIG.read_text(encoding="utf-8"))
+
+    selected_repo_ids = set(args.repositories or [])
+    configured_repo_ids = {row["id"] for row in config["repositories"]}
+    unknown_repo_ids = selected_repo_ids - configured_repo_ids
+    if unknown_repo_ids:
+        parser.error(f"unknown repository id(s): {', '.join(sorted(unknown_repo_ids))}")
 
     repository_rows = []
     artifact_rows: list[dict[str, Any]] = []
@@ -300,7 +326,27 @@ def main() -> int:
     summary_by_repo: dict[str, Counter] = defaultdict(Counter)
     tier_counts: Counter = Counter()
 
+    if selected_repo_ids:
+        snapshot_path = INVENTORY / "source_repositories.json"
+        if not snapshot_path.is_file():
+            parser.error("targeted refresh requires an existing inventory snapshot")
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        repository_rows.extend(
+            row for row in snapshot.get("repositories", [])
+            if row.get("id") not in selected_repo_ids
+        )
+        artifact_rows.extend(
+            row for row in load_jsonl(INVENTORY / "artifacts.jsonl")
+            if row.get("repo_id") not in selected_repo_ids
+        )
+        numerical_rows.extend(
+            row for row in load_jsonl(INVENTORY / "numerical_objects.jsonl")
+            if row.get("repo_id") not in selected_repo_ids
+        )
+
     for repo in config["repositories"]:
+        if selected_repo_ids and repo["id"] not in selected_repo_ids:
+            continue
         repo_path = source_root / Path(repo["local_relative_path"])
         exists = repo_path.exists()
         git_source = exists and repo_path.is_dir() and (repo_path / ".git").exists()
@@ -331,7 +377,11 @@ def main() -> int:
         if not exists:
             continue
 
-        for path in iter_artifacts(repo_path, repo.get("source_type", "repository")):
+        for path in iter_artifacts(
+            repo_path,
+            repo.get("source_type", "repository"),
+            bool(repo.get("git_tracked_only", False)),
+        ):
             relative = Path(path.name) if repo_path.is_file() else path.relative_to(repo_path)
             if not artifact_allowed(relative, repo):
                 continue
@@ -345,7 +395,6 @@ def main() -> int:
                 "size_bytes": path.stat().st_size,
                 "sha256": sha256(path),
             }
-            summary_by_repo[repo["id"]][kind] += 1
             if path.suffix.lower() == ".json":
                 try:
                     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -365,7 +414,6 @@ def main() -> int:
                                 "needs_curated_review": True,
                             }
                         )
-                        tier_counts[tier] += 1
                         counts = Counter()
                         for pointer, leaf_kind, leaf in walk_json(payload):
                             counts[leaf_kind] += 1
@@ -388,6 +436,15 @@ def main() -> int:
                                 )
                         row["json_leaf_counts"] = dict(counts)
             artifact_rows.append(row)
+
+    # Recompute aggregate counts from the merged inventory so a targeted refresh
+    # has exactly the same summary semantics as a full rebuild.
+    summary_by_repo = defaultdict(Counter)
+    tier_counts = Counter()
+    for artifact in artifact_rows:
+        summary_by_repo[artifact["repo_id"]][artifact["kind"]] += 1
+        if artifact.get("heuristic_tier"):
+            tier_counts[artifact["heuristic_tier"]] += 1
 
     artifact_rows_by_repo: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for artifact in artifact_rows:

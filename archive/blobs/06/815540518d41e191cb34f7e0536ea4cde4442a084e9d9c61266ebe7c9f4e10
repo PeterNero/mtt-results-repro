@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Independently verify the G3AX relative graph-ball top functional."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import ust_f1016_sparse_minor as sparse_minor
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ax_selected_dvr_top_functional_lift.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def poly_trim(values: list[int], prime: int) -> list[int]:
+    result = [value % prime for value in values]
+    while len(result) > 1 and result[-1] == 0:
+        result.pop()
+    return result
+
+
+def poly_divmod(
+    numerator: list[int], denominator: list[int], prime: int
+) -> tuple[list[int], list[int]]:
+    remainder = poly_trim(numerator, prime)
+    divisor = poly_trim(denominator, prime)
+    quotient = [0] * max(1, len(remainder) - len(divisor) + 1)
+    inverse = pow(divisor[-1], -1, prime)
+    while len(remainder) >= len(divisor) and remainder != [0]:
+        degree = len(remainder) - len(divisor)
+        coefficient = remainder[-1] * inverse % prime
+        quotient[degree] = coefficient
+        for index, value in enumerate(divisor):
+            remainder[index + degree] = (
+                remainder[index + degree] - coefficient * value
+            ) % prime
+        remainder = poly_trim(remainder, prime)
+    return poly_trim(quotient, prime), remainder
+
+
+def poly_gcd(left: list[int], right: list[int], prime: int) -> list[int]:
+    a, b = poly_trim(left, prime), poly_trim(right, prime)
+    while b != [0]:
+        _, remainder = poly_divmod(a, b, prime)
+        a, b = b, remainder
+    inverse = pow(a[-1], -1, prime)
+    return [(value * inverse) % prime for value in a]
+
+
+def derivative(poly: list[int], prime: int) -> list[int]:
+    return poly_trim(
+        [index * coefficient for index, coefficient in enumerate(poly)][1:],
+        prime,
+    )
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AX", "theorem id")
+    require(packet["status"].startswith("CLOSED_EXACT_"), "closed theorem")
+    for label, item in packet["inputs"].items():
+        path = ROOT / item["path"]
+        require(
+            path.is_file()
+            and sha256(path) == item["sha256"]
+            and path.stat().st_size == item["bytes"],
+            f"input {label}",
+        )
+
+    ring = packet["relative_local_ring"]
+    prime = ring["prime"]
+    polynomial = ring["minimal_polynomial_coefficients_ascending"]
+    require(prime == 101 and len(polynomial) == 7 and polynomial[-1] == 1, "ring")
+    require(
+        poly_gcd(polynomial, derivative(polynomial, prime), prime) == [1],
+        "separable residue polynomial",
+    )
+
+    transcript_path = ROOT / packet["inputs"]["G3AP_minor_transcript"]["path"]
+    scalars, vectors = sparse_minor.parse_output(transcript_path)
+    coordinates = int(scalars["TARGET_COORDINATES"])
+    normalization = int(
+        scalars["QUOTIENT_NORMALIZATION_TARGET_COORDINATE_ZERO_BASED"]
+    )
+    pivots = [int(value) for value in vectors["PIVOT_TARGET_COORDINATES_ZERO_BASED"]]
+    require(
+        len(pivots) == len(set(pivots)) == coordinates - 1
+        and sorted(set(range(coordinates)) - set(pivots)) == [normalization],
+        "minor omits exactly normalization coordinate",
+    )
+    target = packet["target_relation_map"]
+    require(
+        coordinates == target["target_coordinates"] == 39726
+        and normalization == target["normalization_coordinate_zero_based"] == 28267
+        and int(scalars["MINOR_SIZE"]) == target["selected_minor_rows"] == 39725
+        and int(scalars["MINOR_DETERMINANT_PACKED"])
+        == target["residue_determinant_packed"]
+        == 748486604801
+        and target["residue_determinant_nonzero"] is True,
+        "selected unit minor",
+    )
+
+    # Independent exact 3x3 analogue of the normalized unit-minor solve.
+    modulus = 101
+    matrix = [[2, 3], [5, 7]]
+    column = [11, 13]
+    determinant = (matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]) % modulus
+    require(determinant != 0, "model unit determinant")
+    inverse_det = pow(determinant, -1, modulus)
+    solution = [
+        (-(matrix[1][1] * column[0] - matrix[0][1] * column[1]) * inverse_det) % modulus,
+        (-(-matrix[1][0] * column[0] + matrix[0][0] * column[1]) * inverse_det) % modulus,
+    ]
+    require(
+        all(
+            (sum(matrix[row][j] * solution[j] for j in range(2)) + column[row])
+            % modulus
+            == 0
+            for row in range(2)
+        ),
+        "normalized unit-minor solve",
+    )
+
+    lift = packet["relative_unique_lift"]
+    require(
+        lift["formula"] == "t(u)[J]=-B(u)^(-1)c(u)"
+        and lift["relative_analytic_section"] is True
+        and lift["ambiguity_after_member_is_fixed"] == 0
+        and lift["member_ambiguity_removed"] is False,
+        "relative lift",
+    )
+    g3ad = json.loads(
+        (ROOT / packet["inputs"]["G3AD"]["path"]).read_text(encoding="utf-8")
+    )
+    g3aj = json.loads(
+        (ROOT / packet["inputs"]["G3AJ"]["path"]).read_text(encoding="utf-8")
+    )
+    require(
+        g3ad["frontier_delta"]["fixed_FQ_same_member_graph_prym_route_retired"]
+        and not g3aj["consequence"]["unique_or_canonical_coefficient_member_selected"],
+        "excluded fixed lift and open member selection",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    print(
+        "UST.G3AX graph-ball top functional: PASS "
+        "unique relative lift at omitted coordinate 28267"
+    )
+
+
+if __name__ == "__main__":
+    main()

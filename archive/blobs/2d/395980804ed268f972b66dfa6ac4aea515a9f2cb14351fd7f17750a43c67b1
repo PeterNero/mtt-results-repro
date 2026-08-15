@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Verify the direct 9H+L/L-truncated Hilbert candidate routes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+
+import build_ust_g3ap_hmajor_ltrunc_hilbert_hint as hint_builder
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_hilbert_hedge as runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+import ust_cayley_fiber2_reduction as reduction
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_loader_contract(candidate_engine: str = "hilbert") -> None:
+    require(
+        candidate_engine in ("hilbert", "sba", "sba_warm_hilbert"),
+        "loader candidate engine",
+    )
+    label = "graph_a"
+    order = permuted.PERMUTATIONS[label]
+    old_to_new, new_to_old = permuted.position_maps(order)
+    module_record = {
+        "path": str(runner.SOURCE.relative_to(runner.ROOT)).replace("\\", "/"),
+        "sha256": sha256(runner.SOURCE),
+        "bytes": runner.SOURCE.stat().st_size,
+        "computational_scalar_bound": runner.TARGET_SCALAR_DEGREE,
+        "valid_for_Cox_degree": [18, 2, 2],
+        "is_full_standard_basis": False,
+        "isSB_trust_attribute_stored": False,
+    }
+    permutation = {
+        "label": label,
+        "old_components_in_new_position_order": list(order),
+        "old_to_new": {str(key): value for key, value in old_to_new.items()},
+        "new_to_old": {str(key): value for key, value in new_to_old.items()},
+        "new_position_shifts": list(runner.mapped_shifts(order)),
+        "is_degree_preserving_module_isomorphism": True,
+    }
+    source = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-hmajor-direct-ltrunc-leading-squeeze-certified-top.v1",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_HMAJOR_DIRECT_LTRUNC_LEADING_SQUEEZE_TOP_DIMENSION_ONE",
+        "candidate_engine": candidate_engine,
+        "permutation": permutation,
+        "checks": {"fixture": True},
+        "guardrails": {"fixture": False},
+        "execution": {
+            "original_module_generator_count": 39,
+            "certified_module_cache": module_record,
+        },
+        "regrading": {"Cox_functional": "9H+L"},
+        "truncation": {"target_Cox_piece_of_boundary_submodule_is_zero": True},
+    }
+    with tempfile.TemporaryDirectory(dir=runner.STATE) as directory:
+        folder = Path(directory)
+        source_path = folder / "source.packet.json"
+        source_path.write_text(json.dumps(source), encoding="ascii")
+        source_record = {
+            "path": str(source_path.relative_to(runner.ROOT)).replace("\\", "/"),
+            "sha256": sha256(source_path),
+        }
+        canonical = {
+            "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+            "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+            "checks": {"fixture": True},
+            "guardrails": {"fixture": False},
+            "inputs": {
+                "fiber2_hmajor_direct_ltrunc_leading_squeeze_certified_top": source_record
+            },
+            "leading_ideal": {
+                "candidate_engine": candidate_engine,
+                "permutation": permutation,
+            },
+            "ordinary_top_piece": {
+                "basis": ["w^12*t2^4*s^2"],
+                "basis_old_component": 6,
+                "basis_new_component": old_to_new[6],
+                "basis_base_exponent": [0, 0, 0, 12, 0, 0, 4],
+            },
+        }
+        canonical_path = folder / "canonical.packet.json"
+        canonical_path.write_text(json.dumps(canonical), encoding="ascii")
+        original = reduction.CANONICAL
+        try:
+            reduction.CANONICAL = canonical_path
+            selected = reduction.selected_fiber2_reduction()
+        finally:
+            reduction.CANONICAL = original
+    require(
+        selected["kind"]
+        == "fiber2_target_reduction_set_in_polynomial_module_Hmajor_9HplusL_at_Cox_18_2_2"
+        and selected["base_cache"] is None
+        and selected["valid_through_scalar_degree"] is None
+        and selected["ring_declaration"] == runner.MODULE_RING
+        and selected["candidate_engine"] == candidate_engine,
+        "direct H-major loader",
+    )
+    reduction.require_response_target_coverage(selected)
+    scope = reduction.response_reduction_basis(selected)
+    require(
+        scope["coverage"]["kind"] == "exact_Cox_target"
+        and scope["coverage"]["computational_scalar_degree"]
+        == runner.TARGET_SCALAR_DEGREE
+        and scope["valid_through_scalar_degree"] is None,
+        "exact-target downstream scope",
+    )
+
+
+def main() -> None:
+    hint_packet, hint = hint_builder.load_hint()
+    require(
+        hint_packet["status"] == "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE"
+        and hint[0] == 1
+        and not any(hint_packet["guardrails"].values()),
+        "non-authoritative Hilbert hint",
+    )
+    source = runner.SOURCE.read_text(encoding="ascii")
+    for label, order in permuted.PERMUTATIONS.items():
+        old_to_new, _ = permuted.position_maps(order)
+        generators = runner.mapped_generators(order)
+        require(len(generators[:39]) == 39 and len(generators[39:]) == 165, f"{label} generators")
+        shifts = runner.mapped_shifts(order)
+        targets = [
+            runner.hmajor.H_WEIGHT * h_degree
+            + runner.hmajor.L_WEIGHT * l_degree
+            + shifts[new_position - 1]
+            for new_position, old_component in enumerate(order, start=1)
+            for _, _, (h_degree, l_degree), _ in [fiber2.COMPONENTS[old_component - 1]]
+        ]
+        require(
+            targets == [runner.TARGET_SCALAR_DEGREE] * 6,
+            f"{label} common target",
+        )
+        script = runner.candidate_script(
+            source,
+            label,
+            order,
+            runner.paths(label)["module_cache"],
+            hint,
+        )
+        require(runner.MODULE_RING in script, f"{label} ring")
+        require("qring q=" not in script, f"{label} direct presentation")
+        require("module G=std(MT,truncatedHilbert,selectedWeights);" in script, f"{label} Hilbert call")
+        require(f"degBound={runner.TARGET_SCALAR_DEGREE};" in script, f"{label} bound")
+        require(
+            f"w^12*t2^4*gen({old_to_new[6]})" in script,
+            f"{label} canonical component",
+        )
+        require(script.count("*gen(") >= 204, f"{label} complete module input")
+    verify_loader_contract()
+    print(
+        "UST.G3AP direct H-major/L-truncated Hilbert routes: PASS "
+        f"routes={len(permuted.PERMUTATIONS)} selected=39 truncators=165 "
+        f"target=174865 scalar=9H+L hint_terms={len(hint)} proof_status=CANDIDATE_ONLY"
+    )
+
+
+if __name__ == "__main__":
+    main()

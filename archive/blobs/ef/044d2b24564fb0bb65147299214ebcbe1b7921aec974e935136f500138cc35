@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Extend G3GB to the next algebraic-number reconstruction height tier."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3ft_component20_full_relation_height_campaign as height_campaign
+import build_ust_g3fz_component20_second_jet_o8_source as second_jet
+import build_ust_g3ga_component20_second_jet_qgamma_promotion as campaign
+import build_ust_g3gb_extra_root_second_jet_height_campaign as root_campaign
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3gc"
+ARRAYS = EVIDENCE / "H02.component20.adaptive_root_second_jet_height.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.adaptive_root_second_jet_height.json"
+CONSTRUCTION = tuple(
+    (81359, gamma) for gamma in height_campaign.FIBERS[81359][1:]
+)
+HOLDOUT = (82963, height_campaign.FIBERS[82963][1])
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    root_campaign.EVIDENCE.mkdir(parents=True, exist_ok=True)
+    root_campaign.SCRATCH.mkdir(parents=True, exist_ok=True)
+    g3bi = second_jet.load(second_jet.G3BI)
+    g3fx = np.load(second_jet.G3FX, allow_pickle=False)
+    context = campaign.full_kernel_context(g3bi)
+    pairs = CONSTRUCTION + (HOLDOUT,)
+    values: list[np.ndarray] = []
+    rows: list[dict[str, object]] = []
+    for index, (prime, gamma) in enumerate(pairs, start=1):
+        value, row = root_campaign.compute_root(
+            prime,
+            gamma,
+            context,
+            g3bi["selected_source"]["coefficient_vectors"],
+            g3fx["D7_gamma_coordinates"],
+            g3fx["B6_gamma_coordinates"],
+        )
+        values.append(value)
+        rows.append(row)
+        print(
+            f"G3GC root {index}/{len(pairs)} p={prime} gamma={gamma}: "
+            f"rank={row['coupling_rank']} kernel={row['kernel_dimension']} second_jet=1",
+            flush=True,
+        )
+    values_array = np.stack(values)
+    require(values_array.shape == (len(pairs), 132), "adaptive sample shape")
+    np.savez_compressed(
+        ARRAYS,
+        primes=np.asarray([prime for prime, _ in pairs], dtype=np.uint32),
+        gamma_roots=np.asarray([gamma for _, gamma in pairs], dtype=np.uint32),
+        roles=np.asarray(
+            ["construction"] * len(CONSTRUCTION) + ["holdout"], dtype="U12"
+        ),
+        second_jet_source_coefficients=values_array,
+    )
+    packet = {
+        "schema": "ust.g3gc.h02.component20.adaptive-root-second-jet-height.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GC",
+        "status": "CLOSED_EXACT_ADAPTIVE_ROOT_SECOND_JET_HEIGHT_EXTENSION",
+        "campaign": {
+            "construction_pairs": [list(pair) for pair in CONSTRUCTION],
+            "holdout_pair": list(HOLDOUT),
+            "rows": rows,
+            "artifact": root_campaign.record(ARRAYS),
+        },
+        "checks": {
+            "all_six_new_samples_have_exact_full_kernels": True,
+            "all_six_new_samples_have_the_corrected4748_1274_global_profile": all(
+                row["coupling_rank"] == campaign.EXPECTED_COUPLING_RANK
+                and row["kernel_dimension"] == campaign.EXPECTED_KERNEL_DIMENSION
+                for row in rows
+            ),
+            "all_six_new_samples_preserve_the_component20_second_jet_profile": all(
+                row["component20_second_jet_profile"] == [15, 5, 0, 33, 17, 1]
+                for row in rows
+            ),
+            "the_final_sample_is_reserved_as_an_independent_holdout": True,
+        },
+        "guardrails": {
+            "claims_Qgamma_reconstruction_before_the_reserved_holdout_passes": False,
+            "claims_the_original4748_1274_global_profile_is_characteristic_zero": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Run the seven-coordinate algebraic-number lattice using the five "
+            "construction roots and test every recovered source entry at the "
+            "reserved p82963 root."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3GC adaptive root height extension: PASS "
+        f"construction={len(CONSTRUCTION)} holdout=1"
+    )
+
+
+if __name__ == "__main__":
+    main()

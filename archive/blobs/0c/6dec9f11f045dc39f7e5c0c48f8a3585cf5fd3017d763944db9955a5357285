@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""Certify the weighted G3AP candidate by an exact lower/upper target squeeze."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import build_ust_g3ap_selected_cayley_ordinary_top_lower_bound as lower
+import run_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_hedge as candidate_runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_qslimgb_hedge as qslimgb_runner
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+CANDIDATE = candidate_runner.PACKET
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_certify.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_certify.singular.out"
+BASE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_certified_base.ssi"
+MODULE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_certified_degree254.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_certified.packet.json"
+LOWER_VERIFIER = ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_lower_bound.py"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def checked(record: dict, label: str) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file() and sha256(path) == record["sha256"], label)
+    return path
+
+
+def certification_script(
+    source: str,
+    candidate_base_cache: Path = candidate_runner.BASE_CACHE,
+    candidate_module_cache: Path = candidate_runner.MODULE_CACHE,
+) -> str:
+    generators = ",\n  ".join(qring.derivative_generators())
+    representatives_before, representatives_after = qring.derivative_representatives()
+    shifts = ",".join(str(value) for value in weighted.COMPONENT_SHIFTS)
+    candidate_base_relative = str(candidate_base_cache.relative_to(ROOT)).replace("\\", "/")
+    candidate_module_relative = str(candidate_module_cache.relative_to(ROOT)).replace("\\", "/")
+    base_relative = str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    module_relative = str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    return weighted.weighted_base_prefix(source) + f'''option(noredTail);
+{representatives_before}
+ideal I0=K,E,C;
+ideal G0=std(I0);
+def cachedIdeal=read("ssi:r {candidate_base_relative}");
+ideal GI=cachedIdeal;
+int i;
+print("G3AP_F2_WQHCERT_BASE_CANDIDATE_IS_SB_ATTR="+string(attrib(GI,"isSB")));
+print("G3AP_F2_WQHCERT_BASE_CANDIDATE_SIZE="+string(size(GI)));
+for (i=1;i<=size(GI);i++)
+{{ print("G3AP_F2_WQHCERT_BASE_CANDIDATE_LEADER_"+string(i)+"_EXP="+string(leadexp(GI[i]))); }}
+ideal GICheck=std(GI);
+int equalBase=1;
+for (i=1;i<=size(G0);i++)
+{{ if (reduce(G0[i],GICheck)!=0) {{ equalBase=0; }} }}
+for (i=1;i<=size(GICheck);i++)
+{{ if (reduce(GICheck[i],G0)!=0) {{ equalBase=0; }} }}
+print("G3AP_F2_WQHCERT_BASE_IDEAL_EQUAL="+string(equalBase));
+print("G3AP_F2_WQHCERT_BASE_GB_SIZE="+string(size(GICheck)));
+for (i=1;i<=size(GICheck);i++)
+{{ print("G3AP_F2_WQHCERT_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GICheck[i]))); }}
+attrib(GICheck,"isSB",0);
+write("ssi:w {base_relative}",GICheck);
+attrib(GICheck,"isSB",1);
+qring q=GICheck;
+{representatives_after}
+module M=
+  {generators};
+intvec componentShifts={shifts};
+attrib(M,"isHomog",componentShifts);
+def cachedCandidate=read("ssi:r {candidate_module_relative}");
+module candidateBasis=cachedCandidate;
+print("G3AP_F2_WQHCERT_MODULE_CANDIDATE_IS_SB_ATTR="+string(attrib(candidateBasis,"isSB")));
+attrib(candidateBasis,"isHomog",componentShifts);
+degBound={weighted.TARGET_SCALAR_DEGREE};
+module G=candidateBasis;
+attrib(G,"isSB",1);
+int badGeneratorRemainders=0;
+for (i=1;i<=size(M);i++)
+{{ if (reduce(M[i],G)!=0) {{ badGeneratorRemainders=badGeneratorRemainders+1; }} }}
+print("G3AP_F2_WQHCERT_BOUND="+string(degBound));
+print("G3AP_F2_WQHCERT_ORIGINAL_GENERATORS="+string(size(M)));
+print("G3AP_F2_WQHCERT_BAD_GENERATOR_REMAINDERS="+string(badGeneratorRemainders));
+print("G3AP_F2_WQHCERT_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("G3AP_F2_WQHCERT_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("G3AP_F2_WQHCERT_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {module_relative}",G);
+print("G3AP_F2_WQHCERT_PASS");
+quit;
+'''
+
+
+def parse_leaders(
+    raw: str,
+) -> tuple[list[tuple[int, ...]], list[tuple[int, tuple[int, ...]]]]:
+    normalized = raw.replace("G3AP_F2_WQHCERT_", "G3AP_F2_QRING_")
+    return qring.parse_leaders(normalized)
+
+
+def parse_candidate_base_leaders(raw: str, prefix: str) -> list[tuple[int, ...]]:
+    count_match = re.search(
+        rf"^{re.escape(prefix)}_BASE_CANDIDATE_SIZE=(\d+)$", raw, re.MULTILINE
+    )
+    require(count_match is not None, "candidate base size")
+    leaders = {
+        int(match.group(1)): tuple(int(value) for value in match.group(2).split(","))
+        for match in re.finditer(
+            rf"^{re.escape(prefix)}_BASE_CANDIDATE_LEADER_(\d+)_EXP=([0-9,]+)$",
+            raw,
+            re.MULTILINE,
+        )
+    }
+    count = int(count_match.group(1))
+    require(set(leaders) == set(range(1, count + 1)), "candidate base leaders")
+    return [leaders[index] for index in range(1, count + 1)]
+
+
+def same_monomial_ideal(
+    left: list[tuple[int, ...]], right: list[tuple[int, ...]]
+) -> bool:
+    def divides(first: tuple[int, ...], second: tuple[int, ...]) -> bool:
+        return all(a <= b for a, b in zip(first, second))
+
+    return all(any(divides(other, item) for other in right) for item in left) and all(
+        any(divides(other, item) for other in left) for item in right
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    parser.add_argument(
+        "--candidate-route",
+        choices=("hilbert", "qslimgb"),
+        default="hilbert",
+    )
+    args = parser.parse_args()
+    weighted.validate_grading()
+    subprocess.run([sys.executable, str(LOWER_VERIFIER)], cwd=ROOT, check=True)
+    lower_packet = json.loads(lower.OUT.read_text(encoding="ascii"))
+    require(
+        lower_packet["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_AT_LEAST_ONE"
+        and all(lower_packet["checks"].values())
+        and not any(lower_packet["guardrails"].values()),
+        "selected ordinary-top lower bound",
+    )
+    candidate_path = CANDIDATE if args.candidate_route == "hilbert" else qslimgb_runner.PACKET
+    candidate = json.loads(candidate_path.read_text(encoding="ascii"))
+    expected_schema = (
+        "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-weighted-hilbert-candidate.v1"
+        if args.candidate_route == "hilbert"
+        else "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-qslimgb-candidate.v1"
+    )
+    require(
+        candidate["schema"] == expected_schema,
+        "candidate schema",
+    )
+    require(
+        candidate["status"]
+        in (
+            "CANDIDATE_REQUIRES_NO_HINT_RECONSTRUCTION_IN_THE_SAME_POSITIVE_COX_ORDER",
+            "CANDIDATE_REQUIRES_INDEPENDENT_SELECTED_TARGET_CERTIFICATION",
+        ),
+        "candidate status",
+    )
+    require(all(candidate["checks"].values()), "candidate checks")
+    require(not any(candidate["guardrails"].values()), "candidate guardrails")
+    source_path = checked(candidate["inputs"]["selected_source"], "selected source")
+    candidate_script = checked(candidate["execution"]["script"], "candidate script")
+    checked(candidate["execution"]["output"], "candidate output")
+    candidate_module = checked(candidate["execution"]["candidate_module_cache"], "candidate module")
+    source = source_path.read_text(encoding="ascii")
+    if args.candidate_route == "hilbert":
+        checked(candidate["inputs"]["predecessor_hint"], "weighted hint packet")
+        candidate_base = checked(
+            candidate["execution"]["untrusted_base_cache"], "candidate base"
+        )
+        _, hilbert = weighted.load_hint()
+        expected_script = candidate_runner.candidate_script(source, hilbert)
+        expected_base = candidate_runner.BASE_CACHE
+        expected_module = candidate_runner.MODULE_CACHE
+    else:
+        candidate_base = checked(
+            candidate["inputs"]["weighted_base_cache"], "candidate base"
+        )
+        expected_script = qslimgb_runner.candidate_script(source)
+        expected_base = qslimgb_runner.BASE_CACHE
+        expected_module = qslimgb_runner.MODULE_CACHE
+    require(
+        fiber2.candidate_script_matches(
+            candidate_script.read_text(encoding="ascii"),
+            expected_script,
+            bool(candidate["execution"].get("leader_recovery_used")),
+        ),
+        "candidate script reconstruction",
+    )
+    require(candidate_base == expected_base, "candidate base path")
+    require(candidate_module == expected_module, "candidate module path")
+    SCRIPT.write_text(
+        certification_script(source, candidate_base, candidate_module), encoding="ascii"
+    )
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)}")
+        return
+    BASE_CACHE.unlink(missing_ok=True)
+    MODULE_CACHE.unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "weighted candidate certification execution")
+    require("G3AP_F2_WQHCERT_PASS" in completed.stdout, "certification pass")
+    expected = {
+        "G3AP_F2_WQHCERT_BASE_CANDIDATE_IS_SB_ATTR": 0,
+        "G3AP_F2_WQHCERT_BASE_IDEAL_EQUAL": 1,
+        "G3AP_F2_WQHCERT_MODULE_CANDIDATE_IS_SB_ATTR": 0,
+        "G3AP_F2_WQHCERT_ORIGINAL_GENERATORS": 21,
+        "G3AP_F2_WQHCERT_BAD_GENERATOR_REMAINDERS": 0,
+    }
+    for label, value in expected.items():
+        require(
+            re.search(rf"^{label}={value}$", completed.stdout, re.MULTILINE)
+            is not None,
+            label,
+        )
+    require(BASE_CACHE.is_file() and BASE_CACHE.stat().st_size > 0, "certified base")
+    require(MODULE_CACHE.is_file() and MODULE_CACHE.stat().st_size > 0, "certified module")
+    base, module = parse_leaders(completed.stdout)
+    candidate_base_leaders = parse_candidate_base_leaders(
+        completed.stdout, "G3AP_F2_WQHCERT"
+    )
+    require(
+        same_monomial_ideal(candidate_base_leaders, base),
+        "candidate base leading ideal",
+    )
+    standards, sectors = fiber2.enumerate_target(qring.combined_leaders(base, module))
+    candidate_runner.annotate_weighted_sectors(sectors)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(standards == [fiber2.EXPECTED_STANDARD], "leading-submodule upper bound one")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-weighted-leading-squeeze-certified-top.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP.FIBER2.QRING.WEIGHTED-LEADING-SQUEEZE.CERTIFIED",
+        "status": "CLOSED_EXACT_SELECTED_F1016_FIBER2_QRING_WEIGHTED_LEADING_SQUEEZE_TOP_DIMENSION_ONE",
+        "inputs": {
+            "candidate": {
+                "path": str(candidate_path.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(candidate_path),
+            },
+            "selected_source": {
+                "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SOURCE),
+            },
+            "selected_ordinary_top_lower_bound": {
+                "path": str(lower.OUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(lower.OUT),
+            },
+        },
+        "grading": candidate["grading"],
+        "execution": {
+            "script": {
+                "path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SCRIPT),
+            },
+            "output": {
+                "path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(OUTPUT),
+            },
+            "elapsed_seconds": time.time() - started,
+            "candidate_engine": args.candidate_route,
+            "base_basis_size": len(base),
+            "original_module_generator_count": 21,
+            "certified_target_reduction_set_size": len(module),
+            "weighted_scalar_degree_bound": weighted.TARGET_SCALAR_DEGREE,
+            "certified_base_cache": {
+                "path": str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BASE_CACHE),
+                "bytes": BASE_CACHE.stat().st_size,
+                "isSB_trust_attribute_stored": False,
+            },
+            "certified_module_cache": {
+                "path": str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(MODULE_CACHE),
+                "bytes": MODULE_CACHE.stat().st_size,
+                "valid_through_weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+                "valid_for_Cox_degree": [18, 2, 2],
+                "is_full_standard_basis": False,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "fiber_degree_two_module": {
+            "base_quotient": "B/(K,E,C)",
+            "components": [name for _, name, _, _ in fiber2.COMPONENTS],
+            "component_weighted_shifts": list(weighted.COMPONENT_SHIFTS),
+            "sectors": sectors,
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "H_plus_L_scalar_degree": 44,
+            "weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE,
+            "enumerated_monomials": total,
+            "dimension": 1,
+            "basis": ["w^12*t2^4*s^2"],
+            "basis_component": "s2",
+            "basis_base_exponent": list(fiber2.EXPECTED_STANDARD[1]),
+        },
+        "checks": {
+            "selected_source_is_hash_bound": True,
+            "candidate_base_cache_is_reloaded_without_isSB_trust": True,
+            "selected_base_ideal_is_recomputed_from_K_E_C": True,
+            "candidate_base_and_selected_base_ideals_are_mutually_equal": True,
+            "candidate_base_and_recomputed_base_have_the_same_leading_ideal": True,
+            "candidate_module_cache_is_reloaded_without_isSB_trust": True,
+            "component_shifts_are_reasserted_before_target_reduction": True,
+            "candidate_elements_belong_to_the_selected_module_by_exact_selected_engine_provenance": True,
+            "all_21_original_selected_generators_reduce_to_zero": True,
+            "candidate_elements_and_original_generators_generate_the_same_module": True,
+            "positive_regrading_preserves_the_Cox_graded_quotient_dimension": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "candidate_leading_submodule_leaves_at_most_one_target_class": True,
+            "selected_toric_residue_lower_bound_supplies_at_least_one_target_class": True,
+            "selected_ordinary_top_piece_has_dimension_one": True,
+            "no_predecessor_entry_is_used_as_selected_source_evidence": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_the_target_reduction_set_is_a_full_standard_basis": False,
+            "claims_an_unrestricted_module_basis": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+            "claims_characteristic_zero_promotion": False,
+        },
+        "next_required_object": (
+            "Independently verify this certificate, adopt canonical G3AP, then "
+            "execute G3AM/G3AN response ranks."
+        ),
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP weighted qring leading-squeeze certification: PASS "
+        f"base={len(base)} reducer={len(module)} monomials={total} dimension=1"
+    )
+
+
+if __name__ == "__main__":
+    main()

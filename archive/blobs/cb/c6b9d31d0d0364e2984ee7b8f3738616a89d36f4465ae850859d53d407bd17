@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Independent replay for the G3BH direct-containment no-go."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3bh_fixed_b89_root_containment_nogo as builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bh_fixed_b89_root_containment_nogo.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = load(PACKET)
+    evidence = load(builder.EVIDENCE)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bh-fixed-b89-root-containment-nogo.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_DIRECT_ROOT_CONTAINMENT_NOGO_NONTRIVIAL_TRANSPORT_REQUIRED_TRANSPORT_AND_READOUT_OPEN",
+        "G3BH packet",
+    )
+    require(all(packet["checks"].values()), "G3BH checks")
+    require(not any(packet["guardrails"].values()), "G3BH guardrails")
+    require(packet["inputs"]["finite_evidence"]["sha256"] == sha256(builder.EVIDENCE), "evidence lock")
+    for name, path in (
+        ("G3BG", builder.G3BG),
+        ("G3AC", builder.G3AC),
+        ("G3AJ", builder.G3AJ),
+        ("G3AQ", builder.G3AQ),
+    ):
+        require(sha256(path) == builder.EXPECTED_HASHES[name], f"{name} lock")
+
+    root = evidence["root_model"]
+    require(
+        root["G3_restriction_coefficients_by_t_power"] == [-2, 0, -1, 0, 2, -2, -1]
+        and root["w_restriction_coefficients_by_t_power"] == [2, 0, 1, 0, -2, 2, 1],
+        "root restriction",
+    )
+
+    restrictions = evidence["fixed_B89_pencil_restrictions"]
+    f0 = [[builder.k(entry) for entry in row] for row in restrictions["F0_rows"]]
+    f1 = [[builder.k(entry) for entry in row] for row in restrictions["F1_rows"]]
+
+    def minor(row_indices: list[int]) -> builder.Polynomial:
+        return builder.determinant3(
+            [
+                [[f0[column][row], f1[column][row]] for column in range(3)]
+                for row in row_indices
+            ]
+        )
+
+    minor_012 = minor([18, 17, 16])
+    minor_013 = minor([18, 17, 15])
+    fixed = packet["fixed_B89_pencil_nogo"]
+    require(
+        builder.serialize_polynomial(minor_012) == fixed["minor_012_coefficients_low_to_high"]
+        and builder.serialize_polynomial(minor_013) == fixed["minor_013_coefficients_low_to_high"],
+        "pencil minors",
+    )
+    gcd, bezout_012, bezout_013 = builder.p_xgcd(minor_012, minor_013)
+    require(gcd == [builder.ONE], "coprime minors")
+    require(
+        builder.p_add(
+            builder.p_mul(bezout_012, minor_012),
+            builder.p_mul(bezout_013, minor_013),
+        )
+        == [builder.ONE],
+        "Bezout replay",
+    )
+    require(
+        builder.serialize_polynomial(bezout_012) == fixed["Bezout_for_minor_012"]
+        and builder.serialize_polynomial(bezout_013) == fixed["Bezout_for_minor_013"],
+        "serialized Bezout certificate",
+    )
+    require(minor_013[0] != builder.ZERO, "selected residue rank-three minor")
+
+    s_union = [
+        builder.k(entry)
+        for entry in evidence["principal_graph_slice_restriction"]["s_union_coefficients_by_t_power"]
+    ]
+    matrix = [
+        [f0[column][row] for column in range(3)]
+        + [
+            s_union[row - shift]
+            if 0 <= row - shift < len(s_union)
+            else builder.ZERO
+            for shift in range(7)
+        ]
+        for row in range(19)
+    ]
+    principal = packet["principal_graph_slice_nogo"]
+    require(builder.matrix_rank(matrix) == principal["rank"] == 10, "principal rank")
+    witness = [matrix[index] for index in principal["nonzero_minor_rows"]]
+    require(
+        list(builder.determinant(witness)) == principal["nonzero_minor_determinant"]
+        and tuple(principal["nonzero_minor_determinant"]) != builder.ZERO,
+        "principal determinant witness",
+    )
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BH"]["state"]
+        == "closed_exact_direct_root_containment_nogo_transport_required"
+        and gates["UST.G3BH"]["depends_on"] == ["UST.G3BG", "UST.G3AC", "UST.G3AJ", "UST.G3AQ"],
+        "G3BH frontier gate",
+    )
+    require(
+        "identity-marking" in frontier["frontier_delta_g3bh"]
+        and "nonconstant" in frontier["next_action"]
+        and "G3BH" in frontier["next_action"],
+        "G3BH frontier delta",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BH" in document.read_text(encoding="utf-8"), f"G3BH integration {document.name}")
+    theorem = (
+        ROOT
+        / "UST_G3BH_FIXED_B89_ROOT_GRAPH_DIRECT_CONTAINMENT_NOGO_AND_TRANSPORT_NECESSITY_THEOREM_v1.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "cannot be the identity" in theorem
+        and "does not" in theorem
+        and "transport only the one sparse integral class" in theorem,
+        "G3BH theorem boundary",
+    )
+    print("UST.G3BH fixed-B89 root containment: PASS no-go and transport necessity replay")
+
+
+if __name__ == "__main__":
+    main()

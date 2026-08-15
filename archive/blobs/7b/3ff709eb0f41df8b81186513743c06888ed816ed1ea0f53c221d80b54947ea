@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Construct a pairing-one dual from the pairing-four root tube and first odd residue."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+from run_ust_g3bc_pairing_one_bezout_dual import combine_period_columns
+
+
+ROOT = Path(__file__).resolve().parent
+INPUT_SCHEMA = "mtt.unified-source.g3bf-parity-first-dual-input.v1"
+ROOT_CERTIFICATE_SCHEMA = "mtt.unified-source.g3bf-pairing-four-root-certificate.v1"
+MERIDIAN_CERTIFICATE_SCHEMA = "mtt.unified-source.g3bc-integral-affine-residue-certificate.v1"
+PRODUCTION_STATUS = "PRODUCTION_PARITY_FIRST_RESIDUE_PAYLOAD"
+TEST_STATUS = "TEST_ONLY_SYNTHETIC_PARITY_FIRST_PAYLOAD"
+DIMENSION = 248
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def resolve_certificate(payload_path: Path, value: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = payload_path.resolve().parent / path
+    return path.resolve()
+
+
+def relative_to_output(path: Path, output_path: Path) -> str:
+    try:
+        return path.resolve().relative_to(output_path.resolve().parent).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def canonical_mod_four_coefficients(odd_residue: int) -> tuple[int, int]:
+    """Return x,y with 4*x + odd_residue*y = 1 and y in {+1,-1}."""
+    require(isinstance(odd_residue, int) and odd_residue % 2, "odd integral residue")
+    residue_mod_four = odd_residue % 4
+    require(residue_mod_four in (1, 3), "odd residue modulo four")
+    meridian_coefficient = 1 if residue_mod_four == 1 else -1
+    root_coefficient = (1 - meridian_coefficient * odd_residue) // 4
+    require(
+        4 * root_coefficient + odd_residue * meridian_coefficient == 1,
+        "mod-four Bezout identity",
+    )
+    return root_coefficient, meridian_coefficient
+
+
+def certificate_record(path: Path, output_path: Path) -> dict[str, Any]:
+    return {
+        "path": relative_to_output(path, output_path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def execute(payload_path: Path, output_path: Path, allow_test_only: bool = False) -> dict[str, Any]:
+    payload = load(payload_path)
+    require(payload.get("schema") == INPUT_SCHEMA, "G3BF input schema")
+    status = payload.get("status")
+    require(status in (PRODUCTION_STATUS, TEST_STATUS), "known G3BF payload status")
+    test_only = status == TEST_STATUS
+    require(not test_only or allow_test_only, "test-only fixture requires --allow-test-only")
+
+    bindings = payload.get("bindings")
+    require(isinstance(bindings, dict), "source bindings")
+    required_bindings = (
+        "K3_delta_orientation_sha256",
+        "K3_picard_sha256",
+        "B85_index_four_sha256",
+        "B86_root_tube_sha256",
+        "B87_source_sha256",
+        "G3BB_target_sha256",
+        "G3BC_packet_sha256",
+        "B89_pencil_sha256",
+    )
+    for key in required_bindings:
+        require(isinstance(bindings.get(key), str) and len(bindings[key]) == 64, f"binding {key}")
+
+    root_row = payload.get("root_tube_row")
+    require(isinstance(root_row, dict), "pairing-four root row")
+    root_path = resolve_certificate(payload_path, root_row["certificate_path"])
+    require(sha256(root_path) == root_row.get("certificate_sha256"), "root certificate hash")
+    root_certificate = load(root_path)
+    require(root_certificate.get("schema") == ROOT_CERTIFICATE_SCHEMA, "root certificate schema")
+    require(all(root_certificate.get("checks", {}).values()), "root certificate checks")
+    require(root_certificate.get("bindings") == bindings, "root source bindings")
+    require(root_certificate.get("tube_id") == root_row.get("tube_id"), "root tube identity")
+    require(root_certificate.get("integral_affine_pairing") == 4, "root pairing four")
+    require(root_row.get("integral_affine_pairing") == 4, "payload root pairing four")
+    require(bool(root_certificate.get("test_only")) == test_only, "root evidence tier")
+    require(
+        root_certificate.get("normalization_tier")
+        == "INTEGRAL_ALGEBRAIC_PRODUCT_TUBE_IN_FIXED_B89_MARKING",
+        "root fixed-B89 integral normalization",
+    )
+    common_marking = root_certificate.get("common_B89_marking")
+    require(isinstance(common_marking, dict), "root common B89 marking")
+    require(
+        common_marking.get("base_pencil_sha256") == bindings["B89_pencil_sha256"],
+        "root B89 pencil binding",
+    )
+    require(
+        isinstance(common_marking.get("transport_method"), str)
+        and common_marking["transport_method"],
+        "root transport method",
+    )
+    require(
+        isinstance(common_marking.get("transport_certificate_sha256"), str)
+        and len(common_marking["transport_certificate_sha256"]) == 64,
+        "root transport certificate hash",
+    )
+    require(
+        root_certificate["checks"].get("the_root_is_expressed_in_the_fixed_B89_integral_marking"),
+        "root common-marking check",
+    )
+
+    rows = payload.get("affine_residue_rows")
+    require(isinstance(rows, list), "affine residue rows")
+    require(
+        [row.get("order_index") for row in rows] == list(range(len(rows))),
+        "canonical B89 residue order",
+    )
+    require(len({row.get("meridian_id") for row in rows}) == len(rows), "unique meridian ids")
+
+    g3bc_bindings = {
+        "B87_source_sha256": bindings["B87_source_sha256"],
+        "G3BB_target_sha256": bindings["G3BB_target_sha256"],
+        "B89_pencil_sha256": bindings["B89_pencil_sha256"],
+    }
+    residue_certificates: list[dict[str, Any]] = []
+    residue_certificate_paths: list[Path] = []
+    residues: list[int] = []
+    for row in rows:
+        path = resolve_certificate(payload_path, row["certificate_path"])
+        require(sha256(path) == row.get("certificate_sha256"), "meridian certificate hash")
+        certificate = load(path)
+        require(certificate.get("schema") == MERIDIAN_CERTIFICATE_SCHEMA, "meridian certificate schema")
+        require(all(certificate.get("checks", {}).values()), "meridian certificate checks")
+        require(
+            certificate.get("normalization_tier")
+            == "INTEGRAL_PICARD_LEFSCHETZ_AFFINE_PAIRING",
+            "integral Picard-Lefschetz normalization",
+        )
+        require(certificate.get("bindings") == g3bc_bindings, "same B87/G3BB/B89 bindings")
+        require(certificate.get("meridian_id") == row.get("meridian_id"), "meridian identity")
+        value = certificate.get("integral_affine_pairing")
+        require(isinstance(value, int), "integral affine residue")
+        require(row.get("integral_affine_pairing") == value, "payload/certificate residue")
+        require(bool(certificate.get("test_only")) == test_only, "meridian evidence tier")
+        residue_certificates.append(certificate)
+        residue_certificate_paths.append(path)
+        residues.append(value)
+
+    odd_index = next((index for index, value in enumerate(residues) if value % 2), None)
+    base = {
+        "schema": "mtt.unified-source.g3bf-parity-first-dual-output.v1",
+        "test_only": test_only,
+        "input": certificate_record(payload_path.resolve(), output_path),
+        "bindings": bindings,
+        "root_certificate": certificate_record(root_path, output_path),
+        "verified_residue_certificate_count": len(rows),
+        "verified_even_prefix_length": len(rows) if odd_index is None else odd_index,
+    }
+    if odd_index is None:
+        result = {
+            **base,
+            "status": (
+                "TEST_ONLY_FIRST_ODD_RESIDUE_NOT_SUPPLIED"
+                if test_only
+                else "PRODUCTION_FIRST_ODD_RESIDUE_NOT_YET_SUPPLIED"
+            ),
+            "production_promotable": False,
+            "canonical_selection": {
+                "rule": "first integrally normalized odd residue in fixed B89 order",
+                "first_odd_order_index": None,
+                "pairing_one_dual_emitted": False,
+            },
+            "checks": {
+                "the_pairing_four_root_is_hash_bound": True,
+                "every_supplied_meridian_residue_is_hash_bound_and_integral": True,
+                "every_supplied_meridian_residue_is_even": True,
+                "the_full_finite_inventory_is_proved_to_contain_an_odd_residue": True,
+            },
+            "guardrails": {
+                "claims_a_pairing_one_dual_is_emitted": False,
+                "claims_beta_C_is_decided": False,
+                "claims_B_ETA9_02_is_closed": False,
+            },
+        }
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(result, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+        return result
+
+    odd_row = rows[odd_index]
+    odd_certificate = residue_certificates[odd_index]
+    odd_path = residue_certificate_paths[odd_index]
+    odd_residue = residues[odd_index]
+    root_coefficient, meridian_coefficient = canonical_mod_four_coefficients(odd_residue)
+    defect = 4 * root_coefficient + odd_residue * meridian_coefficient
+    require(defect == 1, "unit relation defect")
+
+    used_coefficients: list[int] = []
+    used_certificates: list[dict[str, Any]] = []
+    combination = []
+    if root_coefficient:
+        used_coefficients.append(root_coefficient)
+        used_certificates.append(root_certificate)
+        combination.append(
+            {
+                "tube_id": root_row["tube_id"],
+                "coefficient": root_coefficient,
+                "integral_affine_pairing": 4,
+            }
+        )
+    used_coefficients.append(meridian_coefficient)
+    used_certificates.append(odd_certificate)
+    combination.append(
+        {
+            "meridian_id": odd_row["meridian_id"],
+            "coefficient": meridian_coefficient,
+            "integral_affine_pairing": odd_residue,
+        }
+    )
+    readout = combine_period_columns(used_coefficients, used_certificates)
+    production_promotable = not test_only
+    result = {
+        **base,
+        "status": (
+            "TEST_ONLY_PARITY_FIRST_PAIRING_ONE_DUAL_EXECUTOR_PASS"
+            if test_only
+            else "PRODUCTION_PARITY_FIRST_PAIRING_ONE_DUAL_AND_248_READOUT_EMITTED"
+            if readout is not None
+            else "PRODUCTION_PARITY_FIRST_PAIRING_ONE_DUAL_EMITTED_READOUT_OPEN"
+        ),
+        "production_promotable": production_promotable,
+        "selected_odd_certificate": certificate_record(odd_path, output_path),
+        "canonical_selection": {
+            "rule": "first integrally normalized odd residue in fixed B89 order",
+            "first_odd_order_index": odd_index,
+            "first_odd_meridian_id": odd_row["meridian_id"],
+            "first_odd_residue": odd_residue,
+            "root_coefficient": root_coefficient,
+            "meridian_coefficient": meridian_coefficient,
+            "selected_source_count": len(combination),
+            "pairing_one_dual_emitted": True,
+        },
+        "finite_tube_combination": combination,
+        "unit_certificate": {
+            "identity": f"4*({root_coefficient})+({odd_residue})*({meridian_coefficient})=1",
+            "relation_defect": defect,
+            "integral": True,
+            "same_oriented_source_fiber_as_Z_phys": True,
+            "same_beta_C_quotient_class_as_Z_phys": True,
+        },
+        "deligne_readout": {
+            "coordinate_count": DIMENSION if readout is not None else 0,
+            "complex_interval_coordinates": readout or [],
+            "status": "CLOSED_CERTIFIED_248_INTERVALS" if readout is not None else "OPEN",
+        },
+        "checks": {
+            "the_pairing_four_root_is_hash_bound": True,
+            "every_supplied_meridian_residue_is_hash_bound_and_integral": True,
+            "the_first_odd_residue_is_selected_without_a_fit_or_search_knob": True,
+            "the_mod_four_coefficients_are_canonical": True,
+            "the_emitted_integral_combination_has_source_pairing_exactly_one": True,
+            "the_replacement_has_the_same_beta_C_quotient_class_as_Z_phys": True,
+            "all_used_readout_columns_are_combined_by_exact_outward_interval_arithmetic": readout
+            is not None,
+        },
+        "guardrails": {
+            "claims_the_test_fixture_is_physical": False,
+            "claims_beta_C_is_decided": False,
+            "claims_B_ETA9_02_is_closed": False,
+            "claims_coordinate_level_G3AU_descent": False,
+        },
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    return result
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("payload", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--allow-test-only", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    result = execute(args.payload, args.output, args.allow_test_only)
+    selection = result["canonical_selection"]
+    print(
+        "UST.G3BF parity-first dual: PASS "
+        f"odd_index={selection['first_odd_order_index']} "
+        f"emitted={selection['pairing_one_dual_emitted']}"
+    )
+
+
+if __name__ == "__main__":
+    main()

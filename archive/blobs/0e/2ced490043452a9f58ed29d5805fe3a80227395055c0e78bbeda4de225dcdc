@@ -1,0 +1,47 @@
+# UST.G3DR H02 Five-Prime Reconstruction Holdout Theorem v1
+
+## Status
+
+`CLOSED_EXACT_FIVE_PRIME_RECONSTRUCTION_WITH_INDEPENDENT_SIXTH_PRIME_HOLDOUT`
+
+G3DR crosses the signed-64-bit boundary with a native signed-128-bit exact
+executor. It reconstructs each of the 46,032,168 normalized H02 kernel
+coefficients from five complete split-prime archives, then tests the candidate
+against the independently reserved sixth prime 69,011.
+
+## Exact certificate
+
+The executor uses sequential CRT and extended-Euclidean rational
+reconstruction inside
+
+```text
+|numerator| <= floor(sqrt((M-1)/2)),
+1 <= denominator <= floor(sqrt((M-1)/2)).
+```
+
+It persists separate candidate and holdout-pass masks for every coefficient.
+All nonzero passing fractions are emitted with their canonical global index,
+signed numerator and positive denominator. Zero passes remain implicit in the
+pass mask.
+
+The sixth prime is not used until all five-prime candidates are fixed.
+
+## Boundary
+
+This is exact finite reconstruction and out-of-sample validation. It is not a
+height theorem or an identity over `Q(gamma)`. G3DR does not prove the
+characteristic-zero rank, the second Woodbury factorization, source
+contraction, path integration, integral marking, readout or `beta_C`.
+
+The next stage uses the same 128-bit executor with six construction primes and
+reserves prime 72,271 as the seventh-prime holdout.
+
+## Reproduction
+
+```powershell
+python build_ust_g3dr_h02_five_prime_reconstruction_holdout.py
+```
+
+The packet is
+`state/ust_g3dr_h02_five_prime_reconstruction_holdout.packet.json`; masks,
+nonzero fractions and the native log are under `evidence/ust_g3dr/`.

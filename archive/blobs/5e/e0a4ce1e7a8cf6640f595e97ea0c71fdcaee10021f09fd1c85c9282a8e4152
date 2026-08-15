@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Verify G3W projective translation homogeneity and its exact boundary."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3w_relative_projective_translation.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_local_input(packet: dict, key: str) -> dict:
+    item = packet["inputs"][key]
+    path = ROOT / item["path"]
+    require(path.is_file(), f"{key}: source exists")
+    require(file_hash(path) == item["sha256"], f"{key}: source hash")
+    return load(path)
+
+
+def verify_locked_input(packet: dict, key: str, lock: dict) -> None:
+    item = packet["inputs"][key]
+    repository = next(
+        repo for repo in lock["repositories"] if repo["id"] == item["repository_id"]
+    )
+    source = next(src for src in repository["sources"] if src["path"] == item["path"])
+    require(source["sha256"] == item["sha256"], f"{key}: upstream lock hash")
+
+
+def sigma(g: tuple[int, int], h: tuple[int, int]) -> int:
+    _, b = g
+    c, _ = h
+    return (-c * b) % 3
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    g3h = verify_local_input(packet, "local_G3H_packet")
+    g3t = verify_local_input(packet, "local_G3T_packet")
+    g3v = verify_local_input(packet, "local_G3V_packet")
+    verify_locked_input(packet, "upstream_poincare_intertwiner", lock)
+    verify_locked_input(packet, "upstream_bht_contract", lock)
+    verify_locked_input(packet, "upstream_invariant_bott_chern", lock)
+
+    source = packet["relative_degree_three_source"]
+    fm = packet["fourier_mukai_exchange"]
+    coherence = packet["root_coherence"]
+    descent = packet["relative_projective_descent"]
+    factors = packet["factor_classification"]
+    hym = packet["hidden_hym_invariance"]
+    bc = packet["bott_chern_promotion"]
+    downstream = packet["downstream_adjudication"]
+    scope = packet["scope"]
+
+    require(g3h["g3g_binding"]["degree_N"] == 3, "G3H degree-three source")
+    require(g3t["balanced_transform"]["source_factors"] == [[1, 3]] * 3, "G3T source factors")
+    require(g3t["balanced_transform"]["FM_factors"] == [[3, -1]] * 3, "G3T FM factors")
+    require(g3t["holomorphic_determinant"]["holomorphic_P39_reduction_constructed"] is True, "G3T P39")
+    require(g3v["projective_hym"]["projective_hym_exists"] is True, "G3V HYM existence")
+
+    require(source["degree_N"] == 3, "degree-three polarization")
+    require(source["polarization_isogeny_surjective"] is True, "[3] is surjective")
+    require(source["kernel_order"] == source["degree_N"] ** 2 == 9, "elliptic [3] kernel")
+    require(source["roots_per_g"] == source["kernel_order"], "nine roots per translation")
+    require(source["alpha_class_preserved_under_relative_translation"] is True, "alpha translation class")
+    require(source["global_rank1_alpha_twisted_line_claimed"] is False, "no global alpha line")
+    require(source["alpha_sigma_tau_identified"] is False, "twists remain separate")
+
+    require(fm["all_vertical_translations_covered"] is True, "all translations covered")
+    require(fm["line_ambiguities_removed_by_projectivization"] is True, "line twists projectively trivial")
+    require(fm["projectivized_identity"] == "t_g^*P(W9)=P(W9)", "projective homogeneity identity")
+
+    group = [(a, b) for a in range(3) for b in range(3)]
+    associativity_count = 0
+    for g in group:
+        for h in group:
+            for k in group:
+                gh = ((g[0] + h[0]) % 3, (g[1] + h[1]) % 3)
+                hk = ((h[0] + k[0]) % 3, (h[1] + k[1]) % 3)
+                left = (sigma(g, h) + sigma(gh, k)) % 3
+                right = (sigma(h, k) + sigma(g, hk)) % 3
+                require(left == right, "qutrit cocycle associativity")
+                associativity_count += 1
+    require(associativity_count == coherence["associativity_equations"] == 729, "729 coherences")
+    commutators = {
+        (g, h): (sigma(g, h) - sigma(h, g)) % 3 for g in group for h in group
+    }
+    for g in group[1:]:
+        require(any(commutators[(g, h)] != 0 for h in group), "nondegenerate commutator")
+    require(coherence["root_choice_independent_projectively"] is True, "root ambiguity absorbed")
+    require(coherence["projective_group_law_coherent"] is True, "projective coherence")
+
+    require(descent["base_simply_connected"] is True, "K3 simply connected")
+    require(descent["factor_relative_isom_fiber_nonempty"] is True, "fiberwise isomorphisms")
+    require(descent["factor_projective_automorphism_group"] == "E[3]", "projective automorphism group")
+    require(descent["factor_projective_automorphism_order"] == 9, "projective automorphism order")
+    require(descent["relative_isom_torsor_finite_etale"] is True, "finite etale isom torsor")
+    require(descent["H1_et_K3_E3_zero"] is True, "K3 finite torsor vanishing")
+    require(descent["factorwise_translation_isomorphisms_glue_globally"] is True, "global factor homogeneity")
+    require(descent["qutrit_permutations_glue_three_factor_result"] is True, "global W9 homogeneity")
+    require(descent["strict_action_splitting_inferred"] is False, "no strict action inferred")
+
+    rank, degree = factors["uncorrected_transform_pair"]
+    require((rank, degree) == (3, -1), "coprime transformed pair")
+    require(math.gcd(rank, abs(degree)) == 1, "rank and degree coprime")
+    require(factors["factor_stable_and_simple"] is True, "stable simple factor")
+    require(factors["factor_semihomogeneous"] is True, "semihomogeneous factor")
+    require(factors["factor_projectivization_homogeneous"] is True, "homogeneous projectivization")
+    require(factors["finite_standard_representation_dimension"] == rank, "rank-three Heisenberg representation")
+
+    require(hym["balanced_ray_vertical_translation_invariant"] is True, "invariant Gauduchon ray")
+    require(hym["projective_hym_exists"] is True, "hidden projective HYM")
+    require(hym["stable_factor_hym_unique_up_to_gauge"] is True, "HYM uniqueness")
+    require(hym["hidden_quadratic_chern_weil_form_vertical_invariant"] is True, "hidden invariant Chern-Weil")
+    require(hym["selected_hidden_mixed_cohomology_coefficient"] == -9, "hidden mixed coefficient")
+    require(hym["explicit_connection_matrix_emitted"] is False, "no invented connection matrix")
+    require(hym["exact_split_representative_emitted"] is False, "no invented split representative")
+
+    require(bc["invariant_BC22_to_deRham_injective"] is True, "locked Bott-Chern theorem")
+    require(bc["hidden_equivariant_hym_premise_closed"] is True, "hidden BC premise")
+    require(bc["visible_equivariant_hym_premise_closed"] is False, "visible premise remains open")
+    require(bc["total_physical_difference_ddc_exact_closed"] is False, "total ddc boundary")
+    require(bc["positive_conformally_balanced_realization_closed"] is False, "positivity boundary")
+
+    require(downstream["G3X_full_BC22_to_deRham_injectivity_closed"] is True, "G3X downstream closure")
+    require(
+        downstream["visible_connection_equivariance_required_for_anomaly_potential"] is False,
+        "visible equivariance removed downstream",
+    )
+    require(
+        downstream["separate_exact_split_representatives_required_for_anomaly_potential"] is False,
+        "split representatives removed downstream",
+    )
+    require(
+        downstream["G3Y_transverse_FuYau_shortcut_available_for_selected_visible_c3"] is False,
+        "transverse shortcut retired downstream",
+    )
+
+    require(scope["global_projective_translation_homogeneity_closed"] is True, "homogeneity tier")
+    require(scope["strict_elliptic_action_splitting_constructed"] is False, "no strict splitting")
+    require(scope["shared_determinant_SpinC_line_lift_closed"] is False, "shared-line boundary")
+    require(scope["same_source_visible_V3_closed"] is False, "visible boundary")
+    require(scope["pointwise_differential_Bianchi_closed"] is False, "Bianchi boundary")
+    require(scope["B_HS_01_closed"] is False, "B.HS.01 boundary")
+    require(scope["UST_G3_closed"] is False, "UST.G3 boundary")
+    require(scope["physical_promotion"] is False, "physical nonpromotion")
+    require(packet["continuous_fit_parameters"] == 0, "no fitted parameter")
+    require(packet["observed_inputs"] == 0, "no observed input")
+
+    print("UST.G3W relative projective translation homogeneity: PASS")
+    print("degree-three source covers every translation with 9 E[3]-related roots")
+    print("hidden projective HYM Chern-Weil form: vertically invariant")
+    print("visible V3/nontransverse positivity: open; shared-line typing closes downstream in G3AA")
+
+
+if __name__ == "__main__":
+    main()

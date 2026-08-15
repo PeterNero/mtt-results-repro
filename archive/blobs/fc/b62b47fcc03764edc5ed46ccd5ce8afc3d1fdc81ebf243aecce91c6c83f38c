@@ -1,0 +1,170 @@
+# UST.G3BE: Delta-Trivial Hartshorne-Serre Elementary-Transform No-Go Theorem
+
+**Date:** 2026-08-12
+**Status:** closed exact for an ordinary Cartier-line quotient on the selected
+delta-trivial Hartshorne-Serre support; alternate supports, twisted quotients,
+higher-rank quotients, the visible bundle, and the physical endpoint remain open.
+
+## 1. Question
+
+Two earlier q79 constructions expose complementary halves of the visible
+rank-three elementary transform:
+
+1. the Hartshorne-Serre source supplies a support whose elliptic normalization
+   trivializes `delta`, so its pullback is the product `E_B x E_f`;
+2. the Fermat-Prym construction supplies a mixed class of square `-6`, but on
+   a support where the restricted torsor is not trivial.
+
+The tempting shortcut is to place the Fermat-Prym correction directly on the
+first, delta-trivial product. This theorem decides that shortcut exactly.
+
+## 2. Exact base elliptic curve
+
+The selected normalized curve is
+
+```text
+E_B: W^2=-(24u^4+56u^3-127u^2-71u-9).
+```
+
+For a binary quartic `(a,b,c,d,e)`, use
+
+```text
+I=12ae-3bd+c^2,
+J=72ace+9bcd-27ad^2-27b^2e-2c^3.
+```
+
+The exact values are
+
+```text
+I=25465,
+J=8111918,
+4I^3-J^2=249556039776,
+j(E_B)=6912 I^3/(4I^3-J^2)
+      =132105539357000/288838009.
+```
+
+The fraction is reduced and its denominator is greater than one. Thus its
+rational value is not an algebraic integer.
+
+The Fermat cubic `E_f` has `j(E_f)=0` and complex multiplication. Isogenous
+complex elliptic curves have isomorphic rational endomorphism algebras. If
+`E_B` were isogenous to `E_f`, it would therefore have complex multiplication;
+but the `j`-invariant of a CM elliptic curve is an algebraic integer. This is a
+contradiction. Consequently
+
+```text
+Hom(E_B,E_f)=0.
+```
+
+As an independent degree-three check, the official classical modular
+polynomial specializes to
+
+```text
+Phi_3(X,0)=X(X+12288000)^3,
+```
+
+and its exact value at `j(E_B)` is nonzero.
+
+## 3. Neron-Severi cutset
+
+On `A=E_B x E_f`, write
+
+```text
+A_f={point} x E_f,
+B_h=E_B x {point}.
+```
+
+Since `Hom(E_B,E_f)=0`, every numerical integral line class is
+
+```text
+q=a A_f+b B_h,  a,b in Z,
+```
+
+up to a `Pic^0` factor, and
+
+```text
+A_f^2=B_h^2=0,
+A_f.B_h=1.
+```
+
+The q79 Gysin rows are
+
+```text
+i_*A_f=0,
+i_*B_h=u.
+```
+
+The visible elementary transform requires
+
+```text
+i_*q=-6u,
+q^2=-6.
+```
+
+The first equation forces `b=-6`. The second would then read
+
+```text
+-12a=-6,
+a=1/2,
+```
+
+which is impossible for an integral Cartier line class.
+
+The selected plane section is nodal, but this does not restore the missing
+numerical class. A Cartier line on the nodal support pulls back to its
+degree-one normalization product. Its conductor gluing changes the Picard
+gluing datum, not its first Chern class; the Gysin and self-intersection rows
+are preserved. The same Diophantine cutset therefore applies.
+
+## 4. Theorem
+
+> **Delta-Trivial HS Elementary-Transform No-Go.** On the selected
+> Hartshorne-Serre delta-trivial support, no ordinary Cartier line quotient can
+> simultaneously have `i_*q=-6u` and `q^2=-6`. Equivalently, this support
+> cannot promote `ch(kappa_hol)=3-H-3u` to
+> `ch(V_3)=3-9u+3Omega` by the proposed ordinary rank-one elementary
+> transform.
+
+This does not exclude the visible bundle. It excludes one precise support and
+quotient mechanism. It also does not decide `beta_C`.
+
+## 5. Route consequence
+
+The primary visible route is not a new support search. G3AC and G3AJ already
+construct the twisted rank-three graph-Prym family and its selected smooth
+residue member. The active task on that route is the G3BC-G3BD Deligne
+decision for `beta_C`; G3BE does not reopen its existence theorem.
+
+The following is only an optional ordinary rank-one fallback.
+
+An ordinary rank-one exit now has a two-condition support requirement. Find a
+curve `C` on the selected K3 such that
+
+```text
+delta|C = O,
+NS(C x E_f) contains an integral mixed class m with m^2=-6.
+```
+
+At the simple graph tier, the second condition is supplied by a degree-three
+map or elliptic correspondence to `E_f`. The old Fermat-Prym branch satisfies
+the second condition and fails the first; the Hartshorne-Serre branch satisfies
+the first and fails the second. A successor construction must satisfy both
+simultaneously. If that locus is empty, the next honest exits are a twisted
+quotient or a higher-rank quotient, not another retry on `E_B x E_f`.
+
+## 6. Reproduction and sources
+
+```powershell
+python .\build_ust_g3be_delta_trivial_hs_elementary_transform_nogo.py
+python .\verify_ust_g3be_delta_trivial_hs_elementary_transform_nogo.py
+```
+
+External mathematical inputs are limited to standard exact theorems:
+
+- isogenous elliptic curves have isomorphic `End^0`;
+- CM elliptic `j`-invariants are algebraic integers;
+- the classical modular polynomial `Phi_3` parameterizes cyclic
+  degree-three isogenies.
+
+The exact coefficient file and compact q79 source facts are vendored and
+hash-bound. No observed value or fitted parameter enters.

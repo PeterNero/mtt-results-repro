@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Build a non-authoritative 9H+L Hilbert hint with exact L truncation."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+
+import build_ust_g3ap_selected_cayley_fiber2_predecessor_hilbert_hint as predecessor
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_std_hedge as hmajor
+import run_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_hedge as ltrunc
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SCRIPT = STATE / "ust_g3ap_hmajor_ltrunc_hilbert_hint.sing"
+OUTPUT = STATE / "ust_g3ap_hmajor_ltrunc_hilbert_hint.singular.out"
+PACKET = STATE / "ust_g3ap_hmajor_ltrunc_hilbert_hint.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def predecessor_leaders() -> list[tuple[int, tuple[int, ...]]]:
+    source = predecessor.DEFAULT_SOURCE
+    require(
+        source.is_file() and sha256(source) == predecessor.SOURCE_SHA256,
+        "predecessor source hash",
+    )
+    return predecessor.induced_module_leaders(predecessor.parse_source(source))
+
+
+def hint_script(leaders: list[tuple[int, tuple[int, ...]]]) -> str:
+    generators = [
+        f"{ltrunc.monomial(exponent)}*gen({component})"
+        for component, exponent in leaders
+    ] + ltrunc.truncation_generators()
+    shifts = ",".join(str(value) for value in hmajor.COMPONENT_SHIFTS)
+    return f'''{hmajor.HMAJOR_MODULE_RING}
+module H=
+  {',\n  '.join(generators)};
+intvec componentShifts={shifts};
+attrib(H,"isHomog",componentShifts);
+attrib(H,"isSB",1);
+bigintvec truncatedHilbert=hilb(H,1);
+print("G3AP_HMAJOR_LTRUNC_HINT_LEADERS="+string(size(H)));
+print("G3AP_HMAJOR_LTRUNC_HINT_HILBERT="+string(truncatedHilbert));
+print("G3AP_HMAJOR_LTRUNC_HINT_PASS");
+quit;
+'''
+
+
+def parse_hilbert(raw: str) -> list[int]:
+    match = re.search(
+        r"^G3AP_HMAJOR_LTRUNC_HINT_HILBERT=([0-9, -]+)$",
+        raw,
+        re.MULTILINE,
+    )
+    require(match is not None, "H-major L-truncated Hilbert numerator")
+    values = [int(value.strip()) for value in match.group(1).split(",")]
+    require(values and values[0] == 1, "normalized Hilbert numerator")
+    return values
+
+
+def load_hint() -> tuple[dict, list[int]]:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3ap-hmajor-ltrunc-hilbert-hint.v1",
+        "H-major hint schema",
+    )
+    require(
+        packet["status"] == "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE",
+        "H-major hint status",
+    )
+    require(all(packet["checks"].values()), "H-major hint checks")
+    require(not any(packet["guardrails"].values()), "H-major hint guardrails")
+    return packet, [int(value) for value in packet["hilbert_numerator"]]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    hmajor.validate_grading()
+    leaders = predecessor_leaders()
+    require(len(leaders) == 17483, "induced predecessor module leaders")
+    truncators = ltrunc.truncation_generators()
+    require(len(truncators) == 165, "L-boundary generators")
+    SCRIPT.write_text(hint_script(leaders), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)} leaders={len(leaders) + len(truncators)}")
+        return
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "H-major hint execution")
+    require("G3AP_HMAJOR_LTRUNC_HINT_PASS" in completed.stdout, "hint marker")
+    hilbert = parse_hilbert(completed.stdout)
+    packet = {
+        "schema": "mtt.unified-source.g3ap-hmajor-ltrunc-hilbert-hint.v1",
+        "date": "2026-08-10",
+        "status": "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE",
+        "predecessor": {
+            "sha256": predecessor.SOURCE_SHA256,
+            "source_repository_commit": predecessor.SOURCE_COMMIT,
+            "induced_module_leaders": len(leaders),
+        },
+        "grading": {
+            "Cox_functional": "9H+L",
+            "base_weights": list(hmajor.BASE_WEIGHTS),
+            "component_shifts": list(hmajor.COMPONENT_SHIFTS),
+            "target_scalar_degree": hmajor.TARGET_SCALAR_DEGREE,
+        },
+        "truncation": {
+            "kind": "componentwise_L_boundary",
+            "minimal_L_boundary_generators": len(truncators),
+            "target_piece_is_zero": True,
+        },
+        "execution": {
+            "script": {
+                "path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SCRIPT),
+            },
+            "output": {
+                "path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(OUTPUT),
+            },
+            "returncode": completed.returncode,
+        },
+        "hilbert_numerator": hilbert,
+        "checks": {
+            "the_hash_locked_predecessor_initial_module_is_regraded": True,
+            "the_165_exact_L_boundaries_are_added": True,
+            "the_positive_9H_plus_L_functional_is_used": True,
+            "the_common_target_scalar_degree_is_328": True,
+        },
+        "guardrails": {
+            "claims_predecessor_flatness": False,
+            "claims_selected_G3AP_dimension": False,
+            "may_be_used_without_independent_selected_source_certification": False,
+        },
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP H-major/L-truncated Hilbert hint: PASS "
+        f"leaders={len(leaders) + len(truncators)} "
+        f"numerator_terms={len(hilbert)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

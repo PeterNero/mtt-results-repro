@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Bind the corrected G3BI endpoint to the prior exact H02 DM reference system."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as reduction
+
+
+ROOT = Path(__file__).resolve().parent
+OLD_REPOSITORY = ROOT.parent / "20 Mathematical Language Discovery Program - eta9 charzero"
+OLD_PACKET = OLD_REPOSITORY / "q79_eta9_characteristic_zero_detecting_meridian_transport.packet.json"
+OUT = ROOT / "state" / "ust_g3bx_g3bi_h02_structural_intertwiner.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository.resolve()),
+        "repository_relative_path": path.resolve().relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    g3bw_path = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+    g3bv_path = ROOT / "state" / "ust_g3bv_h02_endpoint_gf11_calibration.packet.json"
+    g3br_path = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+    g3bw = load(g3bw_path)
+    g3bv = load(g3bv_path)
+    g3br = load(g3br_path)
+    old = load(OLD_PACKET)
+    for packet, label in ((g3bw, "G3BW"), (g3bv, "G3BV"), (g3br, "G3BR"), (old, "old reference")):
+        checks = packet.get("checks", {})
+        require(all(checks.values()), f"{label} checks")
+
+    new_hashes = g3bw["DM_reduction"]["hashes"]
+    old_h02 = old["H02_exact_DM_and_Woodbury_reduction"]
+    old_hashes = old_h02["hashes"]
+    structural_names = [
+        "exact_complement_pattern_sha256",
+        "matching_column_by_row_sha256",
+        "component_by_column_sha256",
+        "component_by_row_sha256",
+        "component_sizes_sha256",
+        "topological_component_order_sha256",
+    ]
+    structural_matches = {name: new_hashes[name] == old_hashes[name] for name in structural_names}
+    require(all(structural_matches.values()), "six structural hashes")
+
+    arrays_path = ROOT / g3bw["DM_reduction"]["arrays"]["path"]
+    arrays = np.load(arrays_path, allow_pickle=False)
+    component_sizes = arrays["component_sizes"]
+    nontrivial = np.flatnonzero(component_sizes > 1)
+    require(nontrivial.size == 1, "unique nontrivial component")
+    core = int(nontrivial[0])
+    internal_core = arrays["internal_gamma_mask"] & (
+        arrays["component_by_row"][arrays["gamma_rows"]] == core
+    )
+    active_rows = np.unique(arrays["gamma_rows"][internal_core]).astype(np.int32)
+    active_columns = np.unique(arrays["gamma_columns"][internal_core]).astype(np.int32)
+    active_hashes = {
+        "active_core_rows_sha256": reduction.array_hash(active_rows, "<i4"),
+        "active_core_columns_sha256": reduction.array_hash(active_columns, "<i4"),
+    }
+    active_matches = {name: value == old_hashes[name] for name, value in active_hashes.items()}
+    require(all(active_matches.values()), "active coordinate hashes")
+    require(
+        (active_rows.size, active_columns.size, int(component_sizes[core]))
+        == (15158, 17676, 24767),
+        "active dimensions",
+    )
+
+    old_anchor = old["all_embedding_integer_anchor_certificate"]["selected_good_residue"]
+    require((int(old_anchor["prime"]), int(old_anchor["gamma"])) == (11, 3), "old anchor")
+    require(int(g3bv["endpoint_chart"]["determinant_mod11"]) == 0, "corrected endpoint singular at old anchor")
+    require(int(g3br["endpoint_chart"]["determinant_mod21817"]) == 419, "new proof anchor")
+
+    checks = {
+        "the_corrected_and_prior_exact_complement_support_patterns_are_identical": True,
+        "the_perfect_matching_and_both_DM_coordinate_maps_are_identical": True,
+        "the_component_sizes_and_topological_order_are_identical": True,
+        "the_unique24767_core_is_identical_as_a_coordinate_subset": True,
+        "the15158_active_rows_and17676_active_columns_are_identical": True,
+        "the_prior_GF11_anchor_is_rejected_for_the_corrected_endpoint": True,
+        "the_corrected_integral_anchor_is_certified_by_determinant419_mod21817": True,
+        "no_prior_coefficient_matrix_inverse_or_Woodbury_value_is_reused": True,
+    }
+    require(all(checks.values()), "G3BX checks")
+    packet = {
+        "schema": "mtt.unified-source.g3bx-g3bi-h02-structural-intertwiner.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_SUPPORT_LEVEL_STRUCTURAL_INTERTWINER_CLOSED_COEFFICIENT_ACTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BW": local_record(g3bw_path),
+            "G3BV": local_record(g3bv_path),
+            "G3BR": local_record(g3br_path),
+            "prior_characteristic_zero_reference": external_record(OLD_PACKET, OLD_REPOSITORY),
+            "G3BW_arrays": local_record(arrays_path),
+        },
+        "structural_intertwiner": {
+            "map": "identity on the canonical 42458 H02 complement row and selected-column coordinates",
+            "scope": "support pattern, perfect matching, DM components, condensation order, and active core coordinate subsets",
+            "complement_dimension": 42458,
+            "structural_hash_matches": structural_matches,
+            "unique_nontrivial_component_label": core,
+            "unique_nontrivial_component_dimension": int(component_sizes[core]),
+            "active_core_rows": int(active_rows.size),
+            "active_core_columns": int(active_columns.size),
+            "active_coordinate_hashes": active_hashes,
+            "active_coordinate_hash_matches": active_matches,
+        },
+        "coefficient_boundary": {
+            "prior_reference_anchor": {"prime": 11, "gamma_root": 3, "reported_old_determinant": 2},
+            "corrected_endpoint_at_prior_anchor": {"prime": 11, "gamma_root": 3, "determinant": 0},
+            "corrected_integral_anchor": {"prime": 21817, "gamma_root": 5, "determinant": 419},
+            "conclusion": (
+                "The old support reference system transfers exactly, but the old coefficient "
+                "matrix, anchor inverse, determinant and evaluated Woodbury kernel do not."
+            ),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_a_coefficientwise_operator_intertwiner": False,
+            "claims_the_old_GF11_inverse_applies_to_the_corrected_endpoint": False,
+            "claims_the15158_kernel_has_been_evaluated_for_the_corrected_endpoint": False,
+            "claims_characteristic_zero_transport_or_terminal_readout": False,
+        },
+        "theorem": {
+            "name": "ustG3bxSelectedG3biH02StructuralIntertwiner",
+            "tier": "CLOSED_EXACT_SUPPORT_LEVEL_REFERENCE_SYSTEM",
+            "statement": (
+                "Under the identity map on the canonical H02 complement coordinates, the exact "
+                "selected-G3BI endpoint and the prior characteristic-zero chart have identical "
+                "support pattern, perfect matching, DM decomposition, condensation order and "
+                "15158-by-17676 active core coordinate sets. This is an exact structural "
+                "intertwiner. It does not intertwine coefficient values: the corrected endpoint "
+                "is singular at the prior GF11 anchor and instead uses the certified A(5) anchor."
+            ),
+        },
+        "next_required_object": (
+            "Retain the certified coordinate decomposition and rebuild only the corrected "
+            "coefficient-level A(5)-anchored Woodbury action on the selected source-reachable "
+            "subspace. Do not recompute the support decomposition or reuse the old inverse."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BX selected G3BI H02 structural intertwiner: PASS")
+    print(
+        f"support_hashes={sum(structural_matches.values())}/6 active_hashes={sum(active_matches.values())}/2 "
+        f"core={component_sizes[core]} active={active_rows.size}x{active_columns.size}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

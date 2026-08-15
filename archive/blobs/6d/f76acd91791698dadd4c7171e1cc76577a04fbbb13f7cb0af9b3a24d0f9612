@@ -1,0 +1,418 @@
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <flint/flint.h>
+#include <flint/fmpq.h>
+#include <flint/fmpq_poly.h>
+#include <flint/fmpz.h>
+#include <flint/fmpz_poly.h>
+#include <flint/gr.h>
+#include <flint/gr_mat.h>
+#include <flint/nf.h>
+#include <flint/nf_elem.h>
+
+#define KNOWN_ROWS 400
+#define FREE_COUNT 21
+
+typedef struct
+{
+    nf_struct *nf;
+    char *var;
+} ust_gr_nf_ctx_struct;
+
+static nf_struct *ust_nf_ctx(gr_ctx_t ctx)
+{
+    return ((ust_gr_nf_ctx_struct *) ctx)->nf;
+}
+
+static void die(const char *message)
+{
+    fprintf(stderr, "ust_nf_kernel_recover: %s\n", message);
+    exit(EXIT_FAILURE);
+}
+
+static slong read_slong(FILE *input, fmpz_t value, const char *label)
+{
+    if (!fmpz_fread(input, value))
+        die(label);
+    if (!fmpz_fits_si(value))
+        die("integer does not fit slong");
+    return fmpz_get_si(value);
+}
+
+static void read_fmpq(FILE *input, fmpq_t value, fmpz_t numerator, fmpz_t denominator)
+{
+    int separator;
+    if (!fmpz_fread(input, numerator))
+        die("truncated rational numerator");
+    separator = fgetc(input);
+    if (separator != '/')
+        die("missing rational separator");
+    if (!fmpz_fread(input, denominator))
+        die("truncated rational denominator");
+    if (fmpz_is_zero(denominator))
+        die("zero rational denominator");
+    fmpq_set_fmpz_frac(value, numerator, denominator);
+}
+
+static void set_integer_nf_entry(
+    gr_ptr entry,
+    fmpq_poly_t polynomial,
+    fmpz_t coefficient,
+    slong degree,
+    FILE *input,
+    nf_struct *nf)
+{
+    slong k;
+    fmpq_poly_zero(polynomial);
+    for (k = 0; k < degree; k++)
+    {
+        if (!fmpz_fread(input, coefficient))
+            die("truncated matrix coefficient");
+        fmpq_poly_set_coeff_fmpz(polynomial, k, coefficient);
+    }
+    nf_elem_set_fmpq_poly((nf_elem_struct *) entry, polynomial, nf);
+}
+
+static void set_rational_nf_entry(
+    gr_ptr entry,
+    fmpq_poly_t polynomial,
+    fmpq_t coefficient,
+    fmpz_t numerator,
+    fmpz_t denominator,
+    slong degree,
+    FILE *input,
+    nf_struct *nf)
+{
+    slong k;
+    fmpq_poly_zero(polynomial);
+    for (k = 0; k < degree; k++)
+    {
+        read_fmpq(input, coefficient, numerator, denominator);
+        fmpq_poly_set_coeff_fmpq(polynomial, k, coefficient);
+    }
+    nf_elem_set_fmpq_poly((nf_elem_struct *) entry, polynomial, nf);
+}
+
+static void write_entry(
+    FILE *output,
+    slong row,
+    slong column,
+    gr_srcptr value,
+    slong degree,
+    fmpq_poly_t polynomial,
+    fmpq_t coefficient,
+    nf_struct *nf)
+{
+    slong k;
+    fprintf(output, "%ld %ld", (long) (row + 1), (long) (column + 1));
+    nf_elem_get_fmpq_poly(polynomial, (const nf_elem_struct *) value, nf);
+    for (k = 0; k < degree; k++)
+    {
+        fmpq_poly_get_coeff_fmpq(coefficient, polynomial, k);
+        fputc(' ', output);
+        fmpz_fprint(output, fmpq_numref(coefficient));
+        fputc('/', output);
+        fmpz_fprint(output, fmpq_denref(coefficient));
+    }
+    fputc('\n', output);
+}
+
+static void copy_checkpoint(FILE *output, const char *path)
+{
+    FILE *input;
+    unsigned char *buffer;
+    size_t count;
+    int last = '\n';
+
+    input = fopen(path, "rb");
+    if (input == NULL)
+        die("cannot reopen checkpoint for copying");
+    buffer = (unsigned char *) flint_malloc(1 << 20);
+    while ((count = fread(buffer, 1, 1 << 20, input)) != 0)
+    {
+        if (fwrite(buffer, 1, count, output) != count)
+            die("checkpoint copy failed");
+        last = buffer[count - 1];
+    }
+    flint_free(buffer);
+    fclose(input);
+    if (last != '\n')
+        fputc('\n', output);
+}
+
+int main(int argc, char **argv)
+{
+    FILE *matrix_input;
+    FILE *checkpoint_input;
+    FILE *row_input;
+    FILE *free_input;
+    FILE *output;
+    slong rows, columns, degree, entries;
+    slong checkpoint_rows, relations, checkpoint_degree;
+    slong unknown_count, selected_count;
+    slong row, column, index, relation, selected, unknown;
+    slong *row_lookup;
+    slong *column_lookup;
+    slong *free_lookup;
+    int character, status;
+    fmpz_t integer, numerator, denominator;
+    fmpz_poly_t minimal;
+    fmpq_poly_t polynomial;
+    fmpq_t rational;
+    gr_ctx_t ctx;
+    gr_mat_t known;
+    gr_mat_t matrix;
+    gr_mat_t rhs;
+    gr_mat_t solution;
+    gr_ptr coefficient;
+    gr_ptr identity;
+
+    if (argc != 6)
+        die("usage: ust_nf_kernel_recover MATRIX.sms CHECKPOINT.nfk ROWS.txt FREE_COLUMNS.txt OUTPUT.nfk");
+    matrix_input = fopen(argv[1], "r");
+    checkpoint_input = fopen(argv[2], "r");
+    row_input = fopen(argv[3], "r");
+    free_input = fopen(argv[4], "r");
+    if (matrix_input == NULL || checkpoint_input == NULL || row_input == NULL || free_input == NULL)
+        die("cannot open an input");
+
+    fmpz_init(integer);
+    fmpz_init(numerator);
+    fmpz_init(denominator);
+    rows = read_slong(matrix_input, integer, "missing row count");
+    columns = read_slong(matrix_input, integer, "missing column count");
+    degree = read_slong(matrix_input, integer, "missing field degree");
+    entries = read_slong(matrix_input, integer, "missing entry count");
+    if (rows != 1238 || columns != 1221 || degree != 6 || entries != 55589)
+        die("unexpected production matrix shape");
+
+    fmpz_poly_init(minimal);
+    for (index = 0; index <= degree; index++)
+    {
+        if (!fmpz_fread(matrix_input, integer))
+            die("truncated minimal polynomial");
+        fmpz_poly_set_coeff_fmpz(minimal, index, integer);
+    }
+    gr_ctx_init_nf_fmpz_poly(ctx, minimal);
+
+    checkpoint_rows = read_slong(checkpoint_input, integer, "missing checkpoint rows");
+    relations = read_slong(checkpoint_input, integer, "missing checkpoint relations");
+    checkpoint_degree = read_slong(checkpoint_input, integer, "missing checkpoint degree");
+    if (checkpoint_rows != columns || relations != FREE_COUNT || checkpoint_degree != degree)
+        die("checkpoint header mismatch");
+
+    gr_mat_init(known, KNOWN_ROWS, relations, ctx);
+    gr_mat_init(matrix, 800, 800, ctx);
+    gr_mat_init(rhs, 800, relations, ctx);
+    gr_mat_init(solution, 800, relations, ctx);
+    coefficient = gr_heap_init(ctx);
+    identity = gr_heap_init(ctx);
+    fmpq_poly_init(polynomial);
+    fmpq_init(rational);
+
+    for (row = 0; row < KNOWN_ROWS; row++)
+    {
+        for (column = 0; column < relations; column++)
+        {
+            if (read_slong(checkpoint_input, integer, "truncated checkpoint row") != row + 1)
+                die("checkpoint row order mismatch");
+            if (read_slong(checkpoint_input, integer, "truncated checkpoint column") != column + 1)
+                die("checkpoint column order mismatch");
+            set_rational_nf_entry(
+                gr_mat_entry_ptr(known, row, column, ctx),
+                polynomial,
+                rational,
+                numerator,
+                denominator,
+                degree,
+                checkpoint_input,
+                ust_nf_ctx(ctx));
+        }
+    }
+    do
+    {
+        character = fgetc(checkpoint_input);
+    }
+    while (character != EOF && isspace(character));
+    if (character != EOF)
+        die("checkpoint contains an incomplete extra coordinate row");
+    fclose(checkpoint_input);
+    fprintf(stderr, "ust_nf_kernel_recover: loaded400 complete checkpoint rows\n");
+    fflush(stderr);
+
+    if (fscanf(row_input, "%ld", &selected_count) != 1 || selected_count != 800)
+        die("recovery row count mismatch");
+    row_lookup = (slong *) flint_malloc(rows * sizeof(slong));
+    for (row = 0; row < rows; row++)
+        row_lookup[row] = -1;
+    for (selected = 0; selected < selected_count; selected++)
+    {
+        long source_row;
+        if (fscanf(row_input, "%ld", &source_row) != 1)
+            die("truncated recovery row file");
+        source_row--;
+        if (source_row < 0 || source_row >= rows || row_lookup[source_row] >= 0)
+            die("invalid recovery row");
+        row_lookup[source_row] = selected;
+    }
+    fclose(row_input);
+
+    column_lookup = (slong *) flint_malloc(columns * sizeof(slong));
+    free_lookup = (slong *) flint_malloc(columns * sizeof(slong));
+    for (column = 0; column < columns; column++)
+    {
+        column_lookup[column] = -1;
+        free_lookup[column] = -1;
+    }
+    if (fscanf(free_input, "%ld", &selected_count) != 1 || selected_count != FREE_COUNT)
+        die("free-column count mismatch");
+    for (relation = 0; relation < FREE_COUNT; relation++)
+    {
+        long free_column;
+        if (fscanf(free_input, "%ld", &free_column) != 1)
+            die("truncated free-column file");
+        free_column--;
+        if (free_column < KNOWN_ROWS || free_column >= columns || free_lookup[free_column] >= 0)
+            die("invalid free column");
+        free_lookup[free_column] = relation;
+    }
+    fclose(free_input);
+    unknown_count = 0;
+    for (column = KNOWN_ROWS; column < columns; column++)
+        if (free_lookup[column] < 0)
+            column_lookup[column] = unknown_count++;
+    if (unknown_count != 800)
+        die("unknown column count mismatch");
+
+    status = GR_SUCCESS;
+    for (index = 0; index < entries; index++)
+    {
+        row = read_slong(matrix_input, integer, "truncated entry row") - 1;
+        column = read_slong(matrix_input, integer, "truncated entry column") - 1;
+        if (row < 0 || row >= rows || column < 0 || column >= columns)
+            die("matrix index out of range");
+        selected = row_lookup[row];
+        set_integer_nf_entry(
+            coefficient,
+            polynomial,
+            integer,
+            degree,
+            matrix_input,
+            ust_nf_ctx(ctx));
+        if (selected < 0)
+            continue;
+        unknown = column_lookup[column];
+        if (unknown >= 0)
+        {
+            status |= gr_add(
+                gr_mat_entry_ptr(matrix, selected, unknown, ctx),
+                gr_mat_entry_srcptr(matrix, selected, unknown, ctx),
+                coefficient,
+                ctx);
+        }
+        else if (column < KNOWN_ROWS)
+        {
+            for (relation = 0; relation < relations; relation++)
+            {
+                status |= gr_submul(
+                    gr_mat_entry_ptr(rhs, selected, relation, ctx),
+                    coefficient,
+                    gr_mat_entry_srcptr(known, column, relation, ctx),
+                    ctx);
+            }
+        }
+        else if (free_lookup[column] >= 0)
+        {
+            status |= gr_sub(
+                gr_mat_entry_ptr(rhs, selected, free_lookup[column], ctx),
+                gr_mat_entry_srcptr(rhs, selected, free_lookup[column], ctx),
+                coefficient,
+                ctx);
+        }
+        else
+        {
+            die("unclassified matrix column");
+        }
+    }
+    fclose(matrix_input);
+    if (status != GR_SUCCESS)
+        die("recovery system construction failed");
+    if (getenv("UST_NF_RECOVER_DRY_RUN") != NULL)
+    {
+        printf("ust_nf_kernel_recover: DRY-RUN PASS known=400 unknown=800 free=21\n");
+        return EXIT_SUCCESS;
+    }
+    fprintf(stderr, "ust_nf_kernel_recover: solving exact800x800 system with21 right-hand sides\n");
+    fflush(stderr);
+
+    status = gr_mat_nonsingular_solve_lu(solution, matrix, rhs, ctx);
+    if (status != GR_SUCCESS)
+        die("exact recovery solve failed");
+    fprintf(stderr, "ust_nf_kernel_recover: exact recovery solve complete\n");
+    fflush(stderr);
+
+    output = fopen(argv[5], "wb");
+    if (output == NULL)
+        die("cannot open recovered output");
+    copy_checkpoint(output, argv[2]);
+    for (row = KNOWN_ROWS; row < columns; row++)
+    {
+        for (relation = 0; relation < relations; relation++)
+        {
+            if (free_lookup[row] >= 0)
+            {
+                if (free_lookup[row] == relation)
+                    status = gr_one(identity, ctx);
+                else
+                    status = gr_zero(identity, ctx);
+                if (status != GR_SUCCESS)
+                    die("cannot construct free-coordinate identity");
+                write_entry(
+                    output, row, relation, identity, degree, polynomial, rational, ust_nf_ctx(ctx));
+            }
+            else
+            {
+                unknown = column_lookup[row];
+                if (unknown < 0)
+                    die("missing recovered coordinate");
+                write_entry(
+                    output,
+                    row,
+                    relation,
+                    gr_mat_entry_srcptr(solution, unknown, relation, ctx),
+                    degree,
+                    polynomial,
+                    rational,
+                    ust_nf_ctx(ctx));
+            }
+        }
+        if ((row + 1) % 100 == 0)
+        {
+            fprintf(stderr, "ust_nf_kernel_recover: wrote %ld total kernel rows\n", (long) (row + 1));
+            fflush(stderr);
+        }
+    }
+    fclose(output);
+
+    printf("ust_nf_kernel_recover: PASS known=400 recovered=800 free=21 total=1221\n");
+    fmpq_clear(rational);
+    fmpq_poly_clear(polynomial);
+    gr_heap_clear(identity, ctx);
+    gr_heap_clear(coefficient, ctx);
+    gr_mat_clear(solution, ctx);
+    gr_mat_clear(rhs, ctx);
+    gr_mat_clear(matrix, ctx);
+    gr_mat_clear(known, ctx);
+    gr_ctx_clear(ctx);
+    fmpz_poly_clear(minimal);
+    fmpz_clear(denominator);
+    fmpz_clear(numerator);
+    fmpz_clear(integer);
+    flint_free(column_lookup);
+    flint_free(free_lookup);
+    flint_free(row_lookup);
+    flint_cleanup_master();
+    return EXIT_SUCCESS;
+}

@@ -1,0 +1,490 @@
+#!/usr/bin/env python3
+"""Execute the six exact finite B103 Gram contractions for three source lines."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3al_selected_carrier_response_schur as g3al
+import build_ust_g3am_selected_cayley_fiber2_response_chunk as g3am
+import build_ust_g3az_finite_b103_gram_executor as g3az
+import ust_cayley_fiber2_reduction as fiber2
+import ust_f1016_sparse_minor as field
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+READINESS = STATE / "ust_g3az_finite_b103_gram_executor.packet.json"
+COORDINATES = STATE / "ust_g3az_b103_coordinate_map.json"
+G3AT = STATE / "ust_g3at_polarized_primal_transport.packet.json"
+PAIRS = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
+ZERO = (0,) * field.DEGREE
+ONE = (1,) + (0,) * (field.DEGREE - 1)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def canonical_hash(value: object) -> str:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def checked_local_record(value: dict, label: str) -> Path:
+    path = (ROOT / value["path"]).resolve()
+    require(path.is_relative_to(ROOT.resolve()), f"{label} inside repository")
+    require(path.is_file() and sha256(path) == value["sha256"], f"{label} hash")
+    return path
+
+
+def same_record(value: dict, path: Path, label: str) -> None:
+    require(
+        value["path"] == str(path.relative_to(ROOT)).replace("\\", "/")
+        and value["sha256"] == sha256(path),
+        label,
+    )
+
+
+def reduce_dvr_coefficients(values: object) -> list[int]:
+    require(isinstance(values, list) and len(values) == g3az.RANK, "DVR vector length")
+    result: list[int] = []
+    for coordinate in values:
+        require(
+            isinstance(coordinate, list)
+            and len(coordinate) == field.DEGREE
+            and all(isinstance(value, int) for value in coordinate),
+            "DVR gamma-basis coefficient",
+        )
+        result.append(field.pack(tuple(value % field.PRIME for value in coordinate)))
+    return result
+
+
+def validate_source_certificate(packet: dict, vectors: list[list[int]]) -> dict:
+    source = packet["source_domain"]
+    kind = source["kind"]
+    require(
+        kind in ("exact_DVR_common_frame", "exact_finite_common_frame"),
+        "production source kind",
+    )
+    certificate_path = checked_local_record(source["certificate"], "source certificate")
+    certificate = load(certificate_path)
+    expected_schema = {
+        "exact_DVR_common_frame": "mtt.unified-source.g3az-exact-dvr-common-frame-certificate.v1",
+        "exact_finite_common_frame": "mtt.unified-source.g3az-exact-finite-common-frame-certificate.v1",
+    }[kind]
+    require(certificate["schema"] == expected_schema, "source certificate schema")
+    require(
+        certificate["status"].startswith("CLOSED_EXACT_")
+        and all(certificate["checks"].values())
+        and not any(certificate["guardrails"].values()),
+        "source certificate closure",
+    )
+    payload = [
+        {"path_index": index, "coefficients_F1016_packed": vector}
+        for index, vector in enumerate(vectors)
+    ]
+    require(
+        certificate["B103_coordinate_map_sha256"] == sha256(COORDINATES)
+        and certificate["reduced_vector_payload_sha256"] == canonical_hash(payload),
+        "source certificate payload binding",
+    )
+    return record(certificate_path)
+
+
+def load_vectors(path: Path, allow_test_fixture: bool) -> tuple[list[list[int]], list[int], dict | None]:
+    packet = load(path)
+    require(
+        packet["schema"] == "mtt.unified-source.g3az-finite-transport-input.v1",
+        "transport input schema",
+    )
+    same_record(packet["inputs"]["G3AT"], G3AT, "transport G3AT binding")
+    same_record(
+        packet["inputs"]["B103_coordinate_map"],
+        COORDINATES,
+        "transport coordinate binding",
+    )
+    require(
+        packet["basis_binding"]
+        == {
+            "rank": g3az.RANK,
+            "order": "H20 then H11 then H02; sector order u,v,s; lexicographic exponent loops",
+            "residue_field": "F_(101^6)",
+        },
+        "transport basis binding",
+    )
+    paths = packet["paths"]
+    require(
+        isinstance(paths, list)
+        and len(paths) == 3
+        and [item["path_index"] for item in paths] == [0, 1, 2],
+        "three ordered paths",
+    )
+    kind = packet["source_domain"]["kind"]
+    vectors: list[list[int]] = []
+    if kind == "exact_DVR_common_frame":
+        require(
+            packet["status"] == "CLOSED_EXACT_DVR_COMMON_FRAME_TRANSPORT_INPUT",
+            "DVR transport status",
+        )
+        vectors = [reduce_dvr_coefficients(item["coefficients_Z_gamma"]) for item in paths]
+    else:
+        for item in paths:
+            vector = item["coefficients_F1016_packed"]
+            require(
+                isinstance(vector, list)
+                and len(vector) == g3az.RANK
+                and all(isinstance(value, int) and 0 <= value < field.FIELD_ORDER for value in vector),
+                "finite transport vector",
+            )
+            vectors.append(vector)
+    if kind == "test_only_sparse_F1016":
+        require(
+            allow_test_fixture
+            and packet["status"] == "TEST_ONLY_SYNTHETIC_FINITE_INPUT",
+            "explicit test-only fixture",
+        )
+        certificate = None
+    else:
+        certificate = validate_source_certificate(packet, vectors)
+    word = packet.get("reflection_word_zero_based", [])
+    require(
+        isinstance(word, list)
+        and all(isinstance(value, int) and 0 <= value < 3 for value in word),
+        "reflection word",
+    )
+    return vectors, word, certificate
+
+
+def monomial(exponent: list[int]) -> str:
+    names = ("x", "y", "z", "w", "t0", "t1", "t2")
+    factors = []
+    for name, power in zip(names, exponent):
+        if power == 1:
+            factors.append(name)
+        elif power > 1:
+            factors.append(f"{name}^{power}")
+    return "*".join(factors) or "1"
+
+
+def polynomial(indices: range, vector: list[int], coordinates: list[list[int]], fiber: tuple[int, int, int] | None) -> str:
+    terms = []
+    for index in indices:
+        coefficient = vector[index]
+        exponent = coordinates[index]
+        if coefficient == 0 or (fiber is not None and tuple(exponent[7:]) != fiber):
+            continue
+        terms.append(f"({g3am.packed_to_singular(coefficient)})*{monomial(exponent[:7])}")
+    return "+".join(terms) or "0"
+
+
+def script_text(vectors: list[list[int]], coordinate_packet: dict, reduction: dict) -> str:
+    coordinates = coordinate_packet["exponent_vectors"]
+    definitions = []
+    for path_index, vector in enumerate(vectors):
+        definitions.append(f"poly e{path_index}h20={polynomial(range(0, 248), vector, coordinates, None)};")
+        for label, fiber_exponent in (("u", (1, 0, 0)), ("v", (0, 1, 0)), ("s", (0, 0, 1))):
+            definitions.append(
+                f"poly e{path_index}h11{label}="
+                f"{polynomial(range(248, 1261), vector, coordinates, fiber_exponent)};"
+            )
+        for label, fiber_exponent in (
+            ("u2", (2, 0, 0)),
+            ("uv", (1, 1, 0)),
+            ("us", (1, 0, 1)),
+            ("v2", (0, 2, 0)),
+            ("vs", (0, 1, 1)),
+            ("s2", (0, 0, 2)),
+        ):
+            definitions.append(
+                f"poly e{path_index}h02{label}="
+                f"{polynomial(range(1261, 1509), vector, coordinates, fiber_exponent)};"
+            )
+
+    products = []
+    exports = []
+    middle = {
+        "u2": lambda i, j: f"e{i}h11u*e{j}h11u",
+        "uv": lambda i, j: f"e{i}h11u*e{j}h11v+e{i}h11v*e{j}h11u",
+        "us": lambda i, j: f"e{i}h11u*e{j}h11s+e{i}h11s*e{j}h11u",
+        "v2": lambda i, j: f"e{i}h11v*e{j}h11v",
+        "vs": lambda i, j: f"e{i}h11v*e{j}h11s+e{i}h11s*e{j}h11v",
+        "s2": lambda i, j: f"e{i}h11s*e{j}h11s",
+    }
+    labels = ("u2", "uv", "us", "v2", "vs", "s2")
+    for pair_index, (i, j) in enumerate(PAIRS):
+        for component, label in enumerate(labels, start=1):
+            name = f"p{pair_index}c{component}"
+            products.append(
+                f"poly {name}=3*(e{i}h20*e{j}h02{label}+e{i}h02{label}*e{j}h20)"
+                f"+4*({middle[label](i, j)});"
+            )
+            exports.append(
+                f'''pp=reduce({name},ZQ);
+while(pp!=0)
+{{
+  print("G3AZ_TERM={pair_index}|{component}|"+string(leadexp(pp))+"|"+string(leadcoef(pp)));
+  pp=pp-lead(pp);
+}}'''
+            )
+    base_cache = reduction["base_cache"]
+    require(isinstance(base_cache, Path), "G3AP base cache")
+    base_relative = str(base_cache.relative_to(ROOT)).replace("\\", "/")
+    minpoly = g3al.singular_minpoly(list(field.RELATION))
+    return f'''// UST.G3AZ exact six-product finite B103 Gram screen.
+option(redSB);
+{reduction["ring_declaration"]}
+minpoly={minpoly};
+def cachedBase=read("ssi:r {base_relative}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+qring q=GI;
+{chr(10).join(definitions)}
+{chr(10).join(products)}
+ideal ZQ=std(0);
+poly pp;
+{chr(10).join(exports)}
+print("G3AZ_EXPORT_PASS");
+quit;
+'''
+
+
+def field_power(value: tuple[int, ...], exponent: int) -> tuple[int, ...]:
+    result = ONE
+    base = value
+    while exponent:
+        if exponent & 1:
+            result = field.multiply(result, base)
+        base = field.multiply(base, base)
+        exponent >>= 1
+    return result
+
+
+def inverse(value: tuple[int, ...]) -> tuple[int, ...]:
+    require(value != ZERO, "finite inverse of zero")
+    result = field_power(value, field.FIELD_ORDER - 2)
+    require(field.multiply(value, result) == ONE, "finite inverse")
+    return result
+
+
+def subtract(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    return field.add(left, field.negate(right))
+
+
+def determinant3(matrix: list[list[tuple[int, ...]]]) -> tuple[int, ...]:
+    a, b, c = matrix[0]
+    d, e, f = matrix[1]
+    g, h, i = matrix[2]
+    positive = field.add(
+        field.add(field.multiply(a, field.multiply(e, i)), field.multiply(b, field.multiply(f, g))),
+        field.multiply(c, field.multiply(d, h)),
+    )
+    negative = field.add(
+        field.add(field.multiply(c, field.multiply(e, g)), field.multiply(b, field.multiply(d, i))),
+        field.multiply(a, field.multiply(f, h)),
+    )
+    return subtract(positive, negative)
+
+
+def reflection_matrices(gram: list[list[tuple[int, ...]]]) -> list[list[list[tuple[int, ...]]]]:
+    two = (2,) + (0,) * (field.DEGREE - 1)
+    result = []
+    for generator in range(3):
+        denominator = gram[generator][generator]
+        require(denominator != ZERO, "nonisotropic finite line")
+        denominator_inverse = inverse(denominator)
+        matrix = [[ONE if row == column else ZERO for column in range(3)] for row in range(3)]
+        for column in range(3):
+            ratio = field.multiply(
+                two, field.multiply(gram[generator][column], denominator_inverse)
+            )
+            matrix[generator][column] = subtract(matrix[generator][column], ratio)
+        result.append(matrix)
+    return result
+
+
+def matrix_multiply(left, right):
+    output = [[ZERO for _ in range(3)] for _ in range(3)]
+    for row in range(3):
+        for column in range(3):
+            value = ZERO
+            for middle in range(3):
+                value = field.add(value, field.multiply(left[row][middle], right[middle][column]))
+            output[row][column] = value
+    return output
+
+
+def pack_matrix(matrix):
+    return [[field.pack(value) for value in row] for row in matrix]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--vectors", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument("--allow-test-fixture", action="store_true")
+    parser.add_argument("--build-only", action="store_true")
+    args = parser.parse_args()
+    vectors_path = args.vectors.resolve()
+    output_path = args.output.resolve()
+    require(vectors_path.is_relative_to(ROOT.resolve()), "vectors inside repository")
+    require(output_path.is_relative_to(ROOT.resolve()), "output inside repository")
+    readiness = load(READINESS)
+    require(
+        readiness["status"]
+        == "CLOSED_EXACT_FINITE_B103_GRAM_EXECUTOR_READY_ADMISSIBLE_TRANSPORT_SOURCE_OPEN"
+        and all(readiness["checks"].values())
+        and not any(readiness["guardrails"].values()),
+        "G3AZ readiness",
+    )
+    same_record(readiness["artifacts"]["B103_coordinate_map"], COORDINATES, "readiness coordinate map")
+    coordinate_packet = load(COORDINATES)
+    require(
+        coordinate_packet["status"] == "CLOSED_EXACT_HASH_BOUND_B103_COORDINATE_MAP"
+        and coordinate_packet["rank"] == g3az.RANK,
+        "coordinate packet",
+    )
+    vectors, word, source_certificate = load_vectors(vectors_path, args.allow_test_fixture)
+    reduction = fiber2.selected_fiber2_reduction()
+    fiber2.require_response_target_coverage(reduction)
+    script = output_path.with_suffix(".sing")
+    raw_output = output_path.with_suffix(".singular.out")
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(script_text(vectors, coordinate_packet, reduction), encoding="ascii")
+    if args.build_only:
+        print(script)
+        return
+
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, script),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    raw_output.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "G3AZ Singular return code")
+    require("G3AZ_EXPORT_PASS" in completed.stdout, "G3AZ export marker")
+    require(not any(line.lstrip().startswith("?") for line in completed.stdout.splitlines()), "G3AZ Singular errors")
+
+    functional, target_index = g3am.functional_payload(reduction)
+    contractions = [ZERO for _ in PAIRS]
+    term_count = 0
+    for line in completed.stdout.splitlines():
+        if not line.startswith("G3AZ_TERM="):
+            continue
+        pair_text, component_text, exponent_text, coefficient_text = line.split("=", 1)[1].split("|", 3)
+        pair_index = int(pair_text)
+        target = (
+            int(component_text),
+            tuple(int(value) for value in exponent_text.split(",")),
+        )
+        require(0 <= pair_index < len(PAIRS) and target in target_index, "G3AZ target term")
+        coefficient = field.unpack(g3am.macaulay.packed_coefficient(coefficient_text))
+        weight = field.unpack(functional[target_index[target]])
+        contractions[pair_index] = field.add(
+            contractions[pair_index], field.multiply(coefficient, weight)
+        )
+        term_count += 1
+    gram = [[ZERO for _ in range(3)] for _ in range(3)]
+    for value, (i, j) in zip(contractions, PAIRS):
+        gram[i][j] = gram[j][i] = value
+    diagonal_units = [gram[index][index] != ZERO for index in range(3)]
+    determinant = determinant3(gram)
+    nondegenerate = determinant != ZERO
+    reflections = reflection_matrices(gram) if all(diagonal_units) else None
+    word_matrix = None
+    word_nonidentity = None
+    if word and reflections is not None:
+        word_matrix = [[ONE if row == column else ZERO for column in range(3)] for row in range(3)]
+        for generator in word:
+            word_matrix = matrix_multiply(reflections[generator], word_matrix)
+        identity = [[ONE if row == column else ZERO for column in range(3)] for row in range(3)]
+        word_nonidentity = word_matrix != identity
+    status = (
+        "CLOSED_EXACT_FINITE_GRAM_NONDEGENERACY_SCREEN"
+        if all(diagonal_units) and nondegenerate
+        else "EXACT_FINITE_GRAM_SCREEN_EXECUTED_INCONCLUSIVE_FOR_UNIFORM_PROMOTION"
+    )
+    result = {
+        "schema": "mtt.unified-source.g3az-finite-b103-gram-screen-result.v1",
+        "date": "2026-08-12",
+        "status": status,
+        "inputs": {
+            "G3AZ_readiness": record(READINESS),
+            "transport_vectors": record(vectors_path),
+            "source_certificate": source_certificate,
+            "B103_coordinate_map": record(COORDINATES),
+            "G3AP_certificate": reduction["certificate"],
+            "G3AP_source_certificate": reduction["source_certificate"],
+            "quotient_functional": reduction["quotient_functional_record"],
+        },
+        "execution": {
+            "script": record(script),
+            "raw_output": record(raw_output),
+            "elapsed_seconds": time.time() - started,
+            "exported_standard_terms": term_count,
+            "unordered_pairs": [list(pair) for pair in PAIRS],
+        },
+        "finite_Gram": {
+            "entries_F1016_packed": pack_matrix(gram),
+            "diagonal_units": diagonal_units,
+            "determinant_F1016_packed": field.pack(determinant),
+            "nondegenerate": nondegenerate,
+        },
+        "finite_reflections": None if reflections is None else [pack_matrix(matrix) for matrix in reflections],
+        "reflection_word": {
+            "generator_indices_applied_left_to_right": word,
+            "matrix_F1016_packed": None if word_matrix is None else pack_matrix(word_matrix),
+            "nonidentity": word_nonidentity,
+        },
+        "promotion": {
+            "all_three_lines_are_uniform_units_over_every_same_residue_DVR_lift": all(diagonal_units),
+            "Gram_span_is_uniformly_nondegenerate_over_every_same_residue_DVR_lift": nondegenerate,
+            "nonidentity_word_cannot_become_identity_in_characteristic_zero": word_nonidentity is True,
+            "zero_or_identity_residue_is_conclusive": False,
+        },
+        "guardrails": {
+            "claims_the_finite_values_equal_archimedean_complex_values": False,
+            "claims_zero_mod101_implies_zero_in_characteristic_zero": False,
+            "claims_integral_normalization_or_beta_C": False,
+            "claims_a_Hull_Strominger_endpoint": False,
+        },
+    }
+    output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AZ finite Gram screen: "
+        f"{status} diagonal_units={diagonal_units} det_nonzero={nondegenerate}"
+    )
+
+
+if __name__ == "__main__":
+    main()

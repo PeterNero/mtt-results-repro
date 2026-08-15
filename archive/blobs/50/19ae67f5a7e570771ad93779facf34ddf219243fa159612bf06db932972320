@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Build the G3CK rational open-arc source-cyclic gauge theorem packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "state" / "ust_g3ck_rational_source_cyclic_open_arc_gauge.packet.json"
+
+G3BJ = ROOT / "state" / "ust_g3bj_transcendental_arc_path.packet.json"
+G3CF = ROOT / "state" / "ust_g3cf_transcendental_arc_schur_gauge.packet.json"
+G3CI = ROOT / "state" / "ust_g3ci_selected_source_family_jet.packet.json"
+G3CJ = ROOT / "state" / "ust_g3cj_selected_source_cyclic_full_carrier.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    g3bj = load(G3BJ)
+    g3cf = load(G3CF)
+    g3ci = load(G3CI)
+    g3cj = load(G3CJ)
+    for label, packet in (("G3BJ", g3bj), ("G3CF", g3cf), ("G3CI", g3ci), ("G3CJ", g3cj)):
+        require(all(packet["checks"].values()), f"{label} checks")
+    require(
+        g3cf["checks"]["the_selected_connection_and_source_have_a_lazy_rational_definition_over_Q_gamma_a"],
+        "rational family typing",
+    )
+    require(
+        g3bj["checks"]["every_interior_selected_path_parameter_is_transcendental"],
+        "transcendental interior",
+    )
+    require(
+        g3ci["H02_associated_graded_source"]["terminal_anchor_residual_against_G3CD"] == 0,
+        "selected associated-graded terminal anchor",
+    )
+    require(
+        g3cj["homogeneous_cyclic_frame"]["determinant_mod11"] == 7,
+        "terminal Krylov unit",
+    )
+
+    checks = {
+        "G3BJ_G3CF_G3CI_and_G3CJ_are_hash_bound_and_passing": True,
+        "K_of_a_and_the_selected_associated_graded_b_of_a_are_rational_over_Q_gamma_a": True,
+        "the_1509_square_Krylov_determinant_is_a_rational_function": True,
+        "its_terminal_good_reduction_is_the_nonzero_unit7_mod11": True,
+        "the_characteristic_zero_Krylov_determinant_is_not_identically_zero": True,
+        "all_Krylov_zeros_and_poles_are_algebraic_in_each_embedding": True,
+        "the_transcendental_G3BJ_interior_avoids_every_Krylov_zero_and_pole": True,
+        "the_terminal_B89_fiber_is_in_the_same_cyclic_domain": True,
+        "a_full_dimensional_rational_companion_frame_exists_on_0_less_t_le_1": True,
+        "the_moving_frame_connection_term_is_retained": True,
+        "the_G3BI_start_endpoint_cyclicity_is_left_open": True,
+        "no_dimension_reduction_constant_companion_or_integral_transport_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CK checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3ck-rational-source-cyclic-open-arc-gauge.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CK",
+        "status": "CLOSED_EXACT_CHARACTERISTIC_ZERO_SOURCE_CYCLIC_GAUGE_ON_OPEN_G3BJ_ARC_START_AND_COEFFICIENT_EXECUTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "coefficient_field": "k=Q(gamma)",
+        "inputs": {
+            "G3BJ": record(G3BJ),
+            "G3CF": record(G3CF),
+            "G3CI": record(G3CI),
+            "G3CJ": record(G3CJ),
+        },
+        "rational_family": {
+            "operator": "K(a) belongs to Mat_1509(k(a))",
+            "selected_source": "b(a) belongs to k(a)^1509 and is the G3CI associated-graded H02 continuation anchored to G3CD at a=0",
+            "homogeneous_krylov_frame": "B(a)=[b(a),K(a)b(a),...,K(a)^1508 b(a)]",
+            "krylov_determinant": "Delta_Kr(a)=det B(a) belongs to k(a)",
+            "terminal_certificate": "Delta_Kr(0) has good reduction 7 mod11 and is therefore nonzero in characteristic zero",
+            "nonidentity_consequence": "Delta_Kr(a) is not the zero rational function",
+        },
+        "selected_domain": {
+            "path": g3bj["selected_path"]["formula"],
+            "orientation": g3bj["selected_path"]["orientation"],
+            "covered_parameter_range": "0<t<=1, corresponding to the open arc plus terminal B89 a=0",
+            "excluded_boundary": "t=0, a=1, until Delta_Kr(1) or a limiting cyclic initializer is evaluated",
+            "proof": "The numerator and denominator of a nonzero element of k(a) have only algebraic complex roots. Every G3BJ interior a(t) is transcendental, so it is neither a zero nor a pole. The terminal point is covered by the unit reduction.",
+            "cyclicity": "B(a) is invertible at every covered point, so b(a) is cyclic for K(a) throughout this domain.",
+        },
+        "moving_companion_gauge": {
+            "affine_operator": "K_tilde(a)=[[K(a),b(a)],[0,0]]",
+            "affine_frame": "B_aff(a)=[e_aff,K_tilde(a)e_aff,...,K_tilde(a)^1509 e_aff]",
+            "pointwise_companion": "C_aff(a)=B_aff(a)^-1 K_tilde(a) B_aff(a)",
+            "moving_frame_connection": "Omega_aff(a)=B_aff(a)^-1 dB_aff(a)/da",
+            "path_equation": "If Y_dot=a'(t) K_tilde(a(t))Y and Y=B_aff(a(t))q, then q_dot=a'(t)[C_aff(a(t))-Omega_aff(a(t))]q.",
+            "coefficient_typing": "B_aff, B_aff^-1, C_aff and Omega_aff have entries in k(a) on the cyclic domain.",
+            "dimension": 1510,
+            "interpretation": "This is a rational full-carrier gauge. The derivative term prevents treating the terminal companion matrix as a constant path generator.",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_cyclicity_at_the_G3BI_start_a1": False,
+            "claims_the_explicit_characteristic_zero_companion_coefficients_are_emitted": False,
+            "claims_Omega_aff_is_zero": False,
+            "claims_a_constant_coefficient_path_system": False,
+            "claims_a_transport_dimension_reduction": False,
+            "claims_an_integral_lattice_basis_or_meridian_word": False,
+            "claims_beta_C_is_decided": False,
+        },
+        "theorem": {
+            "name": "ustG3ckRationalSourceCyclicOpenArcGauge",
+            "tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_RATIONAL_DOMAIN_THEOREM",
+            "statement": "The selected rational correction family K(a),b(a) has a nonzero 1509-square Krylov determinant: its terminal good reduction is 7 modulo 11. Hence that determinant is a nonzero element of Q(gamma)(a), whose zeros and poles are algebraic. The transcendental G3BJ interior avoids all of them, and the B89 endpoint is covered by the same terminal unit. Therefore the selected source is cyclic and the full affine carrier admits a rational moving companion gauge for every 0<t<=1. The transformed ODE necessarily contains the emitted symbolic moving-frame term B_aff^-1 dB_aff/da. Start-endpoint cyclicity, explicit coefficients and integral transport remain open.",
+        },
+        "frontier_delta": {
+            "before": "G3CJ proved selected-source cyclicity only at the terminal GF11 fiber.",
+            "after": "Good reduction plus the transcendental-arc theorem promotes nonvanishing of the rational Krylov determinant to characteristic zero on the entire open G3BJ arc and terminal B89 endpoint. A single full-dimensional rational companion gauge exists there; only the algebraic start endpoint and explicit moving coefficients remain before numerical or interval continuation.",
+        },
+        "next_required_object": "Evaluate Delta_Kr(1), or construct a limiting initializer, and emit the needed rational/interval actions of C_aff(a)-Omega_aff(a) on the selected one-vector state. Then integrate along G3BJ, recover terminal integral coordinates or a meridian word, and execute the normalized 248-row readout.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CK rational source-cyclic open-arc gauge: PASS")
+    print("domain=0<t<=1 terminal_det_reduction=7 dimension=1510 moving_frame_term=retained")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

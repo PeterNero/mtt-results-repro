@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Probe modular-guided fraction-free elimination on the G3ED quotient."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import time
+from pathlib import Path
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    ZERO,
+    coefficient_add,
+    coefficient_multiply,
+    coefficient_scale,
+)
+from build_ust_g3ec_h02_component12_unit_pivot_reduction import PRIME, ROOT
+
+
+INPUT = ROOT / "evidence/ust_g3ed/H02.component12.unit_saturated.number_field.sms"
+INPUT_CERTIFICATE = ROOT / "evidence/ust_g3ed/H02.component12.unit_saturation.json"
+OUTPUT_CERTIFICATE = ROOT / "evidence/ust_g3ee/H02.component12.fraction_free_elimination.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def evaluate(value: tuple[int, ...]) -> int:
+    result = 0
+    for coefficient in reversed(value):
+        result = (result * 5 + coefficient) % PRIME
+    return result
+
+
+def parse_matrix() -> tuple[int, list[dict[int, tuple[int, ...]]]]:
+    with INPUT.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require(degree == 6 and minimal == (64, 16, 33, 44, 89, 24, 1), "number field")
+        result: list[dict[int, tuple[int, ...]]] = [dict() for _ in range(columns)]
+        count = 0
+        for line in handle:
+            values = list(map(int, line.split()))
+            result[values[1] - 1][values[0] - 1] = tuple(values[2:])
+            count += 1
+    require(count == declared, "declared entries")
+    return rows, result
+
+
+def content(column: dict[int, tuple[int, ...]]) -> int:
+    value = 0
+    for coefficients in column.values():
+        for coefficient in coefficients:
+            value = math.gcd(value, abs(coefficient))
+            if value == 1:
+                return 1
+    return value
+
+
+def bit_height(columns: list[dict[int, tuple[int, ...]]], active: set[int]) -> int:
+    return max(
+        (
+            abs(coefficient).bit_length()
+            for column in active
+            for value in columns[column].values()
+            for coefficient in value
+        ),
+        default=0,
+    )
+
+
+def update_transcript(
+    digest: "hashlib._Hash",
+    step: int,
+    column: int,
+    row: int,
+    pivot: tuple[int, ...],
+) -> None:
+    digest.update(step.to_bytes(4, "little"))
+    digest.update(column.to_bytes(4, "little"))
+    digest.update(row.to_bytes(4, "little"))
+    for value in pivot:
+        magnitude = abs(value).to_bytes(max(1, (abs(value).bit_length() + 7) // 8), "little")
+        digest.update(b"\x01" if value < 0 else b"\x00")
+        digest.update(len(magnitude).to_bytes(4, "little"))
+        digest.update(magnitude)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--max-pivots",
+        type=int,
+        default=0,
+        help="zero executes every non-free pivot",
+    )
+    arguments = parser.parse_args()
+    upstream = json.loads(INPUT_CERTIFICATE.read_text(encoding="utf-8"))
+    rows_count, columns = parse_matrix()
+    require([rows_count, len(columns)] == upstream["output"]["shape"], "input shape")
+    free = set(int(value) for value in upstream["output"]["free_component12_columns"])
+    require(len(free) == 10, "ten protected columns")
+    active_columns = set(range(len(columns)))
+    active_rows = {row for column in columns for row in column}
+    started = time.monotonic()
+    transcript = hashlib.sha256()
+    pivot_summaries: list[dict[str, int]] = []
+    target_pivots = len(columns) - len(free)
+    requested_pivots = (
+        target_pivots
+        if arguments.max_pivots == 0
+        else min(arguments.max_pivots, target_pivots)
+    )
+
+    for step in range(requested_pivots):
+        row_columns: dict[int, list[int]] = {row: [] for row in active_rows}
+        for column in active_columns:
+            for row in columns[column]:
+                if row in active_rows:
+                    row_columns[row].append(column)
+        candidates: list[tuple[int, int, int, int, int]] = []
+        for column in active_columns - free:
+            column_degree = sum(row in active_rows for row in columns[column])
+            for row, value in columns[column].items():
+                if row not in active_rows or evaluate(value) == 0:
+                    continue
+                coefficient_height = max(abs(item).bit_length() for item in value)
+                markowitz = (column_degree - 1) * (len(row_columns[row]) - 1)
+                candidates.append(
+                    (markowitz, coefficient_height, len(row_columns[row]), column, row)
+                )
+        require(candidates, "finite pivot candidate")
+        markowitz, _, row_degree, pivot_column, pivot_row = min(candidates)
+        pivot = columns[pivot_column][pivot_row]
+        require(evaluate(pivot) != 0, "good-reduction pivot")
+        affected = [
+            column for column in row_columns[pivot_row] if column != pivot_column
+        ]
+        pivot_data = columns[pivot_column]
+        for column in affected:
+            multiplier = columns[column][pivot_row]
+            updated = {
+                row: coefficient_multiply(pivot, value)
+                for row, value in columns[column].items()
+                if row != pivot_row
+            }
+            negative = coefficient_scale(multiplier, -1)
+            for row, value in pivot_data.items():
+                if row == pivot_row:
+                    continue
+                combined = coefficient_add(
+                    updated.get(row, ZERO), coefficient_multiply(negative, value)
+                )
+                if combined == ZERO:
+                    updated.pop(row, None)
+                else:
+                    updated[row] = combined
+            divisor = content(updated)
+            if divisor > 1:
+                updated = {
+                    row: tuple(value // divisor for value in coefficients)
+                    for row, coefficients in updated.items()
+                }
+            columns[column] = updated
+        active_columns.remove(pivot_column)
+        active_rows.remove(pivot_row)
+        update_transcript(transcript, step, pivot_column, pivot_row, pivot)
+        pivot_summaries.append(
+            {
+                "step": step + 1,
+                "column": pivot_column,
+                "row": pivot_row,
+                "markowitz": markowitz,
+                "row_degree": row_degree,
+                "affected_columns": len(affected),
+            }
+        )
+        if (step + 1) % 10 == 0 or step + 1 == requested_pivots:
+            nnz = sum(len(columns[column]) for column in active_columns)
+            print(
+                f"G3EE_FF step={step+1} columns={len(active_columns)} "
+                f"rows={len(active_rows)} nnz={nnz} bits={bit_height(columns, active_columns)} "
+                f"elapsed={time.monotonic()-started:.3f}",
+                flush=True,
+            )
+
+    residual_entries = sum(len(columns[column]) for column in active_columns)
+    completed = requested_pivots == target_pivots
+    exact_zero_residual = completed and residual_entries == 0
+    if completed:
+        require(active_columns == free, "only protected columns survive")
+    payload = {
+        "schema": "ust.g3ee.h02.component12.fraction-free-elimination.v1",
+        "input": INPUT.relative_to(ROOT).as_posix(),
+        "input_shape": [rows_count, len(columns)],
+        "protected_columns": sorted(free),
+        "target_pivots": target_pivots,
+        "executed_pivots": requested_pivots,
+        "complete": completed,
+        "pivot_transcript_sha256": transcript.hexdigest(),
+        "pivot_summaries": pivot_summaries,
+        "final": {
+            "active_rows": len(active_rows),
+            "active_columns": len(active_columns),
+            "residual_entries": residual_entries,
+            "exact_zero_residual": exact_zero_residual,
+            "coefficient_bit_height": bit_height(columns, active_columns),
+            "elapsed_seconds": time.monotonic() - started,
+        },
+        "claim_boundary": (
+            "Each pivot is nonzero at the certified good reduction and hence nonzero "
+            "over Q(gamma). Fraction-free column substitutions and integer-content "
+            "normalizations are invertible over Q(gamma). Exact rank 861 and nullity "
+            "10 follow only when all 861 pivots execute and the ten-column residual "
+            "is literally zero."
+        ),
+    }
+    if completed:
+        OUTPUT_CERTIFICATE.parent.mkdir(parents=True, exist_ok=True)
+        OUTPUT_CERTIFICATE.write_text(
+            json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+        )
+    print(
+        f"G3EE_FF_FINAL complete={completed} pivots={requested_pivots}/{target_pivots} "
+        f"active_columns={len(active_columns)} residual_entries={residual_entries} "
+        f"exact_zero={exact_zero_residual} transcript={transcript.hexdigest()}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

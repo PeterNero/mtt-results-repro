@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""Run the exact full-source G3AP target-Macaulay rank calculation."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+import assemble_ust_g3ap_selected_cayley_target_macaulay_full_reuse as assembler
+import build_ust_f1016_native_tools as native_tools
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+import extract_ust_g3ap_selected_cayley_target_macaulay_minor as extractor
+import run_ust_g3ap_selected_cayley_target_macaulay_minor as balanced_runner
+import ust_f1016_sparse_minor as minor
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+CAMPAIGN = assembler.PACKET
+FULL_MATRIX = assembler.FULL_MATRIX
+CUSTOM_OUTPUT = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_full_reused."
+    "weighted-free-fast-native.minor.out"
+)
+CUSTOM_LOG = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_full_reused."
+    "weighted-free-fast-native.minor.log"
+)
+MINOR_MATRIX = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.minor.packed-sms"
+)
+FUNCTIONAL = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_full_reused."
+    "quotient-functional.packed-vector"
+)
+MINOR_BODY = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.minor.body.tmp"
+)
+EXTRACTION_PACKET = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.minor.packet.json"
+)
+LINBOX_OUTPUT = (
+    STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.minor.linbox.out"
+)
+FUNCTIONAL_OUTPUT = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_full_reused."
+    "quotient-functional.givaro.out"
+)
+SELFTEST_CUSTOM = STATE / "ust_f1016_sparse_rank.full-source-selftest.custom.out"
+SELFTEST_CUSTOM_LOG = STATE / "ust_f1016_sparse_rank.full-source-selftest.custom.log"
+SELFTEST_SCHEDULER = STATE / "ust_f1016_sparse_rank.full-source-scheduler-selftest.out"
+SELFTEST_SCHEDULER_LOG = (
+    STATE / "ust_f1016_sparse_rank.full-source-scheduler-selftest.log"
+)
+SELFTEST_LINBOX = STATE / "ust_f1016_sparse_rank.full-source-selftest.linbox.out"
+SELFTEST_FUNCTIONAL = (
+    STATE / "ust_f1016_sparse_rank.full-source-selftest.functional.packed-vector"
+)
+SELFTEST_FUNCTIONAL_OUTPUT = (
+    STATE / "ust_f1016_sparse_rank.full-source-selftest.functional.givaro.out"
+)
+PACKET = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_full_reused."
+    "rank-candidate.packet.json"
+)
+TARGET_RANK = macaulay.EXPECTED_TARGET_COORDINATES - 1
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def relative(path: Path) -> str:
+    return str(path.relative_to(ROOT)).replace("\\", "/")
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": relative(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def checked(item: dict[str, object], label: str) -> Path:
+    path = ROOT / str(item["path"])
+    require(
+        path.is_file()
+        and sha256(path) == item["sha256"]
+        and path.stat().st_size == item.get("bytes", path.stat().st_size),
+        label,
+    )
+    return path
+
+
+def run_field_selftests() -> dict[str, object]:
+    balanced_runner.write_selftest()
+    custom_raw = balanced_runner.run_exact(
+        balanced_runner.WEIGHTED_FREE_FAST_BINARY,
+        [
+            relative(balanced_runner.SELFTEST_MATRIX),
+            "--target-rank",
+            "1",
+            "--output",
+            relative(SELFTEST_CUSTOM),
+            "--progress-seconds",
+            "60",
+        ],
+        SELFTEST_CUSTOM_LOG,
+        120,
+    )
+    require("SUCCESS" in custom_raw and "rank=1" in custom_raw, "custom field self-test")
+    custom_scalars, custom_vectors = minor.parse_output(SELFTEST_CUSTOM)
+    require(
+        int(custom_scalars["MINOR_SIZE"]) == 1
+        and int(custom_scalars["MINOR_DETERMINANT_PACKED"]) != 0,
+        "custom field self-test output",
+    )
+
+    scheduler_raw = balanced_runner.run_exact(
+        balanced_runner.WEIGHTED_FREE_FAST_BINARY,
+        [
+            relative(balanced_runner.SELFTEST_FREE_SCHEDULER_MATRIX),
+            "--target-rank",
+            "2",
+            "--output",
+            relative(SELFTEST_SCHEDULER),
+            "--progress-seconds",
+            "60",
+        ],
+        SELFTEST_SCHEDULER_LOG,
+        120,
+    )
+    scheduler_scalars, scheduler_vectors = minor.parse_output(SELFTEST_SCHEDULER)
+    require(
+        "SUCCESS" in scheduler_raw
+        and scheduler_scalars["ROW_ORDER"]
+        == "adaptive-free-then-weighted-support"
+        and int(scheduler_scalars["PROCESSED_SOURCE_ROWS"]) == 2
+        and int(scheduler_scalars["RESCORED_SOURCE_ROWS"]) >= 1
+        and scheduler_vectors["SELECTED_SOURCE_ROWS_ZERO_BASED"] == [0, 2],
+        "free-support scheduler self-test",
+    )
+
+    linbox_raw = balanced_runner.run_exact(
+        balanced_runner.LINBOX_BINARY,
+        [relative(balanced_runner.SELFTEST_MATRIX)],
+        SELFTEST_LINBOX,
+        120,
+    )
+    require(
+        balanced_runner.parse_linbox(linbox_raw) == (2, 2, 4, 1),
+        "LinBox field self-test",
+    )
+
+    functional = custom_vectors["QUOTIENT_FUNCTIONAL_PACKED"]
+    SELFTEST_FUNCTIONAL.write_text(
+        f"{len(functional)}\n"
+        + " ".join(str(value) for value in functional)
+        + "\n",
+        encoding="ascii",
+    )
+    functional_raw = balanced_runner.run_exact(
+        balanced_runner.FUNCTIONAL_BINARY,
+        [
+            relative(balanced_runner.SELFTEST_MATRIX),
+            relative(SELFTEST_FUNCTIONAL),
+        ],
+        SELFTEST_FUNCTIONAL_OUTPUT,
+        120,
+    )
+    require(
+        balanced_runner.parse_functional_replay(functional_raw) == (2, 2, 4, 2, 2),
+        "Givaro functional field self-test",
+    )
+    return {
+        "matrix": record(balanced_runner.SELFTEST_MATRIX),
+        "custom_output": record(SELFTEST_CUSTOM),
+        "custom_log": record(SELFTEST_CUSTOM_LOG),
+        "scheduler_matrix": record(balanced_runner.SELFTEST_FREE_SCHEDULER_MATRIX),
+        "scheduler_output": record(SELFTEST_SCHEDULER),
+        "scheduler_log": record(SELFTEST_SCHEDULER_LOG),
+        "linbox_output": record(SELFTEST_LINBOX),
+        "functional": record(SELFTEST_FUNCTIONAL),
+        "functional_output": record(SELFTEST_FUNCTIONAL_OUTPUT),
+        "exact_rank": 1,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--skip-custom", action="store_true")
+    args = parser.parse_args()
+
+    subprocess.run(
+        [sys.executable, str(ROOT / "build_ust_f1016_native_tools.py")],
+        cwd=ROOT,
+        check=True,
+    )
+    require(native_tools.current(), "hash-current native exact engines")
+    campaign = json.loads(CAMPAIGN.read_text(encoding="ascii"))
+    require(
+        campaign["schema"]
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-full-reused.v1"
+        and all(campaign["checks"].values())
+        and not any(campaign["guardrails"].values()),
+        "full reused campaign",
+    )
+    matrix = checked(campaign["matrix"], "full reused matrix")
+    require(
+        matrix == FULL_MATRIX
+        and campaign["matrix"]["rows"] == 92979
+        and campaign["matrix"]["columns"] == macaulay.EXPECTED_TARGET_COORDINATES
+        and campaign["selection"]["union_is_a_permutation_of_all_selected_sources"],
+        "full selected matrix identity",
+    )
+    require(
+        balanced_runner.WEIGHTED_FREE_FAST_SOURCE.is_file()
+        and balanced_runner.WEIGHTED_FREE_FAST_BINARY.is_file()
+        and balanced_runner.LINBOX_BINARY.is_file()
+        and balanced_runner.FUNCTIONAL_BINARY.is_file(),
+        "exact rank engines",
+    )
+
+    field_selftest = run_field_selftests()
+    started = time.time()
+    if not args.skip_custom:
+        custom_raw = balanced_runner.run_exact(
+            balanced_runner.WEIGHTED_FREE_FAST_BINARY,
+            [
+                relative(FULL_MATRIX),
+                "--target-rank",
+                str(TARGET_RANK),
+                "--output",
+                relative(CUSTOM_OUTPUT),
+                "--progress-seconds",
+                "10",
+            ],
+            CUSTOM_LOG,
+            args.timeout,
+        )
+        require(
+            "SUCCESS" in custom_raw and f"rank={TARGET_RANK}" in custom_raw,
+            "full-source target minor",
+        )
+    else:
+        require(CUSTOM_OUTPUT.is_file(), "existing full-source target minor")
+        if not CUSTOM_LOG.is_file():
+            CUSTOM_LOG.write_bytes(CUSTOM_OUTPUT.read_bytes())
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "extract_ust_g3ap_selected_cayley_target_macaulay_minor.py"),
+            "--campaign",
+            str(CAMPAIGN),
+            "--minor-output",
+            str(CUSTOM_OUTPUT),
+            "--matrix-output",
+            str(MINOR_MATRIX),
+            "--functional-output",
+            str(FUNCTIONAL),
+            "--body-output",
+            str(MINOR_BODY),
+            "--packet-output",
+            str(EXTRACTION_PACKET),
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    extraction = json.loads(EXTRACTION_PACKET.read_text(encoding="ascii"))
+    require(
+        extraction["minor"]["path"] == relative(MINOR_MATRIX)
+        and extraction["minor"]["size"] == TARGET_RANK,
+        "full-source minor extraction",
+    )
+
+    linbox_raw = balanced_runner.run_exact(
+        balanced_runner.LINBOX_BINARY,
+        [relative(MINOR_MATRIX)],
+        LINBOX_OUTPUT,
+        args.timeout,
+    )
+    rows, columns, nonzeros, rank = balanced_runner.parse_linbox(linbox_raw)
+    require(
+        rows == columns == rank == TARGET_RANK
+        and nonzeros == extraction["minor"]["nonzeros"],
+        "independent full-rank minor",
+    )
+    functional_raw = balanced_runner.run_exact(
+        balanced_runner.FUNCTIONAL_BINARY,
+        [relative(FULL_MATRIX), relative(FUNCTIONAL)],
+        FUNCTIONAL_OUTPUT,
+        args.timeout,
+    )
+    functional_shape = balanced_runner.parse_functional_replay(functional_raw)
+    require(
+        functional_shape[0] == campaign["matrix"]["rows"]
+        and functional_shape[1] == macaulay.EXPECTED_TARGET_COORDINATES
+        and functional_shape[2] == campaign["matrix"]["nonzeros"]
+        and functional_shape[3] == campaign["matrix"]["rows"]
+        and functional_shape[4]
+        == extraction["minor"]["quotient_functional"]["nonzero_coefficients"],
+        "independent full-source quotient-functional replay",
+    )
+
+    packet: dict[str, object] = {
+        "schema": (
+            "mtt.unified-source.g3ap-selected-cayley-target-macaulay-"
+            "full-rank-candidate.v1"
+        ),
+        "date": "2026-08-11",
+        "status": (
+            "CANDIDATE_EXACT_FULL_SOURCE_TWO_ENGINE_TARGET_CODIMENSION_AT_MOST_ONE_"
+            "REQUIRES_SOURCE_CERTIFICATE_ADOPTION"
+        ),
+        "inputs": {
+            "native_tools_build": record(native_tools.RECEIPT),
+            "campaign": record(CAMPAIGN),
+            "campaign_matrix": record(FULL_MATRIX),
+            "minor_extraction": record(EXTRACTION_PACKET),
+            "selected_minor": record(MINOR_MATRIX),
+        },
+        "engines": {
+            "custom_sparse_column_elimination": {
+                "scheduler": "weighted-free-fast",
+                "source": record(balanced_runner.WEIGHTED_FREE_FAST_SOURCE),
+                "source_dependencies": [
+                    record(balanced_runner.CUSTOM_SOURCE),
+                    record(balanced_runner.GREEDY_SOURCE),
+                    record(balanced_runner.WEIGHTED_FREE_SOURCE),
+                ],
+                "binary": record(balanced_runner.WEIGHTED_FREE_FAST_BINARY),
+                "output": record(CUSTOM_OUTPUT),
+                "log": record(CUSTOM_LOG),
+            },
+            "linbox_givaro_sparse_elimination": {
+                "source": record(balanced_runner.LINBOX_SOURCE),
+                "binary": record(balanced_runner.LINBOX_BINARY),
+                "output": record(LINBOX_OUTPUT),
+            },
+            "givaro_full_matrix_functional_replay": {
+                "source": record(balanced_runner.FUNCTIONAL_SOURCE),
+                "binary": record(balanced_runner.FUNCTIONAL_BINARY),
+                "functional": record(FUNCTIONAL),
+                "output": record(FUNCTIONAL_OUTPUT),
+            },
+        },
+        "field_self_test": field_selftest,
+        "rank": {
+            "ambient_target_coordinates": macaulay.EXPECTED_TARGET_COORDINATES,
+            "selected_minor_size": TARGET_RANK,
+            "custom_nonzero_determinant_packed": extraction["minor"][
+                "determinant_packed_from_pivot_transcript"
+            ],
+            "independent_linbox_rank": rank,
+            "quotient_functional": extraction["minor"]["quotient_functional"],
+        },
+        "checks": {
+            "the_native_exact_engines_have_a_hash_current_reproducible_build_receipt": True,
+            "both_rank_engines_pass_the_selected_F1016_minpoly_dependence_test": True,
+            "the_adaptive_scheduler_passes_the_exact_free_support_ordering_test": True,
+            "the_custom_engine_emits_a_nonzero_39725_minor_transcript": True,
+            "the_minor_is_extracted_in_the_determinant_orientation": True,
+            "independent_LinBox_Givaro_elimination_finds_rank39725": True,
+            "the_full_relation_span_has_codimension_at_most_one_in_the_39726_coordinate_target": True,
+            "the_unique_normalized_quotient_functional_annihilates_all_92979_rows": True,
+            "independent_Givaro_replay_annihilates_all_92979_rows": True,
+        },
+        "guardrails": {
+            "claims_full_source_provenance_is_certified_by_this_packet": False,
+            "claims_the_target_dimension_is_at_least_one": False,
+            "claims_characteristic_zero_promotion": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "elapsed_seconds": time.time() - started,
+        "next_required_object": (
+            "Combine this full-source rank certificate with the independent full-source "
+            "provenance packet and the selected ordinary-top lower bound."
+        ),
+    }
+    require(all(packet["checks"].values()), "full-source rank checks")
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP full-source target Macaulay rank candidate: PASS "
+        f"rows={campaign['matrix']['rows']} minor={TARGET_RANK} "
+        f"LinBox_rank={rank} source_certificate_adoption=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

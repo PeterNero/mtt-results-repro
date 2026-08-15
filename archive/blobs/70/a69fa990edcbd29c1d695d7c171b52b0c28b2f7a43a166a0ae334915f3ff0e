@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Run the restartable exact G3AP -> G3AQ closure pipeline.
+
+The expensive target-Macaulay export is intentionally separate. This driver
+starts only after its assembled campaign packet exists, then performs every
+promotion and independent verifier in theorem order.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+CAMPAIGN = STATE / "ust_g3ap_selected_cayley_target_macaulay_full_reused.packet.json"
+G3AP = STATE / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+G3AM = STATE / "ust_g3am_selected_cayley_principal_response.packet.json"
+G3AN = STATE / "ust_g3an_selected_cayley_full_response_schur.packet.json"
+G3AQ = STATE / "ust_g3aq_selected_cayley_relative_residue_promotion.packet.json"
+RECEIPT = STATE / "ust_g3ap_through_g3aq_closure.pipeline.json"
+INCREMENTAL_RANK_WITNESS = (
+    STATE
+    / "ust_g3ap_selected_cayley_target_macaulay_incremental_rank_witness.latest.json"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"missing artifact {path.relative_to(ROOT)}")
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def run(label: str, arguments: list[str]) -> None:
+    print(f"PIPELINE START {label}", flush=True)
+    subprocess.run([sys.executable, *arguments], cwd=ROOT, check=True)
+    print(f"PIPELINE PASS {label}", flush=True)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="ascii"))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exact-timeout", type=int, default=43200)
+    parser.add_argument("--response-timeout", type=int, default=10800)
+    parser.add_argument("--response-workers", type=int, default=8)
+    parser.add_argument("--principal-rows-per-chunk", type=int, default=8)
+    parser.add_argument("--extra-rows-per-chunk", type=int, default=4)
+    parser.add_argument("--reuse-custom-minor", action="store_true")
+    parser.add_argument(
+        "--custom-engine",
+        choices=("weighted-free-fast",),
+        default="weighted-free-fast",
+    )
+    parser.add_argument("--skip-smoke", action="store_true")
+    parser.add_argument("--skip-canonical-verify", action="store_true")
+    args = parser.parse_args()
+    require(1 <= args.response_workers <= 16, "response workers")
+    require(1 <= args.principal_rows_per_chunk <= 248, "principal rows per chunk")
+    require(1 <= args.extra_rows_per_chunk <= 248, "extra rows per chunk")
+
+    campaign = load(CAMPAIGN)
+    require(
+        campaign.get("schema")
+        == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-full-reused.v1"
+        and campaign.get("matrix", {}).get("rows") == 92979
+        and campaign.get("matrix", {}).get("columns") == 39726,
+        "completed full-source target-Macaulay campaign",
+    )
+
+    minor_command = [
+        "run_ust_g3ap_selected_cayley_target_macaulay_full_minor.py",
+        "--timeout",
+        str(args.exact_timeout),
+    ]
+    if args.reuse_custom_minor:
+        minor_command.append("--skip-custom")
+    run(
+        "G3AP full-source provenance certificate",
+        ["verify_ust_g3ap_selected_cayley_target_macaulay_full_reused.py"],
+    )
+    if INCREMENTAL_RANK_WITNESS.is_file():
+        run(
+            "G3AP monotone full-source rank-squeeze certificate",
+            [
+                "certify_ust_g3ap_selected_cayley_target_macaulay_full_from_incremental.py",
+                "--timeout",
+                str(args.exact_timeout),
+                "--reuse-source-certificate",
+            ],
+        )
+    else:
+        run("G3AP exact full-source two-engine minor", minor_command)
+        run(
+            "G3AP full-source rank-squeeze certificate",
+            [
+                "certify_ust_g3ap_selected_cayley_target_macaulay_full.py",
+                "--timeout",
+                str(args.exact_timeout),
+                "--reuse-source-certificate",
+            ],
+        )
+    run(
+        "G3AP canonical adoption",
+        [
+            "adopt_ust_g3ap_selected_cayley_target_macaulay_certified.py",
+            "--skip-verifier",
+        ],
+    )
+    run(
+        "G3AP canonical verifier",
+        ["verify_ust_g3ap_selected_cayley_ordinary_top_dimension.py"],
+    )
+    g3ap = load(G3AP)
+    require(
+        g3ap.get("status")
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+        "closed G3AP",
+    )
+
+    if not args.skip_smoke:
+        run(
+            "G3AM one-cell functional smoke",
+            [
+                "build_ust_g3am_selected_cayley_fiber2_response_chunk.py",
+                "--row-start",
+                "0",
+                "--row-count",
+                "1",
+                "--column-start",
+                "0",
+                "--column-count",
+                "1",
+                "--timeout",
+                str(args.response_timeout),
+            ],
+        )
+    run(
+        "G3AM principal response",
+        [
+            "run_ust_g3al_selected_cayley_principal_campaign.py",
+            "--rows-per-chunk",
+            str(args.principal_rows_per_chunk),
+            "--timeout-per-chunk",
+            str(args.response_timeout),
+            "--workers",
+            str(args.response_workers),
+        ],
+    )
+    run(
+        "G3AM principal verifier",
+        ["verify_ust_g3am_selected_cayley_principal_response.py"],
+    )
+    g3am = load(G3AM)
+    require(
+        g3am.get("principal_response", {}).get("rank") == 33,
+        "G3AM rank(D0)=33",
+    )
+
+    run(
+        "G3AN extra response and Schur assembly",
+        [
+            "run_ust_g3an_selected_cayley_extra_campaign.py",
+            "--rows-per-chunk",
+            str(args.extra_rows_per_chunk),
+            "--timeout-per-chunk",
+            str(args.response_timeout),
+            "--workers",
+            str(args.response_workers),
+        ],
+    )
+    run(
+        "G3AN full-response verifier",
+        ["verify_ust_g3an_selected_cayley_full_response_schur.py"],
+    )
+    g3an = load(G3AN)
+    require(
+        g3an.get("full_response_schur", {}).get("rank_D") == 122,
+        "G3AN rank(D)=122",
+    )
+
+    run(
+        "G3AQ characteristic-zero promotion",
+        ["build_ust_g3aq_selected_cayley_relative_residue_promotion.py"],
+    )
+    run(
+        "G3AQ promotion verifier",
+        ["verify_ust_g3aq_selected_cayley_relative_residue_promotion.py"],
+    )
+    g3aq = load(G3AQ)
+    require(
+        g3aq.get("status")
+        == "CLOSED_EXACT_SELECTED_CHARACTERISTIC_ZERO_RELATIVE_R1_RESPONSE_RANK122",
+        "closed G3AQ",
+    )
+
+    if not args.skip_canonical_verify:
+        run("canonical repository verifier", ["verify.py"])
+
+    receipt = {
+        "schema": "mtt.unified-source.g3ap-through-g3aq-closure-pipeline.v1",
+        "status": "PASS_EXACT_G3AP_THROUGH_G3AQ_PIPELINE",
+        "artifacts": {
+            "G3AP": record(G3AP),
+            "G3AM": record(G3AM),
+            "G3AN": record(G3AN),
+            "G3AQ": record(G3AQ),
+        },
+        "checks": {
+            "G3AP_selected_top_dimension_is_one": True,
+            "G3AM_principal_response_rank_is_33": True,
+            "G3AN_full_response_rank_is_122": True,
+            "G3AQ_characteristic_zero_promotion_is_verified": True,
+        },
+        "guardrails": {
+            "claims_beta_C_is_computed": False,
+            "claims_the_Hull_Strominger_endpoint_is_closed": False,
+        },
+        "next_required_object": (
+            "Emit beta_C from the same selected Deligne source and evaluate the "
+            "rank-126 promoted obstruction before the q79 Hull-Strominger endpoint."
+        ),
+    }
+    RECEIPT.write_text(json.dumps(receipt, indent=2) + "\n", encoding="ascii")
+    print("PIPELINE COMPLETE G3AP -> G3AQ", flush=True)
+
+
+if __name__ == "__main__":
+    main()

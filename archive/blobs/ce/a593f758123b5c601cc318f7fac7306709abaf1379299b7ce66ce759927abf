@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Peel exact unit leaves from the reduced component-20 presentation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import deque
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    ONE,
+    ZERO,
+    load,
+    write_number_field_matrix,
+)
+from build_ust_g3el_h02_component16_unit_pivot_reduction import finite_rank
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "evidence/ust_g3ey/H02.component20.geometric_unit_reduced.number_field.sms"
+SOURCE_PACKET = ROOT / "evidence/ust_g3ey/H02.component20.geometric_unit_reduction.json"
+EVIDENCE = ROOT / "evidence/ust_g3ez"
+OUTPUT = EVIDENCE / "H02.component20.unit_leaf_reduced.number_field.sms"
+RECONSTRUCTION = EVIDENCE / "H02.component20.unit_leaf_reconstruction.json"
+CERTIFICATE = EVIDENCE / "H02.component20.unit_leaf_reduction.json"
+
+MINUS_ONE = (-1, 0, 0, 0, 0, 0)
+INPUT_ROWS = 5442
+INPUT_COLUMNS = 5477
+INPUT_STRUCTURAL_RANK = 5415
+INPUT_FINITE_RANK = 5091
+INPUT_NULLITY = 386
+INPUT_STRUCTURAL_NULLITY = 62
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def parse_matrix() -> tuple[
+    list[dict[int, tuple[int, ...]]],
+    list[dict[int, tuple[int, ...]]],
+]:
+    with SOURCE.open("r", encoding="ascii") as handle:
+        rows, columns, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require((rows, columns, degree) == (INPUT_ROWS, INPUT_COLUMNS, 6), "matrix shape")
+        require(minimal == (64, 16, 33, 44, 89, 24, 1), "minimal polynomial")
+        by_column: list[dict[int, tuple[int, ...]]] = [dict() for _ in range(columns)]
+        by_row: list[dict[int, tuple[int, ...]]] = [dict() for _ in range(rows)]
+        count = 0
+        for line in handle:
+            values = list(map(int, line.split()))
+            row = values[0] - 1
+            column = values[1] - 1
+            coefficient = tuple(values[2:])
+            require(coefficient != ZERO, "stored zero")
+            by_column[column][row] = coefficient
+            by_row[row][column] = coefficient
+            count += 1
+    require(count == declared, "declared entries")
+    return by_column, by_row
+
+
+def structural_rank(columns: list[dict[int, tuple[int, ...]]], rows: int) -> int:
+    row_indices = np.asarray(
+        [row for column in columns for row in column], dtype=np.int32
+    )
+    column_indices = np.asarray(
+        [index for index, column in enumerate(columns) for _ in column], dtype=np.int32
+    )
+    pattern = sparse.csr_matrix(
+        (np.ones(len(row_indices), dtype=np.uint8), (row_indices, column_indices)),
+        shape=(rows, len(columns)),
+    )
+    matching = maximum_bipartite_matching(pattern, perm_type="column")
+    return int(np.count_nonzero(matching >= 0))
+
+
+def main() -> None:
+    source_packet = load(SOURCE_PACKET)
+    require(all(source_packet["checks"].values()), "source checks")
+    source_output = source_packet["output"]
+    require(source_output["shape"] == [INPUT_ROWS, INPUT_COLUMNS], "source shape")
+    require(source_output["structural_rank"] == INPUT_STRUCTURAL_RANK, "source structural rank")
+    require(source_output["finite_rank_at_p21817_gamma5"] == INPUT_FINITE_RANK, "source finite rank")
+    require(source_output["finite_nullity"] == INPUT_NULLITY, "source finite nullity")
+    require(source_output["structural_nullity"] == INPUT_STRUCTURAL_NULLITY, "source structural nullity")
+
+    old_columns = [int(value) for value in source_output["retained_old_columns"]]
+    ambient_rows = [int(value) for value in source_output["retained_ambient_rows"]]
+    protected = {int(value) for value in source_output["protected_target_columns"]}
+    require(len(old_columns) == INPUT_COLUMNS, "old-column map")
+    require(len(ambient_rows) == INPUT_ROWS, "ambient-row map")
+    require(len(protected) == 100, "protected target dimension")
+
+    columns, rows = parse_matrix()
+    active_columns = np.ones(INPUT_COLUMNS, dtype=bool)
+    active_rows = np.ones(INPUT_ROWS, dtype=bool)
+    queue = deque(
+        column
+        for column, entries in enumerate(columns)
+        if len(entries) == 1
+        and next(iter(entries.values())) in (ONE, MINUS_ONE)
+        and column not in protected
+    )
+    pivots: list[dict[str, object]] = []
+
+    while queue:
+        column = queue.popleft()
+        if not active_columns[column] or column in protected or len(columns[column]) != 1:
+            continue
+        row, unit = next(iter(columns[column].items()))
+        if not active_rows[row] or unit not in (ONE, MINUS_ONE):
+            continue
+
+        dependencies = [
+            {
+                "reduced_column": int(other),
+                "old_column": old_columns[other],
+                "coefficient": list(coefficient),
+            }
+            for other, coefficient in sorted(rows[row].items())
+            if other != column
+        ]
+        pivots.append(
+            {
+                "pivot_reduced_column": int(column),
+                "pivot_old_column": old_columns[column],
+                "pivot_local_row": int(row),
+                "pivot_ambient_row": ambient_rows[row],
+                "unit": list(unit),
+                "reconstruction": "x_pivot=-unit*sum(coefficient*x_column)",
+                "dependencies": dependencies,
+            }
+        )
+
+        incident_columns = list(rows[row])
+        for other in incident_columns:
+            columns[other].pop(row)
+        rows[row].clear()
+        active_rows[row] = False
+        active_columns[column] = False
+
+        for other in incident_columns:
+            if (
+                other != column
+                and active_columns[other]
+                and other not in protected
+                and len(columns[other]) == 1
+                and next(iter(columns[other].values())) in (ONE, MINUS_ONE)
+            ):
+                queue.append(other)
+
+    retained_rows = np.flatnonzero(active_rows).astype(int).tolist()
+    retained_columns = np.flatnonzero(active_columns).astype(int).tolist()
+    row_map = {old: new for new, old in enumerate(retained_rows)}
+    reduced_columns = [
+        {row_map[row]: coefficient for row, coefficient in columns[column].items()}
+        for column in retained_columns
+    ]
+    entries = {
+        (row, column): coefficient
+        for column, values in enumerate(reduced_columns)
+        for row, coefficient in values.items()
+    }
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    write_number_field_matrix(
+        OUTPUT, entries, (len(retained_rows), len(retained_columns))
+    )
+
+    pivot_count = len(pivots)
+    require(pivot_count == 66, "66 exact unit leaves")
+    require(not protected.intersection({row["pivot_reduced_column"] for row in pivots}), "protected targets retained")
+    output_structural_rank = structural_rank(reduced_columns, len(retained_rows))
+    output_finite_rank = finite_rank(reduced_columns, len(retained_rows))
+    require(INPUT_STRUCTURAL_RANK - output_structural_rank == pivot_count, "structural rank preservation")
+    require(INPUT_FINITE_RANK - output_finite_rank == pivot_count, "finite rank preservation")
+    require(len(retained_columns) - output_structural_rank == INPUT_STRUCTURAL_NULLITY, "structural nullity preservation")
+    require(len(retained_columns) - output_finite_rank == INPUT_NULLITY, "finite nullity preservation")
+
+    retained_position = {old: new for new, old in enumerate(retained_columns)}
+    protected_output = [retained_position[column] for column in sorted(protected)]
+    reconstruction = {
+        "schema": "ust.g3ez.h02.component20.unit-leaf-reconstruction.v1",
+        "date": "2026-08-15",
+        "source_matrix": record(SOURCE),
+        "pivots": pivots,
+        "retained_input_columns": retained_columns,
+        "retained_input_rows": retained_rows,
+    }
+    RECONSTRUCTION.write_text(
+        json.dumps(reconstruction, indent=2) + "\n", encoding="utf-8"
+    )
+
+    certificate = {
+        "schema": "ust.g3ez.h02.component20.unit-leaf-reduction.v1",
+        "date": "2026-08-15",
+        "status": "CLOSED_EXACT_COMPONENT20_UNIT_LEAF_CONTRACTION_CHARZERO_KERNEL_OPEN",
+        "source_packet": record(SOURCE_PACKET),
+        "source_matrix": record(SOURCE),
+        "input": {
+            "shape": [INPUT_ROWS, INPUT_COLUMNS],
+            "entries": int(sum(len(column) for column in parse_matrix()[0])),
+            "structural_rank": INPUT_STRUCTURAL_RANK,
+            "finite_rank_at_p21817_gamma5": INPUT_FINITE_RANK,
+            "finite_nullity": INPUT_NULLITY,
+            "structural_nullity": INPUT_STRUCTURAL_NULLITY,
+        },
+        "exact_leaf_contraction": {
+            "unit_pivots": pivot_count,
+            "positive_units": sum(row["unit"] == list(ONE) for row in pivots),
+            "negative_units": sum(row["unit"] == list(MINUS_ONE) for row in pivots),
+            "protected_target_columns_eliminated": 0,
+            "reconstruction": record(RECONSTRUCTION),
+        },
+        "output": {
+            "shape": [len(retained_rows), len(retained_columns)],
+            "entries": len(entries),
+            "structural_rank": output_structural_rank,
+            "finite_rank_at_p21817_gamma5": output_finite_rank,
+            "finite_nullity": len(retained_columns) - output_finite_rank,
+            "structural_nullity": len(retained_columns) - output_structural_rank,
+            "retained_g3ey_columns": retained_columns,
+            "retained_old_columns": [old_columns[column] for column in retained_columns],
+            "retained_ambient_rows": [ambient_rows[row] for row in retained_rows],
+            "protected_target_columns": protected_output,
+            "matrix": record(OUTPUT),
+        },
+        "checks": {
+            "all66_leaf_coefficients_are_exact_units": pivot_count == 66,
+            "all66_leaf_rows_are_distinct": len({row["pivot_local_row"] for row in pivots}) == 66,
+            "the100_target_coordinates_are_retained": len(protected_output) == 100,
+            "each_leaf_equation_has_an_explicit_reconstruction_formula": all("dependencies" in row for row in pivots),
+            "finite_nullity_is_preserved_at386": len(retained_columns) - output_finite_rank == 386,
+            "structural_nullity_is_preserved_at62": len(retained_columns) - output_structural_rank == 62,
+        },
+        "guardrails": {
+            "claims_characteristic_zero_kernel_dimension386": False,
+            "claims_the100_selected_finite_vectors_lift_to_Qgamma": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Run the reduced 5376x5411 presentation at every root of independent "
+            "completely split good primes. If the nullity-386 profile persists, "
+            "reconstruct and replay the protected 100-dimensional kernel over Q(gamma); "
+            "otherwise isolate the specialization-only directions before promotion."
+        ),
+    }
+    require(all(certificate["checks"].values()), "checks")
+    require(not any(certificate["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(certificate, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3EZ component20 unit-leaf reduction: PASS "
+        f"pivots={pivot_count} output={len(retained_rows)}x{len(retained_columns)} "
+        f"structural={output_structural_rank} finite_rank={output_finite_rank}"
+    )
+
+
+if __name__ == "__main__":
+    main()

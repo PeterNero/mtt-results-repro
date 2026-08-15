@@ -1,0 +1,211 @@
+# UST.G3AF: Two-H First-Order Joint Graph/Coefficient Lift Theorem
+
+## Status
+
+`CLOSED_EXACT_FINITE_RING_FIRST_ORDER_TWO_COMPONENT_LIFT`
+
+`UST.G3AE` proves that the selected second primitive-`H` graph can be
+preserved by deforming the eta9 coefficient vector. This theorem adds the
+independently selected first primitive-`H` graph and asks the stronger
+question:
+
+> Does one global eta9 coefficient lift contain both selected `H` graphs at
+> once?
+
+The answer is yes modulo `101^2`.
+
+## 1. First-H Source
+
+The first graph is bound to the q79 packets
+
+```text
+z = r x + w y,
+(r,w,v,b) = (6978,9344,9433,8188) mod 101^2,
+```
+
+and to the explicit degree-three Fermat cover on the residue line
+
+```text
+z = 9x+52y mod 101.
+```
+
+The map is reconstructed from the recorded Mobius coordinate and normal-form
+cover, rather than entered as an unrelated polynomial ansatz. Pulling the
+normal cubics back to the original line gives the raw direct rows
+
+```text
+P_raw = (94,72,86,59),
+Q_raw = (36,66,73,31),
+S_raw = (85,63,49,43),
+k_raw = 14,
+lambda_raw = 2.
+```
+
+After a common projective normalization and a monic normalization of `S`, the
+selected residue map is
+
+```text
+P = (91,74,94,41),
+Q = (37,51,61,1),
+S = (56,32,81,1),
+k = 31,
+lambda = 50.
+```
+
+It obeys
+
+```text
+Q(P^3+16Q^3) = lambda h S^2,
+k^2 = -3 lambda
+```
+
+over `F_101`, where `h` is the selected first-H line sextic.
+
+## 2. Unique Normalized Lift
+
+Evaluate the exact q79 K3 sextic at the selected lifted line. Its monic
+sextic has a unique lift of the selected coprime cubic factorization. The
+factor Hensel system has shape `6 x 6` and rank 6. It emits
+
+```text
+Q = (9127,6212,6020,1),
+R = (4854,7896,1633,1)
+```
+
+modulo `101^2` with `QR=h_monic` exactly.
+
+Holding that factor fixed, the normalized marked-map correction has eight
+unknowns: four coefficients of `P`, the three lower coefficients of monic
+`S`, and `lambda`. Its `13 x 8` derivative has rank 8 and a consistent
+right-hand side. The unique normalized lift is
+
+```text
+P      = (8171,10174,8073,647),
+Q      = (9127,6212,6020,1),
+S      = (8641,8314,182,1),
+lambda = 50,
+k      = 2152
+```
+
+modulo `101^2`. Direct substitution verifies both the marked-map identity and
+
+```text
+T0^3+T1^3+T2^3 = 0,
+
+T0 = 12Q^2-kSy_h,
+T1 = 12Q^2+kSy_h,
+T2 = 6PQ,
+y_h^2=h.
+```
+
+## 3. One Global Coefficient Correction
+
+For either graph, restriction of the 249 eta9 coefficient directions gives
+32 rows over
+
+```text
+k = F_101[gamma]/(M).
+```
+
+The two maps have ranks
+
+```text
+rank L_Gamma1 = 26,
+rank L_Gamma2 = 26.
+```
+
+Stack them in first-H, second-H order:
+
+```text
+L_12 : k^249 -> k^64.
+```
+
+Exact elimination gives
+
+```text
+rank L_12 = 52,
+nullity L_12 = 197,
+cokernel dimension = 12.
+```
+
+The combined 64-row defect of the fixed coefficient lift satisfies all twelve
+compatibility relations. RREF in the displayed basis, with all free variables
+set to zero, emits a correction supported on 52 coefficient slots.
+
+## 4. Theorem
+
+**Two-H First-Order Joint Graph/Coefficient Lift Theorem.** The selected
+first-H degree-three Fermat map has the unique normalized lift displayed above
+through `101^2`. The union of its eta9 coefficient-restriction derivative and
+the selected second-H derivative has rank 52. The combined fixed-lift defect
+lies in this image. Consequently there exists one global eta9 coefficient
+correction `delta_F` such that
+
+```text
+F_joint = F_Q + 101 delta_F mod 101^2
+```
+
+restricts to zero on both unchanged selected primitive-H graph maps. The
+emitted canonical correction verifies all 64 rows by direct substitution.
+
+**Proof.** The first map identities follow from the exact Mobius pullback,
+the two full-rank scalar Hensel systems and direct reduction by the lifted
+sheet equation. Restrict each displayed eta9 coefficient basis vector to each
+graph and row-reduce the resulting `64 x 249` matrix over the selected residue
+field. Exact RREF gives rank 52 and a consistent augmented system. Substituting
+the emitted correction into the original equation over the completion ring
+makes all 32 first-H and all 32 second-H coefficients zero modulo `101^2`.
+QED.
+
+## 5. Meaning
+
+G3AF is stronger than two independent repairs. The same global coefficient
+vector works for both graph components. The rank additivity
+
+```text
+26 + 26 = 52
+```
+
+also shows that the two selected primitive-H graphs impose independent linear
+conditions at this order. Their shared solution still has 197 affine
+directions, so compatibility is nonempty but physical selection is not yet
+unique.
+
+The 197-dimensional kernel is deformation freedom in this finite incidence
+problem. It is not a count of physical fit parameters. The RREF convention is
+a reproducible witness rule, not an MTT selection axiom.
+
+## 6. Exact Boundary
+
+This theorem does not yet provide:
+
+- the selected `4H` degree-six graph in the same completion;
+- simultaneous containment of all three G3AC graph components;
+- a lift beyond first `101`-adic order or a convergence theorem;
+- an algebraic characteristic-zero eta9 member;
+- smoothness of the corrected finite-precision member;
+- an intrinsic selection among the 197 free directions;
+- the analytic rank-248 `beta_C` normal value;
+- the twisted visible `V_3`, a common visible-hidden HYM chamber or a physical
+  Hull-Strominger endpoint.
+
+## 7. Next Construction
+
+The next finite target is now singular and concrete:
+
+```text
+embed/lift the exact 4H degree-six graph
+  + append its restriction rows
+  + solve the full three-component coefficient system
+```
+
+Only after the three-component member is fixed should the lift be iterated and
+the `beta_C` functional evaluated on that same member.
+
+## 8. Reproduction
+
+```text
+python build_ust_g3af_two_h_joint_coefficient_lift.py
+python verify_ust_g3af_two_h_joint_coefficient_lift.py
+python verify.py
+```

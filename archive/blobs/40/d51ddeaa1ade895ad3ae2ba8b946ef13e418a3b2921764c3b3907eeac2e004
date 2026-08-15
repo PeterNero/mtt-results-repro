@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Independent replay of the UST.G3BI exact start-member certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3bi_explicit_root_start as builder
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+FRONTIER = ROOT / "state" / "frontier.json"
+P = 101
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def monomials(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (a, b, degree - a - b)
+        for a in range(degree, -1, -1)
+        for b in range(degree - a, -1, -1)
+    ]
+
+
+def add(left: list[int], right: list[int]) -> list[int]:
+    return [a + b for a, b in zip(left, right)]
+
+
+def scale(scalar: int, value: list[int]) -> list[int]:
+    return [scalar * entry for entry in value]
+
+
+def restriction(coefficients: list[list[int]], theta: int) -> list[list[int]]:
+    degree9 = monomials(9)
+    degree6 = monomials(6)
+    w = [2, 0, 1, 0, -2, 2, 1]
+    result = [[0] * 6 for _ in range(19)]
+    offset = theta * 83
+    for index, (_, b, c) in enumerate(degree9):
+        result[b + 2 * c] = add(result[b + 2 * c], coefficients[offset + index])
+    for index, (_, b, c) in enumerate(degree6):
+        for shift, scalar in enumerate(w):
+            result[b + 2 * c + shift] = add(
+                result[b + 2 * c + shift],
+                scale(scalar, coefficients[offset + 55 + index]),
+            )
+    return result
+
+
+def main() -> None:
+    packet = load(PACKET)
+    evidence = load(builder.EVIDENCE)
+    require(
+        packet["schema"] == "mtt.unified-source.g3bi-explicit-root-start.v1"
+        and packet["status"]
+        == "CLOSED_EXACT_EXPLICIT_SMOOTH_CHARACTERISTIC_ZERO_ROOT_CONTAINING_START_PATH_AND_TRANSPORT_OPEN",
+        "G3BI packet",
+    )
+    require(all(packet["checks"].values()), "G3BI checks")
+    require(not any(packet["guardrails"].values()), "G3BI guardrails")
+    require(packet["inputs"]["finite_evidence"]["sha256"] == sha256(builder.EVIDENCE), "evidence lock")
+    require(sha256(builder.G3BH) == builder.EXPECTED_HASHES["G3BH"], "G3BH lock")
+    require(sha256(builder.G3BG) == builder.EXPECTED_HASHES["G3BG"], "G3BG lock")
+
+    original = evidence["canonical_right_inverse"]["original_B67_integer_section_coefficient_vectors"]
+    require(
+        packet["smooth_endpoint"]["characteristic_zero_endpoint_is_smooth"]
+        and packet["smooth_endpoint"]["basepoint_unit_ideals"] == 3
+        and packet["smooth_endpoint"]["smoothness_unit_ideals"] == 9
+        and packet["smooth_endpoint"]["coefficient_vectors"] == original,
+        "smooth endpoint replay",
+    )
+    emitted = packet["selected_source"]["coefficient_vectors"]
+    require(len(original) == len(emitted) == 249, "coefficient dimensions")
+    replay = [row[:] for row in original]
+    degree9 = monomials(9)
+    source_indices = []
+    for row in evidence["canonical_right_inverse"]["rows"]:
+        t_power = int(row["t_power"])
+        c_power = t_power // 2
+        b_power = t_power % 2
+        exponent = (9 - b_power - c_power, b_power, c_power)
+        require(row["source_monomial"] == list(exponent), "right-inverse monomial")
+        require(row["source_index"] == degree9.index(exponent), "right-inverse index")
+        source_indices.append(row["source_index"])
+        replay[row["source_index"]] = add(
+            replay[row["source_index"]], row["correction_gamma_coordinates"]
+        )
+    require(len(set(source_indices)) == 19, "nineteen independent right-inverse monomials")
+    require(replay == emitted, "all 249 coefficient vectors replay")
+    restricted0 = restriction(emitted, 0)
+    restricted1 = restriction(emitted, 1)
+    require(restricted0 == restricted1, "characteristic-zero root identity")
+    require(
+        all(all((a - b) % P == 0 for a, b in zip(left, right)) for left, right in zip(restricted0, restricted1)),
+        "root identity after B67 specialization",
+    )
+
+    attempt = evidence["attempts"][0]
+    require(attempt["candidate_index"] == 0 and not attempt["preserving_perturbation"], "no search displacement")
+    require(len(attempt["chart_runs"]) == 12, "twelve charts")
+    for row in attempt["chart_runs"]:
+        script = builder.EVIDENCE.parent / "charts" / row["script"]
+        require(sha256(script) == row["script_sha256"], f"script lock {row['label']}")
+        expected = (
+            f"BASEPOINT_PASS {row['label']} basis_length=1"
+            if row["kind"] == "basepoint"
+            else f"CHART_PASS {row['label']} basis_length=1"
+        )
+        require(row["passed"] and not row["timed_out"], f"chart state {row['label']}")
+        require("GAMMA_REL=0" in row["output_tail"] and expected in row["output_tail"], f"unit ideal {row['label']}")
+
+    frontier = load(FRONTIER)
+    gates = {gate["id"]: gate for gate in frontier["gates"]}
+    require(
+        gates["UST.G3BI"]["state"]
+        == "closed_exact_explicit_smooth_root_containing_start_path_transport_open"
+        and gates["UST.G3BI"]["depends_on"] == ["UST.G3BH", "UST.G3BG"],
+        "G3BI frontier gate",
+    )
+    require(
+        "start member" in frontier["frontier_delta_g3bi"]
+        and "path" in frontier["next_action"]
+        and "G3BI" in frontier["next_action"],
+        "G3BI frontier integration",
+    )
+    theorem = (
+        ROOT
+        / "UST_G3BI_EXPLICIT_SMOOTH_ROOT_CONTAINING_START_MEMBER_THEOREM_v1.md"
+    ).read_text(encoding="utf-8")
+    require(
+        "19-term" in theorem
+        and "3/3" in theorem
+        and "9/9" in theorem
+        and "does not construct" in theorem,
+        "G3BI theorem boundary",
+    )
+    for document in (
+        ROOT / "README.md",
+        ROOT / "PLAN.md",
+        ROOT / "HYPOTHESIS.md",
+        ROOT / "docs" / "BRANCH_DECISION.md",
+        ROOT / "docs" / "SOURCE_CERTIFICATE.md",
+        ROOT / "docs" / "WORKER_INSTRUCTIONS.md",
+    ):
+        require("G3BI" in document.read_text(encoding="utf-8"), f"G3BI integration {document.name}")
+    print("UST.G3BI explicit smooth root-containing start: PASS independent replay")
+
+
+if __name__ == "__main__":
+    main()

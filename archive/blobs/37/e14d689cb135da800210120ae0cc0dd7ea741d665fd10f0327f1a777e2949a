@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""Independently verify the UST.G3AQ relative-residue promotion packet."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3aq_selected_cayley_relative_residue_promotion.packet.json"
+EXPECTED_B72_SHA256 = "80527c7ee4c75757b346e14a05fbbdf9056bad1ef4ce0d726c8a655395c7c7e5"
+EXPECTED_B71_SHA256 = "b8f27827ad938d6234e7aa70919242c96e670b30a7c05e12354793ad8711abf9"
+G3AN_FULL_VERIFIER = ROOT / "verify_ust_g3an_selected_cayley_full_response_schur.py"
+G3AN_DIRECT_VERIFIER = ROOT / "verify_ust_g3an_selected_cayley_direct_schur.py"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def normalized_sha256(path: Path) -> str:
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def checked_input(record: dict, label: str) -> tuple[Path, dict]:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"{label} exists")
+    require(sha256(path) == record["sha256"], f"{label} hash")
+    return path, load(path)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--upstream-g3an-verified-in-caller",
+        action="store_true",
+        help="skip only the nested G3AN subprocess when the canonical caller has just verified the same hash-bound packet",
+    )
+    args = parser.parse_args()
+    packet = load(PACKET)
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3aq-selected-cayley-relative-residue-promotion.v1",
+        "schema",
+    )
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_SELECTED_CHARACTERISTIC_ZERO_RELATIVE_R1_RESPONSE_RANK122",
+        "status",
+    )
+    inputs = packet["inputs"]
+    g3ag_path, g3ag = checked_input(inputs["G3AG"], "G3AG")
+    g3ah_path, g3ah = checked_input(inputs["G3AH"], "G3AH")
+    _, g3aj = checked_input(inputs["G3AJ"], "G3AJ")
+    _, g3al = checked_input(inputs["G3AL"], "G3AL")
+    _, g3ao = checked_input(inputs["G3AO"], "G3AO")
+    _, g3ap = checked_input(inputs["G3AP"], "G3AP")
+    _, g3an = checked_input(inputs["G3AN"], "G3AN")
+    g3an_verifier = (
+        G3AN_DIRECT_VERIFIER
+        if g3an.get("schema")
+        == "mtt.unified-source.g3an-selected-cayley-direct-schur.v1"
+        else G3AN_FULL_VERIFIER
+    )
+    if not args.upstream_g3an_verified_in_caller:
+        subprocess.run(
+            [sys.executable, str(g3an_verifier)],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    b72_path, b72 = checked_input(inputs["B72_family_witness"], "B72 family witness")
+    b71_path, b71 = checked_input(inputs["B71_ambient_witness"], "B71 ambient witness")
+
+    require(sha256(b72_path) == EXPECTED_B72_SHA256, "immutable B72 checksum")
+    require(sha256(b71_path) == EXPECTED_B71_SHA256, "immutable B71 checksum")
+    require(b72["inputs"]["B71_toric_regularity"]["sha256"] == EXPECTED_B71_SHA256, "B72/B71 binding")
+    require(inputs["B72_family_witness"]["source_repository_commit"] == "0b99967a68dfdf9d50c80408874a0c9a9d27b387", "B72 commit")
+    require(
+        b72["promotion_result"]["transported_socle_survives_in_R1_characteristic_zero"]
+        is True,
+        "legacy family R1 witness",
+    )
+    require(b72["promotion_result"]["ordinary_top_dimension"] == 1, "legacy top line")
+    require(
+        g3ag["schema"] == "mtt.unified-source.g3ag-three-graph-joint-coefficient-lift.v1",
+        "G3AG schema",
+    )
+    require(
+        g3ah["schema"] == "mtt.unified-source.g3ah-formal-coefficient-kernel.v1",
+        "G3AH schema",
+    )
+    require(g3ao["orbit_systems"] == {"passed": 735, "total": 735}, "selected orbit regularity")
+    require(all(g3ao["checks"].values()), "G3AO checks")
+    require(
+        g3ao["toric_ambient"]["chart_gauge_is_etale_over_F1016"] is True,
+        "selected etale chart gauges",
+    )
+    common_ambient_keys = (
+        "description",
+        "Cox_degree_matrix_by_variable",
+        "dimension",
+        "Cayley_degree",
+        "Cox_anticanonical_degree",
+        "maximal_chart_count",
+        "chart_cover",
+        "chart_gauge_degree_determinants",
+    )
+    require(
+        all(g3ao["toric_ambient"][key] == b71["toric_ambient"][key] for key in common_ambient_keys),
+        "identical old and selected toric ambient",
+    )
+    require(packet["common_toric_ambient"] == g3ao["toric_ambient"], "promoted ambient identity")
+    require(g3ap["ordinary_top_piece"]["dimension"] == 1, "selected top dimension")
+    selected_socle_basis = g3ap["ordinary_top_piece"]["basis"]
+    require(
+        isinstance(selected_socle_basis, list)
+        and len(selected_socle_basis) == 1
+        and isinstance(selected_socle_basis[0], str)
+        and bool(selected_socle_basis[0]),
+        "selected one-line socle basis",
+    )
+    selected_socle = selected_socle_basis[0]
+    require(all(g3ap["checks"].values()), "G3AP checks")
+    require(
+        g3ap["status"]
+        == "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+        "G3AP closed status",
+    )
+    require(
+        g3an["schema"]
+        in (
+            "mtt.unified-source.g3an-selected-cayley-full-response-schur.v1",
+            "mtt.unified-source.g3an-selected-cayley-direct-schur.v1",
+        ),
+        "G3AN schema",
+    )
+    if g3an["schema"] == "mtt.unified-source.g3an-selected-cayley-full-response-schur.v1":
+        response = g3an["full_response_schur"]
+        principal_binary = response["binary_artifact"]
+        principal_layout = principal_binary["layout"]
+        principal_n0_key = "N0_principal_quotient"
+        schur_binary = principal_binary
+        schur_layout = principal_layout
+    else:
+        response = g3an["direct_schur_response"]
+        principal_binary = response["principal_quotient_artifact"]
+        principal_layout = principal_binary["layout"]
+        principal_n0_key = "N0"
+        schur_binary = response["binary_artifact"]
+        schur_layout = schur_binary["layout"]
+    require(response["rank_D"] == 122, "finite response rank")
+    require(response["full_left_nullity"] == 126, "finite response nullity")
+    principal_rows = response["principal_pivot_rows_zero_based"]
+    quotient_rows = response["principal_quotient_rows_zero_based"]
+    extra_rows = response["extra_pivot_rows_in_principal_quotient_zero_based"]
+    final_rows = response["final_normal_rows_in_principal_quotient_zero_based"]
+    require(
+        len(principal_rows) == 33
+        and len(quotient_rows) == 215
+        and sorted(principal_rows + quotient_rows) == list(range(248)),
+        "principal row partition",
+    )
+    require(
+        len(extra_rows) == 89
+        and len(final_rows) == 126
+        and sorted(extra_rows + final_rows) == list(range(215)),
+        "Schur row partition",
+    )
+    selected_minor_rows = principal_rows + [quotient_rows[index] for index in extra_rows]
+    require(len(selected_minor_rows) == 122 and len(set(selected_minor_rows)) == 122, "unit-minor rows")
+    principal_binary_path = ROOT / principal_binary["path"]
+    schur_binary_path = ROOT / schur_binary["path"]
+    require(
+        principal_binary_path.is_file()
+        and sha256(principal_binary_path) == principal_binary["sha256"],
+        "G3AN principal binary artifact",
+    )
+    require(
+        schur_binary_path.is_file()
+        and sha256(schur_binary_path) == schur_binary["sha256"],
+        "G3AN Schur binary artifact",
+    )
+    require(principal_layout["R0_inverse"]["shape"] == [33, 33, 6], "R0 inverse certificate")
+    require(principal_layout[principal_n0_key]["shape"] == [215, 248, 6], "N0 certificate")
+    require(schur_layout["E0_inverse"]["shape"] == [89, 89, 6], "E0 inverse certificate")
+    require(schur_layout["L_extra_quotient"]["shape"] == [126, 215, 6], "L certificate")
+    finite_minor = {
+        "method": "block_Gaussian_elimination_with_explicit_R0_and_E0_inverses",
+        "finite_execution_schema": g3an["schema"],
+        "ordered_original_rows_zero_based": selected_minor_rows,
+        "principal_rows_zero_based": principal_rows,
+        "extra_rows_in_principal_quotient_zero_based": extra_rows,
+        "principal_binary_artifact": {
+            "path": principal_binary["path"],
+            "sha256": principal_binary["sha256"],
+            "N0_layout": principal_layout[principal_n0_key],
+            "R0_inverse_layout": principal_layout["R0_inverse"],
+        },
+        "Schur_binary_artifact": {
+            "path": schur_binary["path"],
+            "sha256": schur_binary["sha256"],
+            "E0_inverse_layout": schur_layout["E0_inverse"],
+            "L_layout": schur_layout["L_extra_quotient"],
+        },
+    }
+    require(all(g3an["checks"].values()), "G3AN checks")
+    require(
+        g3ao["inputs"]["G3AL"]["sha256"] == inputs["G3AL"]["sha256"],
+        "G3AO selected carrier identity",
+    )
+    require(
+        g3an["inputs"]["G3AL"]["sha256"] == inputs["G3AL"]["sha256"],
+        "G3AN selected carrier identity",
+    )
+    require(
+        g3aj["checks"]["the_selected_residue_ball_contains_a_smooth_finite_flat_rank_three_graph_member"],
+        "selected characteristic-zero lift",
+    )
+    require(
+        g3ah["inputs"]["local_G3AG_packet"]["sha256"] == sha256(g3ag_path),
+        "G3AH selected residue identity",
+    )
+    require(
+        g3aj["inputs"]["G3AH_formal_kernel"]["sha256"] == normalized_sha256(g3ah_path),
+        "G3AJ formal-kernel identity",
+    )
+    require(
+        g3al["inputs"]["ust_g3ag_three_graph_joint_coefficient_lift.packet"]["sha256"]
+        == sha256(g3ag_path),
+        "G3AL selected residue identity",
+    )
+    require(
+        g3al["residue_field"] == g3an["residue_field"],
+        "same selected residue field",
+    )
+    require(
+        g3ah["formal_algebra"]["source_module"] == "O^249"
+        and g3ah["formal_algebra"]["target_module"] == "O^126"
+        and g3ah["formal_algebra"]["special_fiber_rank"] == 126
+        and g3ah["geometric_rank_calculation"]["formal_kernel_rank"] == 123
+        and g3ah["formal_algebra"]["kernel_conclusion"]
+        == "the kernel is finite free of rank 123 and commutes with reduction",
+        "same-source free rank-123 integral incidence kernel",
+    )
+    control = g3al["selected_coefficient_control"]
+    require(
+        control["homogeneous_rank"] == 249
+        and control["projective_target_rank"] == 248
+        and control["principal_rank"] == 33
+        and control["additional_rank"] == 89
+        and control["full_rank"] == 122,
+        "complete selected projective tangent frame",
+    )
+
+    result = packet["promotion_result"]
+    require(result["selected_socle"] == selected_socle, "promoted socle")
+    require(
+        result["canonical_predecessor_socle_diagnostic"]
+        == g3ap["ordinary_top_piece"].get(
+            "canonical_predecessor_socle_diagnostic"
+        ),
+        "predecessor socle diagnostic scope",
+    )
+    require(result["selected_socle_survives_in_R1_characteristic_zero"] is True, "R1 survival")
+    require(result["relative_R1_response_shape"] == [248, 122], "promoted response shape")
+    require(result["relative_R1_response_rank"] == 122, "promoted rank")
+    require(result["relative_left_nullity"] == 126, "promoted nullity")
+    require(result["finite_unit_minor_certificate"] == finite_minor, "minor certificate identity")
+    require(all(packet["checks"].values()), "promotion checks")
+    require(
+        packet["checks"][
+            "equal_special_and_generic_dimension_plus_Nakayama_make_the_local_ordinary_top_module_free_of_rank_one"
+        ]
+        is True,
+        "flat top-line argument",
+    )
+    require(
+        packet["checks"][
+            "the_old_B72_packet_is_used_only_as_an_immutable_nonzero_family_dimension_witness"
+        ]
+        is True,
+        "legacy evidence scope",
+    )
+    require(
+        packet["checks"][
+            "finite_presentation_and_Fitting_ideal_equalities_spread_the_complex_R1_dimension_to_every_characteristic_zero_field"
+        ]
+        is True,
+        "characteristic-zero Fitting-locus descent",
+    )
+    require(
+        packet["checks"][
+            "G3AH_makes_the_integral_incidence_kernel_free_rank123_and_compatible_with_reduction"
+        ]
+        and packet["checks"][
+            "the_nonzero_selected_member_is_primitive_so_its_radial_line_splits_off_and_the_projective_tangent_is_free_rank122"
+        ]
+        and packet["checks"][
+            "the_G3AL_residue_frame_lifts_by_Nakayama_to_a_basis_of_that_same_projective_tangent_module"
+        ],
+        "same-source tangent-basis lift",
+    )
+    require(
+        [step["name"] for step in packet["proof_chain"]]
+        == [
+            "selected_same_residue_regular_lift",
+            "full_Newton_polytope",
+            "complex_polytope_invariant_R1_dimension",
+            "characteristic_zero_fitting_descent",
+            "selected_flat_socle_line",
+            "same_source_projective_tangent_lift",
+            "selected_unit_minor_response_promotion",
+        ],
+        "complete promotion proof order",
+    )
+    require(
+        result["characteristic_zero_dimension_transport"]
+        == "finite-presentation Fitting-locus descent from the complex regular full-polytope locus; no embedding of the selected p-adic coefficient field into C is assumed",
+        "characteristic-zero transport scope",
+    )
+    require(packet["parameter_ledger"] == {
+        "new_continuous_fit_parameters": 0,
+        "new_discrete_fit_parameters": 0,
+        "imported_legacy_matrix_entries": 0,
+    }, "parameter ledger")
+    require(packet["guardrails"]["claims_beta_C_is_defined_or_evaluated"] is False, "beta guardrail")
+    require(packet["guardrails"]["claims_B_ETA9_02_is_fully_closed"] is False, "blocker guardrail")
+    print("UST.G3AQ verifier: PASS selected characteristic-zero relative R1 rank=122 nullity=126")
+
+
+if __name__ == "__main__":
+    main()

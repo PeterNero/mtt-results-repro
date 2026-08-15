@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""Run and assemble deterministic parallel G3AP target-Macaulay chunks."""
+
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import build_ust_g3ap_selected_cayley_target_macaulay_chunk as chunk_builder
+import build_ust_g3ap_selected_cayley_target_macaulay_matrix as macaulay
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+ASSEMBLED = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.packed-sms"
+PACKET = STATE / "ust_g3ap_selected_cayley_target_macaulay_balanced.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def artifact_current(record: dict[str, object]) -> bool:
+    path = ROOT / str(record.get("path", ""))
+    return (
+        path.is_file()
+        and record.get("sha256") == sha256(path)
+        and ("bytes" not in record or record["bytes"] == path.stat().st_size)
+    )
+
+
+def run_chunk(total: int, index: int, count: int, timeout: int) -> str:
+    command = [
+        sys.executable,
+        str(chunk_builder.__file__),
+        "--balanced-rows",
+        str(total),
+        "--chunk-index",
+        str(index),
+        "--chunk-count",
+        str(count),
+        "--timeout",
+        str(timeout),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout + 300,
+        check=False,
+    )
+    require(completed.returncode == 0, f"chunk {index}: {completed.stdout[-2000:]}")
+    return completed.stdout.strip()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--balanced-rows", type=int, default=50000)
+    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--skip-existing", action="store_true")
+    args = parser.parse_args()
+    require(21 <= args.balanced_rows <= macaulay.EXPECTED_SOURCE_MULTIPLES, "balanced rows")
+    require(1 <= args.workers <= args.balanced_rows, "worker count")
+
+    # Reuse the finite coordinate packet when its complete provenance is current.
+    macaulay.ensure_inspection(args.timeout)
+    pending: list[int] = []
+    for index in range(args.workers):
+        packet_path = chunk_builder.paths(args.balanced_rows, index, args.workers)["packet"]
+        if args.skip_existing and packet_path.is_file():
+            try:
+                packet = json.loads(packet_path.read_text(encoding="ascii"))
+                source = packet["inputs"]["selected_source"]
+                base = packet["inputs"]["base_coordinate_packet"]
+                if (
+                    packet["selection"]["balanced_rows"] == args.balanced_rows
+                    and packet["selection"]["chunk_index"] == index
+                    and packet["selection"]["chunk_count"] == args.workers
+                    and source["path"] == macaulay.relative(macaulay.SOURCE)
+                    and source["sha256"] == macaulay.sha256(macaulay.SOURCE)
+                    and base["path"] == macaulay.relative(macaulay.INSPECT_PACKET)
+                    and base["sha256"] == sha256(macaulay.INSPECT_PACKET)
+                    and artifact_current(packet["execution"]["script"])
+                    and artifact_current(packet["execution"]["compressed_output"])
+                    and artifact_current(packet["execution"]["packed_triples"])
+                ):
+                    continue
+            except (KeyError, ValueError, OSError):
+                pass
+        pending.append(index)
+
+    if pending:
+        with ThreadPoolExecutor(max_workers=len(pending)) as executor:
+            futures = {
+                executor.submit(
+                    run_chunk, args.balanced_rows, index, args.workers, args.timeout
+                ): index
+                for index in pending
+            }
+            for future in as_completed(futures):
+                print(future.result(), flush=True)
+
+    packets: list[dict[str, object]] = []
+    nonzeros = 0
+    selection_hash = None
+    expected_start = 0
+    for index in range(args.workers):
+        item_paths = chunk_builder.paths(args.balanced_rows, index, args.workers)
+        packet = json.loads(item_paths["packet"].read_text(encoding="ascii"))
+        require(
+            packet["schema"]
+            == "mtt.unified-source.g3ap-selected-cayley-target-macaulay-chunk.v1",
+            "chunk schema",
+        )
+        selection = packet["selection"]
+        require(
+            selection["balanced_rows"] == args.balanced_rows
+            and selection["chunk_index"] == index
+            and selection["chunk_count"] == args.workers
+            and selection["global_start_zero_based"] == expected_start,
+            "chunk coverage",
+        )
+        expected_start = selection["global_stop_exclusive_zero_based"]
+        selection_hash = selection_hash or selection["selection_sha256"]
+        require(selection["selection_sha256"] == selection_hash, "selection identity")
+        require(
+            sha256(item_paths["triples"])
+            == packet["execution"]["packed_triples"]["sha256"],
+            "chunk triples hash",
+        )
+        nonzeros += packet["execution"]["nonzeros"]
+        packets.append(packet)
+    require(expected_start == args.balanced_rows, "complete chunk coverage")
+
+    with ASSEMBLED.open("wb") as output:
+        output.write(
+            f"{args.balanced_rows} {macaulay.EXPECTED_TARGET_COORDINATES} {nonzeros}\n".encode(
+                "ascii"
+            )
+        )
+        for index in range(args.workers):
+            triples = chunk_builder.paths(args.balanced_rows, index, args.workers)["triples"]
+            with triples.open("rb") as source:
+                while True:
+                    block = source.read(8 * 1024 * 1024)
+                    if not block:
+                        break
+                    output.write(block)
+
+    campaign: dict[str, object] = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-target-macaulay-campaign.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_EXACT_SELECTED_MATRIX_REQUIRES_MINOR_CERTIFICATE",
+        "inputs": {
+            "selected_source": {
+                "path": macaulay.relative(macaulay.SOURCE),
+                "sha256": macaulay.sha256(macaulay.SOURCE),
+            },
+            "base_coordinate_packet": {
+                "path": macaulay.relative(macaulay.INSPECT_PACKET),
+                "sha256": sha256(macaulay.INSPECT_PACKET),
+            },
+        },
+        "selection": {
+            "kind": "balanced_quantiles_across_all_21_selected_derivative_generators",
+            "rows": args.balanced_rows,
+            "selection_sha256": selection_hash,
+            "workers": args.workers,
+            "per_generator_quotas": packets[0]["selection"]["per_generator_quotas"],
+        },
+        "matrix": {
+            "path": macaulay.relative(ASSEMBLED),
+            "sha256": sha256(ASSEMBLED),
+            "bytes": ASSEMBLED.stat().st_size,
+            "rows": args.balanced_rows,
+            "columns": macaulay.EXPECTED_TARGET_COORDINATES,
+            "nonzeros": nonzeros,
+        },
+        "chunks": [
+            {
+                "packet": {
+                    "path": macaulay.relative(
+                        chunk_builder.paths(args.balanced_rows, index, args.workers)["packet"]
+                    ),
+                    "sha256": sha256(
+                        chunk_builder.paths(args.balanced_rows, index, args.workers)["packet"]
+                    ),
+                },
+                "global_range_zero_based": [
+                    packet["selection"]["global_start_zero_based"],
+                    packet["selection"]["global_stop_exclusive_zero_based"],
+                ],
+            }
+            for index, packet in enumerate(packets)
+        ],
+        "guardrails": {
+            "claims_matrix_rank": False,
+            "claims_target_dimension_at_most_one": False,
+            "claims_G3AP_is_closed": False,
+        },
+        "next_required_object": (
+            "Run the deterministic F_101^6 sparse-column eliminator to emit a "
+            "nonzero 39725-minor, then independently replay its selected rows, "
+            "pivot coordinates and determinant before combining with G3AP.LOWER."
+        ),
+    }
+    PACKET.write_text(json.dumps(campaign, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP target Macaulay campaign: PASS "
+        f"rows={args.balanced_rows} columns={macaulay.EXPECTED_TARGET_COORDINATES} "
+        f"nonzeros={nonzeros} rank=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

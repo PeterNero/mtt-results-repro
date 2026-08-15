@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Prove the exact DM source-observation corridor for the H11 path kernel."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import nmod_mat
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3CV = ROOT / "state" / "ust_g3cv_h11_fraction_free_path_woodbury.packet.json"
+G3CW = ROOT / "state" / "ust_g3cw_h11_split_place_base_action.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3cx"
+OUT = ROOT / "state" / "ust_g3cx_h11_dm_source_observation_corridor.packet.json"
+PRIME = 21817
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def union_pattern(matrices: list[sparse.csr_matrix]) -> sparse.csr_matrix:
+    result = sparse.csr_matrix(matrices[0].shape, dtype=np.uint8)
+    for matrix in matrices:
+        current = matrix.copy().tocsr()
+        current.data = np.ones(current.nnz, dtype=np.uint8)
+        result = result + current
+    result.data[:] = 1
+    result.eliminate_zeros()
+    return result
+
+
+def closure(seed: set[int], adjacency: list[set[int]]) -> set[int]:
+    reached = set(seed)
+    stack = list(seed)
+    while stack:
+        current = stack.pop()
+        for target in adjacency[current]:
+            if target not in reached:
+                reached.add(target)
+                stack.append(target)
+    return reached
+
+
+def evaluate_dense(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.uint64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value.astype(np.uint16)
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    g3cv = load(G3CV)
+    g3cw = load(G3CW)
+    require(all(g3cv["checks"].values()), "G3CV checks")
+    require(all(g3cw["checks"].values()), "G3CW checks")
+
+    dm_path = mld / "q79_eta9_H11_Dulmage_Mendelsohn_decomposition.packet.json"
+    dm = load(dm_path)
+    require(all(dm["checks"].values()), "DM checks")
+    dm_arrays_path = mld / dm["Dulmage_Mendelsohn"]["arrays"]["path"]
+    dm_arrays = np.load(dm_arrays_path, allow_pickle=False)
+    complement_rows = dm_arrays["complement_ambient_rows"].astype(np.int32)
+    component_by_column = dm_arrays["component_by_image_column"].astype(np.int32)
+    component_by_row = dm_arrays["component_by_complement_row"].astype(np.int32)
+    component_sizes = dm_arrays["component_sizes"].astype(np.int32)
+    topological_order = dm_arrays["topological_component_order"].astype(np.int32)
+    component_count = int(component_sizes.size)
+    require(component_count == 1813, "DM component count")
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H11.packet.json"
+    macaulay = load(macaulay_path)
+    factor = load(factor_path)
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    for packet, label in (
+        (macaulay, "Macaulay"),
+        (factor, "factor"),
+        (base, "base"),
+        (global_f0, "global F0"),
+        (b89, "B89"),
+    ):
+        require(all(packet["checks"].values()), f"{label} checks")
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    complement_lookup = {
+        int(ambient_row): local_row
+        for local_row, ambient_row in enumerate(complement_rows.tolist())
+    }
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"][
+            "selected_original_Jacobian_columns"
+        ]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    rows: list[int] = []
+    columns: list[int] = []
+    for column_index, descriptor in enumerate(descriptors):
+        exact_column = oracle.exact_column(descriptor, generators0, target_lookup)
+        for ambient_row in exact_column:
+            local_row = complement_lookup.get(int(ambient_row))
+            if local_row is not None:
+                rows.append(local_row)
+                columns.append(column_index)
+    exact_pattern = sparse.csr_matrix(
+        (
+            np.ones(len(rows), dtype=np.uint8),
+            (np.asarray(rows, dtype=np.int32), np.asarray(columns, dtype=np.int32)),
+        ),
+        shape=(4426, 4426),
+    )
+    exact_pattern.sum_duplicates()
+    exact_pattern.data[:] = 1
+    require(
+        exact_pattern.nnz == int(dm["exact_complement_pattern"]["nonzero_entries"]),
+        "exact pattern nonzeros",
+    )
+
+    root5 = next(item for item in g3cw["root_replays"] if int(item["gamma_root"]) == 5)
+    chart_path = mld / root5["base_chart"]["repository_relative_path"]
+    base_chart, chart_prime, quotient, image = initializer.read_chart(chart_path)
+    require((chart_prime, quotient, image) == (PRIME, 1013, 4426), "root5 chart typing")
+    root_pattern = base_chart[complement_rows, 1013:].tocsr()
+    root_pattern.data[:] = 1
+    require((root_pattern != exact_pattern).nnz == 0, "root5 exact support replay")
+
+    sources: list[set[int]] = [set() for _ in range(component_count)]
+    predecessors: list[set[int]] = [set() for _ in range(component_count)]
+    coo = exact_pattern.tocoo()
+    edge_pairs: set[tuple[int, int]] = set()
+    for source, target_component in zip(
+        component_by_row[coo.row].tolist(),
+        component_by_column[coo.col].tolist(),
+        strict=True,
+    ):
+        source = int(source)
+        target_component = int(target_component)
+        if source != target_component:
+            sources[source].add(target_component)
+            predecessors[target_component].add(source)
+            edge_pairs.add((source, target_component))
+    order_position = np.empty(component_count, dtype=np.int32)
+    order_position[topological_order] = np.arange(component_count, dtype=np.int32)
+    require(
+        all(order_position[left] < order_position[right] for left, right in edge_pairs),
+        "exact upper-triangular component DAG",
+    )
+
+    u_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr()
+        for item in g3cv["factorization"]["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr()
+        for item in g3cv["factorization"]["W_gamma_coefficients"]
+    ]
+    u_pattern = union_pattern(u_coefficients)
+    w_pattern = union_pattern(w_coefficients)
+    source_components = set(
+        int(value) for value in np.unique(component_by_row[u_pattern.nonzero()[0]])
+    )
+    observation_components = set(
+        int(value) for value in np.unique(component_by_column[w_pattern.nonzero()[1]])
+    )
+    solution_components = closure(source_components, predecessors)
+    observation_descendants = closure(observation_components, sources)
+    corridor_components = solution_components & observation_descendants
+
+    u_csc = u_pattern.tocsc()
+    active_kernel_columns: list[int] = []
+    zero_kernel_columns: list[int] = []
+    for column in range(u_csc.shape[1]):
+        row_slice = u_csc.indices[u_csc.indptr[column] : u_csc.indptr[column + 1]]
+        components = set(int(value) for value in component_by_row[row_slice])
+        if components & observation_descendants:
+            active_kernel_columns.append(column)
+        else:
+            zero_kernel_columns.append(column)
+    active_kernel_rows: list[int] = []
+    for row in range(w_pattern.shape[0]):
+        column_slice = w_pattern.indices[
+            w_pattern.indptr[row] : w_pattern.indptr[row + 1]
+        ]
+        components = set(int(value) for value in component_by_column[column_slice])
+        if components & solution_components:
+            active_kernel_rows.append(row)
+
+    corridor_histogram = Counter(
+        int(component_sizes[component]) for component in corridor_components
+    )
+    corridor_edges = sorted(
+        (left, right)
+        for left, right in edge_pairs
+        if left in corridor_components and right in corridor_components
+    )
+    require(
+        corridor_histogram == Counter({1: 392, 684: 1, 1710: 1}),
+        "two cores plus scalar corridor",
+    )
+    require(len(active_kernel_columns) == 740, "740 active kernel columns")
+    require(len(zero_kernel_columns) == 248, "248 zero kernel columns")
+    require(len(active_kernel_rows) == 988, "all kernel rows observable")
+
+    q_path = ROOT / g3cw["reduced_kernel_action"]["coefficient_archive"]["path"]
+    q_coefficients = np.load(q_path, allow_pickle=False)["coefficients"]
+    q_support = np.any(q_coefficients != 0, axis=0)
+    actual_nonzero_columns = np.flatnonzero(np.any(q_support, axis=0)).tolist()
+    actual_nonzero_rows = np.flatnonzero(np.any(q_support, axis=1)).tolist()
+    require(actual_nonzero_columns == active_kernel_columns, "finite Q column support")
+    require(actual_nonzero_rows == active_kernel_rows, "finite Q row support")
+    q_matching = int(
+        np.count_nonzero(
+            maximum_bipartite_matching(
+                sparse.csr_matrix(q_support), perm_type="column"
+            )
+            >= 0
+        )
+    )
+    q_split_ranks = []
+    for root in g3cw["field"]["gamma_roots"]:
+        value = evaluate_dense(q_coefficients, int(root))
+        q_split_ranks.append(
+            int(nmod_mat(988, 988, value.reshape(-1).tolist(), PRIME).rank())
+        )
+    require(set(q_split_ranks) == {710}, "Q split ranks")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    arrays_path = EVIDENCE / "H11.DM.source_observation_corridor.npz"
+    np.savez_compressed(
+        arrays_path,
+        source_components=np.asarray(sorted(source_components), dtype=np.int32),
+        observation_components=np.asarray(sorted(observation_components), dtype=np.int32),
+        solution_components=np.asarray(sorted(solution_components), dtype=np.int32),
+        observation_descendants=np.asarray(
+            sorted(observation_descendants), dtype=np.int32
+        ),
+        corridor_components=np.asarray(sorted(corridor_components), dtype=np.int32),
+        corridor_edges=np.asarray(corridor_edges, dtype=np.int32).reshape(-1, 2),
+        active_kernel_columns=np.asarray(active_kernel_columns, dtype=np.int32),
+        structurally_zero_kernel_columns=np.asarray(
+            zero_kernel_columns, dtype=np.int32
+        ),
+        active_kernel_rows=np.asarray(active_kernel_rows, dtype=np.int32),
+    )
+    checks = {
+        "G3CV_and_G3CW_are_hash_bound_and_passing": True,
+        "the_exact_B89_complement_support_replays_the_DM_decomposition": True,
+        "the_component_condensation_is_an_exact_upper_triangular_DAG": True,
+        "the_complete_P_action_needs_only1400_components_of_total_dimension4013": len(
+            solution_components
+        )
+        == 1400
+        and int(component_sizes[list(solution_components)].sum()) == 4013,
+        "the_Q_source_observation_corridor_has394_components_and_dimension2786": len(
+            corridor_components
+        )
+        == 394
+        and int(component_sizes[list(corridor_components)].sum()) == 2786,
+        "the_corridor_is_exactly_two_large_cores_plus392_singletons": corridor_histogram
+        == Counter({1: 392, 684: 1, 1710: 1}),
+        "exact_DAG_separation_forces248_of988_Q_columns_to_vanish": len(
+            zero_kernel_columns
+        )
+        == 248,
+        "the_remaining740_columns_and_all988_rows_are_nonzero_at_the_good_split_place": len(
+            active_kernel_columns
+        )
+        == 740
+        and len(active_kernel_rows) == 988,
+        "the_one_prime_Q_rank_is710_at_all_six_roots_but_is_not_promoted_as_exact": set(
+            q_split_ranks
+        )
+        == {710},
+        "no_observed_value_floating_point_or_fitted_parameter_is_used": True,
+    }
+    require(all(checks.values()), "G3CX checks")
+    packet = {
+        "schema": "mtt.unified-source.g3cx-h11-dm-source-observation-corridor.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CX",
+        "status": "CLOSED_EXACT_H11_DM_SOURCE_OBSERVATION_CORRIDOR_AND_248_ZERO_KERNEL_COLUMNS",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3CV": record(G3CV),
+            "G3CW": record(G3CW),
+            "H11_DM": external_record(dm_path, mld),
+            "H11_DM_arrays": external_record(dm_arrays_path, mld),
+            "H11_Macaulay": external_record(macaulay_path, mld),
+            "H11_factorization": external_record(factor_path, mld),
+            "root5_B89_chart": external_record(chart_path, mld),
+            "implementation": record(Path(__file__).resolve()),
+        },
+        "exact_component_DAG": {
+            "components": component_count,
+            "total_dimension": int(component_sizes.sum()),
+            "directed_edges": len(edge_pairs),
+            "source_components": len(source_components),
+            "observation_components": len(observation_components),
+            "solution_ancestor_components": len(solution_components),
+            "solution_ancestor_dimension": int(
+                component_sizes[list(solution_components)].sum()
+            ),
+            "source_observation_corridor_components": len(corridor_components),
+            "source_observation_corridor_dimension": int(
+                component_sizes[list(corridor_components)].sum()
+            ),
+            "source_observation_corridor_edges": len(corridor_edges),
+            "corridor_size_histogram": [
+                {"component_size": size, "count": count}
+                for size, count in sorted(corridor_histogram.items())
+            ],
+            "arrays": record(arrays_path),
+        },
+        "kernel_reduction": {
+            "Q": "W*A0^-1*U",
+            "full_shape": [988, 988],
+            "structurally_nonzero_rows": len(active_kernel_rows),
+            "structurally_nonzero_columns": len(active_kernel_columns),
+            "identically_zero_columns_over_Q_gamma": len(zero_kernel_columns),
+            "one_prime_coefficient_support_nonzeros": int(np.count_nonzero(q_support)),
+            "one_prime_structural_matching_bound": q_matching,
+            "one_prime_split_root_ranks": q_split_ranks,
+            "proved_characteristic_zero_rank_interval": [710, 740],
+            "rank_interval_reason": "rank at a good reduction is a lower bound; 740 exact source-reachable columns give the upper bound",
+        },
+        "execution_contract": {
+            "precompute_Q": "solve only the 740 active U columns through the 2786-dimensional source-observation corridor",
+            "recover_Pz": "after z is known, solve one combined A0 action on U*z through the 4013-dimensional solution ancestor subgraph",
+            "large_dense_blocks": [1710, 684],
+            "remaining_corridor_blocks": "392 scalar blocks",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_rank_Q_gamma_Q_equals710": False,
+            "claims_the_Archimedean_Q_action_is_evaluated": False,
+            "claims_x0_or_path_integration": False,
+            "claims_beta_C_or_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3cxH11DmSourceObservationCorridor",
+            "tier": "CLOSED_EXACT_SOURCE_OBSERVATION_GRAPH_REDUCTION",
+            "statement": "In the exact B89 H11 DM condensation DAG, only 394 components of total dimension 2786 lie on a path from a W observation component to a U source component. They are precisely the 1710 and 684 cores plus 392 singletons. This exact separation forces 248 columns of Q=W*A0^-1*U to vanish over Q(gamma); the remaining 740 columns are nonzero at the certified good reduction. The six split-root ranks are all 710, proving 710<=rank_Q(gamma)(Q)<=740 without promoting the lower value to equality.",
+        },
+        "frontier_delta": {
+            "before": "G3CW executed a 4426-by-988 base action and a 988-square kernel at one split prime, while the characteristic-zero lift still appeared to require the full complement.",
+            "after": "The exact source-observation corridor reduces Q evaluation to two large cores plus 392 scalar blocks, total dimension 2786, and only 740 RHS columns. Recovery needs one combined 4013-dimensional solve after z is known. The remaining characteristic-zero rank interval for Q is 710 to 740.",
+        },
+        "next_required_object": "Use the emitted corridor to evaluate Q with directed-rounding balls on each Archimedean embedding. In parallel, prove or refute the observed rank710 by an exact number-field upper bound; do not assume the one-prime rank is generic.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CX H11 DM source-observation corridor: PASS")
+    print(
+        "corridor_components=394 corridor_dimension=2786 "
+        "active_Q_columns=740 zero_Q_columns=248 split_rank=710"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

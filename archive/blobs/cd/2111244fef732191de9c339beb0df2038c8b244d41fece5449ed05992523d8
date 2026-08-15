@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Independent validator for the disjoint UST.G3GN corrected campaign."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as interpolation
+import build_ust_g3ft_component20_full_relation_height_campaign as heights
+import build_ust_g3gn_corrected_fresh_prime_campaign as campaign
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state/ust_g3gn_corrected_fresh_prime_campaign.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"artifact exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"artifact size: {path}")
+    require(sha256(path) == row["sha256"], f"artifact hash: {path}")
+    return path
+
+
+def source_value(prime: int, gamma: int) -> np.ndarray:
+    if prime == 79903:
+        path = (
+            campaign.g3ga.EVIDENCE
+            / f"H02.component20.p{prime}.g{gamma}.second_jet_source.npz"
+        )
+    else:
+        path = campaign.g3ge.source_path(prime, gamma)
+    require(path.is_file(), f"source value p={prime} gamma={gamma}")
+    value = np.load(path, allow_pickle=False)["source_coefficient"].astype(np.uint32)
+    require(value.shape == (132,), "source shape")
+    return value
+
+
+def main() -> None:
+    campaign.configure_disjoint_outputs()
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3GN", "theorem id")
+    require(packet["status"] == "CLOSED_EXACT_CORRECTED_23_FRESH_FIBER_CAMPAIGN", "status")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "packet guardrails")
+    for row in packet["inputs"].values():
+        verify_record(row)
+    stage_paths = {label: verify_record(row) for label, row in packet["stages"].items()}
+    stages = {
+        label: json.loads(path.read_text(encoding="utf-8"))
+        for label, path in stage_paths.items()
+    }
+    require(all(all(row["checks"].values()) for row in stages.values()), "stage checks")
+    require(all(not any(row["guardrails"].values()) for row in stages.values()), "stage guardrails")
+
+    rows = campaign.fresh_root_rows()
+    pairs = {(int(row["prime"]), int(row["gamma_root"])) for row in rows}
+    require(len(rows) == len(pairs) == 23, "23 unique corrected fibers")
+    require(
+        all(
+            int(row["coupling_rank"]) == 4748
+            and int(row["kernel_dimension"]) == 1274
+            and row["component20_second_jet_profile"] == [15, 5, 0, 33, 17, 1]
+            for row in rows
+        ),
+        "corrected profile replay",
+    )
+
+    audit = stages["G3GE_v2"]
+    arrays_path = verify_record(audit["full_root_campaign"]["artifact"])
+    arrays = np.load(arrays_path, allow_pickle=False)
+    primes = tuple(int(value) for value in arrays["primes"])
+    residues = arrays["second_jet_source_power_basis_residues"].astype(np.uint32)
+    require(primes[-3:] == (79903, 81359, 82963), "corrected complete-prime suffix")
+    require(residues.shape == (11, 792), "corrected residue shape")
+
+    for prime_index, prime in enumerate(primes[-3:], start=8):
+        roots = tuple(int(value) for value in heights.FIBERS[prime])
+        values = np.stack([source_value(prime, gamma) for gamma in roots])
+        replay = interpolation.interpolate(values.astype(np.int64), roots, prime)
+        require(
+            np.array_equal(replay.reshape(-1).astype(np.uint32), residues[prime_index]),
+            f"corrected interpolation p={prime}",
+        )
+
+    ten_holdout, _, _, _ = campaign.g3ga.reconstruction_audit(
+        residues, primes, len(primes)
+    )
+    require(
+        ten_holdout == audit["full_root_campaign"]["ten_construction_prime_one_prime_holdout"],
+        "ten-prime holdout replay",
+    )
+    numerators, denominators, valid, modulus, bound = campaign.g3ge.reconstruct_all(
+        residues, primes
+    )
+    require(str(modulus) == audit["full_root_campaign"]["all_eleven_prime_modulus"], "CRT modulus")
+    require(str(bound) == audit["full_root_campaign"]["rational_reconstruction_bound"], "CRT bound")
+    require(
+        np.array_equal(
+            np.asarray([str(value) for value in numerators], dtype="U64"),
+            arrays["reconstructed_numerators"],
+        ),
+        "reconstructed numerators",
+    )
+    require(
+        np.array_equal(
+            np.asarray([str(value) for value in denominators], dtype="U64"),
+            arrays["reconstructed_denominators"],
+        ),
+        "reconstructed denominators",
+    )
+    require(np.array_equal(valid.astype(np.uint8), arrays["reconstruction_valid"]), "valid mask")
+
+    holdout_pairs = tuple(
+        zip(
+            (int(value) for value in arrays["root_holdout_primes"]),
+            (int(value) for value in arrays["root_holdout_gamma"]),
+            strict=True,
+        )
+    )
+    targets = np.stack([source_value(prime, gamma) for prime, gamma in holdout_pairs])
+    require(np.array_equal(targets, arrays["root_holdout_targets"]), "holdout targets")
+    passes = np.stack(
+        [
+            campaign.g3ge.evaluate_coordinates(
+                numerators, denominators, valid, prime, gamma, target
+            )
+            for (prime, gamma), target in zip(holdout_pairs, targets, strict=True)
+        ]
+    )
+    require(
+        np.array_equal(passes.astype(np.uint8), arrays["root_holdout_coordinate_pass"]),
+        "holdout pass replay",
+    )
+
+    old = np.load(
+        ROOT / "evidence/ust_g3ga/H02.component20.p79903.g12863.second_jet_source.npz",
+        allow_pickle=False,
+    )["source_coefficient"]
+    new = source_value(79903, 12863)
+    require(int(np.count_nonzero(old != new)) == 115, "mixed-modulus source mismatch")
+    print(
+        "UST.G3GN independent verification: PASS "
+        f"fibers={len(rows)} profile=4748/1274 holdout_nontrivial="
+        f"{audit['independent_root_validation']['common_passing_nontrivial_coordinates']}"
+    )
+
+
+if __name__ == "__main__":
+    main()

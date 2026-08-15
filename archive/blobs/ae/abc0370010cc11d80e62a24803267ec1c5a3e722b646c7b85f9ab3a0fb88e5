@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Probe selected degree-21 apolar sources for the G3FR primitive-15 lane."""
+
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+BASE = (
+    ROOT.parent
+    / "mtt-protospinor-gr-response-proof/certificates/"
+    "q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json"
+)
+PDELTA = ROOT.parent / "12 Quantum Gravity/q79_splitting_conic_delta_residue_polynomial.packet.json"
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3FR = ROOT / "evidence/ust_g3fr/H02.component20.inverse_system_source.npz"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def polynomial_vector(
+    polynomial: sp.Poly, degree: int, prime: int
+) -> np.ndarray:
+    x, y, z = polynomial.gens
+    result = []
+    for exponent in graded.homogeneous_exponents(degree):
+        coefficient = polynomial.coeff_monomial(
+            x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+        )
+        result.append(
+            int(coefficient.p)
+            * pow(int(coefficient.q), -1, prime)
+            % prime
+        )
+    return np.asarray(result, dtype=np.int64)
+
+
+def product(
+    left: np.ndarray,
+    left_degree: int,
+    right: np.ndarray,
+    right_degree: int,
+    prime: int,
+) -> np.ndarray:
+    left_basis = graded.homogeneous_exponents(left_degree)
+    right_basis = graded.homogeneous_exponents(right_degree)
+    target = graded.homogeneous_exponents(left_degree + right_degree)
+    lookup = {exponent: row for row, exponent in enumerate(target)}
+    result = np.zeros(len(target), dtype=np.int64)
+    for left_exponent, left_coefficient in zip(left_basis, left, strict=True):
+        if left_coefficient == 0:
+            continue
+        for right_exponent, right_coefficient in zip(
+            right_basis, right, strict=True
+        ):
+            if right_coefficient == 0:
+                continue
+            exponent = tuple(
+                left_exponent[index] + right_exponent[index]
+                for index in range(3)
+            )
+            result[lookup[exponent]] = (
+                result[lookup[exponent]]
+                + int(left_coefficient) * int(right_coefficient)
+            ) % prime
+    return result
+
+
+def jacobian_ideal_piece(
+    sextic: sp.Poly, degree: int, prime: int
+) -> np.ndarray:
+    variables = sextic.gens
+    target = graded.homogeneous_exponents(degree)
+    lookup = {exponent: row for row, exponent in enumerate(target)}
+    columns: list[np.ndarray] = []
+    for variable in variables:
+        derivative = polynomial_vector(
+            sp.Poly(sp.diff(sextic.as_expr(), variable), *variables, domain=sp.QQ),
+            5,
+            prime,
+        )
+        for multiplier in graded.homogeneous_exponents(degree - 5):
+            column = np.zeros(len(target), dtype=np.int64)
+            for exponent, coefficient in zip(
+                graded.homogeneous_exponents(5), derivative, strict=True
+            ):
+                shifted = tuple(
+                    exponent[index] + multiplier[index] for index in range(3)
+                )
+                column[lookup[shifted]] = coefficient
+            columns.append(column)
+    matrix = np.stack(columns, axis=1) % prime
+    _, pivots, _ = graded.rref(matrix, prime)
+    return matrix[:, pivots] % prime
+
+
+def pdelta_kernel(
+    sextic: sp.Poly, pdelta: sp.Poly, prime: int
+) -> tuple[np.ndarray, dict[str, int]]:
+    ideal6 = jacobian_ideal_piece(sextic, 6, prime)
+    ideal12 = jacobian_ideal_piece(sextic, 12, prime)
+    representatives6, _, _ = graded.complement_columns(
+        ideal6, np.eye(28, dtype=np.int64), prime
+    )
+    _, _, socle_dual = graded.rref(
+        ideal12.T, prime, emit_nullspace=True
+    )
+    require(socle_dual is not None and socle_dual.shape == (91, 1), "R12 socle")
+    pdelta6 = polynomial_vector(pdelta, 6, prime)
+    products = np.stack(
+        [
+            product(pdelta6, 6, representatives6[:, column], 6, prime)
+            for column in range(representatives6.shape[1])
+        ],
+        axis=1,
+    )
+    multiplication = socle_dual[:, 0] @ products % prime
+    _, _, kernel_coordinates = graded.rref(
+        multiplication.reshape(1, -1), prime, emit_nullspace=True
+    )
+    require(kernel_coordinates is not None, "Pdelta kernel coordinates")
+    kernel = representatives6 @ kernel_coordinates % prime
+    pdelta_square = product(pdelta6, 6, pdelta6, 6, prime)
+    profile = {
+        "ideal6_rank": graded.rref(ideal6, prime)[0],
+        "R6_dimension": representatives6.shape[1],
+        "ideal12_rank": graded.rref(ideal12, prime)[0],
+        "R12_dimension": socle_dual.shape[1],
+        "multiplication_rank": graded.rref(
+            multiplication.reshape(1, -1), prime
+        )[0],
+        "kernel_dimension": kernel.shape[1],
+        "Pdelta_square_socle_coordinate": int(
+            socle_dual[:, 0] @ pdelta_square % prime
+        ),
+    }
+    require(tuple(profile.values())[:6] == (9, 19, 90, 1, 1, 18), "kernel profile")
+    require(profile["Pdelta_square_socle_coordinate"] != 0, "Pdelta square")
+    return kernel, profile
+
+
+def evaluate_selected_form(
+    coefficient_vectors: list[list[int]], theta: int, gamma: int, prime: int
+) -> np.ndarray:
+    restricted = conic.restricted_coefficient(coefficient_vectors, theta)
+    lookup = {
+        exponent: row
+        for row, exponent in enumerate(graded.homogeneous_exponents(9))
+    }
+    result = np.zeros(55, dtype=np.int64)
+    for exponent, coordinates in restricted.items():
+        result[lookup[exponent]] = sum(
+            int(coordinate) * pow(gamma, power, prime)
+            for power, coordinate in enumerate(coordinates)
+        ) % prime
+    return result
+
+
+def contract(
+    operator_basis: np.ndarray,
+    source21: np.ndarray,
+    prime: int,
+    *,
+    ordinary: bool,
+) -> np.ndarray:
+    basis6 = graded.homogeneous_exponents(6)
+    basis15 = graded.homogeneous_exponents(15)
+    lookup21 = {
+        exponent: row
+        for row, exponent in enumerate(graded.homogeneous_exponents(21))
+    }
+    result = np.zeros((136, operator_basis.shape[1]), dtype=np.int64)
+    factorial = [math.factorial(value) % prime for value in range(22)]
+    for column in range(operator_basis.shape[1]):
+        for output_row, beta in enumerate(basis15):
+            value = 0
+            for input_row, alpha in enumerate(basis6):
+                coefficient = int(operator_basis[input_row, column])
+                if coefficient == 0:
+                    continue
+                exponent = tuple(alpha[index] + beta[index] for index in range(3))
+                source_coefficient = int(source21[lookup21[exponent]])
+                if ordinary:
+                    for index in range(3):
+                        source_coefficient = (
+                            source_coefficient
+                            * factorial[exponent[index]]
+                            * pow(factorial[beta[index]], -1, prime)
+                        ) % prime
+                value = (value + coefficient * source_coefficient) % prime
+            result[output_row, column] = value
+    return result
+
+
+def selected_degree12_factors(
+    q: np.ndarray,
+    g3: np.ndarray,
+    h4: np.ndarray,
+    pdelta: np.ndarray,
+    prime: int,
+) -> dict[str, np.ndarray]:
+    generators = (("q", q, 2), ("G3", g3, 3), ("H4", h4, 4), ("Pdelta", pdelta, 6))
+    factors: dict[str, np.ndarray] = {}
+    for q_power in range(7):
+        for g_power in range(5):
+            for h_power in range(4):
+                for p_power in range(3):
+                    powers = (q_power, g_power, h_power, p_power)
+                    if 2 * q_power + 3 * g_power + 4 * h_power + 6 * p_power != 12:
+                        continue
+                    value = np.asarray([1], dtype=np.int64)
+                    degree = 0
+                    labels: list[str] = []
+                    for power, (label, generator, generator_degree) in zip(
+                        powers, generators, strict=True
+                    ):
+                        for _ in range(power):
+                            value = product(
+                                value, degree, generator, generator_degree, prime
+                            )
+                            degree += generator_degree
+                        if power:
+                            labels.append(label if power == 1 else f"{label}^{power}")
+                    require(degree == 12, "degree12 factor")
+                    factors["*".join(labels)] = value
+    return factors
+
+
+def main() -> None:
+    base = load(BASE)
+    pdelta_packet = load(PDELTA)
+    g3bi = load(G3BI)
+    arrays = np.load(G3FR, allow_pickle=False)
+    prime = int(arrays["primes"][0])
+    gamma = int(arrays["roots"][0, 0])
+    require((prime, gamma) == (21817, 5), "anchor fiber")
+
+    x, y, z = sp.symbols("x y z")
+    variables = (x, y, z)
+    sextic = sp.Poly(
+        sp.sympify(
+            base["explicit_K3"]["F6_equals_G3_squared_plus_Q2_H4"],
+            locals={"x": x, "y": y, "z": z},
+        ),
+        *variables,
+        domain=sp.QQ,
+    )
+    g3_polynomial = sp.Poly(
+        sp.sympify(
+            base["explicit_K3"]["G3"], locals={"x": x, "y": y, "z": z}
+        ),
+        *variables,
+        domain=sp.QQ,
+    )
+    h4_polynomial = sp.Poly(
+        sp.sympify(
+            base["explicit_K3"]["H4"], locals={"x": x, "y": y, "z": z}
+        ),
+        *variables,
+        domain=sp.QQ,
+    )
+    pdelta_polynomial = sp.Poly(
+        sp.sympify(
+            pdelta_packet["residue_polynomial"]["expanded"],
+            locals={"x": x, "y": y, "z": z},
+        ),
+        *variables,
+        domain=sp.QQ,
+    )
+    kernel18, profile = pdelta_kernel(sextic, pdelta_polynomial, prime)
+
+    q = polynomial_vector(sp.Poly(x * z - y**2, *variables), 2, prime)
+    g3 = polynomial_vector(g3_polynomial, 3, prime)
+    h4 = polynomial_vector(h4_polynomial, 4, prime)
+    pdelta = polynomial_vector(pdelta_polynomial, 6, prime)
+    factors = selected_degree12_factors(q, g3, h4, pdelta, prime)
+    target = arrays["degree15_primitives"][0, 0].astype(np.int64) % prime
+    _, _, target_annihilator = graded.rref(
+        target.T, prime, emit_nullspace=True
+    )
+    require(target_annihilator is not None, "target annihilator")
+
+    coefficient_vectors = g3bi["selected_source"]["coefficient_vectors"]
+    rows: list[dict[str, object]] = []
+    for ordinary in (False, True):
+        source_matrices: list[np.ndarray] = []
+        source_labels: list[str] = []
+        for theta in range(3):
+            a_theta = evaluate_selected_form(
+                coefficient_vectors, theta, gamma, prime
+            )
+            for label, factor in factors.items():
+                source21 = product(factor, 12, a_theta, 9, prime)
+                candidate = contract(
+                    kernel18, source21, prime, ordinary=ordinary
+                )
+                source_matrices.append(candidate)
+                source_labels.append(f"A{theta}*{label}")
+                rows.append(
+                    {
+                        "convention": "ordinary" if ordinary else "divided_power",
+                        "source": source_labels[-1],
+                        "candidate_rank": graded.rref(candidate, prime)[0],
+                        "joint_rank_with_selected_primitive15": graded.rref(
+                            np.concatenate((candidate, target), axis=1), prime
+                        )[0],
+                    }
+                )
+        obstruction = np.stack(
+            [
+                (target_annihilator.T @ candidate % prime).reshape(-1)
+                for candidate in source_matrices
+            ],
+            axis=1,
+        )
+        _, _, source_nullspace = graded.rref(
+            obstruction, prime, emit_nullspace=True
+        )
+        require(source_nullspace is not None, "source obstruction nullspace")
+        print(
+            f"G3FY convention={'ordinary' if ordinary else 'divided'} "
+            f"sources={len(source_labels)} obstruction_rank={graded.rref(obstruction, prime)[0]} "
+            f"common_source_nullity={source_nullspace.shape[1]}",
+            flush=True,
+        )
+    print(
+        "G3FY kernel profile: "
+        + " ".join(f"{key}={value}" for key, value in profile.items()),
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

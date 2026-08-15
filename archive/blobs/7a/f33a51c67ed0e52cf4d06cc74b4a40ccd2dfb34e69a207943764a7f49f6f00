@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""Decide a sparse exact Deligne quotient certificate for the eta9 source."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+import run_ust_g3bc_pairing_one_bezout_dual as intervals
+
+
+DIMENSION = 248
+INPUT_SCHEMA = "mtt.unified-source.g3bd-sparse-deligne-quotient-input.v1"
+B_SWEEP_SCHEMA = "mtt.unified-source.g3bd-b-sweep-certificate.v1"
+PERIOD_SCHEMA = "mtt.unified-source.g3bd-integral-period-column-certificate.v1"
+DECISION_SCHEMA = "mtt.unified-source.g3bd-quotient-decision-certificate.v1"
+SCOPE_SCHEMA = "mtt.unified-source.g3bd-period-annihilator-scope-certificate.v1"
+PRODUCTION_STATUS = "PRODUCTION_SAME_SOURCE_DELIGNE_QUOTIENT_PAYLOAD"
+TEST_STATUS = "TEST_ONLY_SYNTHETIC_DELIGNE_QUOTIENT_PAYLOAD"
+ZERO_BRANCH = "ZERO_INTEGER_PERIOD_MEMBERSHIP"
+NONZERO_BRANCH = "NONZERO_FULL_LATTICE_ANNIHILATOR"
+CHARACTER_BRANCH = "NONZERO_DUAL_LATTICE_CHARACTER"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def resolve(payload_path: Path, value: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute():
+        path = payload_path.resolve().parent / path
+    return path.resolve()
+
+
+def relative(path: Path, output_path: Path) -> str:
+    try:
+        return path.resolve().relative_to(output_path.resolve().parent).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def load_bound(payload_path: Path, record: dict[str, Any], label: str) -> tuple[Path, dict[str, Any]]:
+    require(isinstance(record, dict), f"{label} record")
+    path = resolve(payload_path, record.get("path", ""))
+    require(path.is_file(), f"{label} file")
+    require(sha256(path) == record.get("sha256"), f"{label} hash")
+    return path, load(path)
+
+
+def zero_interval() -> tuple[Fraction, Fraction, Fraction, Fraction]:
+    return Fraction(0), Fraction(0), Fraction(0), Fraction(0)
+
+
+def subtract(left, right):
+    return intervals.add_intervals(left, intervals.scale_interval(-1, right))
+
+
+def exact_zero(value) -> bool:
+    return value == zero_interval()
+
+
+def excludes_zero(value) -> bool:
+    real_low, real_high, imag_low, imag_high = value
+    return real_high < 0 or real_low > 0 or imag_high < 0 or imag_low > 0
+
+
+def decode_exact_complex(value: dict[str, Any]) -> tuple[Fraction, Fraction]:
+    require(isinstance(value, dict), "exact complex coefficient")
+    return intervals.decode_rational(value["real"]), intervals.decode_rational(value["imag"])
+
+
+def multiply_exact_complex_interval(coefficient, value):
+    real_coefficient, imag_coefficient = coefficient
+    real_low, real_high, imag_low, imag_high = value
+    real_part = intervals.add_intervals(
+        intervals.scale_interval(real_coefficient.numerator, (
+            real_low / real_coefficient.denominator,
+            real_high / real_coefficient.denominator,
+            Fraction(0),
+            Fraction(0),
+        )),
+        intervals.scale_interval(-imag_coefficient.numerator, (
+            imag_low / imag_coefficient.denominator,
+            imag_high / imag_coefficient.denominator,
+            Fraction(0),
+            Fraction(0),
+        )),
+    )
+    imag_part = intervals.add_intervals(
+        intervals.scale_interval(real_coefficient.numerator, (
+            Fraction(0),
+            Fraction(0),
+            imag_low / real_coefficient.denominator,
+            imag_high / real_coefficient.denominator,
+        )),
+        intervals.scale_interval(imag_coefficient.numerator, (
+            Fraction(0),
+            Fraction(0),
+            real_low / imag_coefficient.denominator,
+            real_high / imag_coefficient.denominator,
+        )),
+    )
+    return (
+        real_part[0],
+        real_part[1],
+        imag_part[2],
+        imag_part[3],
+    )
+
+
+def dot(covector, vector):
+    require(len(covector) == len(vector) == DIMENSION, "248-coordinate pairing")
+    total = zero_interval()
+    for coefficient, coordinate in zip(covector, vector, strict=True):
+        total = intervals.add_intervals(
+            total,
+            multiply_exact_complex_interval(coefficient, coordinate),
+        )
+    return total
+
+
+def scale_real_interval(coefficient: Fraction, low: Fraction, high: Fraction) -> tuple[Fraction, Fraction]:
+    if coefficient >= 0:
+        return coefficient * low, coefficient * high
+    return coefficient * high, coefficient * low
+
+
+def real_character_pairing(character, vector) -> tuple[Fraction, Fraction]:
+    require(len(character) == len(vector) == DIMENSION, "248-coordinate real character")
+    low = Fraction(0)
+    high = Fraction(0)
+    for (real_coefficient, imag_coefficient), coordinate in zip(character, vector, strict=True):
+        real_low, real_high, imag_low, imag_high = coordinate
+        part_low, part_high = scale_real_interval(real_coefficient, real_low, real_high)
+        low, high = low + part_low, high + part_high
+        part_low, part_high = scale_real_interval(imag_coefficient, imag_low, imag_high)
+        low, high = low + part_low, high + part_high
+    return low, high
+
+
+def contains_integer(value: tuple[Fraction, Fraction]) -> bool:
+    low, high = value
+    return math.ceil(low) <= math.floor(high)
+
+
+def decode_coordinates(certificate: dict[str, Any], label: str):
+    values = certificate.get("complex_interval_coordinates")
+    require(isinstance(values, list) and len(values) == DIMENSION, f"{label} 248 coordinates")
+    return [intervals.decode_interval(value) for value in values]
+
+
+def validate_bindings(bindings: dict[str, Any]) -> None:
+    require(isinstance(bindings.get("source_orbit_id"), str) and bindings["source_orbit_id"], "source orbit")
+    for key in ("B89_pencil_sha256", "B103_ordered_basis_sha256", "normalized_source_sha256"):
+        require(isinstance(bindings.get(key), str) and len(bindings[key]) == 64, f"binding {key}")
+
+
+def execute(payload_path: Path, output_path: Path, allow_test_only: bool = False) -> dict[str, Any]:
+    payload = load(payload_path)
+    require(payload.get("schema") == INPUT_SCHEMA, "G3BD input schema")
+    require(payload.get("status") in (PRODUCTION_STATUS, TEST_STATUS), "G3BD input status")
+    test_only = payload["status"] == TEST_STATUS
+    require(not test_only or allow_test_only, "test-only fixture requires --allow-test-only")
+    bindings = payload.get("bindings")
+    require(isinstance(bindings, dict), "bindings")
+    validate_bindings(bindings)
+
+    b_path, b_certificate = load_bound(payload_path, payload.get("B_sweep"), "B-sweep")
+    require(b_certificate.get("schema") == B_SWEEP_SCHEMA, "B-sweep schema")
+    require(b_certificate.get("normalization_tier") == "SELECTED_NORMALIZED_B_SWEEP_B103_H02", "B-sweep normalization")
+    require(b_certificate.get("bindings") == bindings, "B-sweep bindings")
+    require(all(b_certificate.get("checks", {}).values()), "B-sweep checks")
+    require(bool(b_certificate.get("test_only")) == test_only, "B-sweep tier")
+    b_sweep = decode_coordinates(b_certificate, "B-sweep")
+
+    period_records = payload.get("period_columns")
+    require(isinstance(period_records, list) and period_records, "period columns")
+    period_ids: list[str] = []
+    period_columns = []
+    period_artifacts = []
+    for index, record in enumerate(period_records):
+        path, certificate = load_bound(payload_path, record, f"period {index}")
+        require(certificate.get("schema") == PERIOD_SCHEMA, "period schema")
+        require(certificate.get("normalization_tier") == "INTEGRAL_BETTI_PERIOD_COLUMN", "period normalization")
+        require(certificate.get("bindings") == bindings, "period bindings")
+        require(all(certificate.get("checks", {}).values()), "period checks")
+        require(bool(certificate.get("test_only")) == test_only, "period tier")
+        period_id = certificate.get("period_id")
+        require(isinstance(period_id, str) and period_id not in period_ids, "unique period id")
+        period_ids.append(period_id)
+        period_columns.append(decode_coordinates(certificate, f"period {period_id}"))
+        period_artifacts.append({"path": relative(path, output_path), "sha256": sha256(path)})
+
+    decision_path, decision = load_bound(payload_path, payload.get("decision_certificate"), "decision")
+    require(decision.get("schema") == DECISION_SCHEMA, "decision schema")
+    require(decision.get("bindings") == bindings, "decision bindings")
+    require(decision.get("period_ids") == period_ids, "decision period order")
+    require(bool(decision.get("test_only")) == test_only, "decision tier")
+    require(all(decision.get("checks", {}).values()), "decision checks")
+    branch = decision.get("branch")
+    require(branch in (ZERO_BRANCH, NONZERO_BRANCH, CHARACTER_BRANCH), "decision branch")
+
+    residual = None
+    annihilator_values = None
+    character_period_values = None
+    deciding_real_interval = None
+    scope_record = None
+    if branch == ZERO_BRANCH:
+        coefficients = decision.get("integer_coefficients")
+        require(
+            isinstance(coefficients, list)
+            and len(coefficients) == len(period_columns)
+            and all(isinstance(value, int) for value in coefficients),
+            "integer membership coefficients",
+        )
+        residual = []
+        for coordinate in range(DIMENSION):
+            value = b_sweep[coordinate]
+            for coefficient, column in zip(coefficients, period_columns, strict=True):
+                value = subtract(value, intervals.scale_interval(coefficient, column[coordinate]))
+            residual.append(value)
+        require(all(exact_zero(value) for value in residual), "exact integer period membership")
+        status = "ZERO_DELIGNE_CLASS_CERTIFIED_EXACT_INTEGER_PERIOD_MEMBERSHIP"
+    elif branch == NONZERO_BRANCH:
+        covector_values = decision.get("annihilating_covector_248")
+        require(isinstance(covector_values, list) and len(covector_values) == DIMENSION, "annihilator length")
+        covector = [decode_exact_complex(value) for value in covector_values]
+        annihilator_values = [dot(covector, column) for column in period_columns]
+        require(all(exact_zero(value) for value in annihilator_values), "annihilator kills supplied periods")
+        scope_path, scope = load_bound(payload_path, decision.get("scope_certificate"), "annihilator scope")
+        require(scope.get("schema") == SCOPE_SCHEMA, "scope schema")
+        require(scope.get("bindings") == bindings and scope.get("period_ids") == period_ids, "scope bindings")
+        require(
+            scope.get("coverage_tier")
+            in ("FULL_INTEGRAL_PERIOD_LATTICE", "SATURATED_DETECTING_QUOTIENT")
+            and all(scope.get("checks", {}).values()),
+            "full-lattice annihilator scope",
+        )
+        require(bool(scope.get("test_only")) == test_only, "scope tier")
+        scope_record = {"path": relative(scope_path, output_path), "sha256": sha256(scope_path)}
+        paired = dot(covector, b_sweep)
+        require(excludes_zero(paired), "annihilator does not separate B-sweep from zero")
+        residual = [paired]
+        status = "NONZERO_DELIGNE_CLASS_CERTIFIED_FULL_LATTICE_SEPARATION"
+    else:
+        character_values = decision.get("dual_lattice_character_248")
+        require(isinstance(character_values, list) and len(character_values) == DIMENSION, "dual character length")
+        character = [decode_exact_complex(value) for value in character_values]
+        character_period_values = [real_character_pairing(character, column) for column in period_columns]
+        require(
+            all(low == high and low.denominator == 1 for low, high in character_period_values),
+            "dual character is integral on supplied periods",
+        )
+        scope_path, scope = load_bound(payload_path, decision.get("scope_certificate"), "character scope")
+        require(scope.get("schema") == SCOPE_SCHEMA, "scope schema")
+        require(scope.get("bindings") == bindings and scope.get("period_ids") == period_ids, "scope bindings")
+        require(
+            scope.get("coverage_tier")
+            in ("FULL_INTEGRAL_PERIOD_LATTICE", "SATURATED_DETECTING_QUOTIENT")
+            and all(scope.get("checks", {}).values()),
+            "full-lattice character scope",
+        )
+        require(bool(scope.get("test_only")) == test_only, "scope tier")
+        scope_record = {"path": relative(scope_path, output_path), "sha256": sha256(scope_path)}
+        deciding_real_interval = real_character_pairing(character, b_sweep)
+        require(not contains_integer(deciding_real_interval), "dual character does not separate B-sweep from the integer lattice")
+        residual = []
+        status = "NONZERO_DELIGNE_CLASS_CERTIFIED_DUAL_LATTICE_CHARACTER"
+
+    result = {
+        "schema": "mtt.unified-source.g3bd-sparse-deligne-quotient-output.v1",
+        "status": status,
+        "test_only": test_only,
+        "production_promotable": not test_only,
+        "bindings": bindings,
+        "branch": branch,
+        "inputs": {
+            "payload": {"path": relative(payload_path, output_path), "sha256": sha256(payload_path)},
+            "B_sweep": {"path": relative(b_path, output_path), "sha256": sha256(b_path)},
+            "period_columns": period_artifacts,
+            "decision": {"path": relative(decision_path, output_path), "sha256": sha256(decision_path)},
+            "annihilator_scope": scope_record,
+        },
+        "certificate": {
+            "period_column_count": len(period_columns),
+            "zero_residual_coordinate_count": DIMENSION if branch == ZERO_BRANCH else None,
+            "annihilator_period_pairings": [intervals.encode_interval(value) for value in annihilator_values]
+            if annihilator_values is not None
+            else None,
+            "dual_character_period_pairings": [
+                {"lower": intervals.encode_rational(low), "upper": intervals.encode_rational(high)}
+                for low, high in character_period_values
+            ]
+            if character_period_values is not None
+            else None,
+            "deciding_interval": intervals.encode_interval(residual[0]) if branch == NONZERO_BRANCH else None,
+            "deciding_real_character_interval": {
+                "lower": intervals.encode_rational(deciding_real_interval[0]),
+                "upper": intervals.encode_rational(deciding_real_interval[1]),
+            }
+            if deciding_real_interval is not None
+            else None,
+        },
+        "checks": {
+            "all_values_are_hash_bound_to_one_source_orbit_and_ordered_B103_basis": True,
+            "zero_branch_uses_an_exact_integer_period_combination": branch != ZERO_BRANCH or all(exact_zero(value) for value in residual),
+            "nonzero_branch_uses_a_full_lattice_or_saturated_quotient_annihilator": branch != NONZERO_BRANCH or scope_record is not None,
+            "nonzero_branch_is_interval_separated_from_zero": branch != NONZERO_BRANCH or excludes_zero(residual[0]),
+            "dual_character_branch_is_integral_on_the_certified_period_lattice": branch != CHARACTER_BRANCH or all(low == high and low.denominator == 1 for low, high in character_period_values),
+            "dual_character_branch_is_separated_from_every_integer": branch != CHARACTER_BRANCH or not contains_integer(deciding_real_interval),
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+        "guardrails": {
+            "claims_a_finite_radius_interval_containing_zero_is_exact_zero": False,
+            "claims_annihilation_of_an_incomplete_period_list_proves_nonzero": False,
+            "claims_integrality_on_an_incomplete_period_list_proves_nonzero": False,
+            "claims_G3AU_period_descent": False,
+            "claims_the_test_fixture_is_physical": False,
+            "claims_B_ETA9_01_or_B_ETA9_02_is_closed_without_production_values": False,
+        },
+    }
+    require(all(result["checks"].values()), "G3BD checks")
+    require(not any(result["guardrails"].values()), "G3BD guardrails")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    return result
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("payload", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--allow-test-only", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    result = execute(args.payload, args.output, args.allow_test_only)
+    print(f"UST.G3BD sparse Deligne decision: PASS branch={result['branch']}")
+
+
+if __name__ == "__main__":
+    main()

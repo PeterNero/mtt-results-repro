@@ -1,0 +1,193 @@
+# UST.G3AG: Three-Graph First-Order Joint Coefficient Lift Theorem
+
+## Status
+
+`CLOSED_EXACT_FINITE_RING_FIRST_ORDER_THREE_COMPONENT_LIFT`
+
+`UST.G3AF` constructs one eta9 coefficient lift containing both selected
+primitive-`H` graphs modulo `101^2`. This theorem adds the selected `4H`
+degree-six graph and decides the full G3AC incidence problem at first
+`101`-adic order.
+
+The result is positive: one global eta9 coefficient lift contains all three
+selected graph components modulo `101^2`.
+
+## 1. Same Completion
+
+The selected `4H` carrier is the inverse image of
+
+```text
+8x^4+8x^2yz+8xy^3-3xz^3+8y^2z^2=0
+```
+
+in the q79 degree-two K3. Its degree-six marked Fermat map uses
+
+```text
+rho^6=13,
+mu^2=-3,
+[G0+mu G1 : G0-mu G1 : G2].
+```
+
+No new coefficient field is needed. The selected residue `rho=28 mod 101`
+has the unique Hensel lift
+
+```text
+rho = 1543 mod 101^2,
+```
+
+and `mu` is the already selected Hensel root in
+
+```text
+R_2=(Z/101^2 Z)[gamma]/(M).
+```
+
+Reconstructing the exact quotient formulas in the quartic coordinate ring
+gives three homogeneous degree-six target coordinates. Direct reduction by
+
+```text
+x^4=-x^2yz-xy^3+(3/8)xz^3-y^2z^2
+```
+
+verifies their Fermat cubic identity modulo `101^2`.
+
+## 2. The 4H Restriction Map
+
+After multiplication by the degree-six target, an eta9 coefficient restricts
+to
+
+```text
+58 degree-15 quartic normal forms
++46 K3-sheet times degree-12 normal forms
+=104 rows.
+```
+
+Thus the third restriction derivative is
+
+```text
+L_Gamma3 : k^249 -> k^104,
+k=F_101[gamma]/(M).
+```
+
+Exact elimination gives
+
+```text
+rank L_Gamma3 = 74.
+```
+
+The fixed integer-gamma coefficient lift contains the graph on the special
+fiber. At first order, 75 of its 104 divided restriction rows are nonzero.
+
+## 3. Full Three-Graph System
+
+Stack the two primitive-H maps from G3AF and the `4H` map:
+
+```text
+L_123 : k^249 -> k^(32+32+104)=k^168.
+```
+
+The component ranks are independent:
+
+```text
+rank L_Gamma1 = 26,
+rank L_Gamma2 = 26,
+rank L_Gamma3 = 74,
+
+rank L_123 = 26+26+74 = 126.
+```
+
+Consequently
+
+```text
+nullity L_123 = 123,
+coordinate-row redundancy = 42.
+```
+
+The complete 168-row fixed-lift defect obeys all 42 coordinate compatibility
+relations.
+RREF in the declared basis, with all free variables zero, emits a correction
+supported on 126 coefficient slots.
+
+## 4. Theorem
+
+**Three-Graph First-Order Joint Coefficient Lift Theorem.** The exact selected
+`4H` degree-six marked Fermat map embeds in the same selected gamma completion
+as the two primitive-H maps through the unique displayed Hensel lifts of
+`rho` and `mu`. Its eta9 restriction derivative has rank 74. The full
+three-component derivative has rank 126, and the complete first-order defect
+of the fixed coefficient lift lies in its image. Therefore there exists one
+global correction `delta_F` such that
+
+```text
+F_joint = F_Q + 101 delta_F mod 101^2
+```
+
+restricts to zero on all three unchanged selected graph maps. Direct
+substitution verifies every one of the 168 restriction rows.
+
+**Proof.** Reconstruct the degree-six target in the quartic coordinate ring
+and verify its Fermat identity in `R_2`. Restrict each of the 249 displayed
+eta9 coefficient basis vectors to the three graphs, reducing respectively by
+the two lifted sheet equations and the quartic relation. Exact row reduction
+gives ranks `26`, `26`, `74` and stacked rank `126`. The augmented matrix is
+consistent. Substitution of the emitted RREF solution into the original eta9
+equation makes all three reduced restrictions zero modulo `101^2`. QED.
+
+## 5. What This Closes
+
+The finite first-order graph-incidence question is now closed:
+
+```text
+one eta9 member
+  contains first H graph
+  contains second H graph
+  contains 4H graph
+modulo 101^2.
+```
+
+This is materially stronger than separate component lifts. The exact rank
+additivity shows that the three graph components impose independent tangent
+conditions, while the combined defect still satisfies every obstruction
+relation.
+
+The 123-dimensional kernel is the affine freedom of the finite incidence
+problem, not a physical parameter count. The canonical RREF witness supplies
+reproducibility, not an intrinsic MTT selection rule.
+
+## 6. Exact Boundary
+
+This theorem does not yet provide:
+
+- compatible graph and coefficient lifts at every `101`-adic order;
+- convergence to a formal or algebraic characteristic-zero eta9 member;
+- smoothness of the corrected member away from the certified special fiber;
+- an intrinsic selection among the 123 tangent directions;
+- the rank-248 analytic `beta_C` normal value on the same member;
+- the twisted visible `V_3`, its HYM connection or a selected physical
+  Hull-Strominger endpoint.
+
+It closes neither `B.ETA9.01`, `B.ETA9.02` nor `B.HS.01` by itself.
+
+## 7. New Frontier
+
+The next theorem is no longer another componentwise finite solve. It must show
+that the three-graph incidence branch persists:
+
+```text
+constant-rank/formal smoothness of the coupled incidence map
+  -> compatible lifts through every 101-adic order
+  -> a smooth characteristic-zero member
+  -> beta_C evaluated on that same member.
+```
+
+A constant-rank or formally smooth incidence theorem would turn the G3AG
+surjectivity onto its compatible image into an all-orders lifting engine. The
+analytic `beta_C` row remains an independent final selector within that
+branch.
+
+## 8. Reproduction
+
+```text
+python build_ust_g3ag_three_graph_joint_coefficient_lift.py
+python verify_ust_g3ag_three_graph_joint_coefficient_lift.py
+python verify.py
+```

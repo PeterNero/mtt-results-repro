@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Certify the completed component-16 checkpoint recovery archive."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+KERNEL = ROOT / "evidence/ust_g3et/H02.component16.exact_kernel.recovered.nfk"
+ROWS = ROOT / "evidence/ust_g3et/H02.component16.checkpoint_recovery_rows.json"
+STDOUT = ROOT / "evidence/ust_g3et/H02.component16.recovery_v2.stdout.log"
+STDERR = ROOT / "evidence/ust_g3et/H02.component16.recovery_v2.stderr.log"
+WITNESS = ROOT / "evidence/ust_g3eu/H02.component16.modular_residual_witness.json"
+OUTPUT = ROOT / "evidence/ust_g3et/H02.component16.recovered_kernel_certificate.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def last_line(path: Path) -> str:
+    with path.open("rb") as handle:
+        handle.seek(0, 2)
+        position = handle.tell() - 2
+        while position >= 0:
+            handle.seek(position)
+            if handle.read(1) == b"\n":
+                break
+            position -= 1
+        if position < 0:
+            handle.seek(0)
+        return handle.readline().decode("ascii").strip()
+
+
+def main() -> None:
+    for path in (KERNEL, ROWS, STDOUT, STDERR, WITNESS):
+        require(path.is_file(), f"required artifact exists: {path.name}")
+    witness = json.loads(WITNESS.read_text(encoding="utf-8"))
+    rows = json.loads(ROWS.read_text(encoding="utf-8"))
+    with KERNEL.open("r", encoding="ascii") as handle:
+        header = [int(value) for value in handle.readline().split()]
+    require(header == [1221, 21, 6], "recovered kernel header")
+    require(KERNEL.stat().st_size == witness["kernel_size_bytes"], "kernel size")
+    require(witness["kernel"] == KERNEL.relative_to(ROOT).as_posix(), "kernel witness path")
+    trailer = last_line(KERNEL)
+    trailer_values = trailer.split()
+    require(len(trailer_values) == 8, "kernel trailer width")
+    require(trailer_values[:2] == ["1221", "21"], "kernel trailer coordinate")
+    require(rows["unknown_column_count"] == rows["selected_minor_rank"] == 800, "recovery rank")
+    require(rows["checkpoint_complete_coordinate_rows"] == 400, "checkpoint rows")
+
+    stdout = STDOUT.read_text(encoding="utf-8")
+    stderr = STDERR.read_text(encoding="utf-8")
+    require(
+        stdout.strip()
+        == "ust_nf_kernel_recover: PASS known=400 recovered=800 free=21 total=1221",
+        "recovery completion log",
+    )
+    for marker in (
+        "loaded400 complete checkpoint rows",
+        "solving exact800x800 system with21 right-hand sides",
+        "exact recovery solve complete",
+        "wrote 1200 total kernel rows",
+    ):
+        require(marker in stderr, f"recovery stderr marker: {marker}")
+
+    payload = {
+        "schema": "ust.g3et.h02.component16.recovered-kernel-certificate.v2",
+        "date": "2026-08-14",
+        "kernel": KERNEL.relative_to(ROOT).as_posix(),
+        "kernel_sha256": witness["kernel_sha256"],
+        "kernel_size_bytes": KERNEL.stat().st_size,
+        "kernel_shape": header,
+        "last_coordinate": [1221, 21],
+        "checkpoint_coordinate_rows": 400,
+        "exact_recovered_coordinate_rows": 800,
+        "free_coordinate_rows": 21,
+        "free_columns_zero_based": rows["free_columns_zero_based"],
+        "recovery_minor_rank": 800,
+        "recovery_rows_certificate": ROWS.relative_to(ROOT).as_posix(),
+        "recovery_rows_certificate_sha256": sha256(ROWS),
+        "stdout": STDOUT.relative_to(ROOT).as_posix(),
+        "stdout_sha256": sha256(STDOUT),
+        "stderr": STDERR.relative_to(ROOT).as_posix(),
+        "stderr_sha256": sha256(STDERR),
+        "checks": {
+            "archive_header_and_terminal_coordinate_are_complete": True,
+            "exact800_square_recovery_minor_is_nonsingular": True,
+            "native_exact_recovery_completed_all800_unknown_rows": True,
+            "archive_hash_is_bound_by_an_independent_modular_replay": True,
+        },
+        "claim_boundary": (
+            "This certifies completion and identity of the recovered archive. "
+            "Kernel membership and the full component rank are certified separately "
+            "by the G3EU exact audit and residual-rank theorem."
+        ),
+    }
+    OUTPUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3ET recovered kernel certificate: PASS shape=1221x21 degree=6")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,532 @@
+#!/usr/bin/env python3
+"""Build UST.G3AL, the selected-carrier response Schur reduction.
+
+The exact coefficient-space witness is finite and executes immediately.  The
+emitted Singular input is a separate, resumable campaign for the genuinely
+analytic Cayley/Deligne response; no response values are inferred here.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import build_ust_g3ad_fixed_fq_second_h_graph_obstruction as g3ad
+import build_ust_g3ae_second_h_joint_coefficient_lift as g3ae
+import build_ust_g3af_two_h_joint_coefficient_lift as g3af
+import build_ust_g3ag_three_graph_joint_coefficient_lift as g3ag
+import build_ust_g3ak_full_graph_incidence_normal_decomposition as g3ak
+
+
+ROOT = Path(__file__).resolve().parent
+G3AD = ROOT / "state" / "ust_g3ad_fixed_fq_second_h_graph_obstruction.packet.json"
+G3AF = ROOT / "state" / "ust_g3af_two_h_joint_coefficient_lift.packet.json"
+G3AG = ROOT / "state" / "ust_g3ag_three_graph_joint_coefficient_lift.packet.json"
+G3AK = ROOT / "state" / "ust_g3ak_full_graph_incidence_normal_decomposition.packet.json"
+INCIDENCE = ROOT / "state" / "ust_g3ak_incidence_matrix.f101e6.u8"
+OUT = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+BUNDLE = ROOT / "state" / "ust_g3al_coefficient_schur.f101e6.u8"
+BASIS_SCRIPT = ROOT / "state" / "ust_g3al_selected_cayley_basis.sing"
+BASIS_CACHE = "state/ust_g3al_selected_cayley_basis.ssi"
+
+P = 101
+Element = g3ad.Element
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def normalized_text_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def transpose(columns: list[list[Element]]) -> list[list[Element]]:
+    return [list(row) for row in zip(*columns)]
+
+
+def dot(left: list[Element], right: list[Element], ring: g3ad.QuotientRing) -> Element:
+    value = ring.zero
+    for a, b in zip(left, right):
+        value = ring.add(value, ring.mul(a, b))
+    return value
+
+
+def matrix_vector(
+    matrix: list[list[Element]], vector: list[Element], ring: g3ad.QuotientRing
+) -> list[Element]:
+    return [dot(row, vector, ring) for row in matrix]
+
+
+def inverse_matrix(
+    matrix: list[list[Element]], ring: g3ad.QuotientRing
+) -> list[list[Element]]:
+    size = len(matrix)
+    require(size and all(len(row) == size for row in matrix), "square matrix")
+    augmented = [
+        list(row)
+        + [ring.one if column == row_index else ring.zero for column in range(size)]
+        for row_index, row in enumerate(matrix)
+    ]
+    reduced, pivots = g3ak.rref(augmented, ring)
+    require(pivots[:size] == list(range(size)), "invertible matrix")
+    require(
+        all(
+            reduced[row][column] == (ring.one if row == column else ring.zero)
+            for row in range(size)
+            for column in range(size)
+        ),
+        "identity left block",
+    )
+    return [row[size:] for row in reduced]
+
+
+def selected_frames() -> dict[str, object]:
+    g3ad_packet = load(G3AD)
+    g3af_packet = load(G3AF)
+    g3ag_packet = load(G3AG)
+    g3ak_packet = load(G3AK)
+    relation = g3ad_packet["completion_ring"]["gamma_relation_coefficients_ascending"]
+    ring = g3ad.QuotientRing(P, relation)
+    basis = g3ae.coefficient_basis()
+
+    raw = INCIDENCE.read_bytes()
+    require(len(raw) == 168 * 249 * 6, "incidence byte count")
+    offset = 0
+    incidence: list[list[Element]] = []
+    for _ in range(168):
+        row = []
+        for _ in range(249):
+            row.append(tuple(raw[offset : offset + 6]))
+            offset += 6
+        incidence.append(row)
+    reduced, pivots = g3ak.rref(incidence, ring)
+    free, kernel = g3ak.canonical_kernel_basis(reduced, pivots, ring)
+    require(len(pivots) == 126 and len(free) == len(kernel) == 123, "G3AK ranks")
+
+    selected = g3ak.coefficient_vector(g3ad_packet, basis, ring)
+    union, _ = g3ak.graph_union(g3ad_packet, g3af_packet, ring)
+    principal, labels = g3ak.principal_slice(union, basis, ring)
+    extra_positions = g3ak_packet["full_graph_preserving_frame"][
+        "extra_kernel_basis_positions_zero_based"
+    ]
+    extra = [kernel[int(position)] for position in extra_positions]
+    require(len(principal) == 33 and len(extra) == 89, "33+89 frame")
+
+    pivot = next(index for index, value in enumerate(selected) if value != ring.zero)
+    pivot_inverse = ring.inverse_field(selected[pivot])
+
+    def chart(vector: list[Element]) -> list[Element]:
+        scale = ring.mul(vector[pivot], pivot_inverse)
+        normalized = [
+            ring.sub(value, ring.mul(scale, selected_value))
+            for value, selected_value in zip(vector, selected)
+        ]
+        require(normalized[pivot] == ring.zero, "projective chart normalization")
+        return normalized[:pivot] + normalized[pivot + 1 :]
+
+    d0 = [chart(vector) for vector in principal]
+    d1 = [chart(vector) for vector in extra]
+    full = d0 + d1
+    # Each list entry is one column of the displayed 248-row map.  RREF of
+    # this transpose returns independent target-row positions.
+    _, principal_pivots = g3ak.rref(d0, ring)
+    _, full_pivots = g3ak.rref(full, ring)
+    require(len(principal_pivots) == 33, "principal chart rank")
+    require(len(full_pivots) == 122, "full chart rank")
+    return {
+        "ring": ring,
+        "relation": relation,
+        "basis": basis,
+        "selected": selected,
+        "principal": principal,
+        "extra": extra,
+        "principal_chart": d0,
+        "extra_chart": d1,
+        "principal_labels": labels,
+        "projective_pivot": pivot,
+        "principal_pivot_rows": principal_pivots,
+        "g3ad": g3ad_packet,
+        "g3ag": g3ag_packet,
+    }
+
+
+def quotient_data(frames: dict[str, object]) -> dict[str, object]:
+    ring: g3ad.QuotientRing = frames["ring"]  # type: ignore[assignment]
+    d0: list[list[Element]] = frames["principal_chart"]  # type: ignore[assignment]
+    d1: list[list[Element]] = frames["extra_chart"]  # type: ignore[assignment]
+    d0_rows = transpose(d0)
+    d1_rows = transpose(d1)
+    pivot_rows = [int(value) for value in frames["principal_pivot_rows"]]  # type: ignore[arg-type]
+    pivot_set = set(pivot_rows)
+    quotient_rows = [row for row in range(248) if row not in pivot_set]
+    r0 = [d0_rows[row] for row in pivot_rows]
+    r0_inverse = inverse_matrix(r0, ring)
+
+    def n0(value: list[Element]) -> list[Element]:
+        coordinates = matrix_vector(r0_inverse, [value[row] for row in pivot_rows], ring)
+        return [
+            ring.sub(value[row], dot(d0_rows[row], coordinates, ring))
+            for row in quotient_rows
+        ]
+
+    require(
+        all(all(value == ring.zero for value in n0(column)) for column in d0),
+        "N0 D0=0",
+    )
+    e_columns = [n0(column) for column in d1]
+    e_rows = transpose(e_columns)
+    _, e_column_pivots = g3ak.rref(e_rows, ring)
+    require(len(e_column_pivots) == 89, "extra Schur rank 89")
+    # E columns are stored as 89 rows of E^T, so these pivots are E-row
+    # positions and select an invertible 89x89 row minor.
+    _, e_pivot_rows = g3ak.rref(e_columns, ring)
+    require(len(e_pivot_rows) == 89, "89 independent E rows")
+    e_pivot_set = set(e_pivot_rows)
+    final_rows = [row for row in range(215) if row not in e_pivot_set]
+    e0 = [e_rows[row] for row in e_pivot_rows]
+    e0_inverse = inverse_matrix(e0, ring)
+
+    def left_normal(value: list[Element]) -> list[Element]:
+        coordinates = matrix_vector(
+            e0_inverse, [value[row] for row in e_pivot_rows], ring
+        )
+        return [
+            ring.sub(value[row], dot(e_rows[row], coordinates, ring))
+            for row in final_rows
+        ]
+
+    require(
+        all(
+            all(value == ring.zero for value in left_normal(column))
+            for column in e_columns
+        ),
+        "L E=0",
+    )
+
+    # The factored solver recovers the two coordinate blocks without forming a
+    # dense 122x248 inverse.
+    for index, column in enumerate(d0):
+        b1 = matrix_vector(e0_inverse, [n0(column)[row] for row in e_pivot_rows], ring)
+        b0 = matrix_vector(r0_inverse, [column[row] for row in pivot_rows], ring)
+        require(all(value == ring.zero for value in b1), "D0 extra coordinates zero")
+        require(
+            b0 == [ring.one if j == index else ring.zero for j in range(33)],
+            "D0 coordinates recovered",
+        )
+    for index, column in enumerate(d1):
+        q = n0(column)
+        b1 = matrix_vector(e0_inverse, [q[row] for row in e_pivot_rows], ring)
+        require(
+            b1 == [ring.one if j == index else ring.zero for j in range(89)],
+            "D1 coordinates recovered",
+        )
+        residual = [
+            ring.sub(value, dot(row, b1, ring)) for value, row in zip(column, d1_rows)
+        ]
+        b0 = matrix_vector(r0_inverse, [residual[row] for row in pivot_rows], ring)
+        require(all(value == ring.zero for value in b0), "D1 principal coordinates zero")
+
+    return {
+        "principal_pivot_rows": pivot_rows,
+        "principal_quotient_rows": quotient_rows,
+        "principal_pivot_inverse": r0_inverse,
+        "extra_schur_columns": e_columns,
+        "extra_pivot_rows": e_pivot_rows,
+        "final_normal_rows": final_rows,
+        "extra_pivot_inverse": e0_inverse,
+    }
+
+
+def singular_element(value: Element) -> str:
+    pieces = []
+    for exponent, coefficient in enumerate(value):
+        coefficient %= P
+        if coefficient == 0:
+            continue
+        power = "" if exponent == 0 else "g" if exponent == 1 else f"g^{exponent}"
+        if exponent == 0:
+            pieces.append(str(coefficient))
+        elif coefficient == 1:
+            pieces.append(power)
+        else:
+            pieces.append(f"{coefficient}*{power}")
+    return "+".join(pieces) if pieces else "0"
+
+
+def monomial(row: dict[str, object]) -> str:
+    pieces = []
+    for variable, power in zip(("x", "y", "z"), row["powers_xyz"]):
+        power = int(power)
+        if power == 1:
+            pieces.append(variable)
+        elif power > 1:
+            pieces.append(f"{variable}^{power}")
+    if row["basis_kind"] == "K3_sheet_times_degree6":
+        pieces.append("w")
+    return "*".join(pieces) if pieces else "1"
+
+
+def coefficient_polynomials(
+    vector: list[Element], basis: list[dict[str, object]]
+) -> list[str]:
+    result = []
+    for target in range(3):
+        terms = []
+        for value, row in zip(vector, basis):
+            if int(row["target_coordinate"]) != target or not any(value):
+                continue
+            terms.append(f"({singular_element(value)})*{monomial(row)}")
+        result.append("+".join(terms) if terms else "0")
+    return result
+
+
+def singular_minpoly(relation: list[int]) -> str:
+    return "+".join(
+        str(coefficient)
+        if exponent == 0
+        else ("g" if coefficient == 1 and exponent == 1 else f"g^{exponent}" if coefficient == 1 else f"{coefficient}*g^{exponent}")
+        for exponent, coefficient in enumerate(relation)
+        if coefficient % P
+    )
+
+
+def cayley_basis_script(
+    relation: list[int], f6: str, coefficient_rows: list[str]
+) -> str:
+    return f'''// UST.G3AL selected F_101^6 Cayley-Jacobian basis campaign.
+option(redSB);
+ring r=(101,g),(x,y,z,w,t0,t1,t2,u,v,s),wp(1,1,1,3,1,1,1,6,9,2);
+minpoly={singular_minpoly(relation)};
+poly F6={f6.replace("**", "^")};
+poly K=w^2-F6;
+poly E=t0^3+t1^3+t2^3;
+poly A0={coefficient_rows[0]};
+poly A1={coefficient_rows[1]};
+poly A2={coefficient_rows[2]};
+poly C=A0*t0+A1*t1+A2*t2;
+poly Phi=u*K+v*E+s*C;
+ideal J=jacob(Phi);
+ideal G=slimgb(J);
+poly reducedSocle=reduce(w^12*t2^4*s^2,G);
+print("G3AL_J_GENERATORS="+string(size(J)));
+print("G3AL_GB_SIZE="+string(size(G)));
+print("G3AL_AFFINE_DIMENSION="+string(dim(G)));
+print("G3AL_COVER_REDUCES="+string(reduce(C,G)));
+print("G3AL_SOCLE_ZERO="+string(reducedSocle==0));
+print("G3AL_SOCLE_TERMS="+string(size(reducedSocle)));
+print("G3AL_SOCLE_LEAD="+string(leadmonom(reducedSocle)));
+write("ssi:w {BASIS_CACHE}",G);
+print("G3AL_SELECTED_CAYLEY_BASIS_PASS");
+quit;
+'''
+
+
+def append_matrix(
+    payload: bytearray,
+    name: str,
+    matrix: list[list[Element]],
+    records: dict[str, object],
+) -> None:
+    rows = len(matrix)
+    columns = len(matrix[0]) if matrix else 0
+    require(all(len(row) == columns for row in matrix), f"rectangular {name}")
+    start = len(payload)
+    for row in matrix:
+        for value in row:
+            payload.extend(value)
+    records[name] = {
+        "shape": [rows, columns, 6],
+        "byte_offset": start,
+        "byte_length": len(payload) - start,
+        "canonical_sha256": canonical_hash(
+            [[list(value) for value in row] for row in matrix]
+        ),
+    }
+
+
+def main() -> None:
+    frames = selected_frames()
+    quotient = quotient_data(frames)
+    ring: g3ad.QuotientRing = frames["ring"]  # type: ignore[assignment]
+    basis: list[dict[str, object]] = frames["basis"]  # type: ignore[assignment]
+    selected: list[Element] = frames["selected"]  # type: ignore[assignment]
+    d0_columns: list[list[Element]] = frames["principal_chart"]  # type: ignore[assignment]
+    d1_columns: list[list[Element]] = frames["extra_chart"]  # type: ignore[assignment]
+    e_columns: list[list[Element]] = quotient["extra_schur_columns"]  # type: ignore[assignment]
+
+    k3 = load(g3ad.K3_BASE)
+    source_hash = frames["g3ad"]["inputs"]["q79_K3_base"]["sha256"]  # type: ignore[index]
+    require(normalized_text_sha256(g3ad.K3_BASE) == source_hash, "K3 source hash")
+    coefficient_rows = coefficient_polynomials(selected, basis)
+    f6 = k3["explicit_K3"]["F6_equals_G3_squared_plus_Q2_H4"]
+    BASIS_SCRIPT.write_text(
+        cayley_basis_script(frames["relation"], f6, coefficient_rows),  # type: ignore[arg-type]
+        encoding="ascii",
+    )
+
+    payload = bytearray()
+    records: dict[str, object] = {}
+    append_matrix(payload, "selected_member", [selected], records)
+    append_matrix(payload, "principal_chart_rows", transpose(d0_columns), records)
+    append_matrix(payload, "extra_chart_rows", transpose(d1_columns), records)
+    append_matrix(payload, "extra_schur_rows", transpose(e_columns), records)
+    append_matrix(
+        payload,
+        "principal_pivot_inverse",
+        quotient["principal_pivot_inverse"],  # type: ignore[arg-type]
+        records,
+    )
+    append_matrix(
+        payload,
+        "extra_pivot_inverse",
+        quotient["extra_pivot_inverse"],  # type: ignore[arg-type]
+        records,
+    )
+    BUNDLE.write_bytes(payload)
+
+    checks = {
+        "selected_member_and_full_tangent_are_reconstructed_from_G3AK": True,
+        "projective_chart_has248_rows": True,
+        "principal_chart_rank_is33": True,
+        "full_graph_preserving_chart_rank_is122": True,
+        "principal_quotient_has215_rows": True,
+        "extra_Schur_block_has_rank89": True,
+        "final_factored_normal_operator_has126_rows": True,
+        "factored_solver_recovers_all122_control_coordinates": True,
+        "selected_F1016_Cayley_basis_script_is_emitted": True,
+        "no_GF11_response_entry_is_imported": True,
+        "no_beta_C_value_is_assumed": True,
+    }
+    require(all(checks.values()), "G3AL checks")
+    packet = {
+        "schema": "mtt.unified-source.g3al-selected-carrier-response-schur.v1",
+        "theorem_id": "UST.G3AL",
+        "status": "CLOSED_EXACT_RESPONSE_SCHUR_REDUCTION_AND_SELECTED_CARRIER_CAMPAIGN_READY",
+        "inputs": {
+            path.stem: {"path": str(path.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(path)}
+            for path in (G3AD, G3AF, G3AG, G3AK, INCIDENCE)
+        },
+        "residue_field": {
+            "prime": P,
+            "extension_degree": 6,
+            "gamma_relation_coefficients_ascending": frames["relation"],
+        },
+        "selected_coefficient_control": {
+            "homogeneous_rank": 249,
+            "projective_pivot_zero_based": frames["projective_pivot"],
+            "projective_target_rank": 248,
+            "principal_rank": 33,
+            "additional_rank": 89,
+            "full_rank": 122,
+            "principal_pivot_rows_zero_based": quotient["principal_pivot_rows"],
+            "principal_quotient_rows_zero_based": quotient["principal_quotient_rows"],
+            "extra_pivot_rows_in_principal_quotient_zero_based": quotient["extra_pivot_rows"],
+            "final_normal_rows_in_principal_quotient_zero_based": quotient["final_normal_rows"],
+            "binary_artifact": {
+                "path": str(BUNDLE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BUNDLE),
+                "bytes": len(payload),
+                "layout": records,
+            },
+        },
+        "schur_reduction": {
+            "response_input_shape": [248, 122],
+            "split": "D=[D_0|D_1], D_0:248x33, D_1:248x89",
+            "hypothesis": "rank(D_0)=33",
+            "principal_normal": "N_0: k^248 -> k^215 with ker(N_0)=im(D_0)",
+            "extra_block": "E=N_0 D_1: k^89 -> k^215",
+            "rank_identity": "rank(D)=33+rank(E)",
+            "exit_test": "rank(E)=89 iff rank(D)=122",
+            "final_normal": "choose L:k^215->k^126 with ker(L)=im(E); N_full=L N_0",
+            "beta_test": "beta_C is tangent-solvable iff N_full beta_C=0",
+            "solver": "b_1=T N_0 beta_C; b_0=S_0(beta_C-D_1 b_1)",
+            "calculation_reduction": {
+                "old_full_rank_test_entries": 248 * 122,
+                "new_extra_rank_test_entries_after_D0": 215 * 89,
+                "entry_reduction": 248 * 122 - 215 * 89,
+            },
+        },
+        "selected_cayley_campaign": {
+            "basis_script": {
+                "path": str(BASIS_SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BASIS_SCRIPT),
+            },
+            "basis_cache_output": BASIS_CACHE,
+            "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+            "Cayley_potential": "Phi=u(w^2-F6)+v(t0^3+t1^3+t2^3)+s(A0*t0+A1*t1+A2*t2)",
+            "response_entry": "NF(u*v*Pdelta*t0*t1*t2*p_i*d_j)=D_ij*socle",
+            "principal_products": 248 * 33,
+            "additional_products": 248 * 89,
+            "execution_state": "BASIS_NOT_YET_EXECUTED",
+            "same_carrier_requirement": True,
+        },
+        "K3_cycle_source": {
+            "Q2": k3["explicit_K3"]["Q2"],
+            "G3": k3["explicit_K3"]["G3"],
+            "H4": k3["explicit_K3"]["H4"],
+            "F6": f6,
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "SelectedCarrierResponseSchurReductionTheorem",
+            "statement": (
+                "For any same-carrier response matrix D=[D0|D1] with rank(D0)=33, quotienting "
+                "the response target by im(D0) gives E=N0D1 and rank(D)=33+rank(E). Hence the "
+                "full rank-122 test is exactly the rank-89 test for E. If E has rank 89, a rank-126 "
+                "normal operator is Nfull=L N0, and beta_C is solvable precisely when Nfull beta_C=0. "
+                "The selected G3AK coefficient frame supplies an exact 33+89 control witness and the "
+                "same F101^6 Cayley campaign is emitted without importing GF11 values."
+            ),
+            "tier": "CLOSED_EXACT_LINEAR_ALGEBRA_AND_EXECUTABLE_SELECTED_CARRIER_INPUT",
+        },
+        "frontier_delta": {
+            "old_request": "compute and rank one undifferentiated 248x122 block",
+            "new_request": "compute D0 once, then rank only E=N0D1 of shape 215x89",
+            "next_required_object": (
+                "Execute the emitted selected-carrier Cayley basis and response chunks. If rank(D0)=33, "
+                "form E=N0D1 and test rank 89; then evaluate the independently emitted beta_C with "
+                "the resulting factored rank-126 normal operator."
+            ),
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_physics_inputs": 0,
+        },
+        "guardrails": {
+            "claims_the_coefficient_control_witness_is_the_Deligne_response": False,
+            "claims_selected_carrier_Cayley_basis_has_executed": False,
+            "claims_D0_or_E_response_rank": False,
+            "claims_beta_C_is_emitted_or_zero": False,
+            "claims_visible_V3_HYM_endpoint": False,
+            "closes_B_ETA9_01": False,
+            "closes_B_ETA9_02": False,
+            "closes_B_HS_01": False,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print("UST.G3AL selected-carrier Schur reduction: BUILT")
+    print("response rank test: 248x122 -> 33 + rank(215x89)")
+    print(f"coefficient witness bundle: {len(payload)} bytes")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,361 @@
+// Find a structural perfect matching and determinant blocks of a square SMS matrix.
+
+#include <algorithm>
+#include <cstdint>
+#include <fstream>
+#include <filesystem>
+#include <iostream>
+#include <limits>
+#include <queue>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr std::uint32_t NONE = std::numeric_limits<std::uint32_t>::max();
+
+struct BipartiteGraph {
+    std::uint32_t size{};
+    std::vector<std::uint64_t> offset;
+    std::vector<std::uint32_t> column;
+};
+
+BipartiteGraph read_graph(const std::string& path) {
+    std::ifstream input(path);
+    if (!input) {
+        throw std::runtime_error("unable to open matrix");
+    }
+    std::uint64_t rows = 0;
+    std::uint64_t columns = 0;
+    std::uint64_t nonzeros = 0;
+    if (!(input >> rows >> columns >> nonzeros) || rows != columns ||
+        rows > std::numeric_limits<std::uint32_t>::max()) {
+        throw std::runtime_error("invalid square SMS header");
+    }
+
+    BipartiteGraph graph;
+    graph.size = static_cast<std::uint32_t>(rows);
+    graph.offset.assign(rows + 1, 0);
+    graph.column.resize(nonzeros);
+    std::vector<std::uint32_t> entry_row(nonzeros);
+    std::vector<std::uint32_t> entry_column(nonzeros);
+    for (std::uint64_t index = 0; index < nonzeros; ++index) {
+        std::uint64_t row = 0;
+        std::uint64_t column = 0;
+        std::string coefficient;
+        if (!(input >> row >> column >> coefficient) || row == 0 || column == 0 ||
+            row > rows || column > columns) {
+            throw std::runtime_error("invalid SMS entry");
+        }
+        ++graph.offset[row];
+        entry_row[index] = static_cast<std::uint32_t>(row - 1);
+        entry_column[index] = static_cast<std::uint32_t>(column - 1);
+    }
+    for (std::size_t row = 1; row < graph.offset.size(); ++row) {
+        graph.offset[row] += graph.offset[row - 1];
+    }
+    auto cursor = graph.offset;
+    for (std::uint64_t index = 0; index < nonzeros; ++index) {
+        graph.column[cursor[entry_row[index]]++] = entry_column[index];
+    }
+    return graph;
+}
+
+std::uint32_t maximum_matching(
+    const BipartiteGraph& graph,
+    std::vector<std::uint32_t>& row_to_column,
+    std::vector<std::uint32_t>& column_to_row) {
+    const auto n = graph.size;
+    row_to_column.assign(n, NONE);
+    column_to_row.assign(n, NONE);
+
+    std::uint32_t matched = 0;
+    for (std::uint32_t row = 0; row < n; ++row) {
+        for (auto edge = graph.offset[row]; edge < graph.offset[row + 1]; ++edge) {
+            const auto column = graph.column[edge];
+            if (column_to_row[column] == NONE) {
+                row_to_column[row] = column;
+                column_to_row[column] = row;
+                ++matched;
+                break;
+            }
+        }
+    }
+
+    std::vector<std::uint32_t> distance(n);
+    std::vector<std::uint64_t> cursor(n);
+    while (true) {
+        std::queue<std::uint32_t> queue;
+        std::fill(distance.begin(), distance.end(), NONE);
+        for (std::uint32_t row = 0; row < n; ++row) {
+            if (row_to_column[row] == NONE) {
+                distance[row] = 0;
+                queue.push(row);
+            }
+        }
+        bool reaches_free_column = false;
+        while (!queue.empty()) {
+            const auto row = queue.front();
+            queue.pop();
+            for (auto edge = graph.offset[row]; edge < graph.offset[row + 1]; ++edge) {
+                const auto next = column_to_row[graph.column[edge]];
+                if (next == NONE) {
+                    reaches_free_column = true;
+                } else if (distance[next] == NONE) {
+                    distance[next] = distance[row] + 1;
+                    queue.push(next);
+                }
+            }
+        }
+        if (!reaches_free_column) {
+            break;
+        }
+
+        cursor = graph.offset;
+        const auto augment = [&](auto&& self, std::uint32_t row) -> bool {
+            for (auto& edge = cursor[row]; edge < graph.offset[row + 1]; ++edge) {
+                const auto column = graph.column[edge];
+                const auto next = column_to_row[column];
+                if (next == NONE ||
+                    (distance[next] == distance[row] + 1 && self(self, next))) {
+                    row_to_column[row] = column;
+                    column_to_row[column] = row;
+                    return true;
+                }
+            }
+            distance[row] = NONE;
+            return false;
+        };
+        std::uint32_t added = 0;
+        for (std::uint32_t row = 0; row < n; ++row) {
+            if (row_to_column[row] == NONE && augment(augment, row)) {
+                ++matched;
+                ++added;
+            }
+        }
+        if (added == 0) {
+            break;
+        }
+    }
+    return matched;
+}
+
+struct Decomposition {
+    std::vector<std::uint32_t> component;
+    std::vector<std::uint32_t> size;
+};
+
+void emit_factor_matrices(
+    const std::string& input_path,
+    const std::string& largest_path,
+    const std::string& remainder_path,
+    const BipartiteGraph& graph,
+    const std::vector<std::uint32_t>& row_to_column,
+    const Decomposition& decomposition,
+    std::uint32_t largest_component) {
+    const auto n = graph.size;
+    std::vector<std::uint32_t> largest_row(n, NONE);
+    std::vector<std::uint32_t> remainder_row(n, NONE);
+    std::vector<std::uint32_t> largest_column(n, NONE);
+    std::vector<std::uint32_t> remainder_column(n, NONE);
+    std::uint32_t largest_size = 0;
+    std::uint32_t remainder_size = 0;
+    for (std::uint32_t row = 0; row < n; ++row) {
+        if (decomposition.component[row] == largest_component) {
+            largest_row[row] = largest_size;
+            largest_column[row_to_column[row]] = largest_size++;
+        } else {
+            remainder_row[row] = remainder_size;
+            remainder_column[row_to_column[row]] = remainder_size++;
+        }
+    }
+
+    const auto largest_body = largest_path + ".body.tmp";
+    const auto remainder_body = remainder_path + ".body.tmp";
+    std::ifstream input(input_path);
+    std::ofstream largest_output(largest_body);
+    std::ofstream remainder_output(remainder_body);
+    if (!input || !largest_output || !remainder_output) {
+        throw std::runtime_error("unable to open factor matrix streams");
+    }
+    std::uint64_t rows = 0;
+    std::uint64_t columns = 0;
+    std::uint64_t nonzeros = 0;
+    input >> rows >> columns >> nonzeros;
+    std::uint64_t largest_nonzeros = 0;
+    std::uint64_t remainder_nonzeros = 0;
+    for (std::uint64_t index = 0; index < nonzeros; ++index) {
+        std::uint64_t row = 0;
+        std::uint64_t column = 0;
+        std::string coefficient;
+        if (!(input >> row >> column >> coefficient)) {
+            throw std::runtime_error("truncated SMS while emitting factors");
+        }
+        const auto row_zero = static_cast<std::uint32_t>(row - 1);
+        const auto column_zero = static_cast<std::uint32_t>(column - 1);
+        if (largest_row[row_zero] != NONE && largest_column[column_zero] != NONE) {
+            largest_output << largest_row[row_zero] + 1 << ' '
+                           << largest_column[column_zero] + 1 << ' '
+                           << coefficient << '\n';
+            ++largest_nonzeros;
+        } else if (
+            remainder_row[row_zero] != NONE && remainder_column[column_zero] != NONE) {
+            remainder_output << remainder_row[row_zero] + 1 << ' '
+                             << remainder_column[column_zero] + 1 << ' '
+                             << coefficient << '\n';
+            ++remainder_nonzeros;
+        }
+    }
+    largest_output.close();
+    remainder_output.close();
+
+    const auto finish = [](
+                            const std::string& output_path,
+                            const std::string& body_path,
+                            std::uint32_t size,
+                            std::uint64_t body_nonzeros) {
+        std::ofstream output(output_path, std::ios::binary);
+        std::ifstream body(body_path, std::ios::binary);
+        if (!output || !body) {
+            throw std::runtime_error("unable to finalize factor matrix");
+        }
+        output << size << ' ' << size << ' ' << body_nonzeros << '\n';
+        output << body.rdbuf();
+        output.close();
+        body.close();
+        std::filesystem::remove(body_path);
+    };
+    finish(largest_path, largest_body, largest_size, largest_nonzeros);
+    finish(remainder_path, remainder_body, remainder_size, remainder_nonzeros);
+    std::cout << "FACTOR_MATRICES largest_dimension=" << largest_size
+              << " largest_nonzeros=" << largest_nonzeros
+              << " remainder_dimension=" << remainder_size
+              << " remainder_nonzeros=" << remainder_nonzeros << "\n";
+}
+
+Decomposition determinant_blocks(
+    const BipartiteGraph& graph,
+    const std::vector<std::uint32_t>& column_to_row) {
+    const auto n = graph.size;
+    std::vector<std::int32_t> index(n, -1);
+    std::vector<std::int32_t> lowlink(n, -1);
+    std::vector<std::uint32_t> stack;
+    std::vector<std::uint8_t> on_stack(n, 0);
+    Decomposition decomposition;
+    decomposition.component.assign(n, NONE);
+    std::int32_t next_index = 0;
+
+    const auto visit = [&](auto&& self, std::uint32_t row) -> void {
+        index[row] = lowlink[row] = next_index++;
+        stack.push_back(row);
+        on_stack[row] = 1;
+        for (auto edge = graph.offset[row]; edge < graph.offset[row + 1]; ++edge) {
+            const auto next = column_to_row[graph.column[edge]];
+            if (next == NONE) {
+                throw std::runtime_error("SCC requested without a perfect matching");
+            }
+            if (index[next] < 0) {
+                self(self, next);
+                lowlink[row] = std::min(lowlink[row], lowlink[next]);
+            } else if (on_stack[next]) {
+                lowlink[row] = std::min(lowlink[row], index[next]);
+            }
+        }
+        if (lowlink[row] == index[row]) {
+            const auto component =
+                static_cast<std::uint32_t>(decomposition.size.size());
+            std::uint32_t size = 0;
+            while (true) {
+                const auto value = stack.back();
+                stack.pop_back();
+                on_stack[value] = 0;
+                decomposition.component[value] = component;
+                ++size;
+                if (value == row) {
+                    break;
+                }
+            }
+            decomposition.size.push_back(size);
+        }
+    };
+
+    for (std::uint32_t row = 0; row < n; ++row) {
+        if (index[row] < 0) {
+            visit(visit, row);
+        }
+    }
+    return decomposition;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc != 2 && argc != 4) {
+        std::cerr
+            << "usage: ust_g3ap_minor_structural_decomposition MATRIX "
+               "[LARGEST_MATRIX REMAINDER_MATRIX]\n";
+        return 64;
+    }
+    try {
+        const auto graph = read_graph(argv[1]);
+        std::vector<std::uint32_t> row_to_column;
+        std::vector<std::uint32_t> column_to_row;
+        const auto matched = maximum_matching(graph, row_to_column, column_to_row);
+        std::cout << "STRUCTURAL_MATCHING size=" << matched
+                  << " dimension=" << graph.size << "\n";
+        if (matched != graph.size) {
+            return 2;
+        }
+        const auto decomposition = determinant_blocks(graph, column_to_row);
+        auto sizes = decomposition.size;
+        std::sort(sizes.begin(), sizes.end(), std::greater<>());
+        const auto largest_component = static_cast<std::uint32_t>(std::distance(
+            decomposition.size.begin(),
+            std::max_element(decomposition.size.begin(), decomposition.size.end())));
+        std::uint64_t largest_internal_edges = 0;
+        std::uint64_t remainder_internal_edges = 0;
+        std::uint64_t cross_edges = 0;
+        for (std::uint32_t row = 0; row < graph.size; ++row) {
+            for (auto edge = graph.offset[row]; edge < graph.offset[row + 1]; ++edge) {
+                const auto next = column_to_row[graph.column[edge]];
+                const bool row_largest =
+                    decomposition.component[row] == largest_component;
+                const bool next_largest =
+                    decomposition.component[next] == largest_component;
+                if (row_largest && next_largest) {
+                    ++largest_internal_edges;
+                } else if (!row_largest && !next_largest) {
+                    ++remainder_internal_edges;
+                } else {
+                    ++cross_edges;
+                }
+            }
+        }
+        std::cout << "DETERMINANT_BLOCKS count=" << sizes.size()
+                  << " largest=" << sizes.front()
+                  << " largest_internal_edges=" << largest_internal_edges
+                  << " remainder_internal_edges=" << remainder_internal_edges
+                  << " cross_edges=" << cross_edges << " sizes=";
+        for (std::size_t index = 0; index < std::min<std::size_t>(sizes.size(), 64);
+             ++index) {
+            if (index != 0) {
+                std::cout << ',';
+            }
+            std::cout << sizes[index];
+        }
+        if (sizes.size() > 64) {
+            std::cout << ",...";
+        }
+        std::cout << "\n";
+        if (argc == 4) {
+            emit_factor_matrices(
+                argv[1], argv[2], argv[3], graph, row_to_column, decomposition,
+                largest_component);
+        }
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "structural decomposition error: " << error.what() << "\n";
+        return 2;
+    }
+}

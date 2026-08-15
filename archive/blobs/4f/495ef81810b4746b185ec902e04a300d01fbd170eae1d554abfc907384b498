@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""Independently verify the persisted UST.G3DC source-action enclosures."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from flint import acb, acb_poly, arb, ctx
+from scipy import sparse
+
+import build_ust_g3bk_correction_pencil_operator_compiler as compiler
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3dc_h11_archimedean_affine_source_action.packet.json"
+H20_DIMENSION = 248
+H11_DIMENSION = 4426
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(item: dict[str, Any], repository: Path) -> Path:
+    key = "path" if "path" in item else "repository_relative_path"
+    path = repository / item[key]
+    require(path.is_file(), f"record file {path}")
+    require(path.stat().st_size == int(item["bytes"]), f"record size {path.name}")
+    require(sha256(path) == item["sha256"], f"record hash {path.name}")
+    return path
+
+
+def coefficient_matrices(
+    rows: list[list[int]],
+    columns: list[list[int]],
+    data: list[list[int]],
+    shape: tuple[int, int],
+) -> list[sparse.csr_matrix]:
+    result: list[sparse.csr_matrix] = []
+    for power in range(6):
+        matrix = sparse.csr_matrix(
+            (
+                np.asarray(data[power], dtype=np.int64),
+                (
+                    np.asarray(rows[power], dtype=np.int32),
+                    np.asarray(columns[power], dtype=np.int32),
+                ),
+            ),
+            shape=shape,
+        )
+        matrix.sum_duplicates()
+        matrix.eliminate_zeros()
+        result.append(matrix)
+    return result
+
+
+def reconstruct(arrays: dict[str, np.ndarray], row: int, column: int) -> acb:
+    real = (
+        arb(float(arrays["real_high"][row, column]))
+        + arb(float(arrays["real_low"][row, column]))
+        + arb(0, float(arrays["real_radius"][row, column]))
+    )
+    imag = (
+        arb(float(arrays["imag_high"][row, column]))
+        + arb(float(arrays["imag_low"][row, column]))
+        + arb(0, float(arrays["imag_radius"][row, column]))
+    )
+    return acb(real, imag)
+
+
+def evaluate_entry(
+    coefficients: list[sparse.csr_matrix],
+    row: int,
+    column: int,
+    powers: list[acb],
+) -> acb:
+    result = acb(0)
+    for power, matrix in enumerate(coefficients):
+        value = int(matrix[row, column])
+        if value:
+            result += value * powers[power]
+    return result
+
+
+def row_support(coefficients: list[sparse.csr_matrix], row: int) -> list[int]:
+    support: set[int] = set()
+    for matrix in coefficients:
+        support.update(int(value) for value in matrix[row, :].nonzero()[1].tolist())
+    return sorted(support)
+
+
+def main() -> None:
+    ctx.prec = 256
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    require(packet["theorem_id"] == "UST.G3DC", "theorem id")
+    require(packet["field"]["canonical_embedding"] == 4, "embedding4")
+    require(packet["field"]["conjugate_embedding"] == 5, "embedding5")
+
+    mld = runtime.resolve_mld()
+    for item in packet["inputs"].values():
+        repository = ROOT if "path" in item else mld
+        verify_record(item, repository)
+    base_path = verify_record(
+        packet["inverse_source_actions"]["A0_inverse_B89"]["archive"], ROOT
+    )
+    correction_path = verify_record(
+        packet["inverse_source_actions"]["A0_inverse_BC"]["archive"], ROOT
+    )
+    with np.load(base_path, allow_pickle=False) as archive:
+        base_arrays = {key: archive[key] for key in archive.files}
+    with np.load(correction_path, allow_pickle=False) as archive:
+        correction_arrays = {key: archive[key] for key in archive.files}
+    for arrays, label in ((base_arrays, "B89"), (correction_arrays, "correction")):
+        require(arrays["real_high"].shape == (H11_DIMENSION, H20_DIMENSION), f"{label} shape")
+        require(
+            np.array_equal(arrays["image_coordinate_columns"], np.arange(H11_DIMENSION, dtype=np.int32)),
+            f"{label} coordinate order",
+        )
+        require(
+            np.array_equal(arrays["source_columns"], np.arange(H20_DIMENSION, dtype=np.int32)),
+            f"{label} source order",
+        )
+
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_H20_to_H11_source_oracle as source_oracle
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi = load(ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json")
+    g3bk = load(ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json")
+    dm = load(mld / "q79_eta9_H11_Dulmage_Mendelsohn_decomposition.packet.json")
+    macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json")
+    factor = load(mld / "q79_eta9_original_jacobian_coordinate_factorization_H11.packet.json")
+    b103 = load(mld / "q79_eta9_full_vanishing_residue_basis.packet.json")
+    b89_source_packet = load(mld / "q79_eta9_characteristic_zero_H20_to_H11_source_oracle.packet.json")
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    require(all(g3bi["checks"].values()) and all(g3bk["checks"].values()), "G3BI/G3BK checks")
+
+    dm_arrays = np.load(mld / dm["Dulmage_Mendelsohn"]["arrays"]["path"], allow_pickle=False)
+    complement_rows = dm_arrays["complement_ambient_rows"].astype(np.int32)
+    component_by_row = dm_arrays["component_by_complement_row"].astype(np.int32)
+    require(complement_rows.size == H11_DIMENSION, "complement dimension")
+    complement_lookup = {
+        int(ambient_row): local_row for local_row, ambient_row in enumerate(complement_rows.tolist())
+    }
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    original_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, original_columns)
+    a_rows = [[] for _ in range(6)]
+    a_columns = [[] for _ in range(6)]
+    a_data = [[] for _ in range(6)]
+    for column, descriptor in enumerate(descriptors):
+        exact_column = oracle.exact_column(descriptor, generators0, target_lookup)
+        for ambient_row, coefficients in exact_column.items():
+            row = complement_lookup.get(int(ambient_row))
+            if row is None:
+                continue
+            for power, coefficient in enumerate(coefficients):
+                if coefficient:
+                    a_rows[power].append(row)
+                    a_columns[power].append(column)
+                    a_data[power].append(int(coefficient))
+    a_coefficients = coefficient_matrices(a_rows, a_columns, a_data, (H11_DIMENSION, H11_DIMENSION))
+
+    b89_columns = exporter.exact_H20_to_H11_source_columns(
+        b103, b89, target_lookup, list(range(H20_DIMENSION))
+    )
+    require(
+        source_oracle.canonical_hash(b89_columns)
+        == b89_source_packet["source_theorem"]["canonical_exact_source_SHA256"],
+        "independent B89 source digest",
+    )
+    b0_rows = [[] for _ in range(6)]
+    b0_columns = [[] for _ in range(6)]
+    b0_data = [[] for _ in range(6)]
+    for column, source in enumerate(b89_columns):
+        for ambient_row, coefficients in source.items():
+            row = complement_lookup.get(int(ambient_row))
+            if row is None:
+                continue
+            for power, coefficient in enumerate(coefficients):
+                if coefficient:
+                    b0_rows[power].append(row)
+                    b0_columns[power].append(column)
+                    b0_data[power].append(int(coefficient))
+    b0_coefficients = coefficient_matrices(b0_rows, b0_columns, b0_data, (H11_DIMENSION, H20_DIMENSION))
+
+    source_block = next(block for block in b103["basis_blocks"] if block["name"] == "H20")
+    source_vectors = [tuple(int(value) for value in row) for row in source_block["basis_exponent_vectors"]]
+    correction_terms = compiler.correction_terms(g3bi)
+    correction_digest = hashlib.sha256()
+    bc_rows = [[] for _ in range(6)]
+    bc_columns = [[] for _ in range(6)]
+    bc_data = [[] for _ in range(6)]
+    for column, source in enumerate(source_vectors):
+        for term in correction_terms:
+            product = tuple(a + b for a, b in zip(source, term["sF_exponent"], strict=True))
+            ambient_row = target_lookup[product]
+            coefficients = [-3 * int(value) for value in term["coefficients"]]
+            correction_digest.update(f"{column}:{ambient_row}:".encode("ascii"))
+            correction_digest.update(",".join(str(value) for value in coefficients).encode("ascii"))
+            correction_digest.update(b"\n")
+            row = complement_lookup.get(int(ambient_row))
+            if row is None:
+                continue
+            for power, coefficient in enumerate(coefficients):
+                if coefficient:
+                    bc_rows[power].append(row)
+                    bc_columns[power].append(column)
+                    bc_data[power].append(coefficient)
+    require(
+        correction_digest.hexdigest()
+        == g3bk["characteristic_zero_derivative_sources"]["H20_to_H11"]["canonical_exact_source_sha256"],
+        "independent correction source digest",
+    )
+    bc_coefficients = coefficient_matrices(bc_rows, bc_columns, bc_data, (H11_DIMENSION, H20_DIMENSION))
+
+    polynomial = acb_poly([64, 16, 33, 44, 89, 24, 1])
+    roots = sorted(
+        polynomial.roots(tol=arb(2) ** (-208), maxprec=1024),
+        key=lambda value: (float(value.real.mid()), float(value.imag.mid())),
+    )
+    require(len(roots) == 6 and roots[5].overlaps(roots[4].conjugate()), "root pair")
+    gamma = roots[4]
+    powers = [acb(1)]
+    for _ in range(5):
+        powers.append(powers[-1] * gamma)
+
+    core221_rows = np.flatnonzero(component_by_row == 221).astype(np.int32)
+    core449_rows = np.flatnonzero(component_by_row == 449).astype(np.int32)
+    fixed_rows = [
+        0,
+        17,
+        403,
+        1021,
+        2207,
+        3711,
+        H11_DIMENSION - 1,
+        int(core221_rows[0]),
+        int(core221_rows[len(core221_rows) // 2]),
+        int(core221_rows[-1]),
+        int(core449_rows[0]),
+        int(core449_rows[len(core449_rows) // 2]),
+        int(core449_rows[-1]),
+    ]
+    direct_base = sparse.vstack(b0_coefficients).tocoo()
+    direct_correction = sparse.vstack(bc_coefficients).tocoo()
+    for matrix in (direct_base, direct_correction):
+        points = np.linspace(0, matrix.nnz - 1, 6, dtype=np.int64)
+        fixed_rows.extend(int(matrix.row[index] % H11_DIMENSION) for index in points.tolist())
+    fixed_rows = list(dict.fromkeys(fixed_rows))
+
+    residuals_checked = 0
+    for family_index, (arrays, source_coefficients) in enumerate(
+        ((base_arrays, b0_coefficients), (correction_arrays, bc_coefficients))
+    ):
+        for sample_index, row in enumerate(fixed_rows):
+            source = (37 * sample_index + 29 * family_index + 7) % H20_DIMENSION
+            residual = -evaluate_entry(source_coefficients, row, source, powers)
+            for column in row_support(a_coefficients, row):
+                residual += evaluate_entry(a_coefficients, row, column, powers) * reconstruct(
+                    arrays, column, source
+                )
+            require(residual.contains(0), f"sample residual family={family_index} row={row} source={source}")
+            residuals_checked += 1
+
+    require(
+        packet["DM_execution"]["active_residual_balls_containing_zero"]
+        + packet["DM_execution"]["exact_structural_zero_residuals"]
+        == H11_DIMENSION * 2 * H20_DIMENSION,
+        "complete residual accounting",
+    )
+    require(
+        min(
+            packet["inverse_source_actions"]["A0_inverse_B89"]["minimum_relative_accuracy_bits_away_from_zero"],
+            packet["inverse_source_actions"]["A0_inverse_BC"]["minimum_relative_accuracy_bits_away_from_zero"],
+        )
+        >= 80,
+        "portable accuracy",
+    )
+    print("UST.G3DC independent archive verification: PASS")
+    print(
+        f"residual_samples={residuals_checked} complete_equations={H11_DIMENSION * 2 * H20_DIMENSION} "
+        f"base_archive={sha256(base_path)} correction_archive={sha256(correction_path)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

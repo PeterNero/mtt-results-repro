@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Probe the unrestricted two-level component-12 Cayley source presentation."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    MINIMAL,
+    ONE,
+    PRIME,
+    ROOT,
+    ZERO,
+    add_entry,
+    add_polynomial_term,
+    coefficient_add,
+    coefficient_multiply,
+    coefficient_scale,
+    homogeneous_exponents,
+    load,
+    multiply_polynomials,
+    runtime,
+    write_number_field_matrix,
+)
+
+
+ROWS = 1462
+COLUMNS = 895
+
+
+def evaluate(value: tuple[int, ...], root: int) -> int:
+    result = 0
+    for coefficient in reversed(value):
+        result = (result * root + coefficient) % PRIME
+    return result
+
+
+def sparse_rank_mod(
+    entries: dict[tuple[int, int], tuple[int, ...]], root: int
+) -> tuple[int, list[int]]:
+    rows: list[dict[int, int]] = [{} for _ in range(ROWS)]
+    for (row, column), value in entries.items():
+        evaluated = evaluate(value, root)
+        if evaluated:
+            rows[row][column] = evaluated
+    pivots: dict[int, dict[int, int]] = {}
+    for row in rows:
+        while row:
+            column = min(row)
+            value = row[column]
+            pivot = pivots.get(column)
+            if pivot is None:
+                inverse = pow(value, -1, PRIME)
+                pivots[column] = {
+                    key: item * inverse % PRIME for key, item in row.items() if item
+                }
+                break
+            for key, item in pivot.items():
+                reduced = (row.get(key, 0) - value * item) % PRIME
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+    return len(pivots), sorted(pivots)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exact", action="store_true")
+    arguments = parser.parse_args()
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    f0 = oracle.exact_f0_terms(global_f0)
+
+    def split_q(terms: dict[tuple[int, ...], tuple[int, ...]]):
+        a: dict[tuple[int, int, int], tuple[int, ...]] = {}
+        b: dict[tuple[int, int, int], tuple[int, ...]] = {}
+        for exponent, value in terms.items():
+            add_polynomial_term(a if exponent[3] == 0 else b, exponent[:3], value)
+        return a, b
+
+    a1, b1 = split_q(oracle.derivative_terms(f0, 5))
+    a2, b2 = split_q(oracle.derivative_terms(f0, 6))
+    correction = __import__(
+        "build_ust_g3bw_g3bi_h02_dm_woodbury_reduction"
+    ).correction_derivatives_exact(
+        load(ROOT / "state/ust_g3bi_explicit_root_start.packet.json")
+    )
+    c0: dict[tuple[int, int, int], tuple[int, ...]] = {}
+    for exponent, value in correction[4].items():
+        add_polynomial_term(c0, exponent[:3], value)
+    f6: dict[tuple[int, int, int], tuple[int, ...]] = {}
+    for exponent, value in oracle.exact_k3_terms(base).items():
+        if exponent[3] == 0:
+            add_polynomial_term(f6, exponent[:3], coefficient_scale(value, -1))
+
+    degree18 = homogeneous_exponents(18)
+    degree15 = homogeneous_exponents(15)
+    p_basis = degree18
+    r1_basis = [value for value in degree15 if value[0] <= 8]
+    r2_basis = [value for value in degree15 if value[0] <= 5]
+    h0_basis = degree18
+    h1_basis = degree15
+    assert tuple(map(len, (p_basis, r1_basis, r2_basis, h0_basis, h1_basis))) == (190, 108, 81, 190, 136)
+
+    even = homogeneous_exponents(27)
+    odd = homogeneous_exponents(24)
+    even_lookup = {value: index for index, value in enumerate(even)}
+    odd_lookup = {value: index for index, value in enumerate(odd)}
+    assert len(even) == 406 and len(odd) == 325
+
+    p1_offset = 0
+    p2_offset = 190
+    r1_offset = 380
+    r2_offset = 488
+    h0_offset = 569
+    h1_offset = 759
+    even1_row = 0
+    even2_row = 406
+    odd1_row = 812
+    odd2_row = 1137
+
+    entries: dict[tuple[int, int], tuple[int, ...]] = {}
+
+    def add_multiplication(
+        fixed: dict[tuple[int, int, int], tuple[int, ...]],
+        basis: list[tuple[int, int, int]],
+        column_offset: int,
+        row_lookup: dict[tuple[int, int, int], int],
+        row_offset: int,
+    ) -> None:
+        for local, monomial in enumerate(basis):
+            for exponent, value in fixed.items():
+                product = tuple(monomial[index] + exponent[index] for index in range(3))
+                add_entry(entries, (row_offset + row_lookup[product], column_offset + local), value)
+
+    f6b1 = multiply_polynomials(f6, b1)
+    f6b2 = multiply_polynomials(f6, b2)
+    add_multiplication(c0, p_basis, p1_offset, even_lookup, even1_row)
+    add_multiplication(c0, p_basis, p2_offset, even_lookup, even2_row)
+    add_multiplication(c0, r1_basis, r1_offset, odd_lookup, odd1_row)
+    add_multiplication(c0, r2_basis, r2_offset, odd_lookup, odd2_row)
+    add_multiplication(a1, h0_basis, h0_offset, even_lookup, even1_row)
+    add_multiplication(a2, h0_basis, h0_offset, even_lookup, even2_row)
+    add_multiplication(b1, h0_basis, h0_offset, odd_lookup, odd1_row)
+    add_multiplication(b2, h0_basis, h0_offset, odd_lookup, odd2_row)
+    add_multiplication(f6b1, h1_basis, h1_offset, even_lookup, even1_row)
+    add_multiplication(f6b2, h1_basis, h1_offset, even_lookup, even2_row)
+    add_multiplication(a1, h1_basis, h1_offset, odd_lookup, odd1_row)
+    add_multiplication(a2, h1_basis, h1_offset, odd_lookup, odd2_row)
+
+    print(f"presentation={ROWS}x{COLUMNS} nonzeros={len(entries)}", flush=True)
+    evidence = ROOT / "evidence/ust_g3eb_probe"
+    evidence.mkdir(parents=True, exist_ok=True)
+    matrix_path = evidence / "H02.component12.general_two_level.number_field.sms"
+    write_number_field_matrix(matrix_path, entries, (ROWS, COLUMNS))
+    rank, pivots = sparse_rank_mod(entries, 5)
+    print(
+        f"root=5 rank={rank} nullity={COLUMNS-rank} "
+        f"pivot_columns={len(pivots)}",
+        flush=True,
+    )
+
+    if arguments.exact:
+        certificate = evidence / "H02.component12.general_two_level.number_field.rank.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "ust_number_field_sparse_rank.py"),
+                str(matrix_path),
+                "--certificate",
+                str(certificate),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        print(completed.stdout.strip())
+        if completed.returncode:
+            print(completed.stderr.strip())
+            raise SystemExit(completed.returncode)
+
+
+if __name__ == "__main__":
+    main()

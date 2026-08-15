@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Reclassify completed G3AO msolve packets with the exact 0.9.4 marker."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_msolve_runtime import msolve_output_is_unit_ideal
+
+
+def main() -> None:
+    changed = 0
+    unit_count = 0
+    for packet_path in sorted(direct.CAMPAIGN.rglob("*.msolve.packet.json")):
+        packet = json.loads(packet_path.read_text(encoding="ascii"))
+        output_record = packet.get("output", {})
+        output_rel = output_record.get("path")
+        if not output_rel:
+            continue
+        output_path = direct.CAMPAIGN / output_rel
+        if not output_path.is_file():
+            continue
+        unit_ideal = msolve_output_is_unit_ideal(output_path.read_text(encoding="utf-8"))
+        passed = bool(
+            packet.get("returncode") == 0
+            and packet.get("timed_out") is False
+            and unit_ideal
+        )
+        if packet.get("unit_ideal") != unit_ideal or packet.get("passed") != passed:
+            packet["unit_ideal"] = unit_ideal
+            packet["passed"] = passed
+            packet["unit_ideal_parser"] = "msolve-0.9.4-one-element-basis-final-[1]-colon"
+            packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+            changed += 1
+        if unit_ideal:
+            unit_count += 1
+        print(f"{packet_path.relative_to(direct.CAMPAIGN)}: {'UNIT' if unit_ideal else 'NONUNIT'}")
+    print(f"UST.G3AO msolve packet reclassification: PASS changed={changed} unit={unit_count}")
+
+
+if __name__ == "__main__":
+    main()

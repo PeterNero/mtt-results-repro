@@ -1,0 +1,102 @@
+# UST.G3AW Three-Line Gram Meridian Reduction Theorem
+
+## Purpose
+
+G3AT and G3AV permit construction of three full polarization dual rows, but
+the immediate `B.ETA9.01` task is narrower: decide words in the three selected
+Picard-Lefschetz reflections and extract the resulting meridian inside their
+span. That task does not require the action on all 1,509 ambient directions.
+
+## Six exact top reductions
+
+Let the three transported common-base vectors be
+
+```text
+e_i = e_i,20 + e_i,11 + e_i,02,  i=1,2,3.
+```
+
+For `i <= j`, define one combined top-degree polynomial
+
+```text
+h_ij = tau(
+  3 (e_i,20 e_j,02 + e_i,02 e_j,20)
+  + 4 e_i,11 e_j,11
+).
+```
+
+The G3AV pairing is exactly
+
+```text
+qhat(e_i,e_j) = -h_ij / 144.
+```
+
+All terms have Cox degree `(18,2,2)`, so linearity permits each `h_ij` to be
+obtained by one exact top reduction. Symmetry leaves only
+
+```text
+3(3+1)/2 = 6
+```
+
+unordered pairs. The common factor `-1/144`, the integration scale and the
+choice of top generator all cancel from every reflection ratio.
+
+## Reflection representation
+
+Put `H=(h_ij)`. If
+
+```text
+h_11 h_22 h_33 != 0,
+det(H) != 0,
+```
+
+then the three scale-free reflections on
+`E=span(e_1,e_2,e_3)` are
+
+```text
+R_i = I_3 - 2 u_i (row_i(H)/h_ii),
+```
+
+where `u_i` is the `i`th coordinate column. Direct multiplication gives
+
+```text
+R_i^2 = I_3,
+R_i^T H R_i = H.
+```
+
+Because `H` is nondegenerate, the ambient polarized space splits as
+
+```text
+V = E direct-sum E^perp.
+```
+
+Every generator fixes `E^perp`. Consequently a word in the three reflections
+is the identity on `V` if and only if its emitted `3 x 3` matrix is the
+identity on `E`. Applying a word to any selected seed also returns its exact
+three coefficients in the transported vectors, from which the full
+rank-1,509 source vector is assembled without a dense projector.
+
+## Computational consequence
+
+For finite relation detection and meridian extraction, the immediate
+polarization workload falls from 4,527 top reductions to six. This removes
+4,521 reductions, or the exact fraction `1507/1509` of that workload.
+
+The result does not delete the full-row route. If `det(H)=0`, if the selected
+vectors are dependent, or if a later calculation genuinely needs a
+reflection on an arbitrary ambient vector, G3AV's 1,509 reductions per row
+remain the valid fallback.
+
+## Proof boundary
+
+G3AW does not execute the six reductions, assert that `det(H)` is nonzero,
+provide the integral `-2` marking, or emit a meridian, period vector,
+`beta_C`, or endpoint. It changes the next required certificate from three
+ambient dual rows to one six-entry Gram packet plus explicit nondegeneracy and
+integrality checks.
+
+## Reproduction
+
+```powershell
+python build_ust_g3aw_three_line_gram_meridian_reduction.py
+python verify_ust_g3aw_three_line_gram_meridian_reduction.py
+```

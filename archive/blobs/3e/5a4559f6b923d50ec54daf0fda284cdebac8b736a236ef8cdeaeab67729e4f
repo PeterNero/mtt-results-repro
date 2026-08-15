@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Verify UST.G3AC graph-Prym arithmetic and source cutset."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3ac_eta9_graph_prym_orbit.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AC", "wrong theorem id")
+
+    local = packet["inputs"]["local_G3AB_packet"]
+    local_path = ROOT / local["path"]
+    require(local_path.is_file(), "missing local G3AB packet")
+    require(sha256(local_path) == local["sha256"], "stale local G3AB hash")
+
+    ambient = packet["ambient"]
+    require(ambient["H_square"] == 2, "wrong K3 polarization square")
+    require(ambient["spectral_degree_over_K3"] == 3, "wrong spectral degree")
+
+    graphs = packet["graphs"]
+    require(len(graphs) == 3, "expected three graph divisors")
+    for graph in graphs:
+        k = graph["curve_class_kH"]
+        degree = graph["map_degree"]
+        genus = 1 + k * k
+        canonical_intersection = 18 * k + 3 * degree
+        self_intersection = 2 * genus - 2 - canonical_intersection
+        require(graph["genus"] == genus, f"wrong genus for {graph['name']}")
+        require(
+            graph["canonical_intersection"] == canonical_intersection,
+            f"wrong canonical intersection for {graph['name']}",
+        )
+        require(
+            graph["self_intersection"] == self_intersection,
+            f"wrong self-intersection for {graph['name']}",
+        )
+
+    geometry = packet["graph_geometry"]
+    require(geometry["base_intersection_counts"] == [2, 8, 8], "wrong base intersections")
+    require(geometry["graph_coincidence_counts"] == [0, 0, 0], "graph coincidences remain")
+    require(geometry["graphs_pairwise_disjoint_on_C"] is True, "graphs are not disjoint")
+
+    coefficients = [graph["coefficient_in_q"] for graph in graphs]
+    k_values = [graph["curve_class_kH"] for graph in graphs]
+    degrees = [graph["map_degree"] for graph in graphs]
+    graph_squares = [graph["self_intersection"] for graph in graphs]
+    a = packet["prym_divisor"]["pullback_H_coefficient"]
+
+    weighted_k = sum(n * k for n, k in zip(coefficients, k_values))
+    weighted_degree = sum(n * degree for n, degree in zip(coefficients, degrees))
+    norm = weighted_k + 3 * a
+    gysin_point = weighted_degree + 18 * a
+    gysin_h_squared = weighted_degree // 2 + 9 * a
+    graph_part = sum(n * n * square for n, square in zip(coefficients, graph_squares))
+    mixed_graph_part = 0
+    square = graph_part + mixed_graph_part + 4 * a * weighted_k + 6 * a * a
+
+    prym = packet["prym_divisor"]
+    require(weighted_k == -6, "wrong weighted graph class")
+    require(weighted_degree == -12, "wrong weighted graph degree")
+    require(norm == prym["norm_H_coefficient"] == 0, "Prym norm does not vanish")
+    require(gysin_point == prym["ordinary_Gysin_point_coefficient"] == 24, "wrong point Gysin row")
+    require(
+        gysin_h_squared == prym["ordinary_Gysin_H_squared_coefficient"] == 12,
+        "wrong H-squared Gysin row",
+    )
+    require(square == prym["integrated_square"] == -132, "wrong Prym square")
+    require(square // ambient["integral_H2_D0"] == -66, "wrong cohomological square coefficient")
+    require(prym["minus9_gamma_x_is_independent_graph_period_equation"] is False, "transgression mistyped")
+
+    family = packet["graph_preserving_family"]
+    require(family["h0_O_K3_3H"] == 2 + 9, "wrong h0(O_K3(3H))")
+    require(family["h0_O_E_3O"] == 3, "wrong theta dimension")
+    require(
+        family["affine_dimension"]
+        == family["h0_O_K3_3H"] * family["h0_O_E_3O"]
+        == 33,
+        "wrong graph-preserving family dimension",
+    )
+    require(family["parameter_space_irreducible"] is True, "family must be irreducible")
+    require(family["basepoint_free_open_nonempty"] is True, "finite-flat open missing")
+    require(family["smooth_open_nonempty"] is True, "smooth open missing")
+    require(family["finite_flat_degree"] == 3, "wrong finite-flat rank")
+    require(family["smooth_finite_flat_intersection_nonempty"] is True, "open intersection missing")
+
+    rank_open = packet["coefficient_rank_open"]
+    require(rank_open["wedge_polynomial_degree"] == 3, "wrong wedge degree")
+    require(rank_open["leading_coefficient_nonzero"] is True, "rank witness vanishes")
+    require(rank_open["rank_three_open_nonempty"] is True, "rank-three open missing")
+
+    orbit = packet["equivariant_orbit"]
+    require(orbit["group_order"] == 3 * 3 == 9, "wrong E[3] order")
+    require(orbit["projective_stabilizer_order"] == 1, "nontrivial stabilizer")
+    require(
+        orbit["orbit_size"] == orbit["group_order"] // orbit["projective_stabilizer_order"] == 9,
+        "wrong orbit size",
+    )
+    require(orbit["all_orbit_members_smooth_finite_flat_graph_prym"] is True, "orbit not promoted")
+    require(orbit["existential_not_fixed_FQ_orbit"] is True, "fixed orbit was silently identified")
+
+    visible = packet["visible_consequence"]
+    require(visible["rank_after_inverse_BHT"] == 3, "wrong inverse-BHT rank")
+    require(visible["target_Chern_rows"] == ["c1=0", "c2=9u", "c3=+6Omega"], "wrong Chern rows")
+    require(visible["alpha_twisted_line_constructed"] is False, "twisted line silently promoted")
+    require(visible["visible_HYM_constructed"] is False, "visible HYM silently promoted")
+
+    cutset = packet["selected_source_cutset"]
+    require(cutset["fixed_explicit_orbit_graph_prym_lift_proved"] is False, "Noether-Lefschetz gate hidden")
+    require(cutset["graph_prym_orbit_exists"] is True, "graph-Prym orbit not constructed")
+    require(cutset["graph_prym_orbit_unique_member_selected"] is False, "member silently selected")
+    require(cutset["mod101_graph_containment_implies_characteristic_zero_line_lift"] is False, "bad specialization inference")
+
+    scope = packet["scope"]
+    require(scope["existential_algebraic_prym_carrier_closed"] is True, "algebraic carrier not closed")
+    require(scope["existential_smooth_finite_flat_graph_prym_orbit_closed"] is True, "orbit not closed")
+    require(scope["fixed_FQ_Noether_Lefschetz_test_closed"] is False, "fixed-orbit Hodge test silently closed")
+    require(scope["B_ETA9_01_closed"] is False, "B.ETA9.01 silently closed")
+    require(scope["B_ETA9_02_closed"] is False, "B.ETA9.02 silently closed")
+    require(scope["B_HS_01_closed"] is False, "B.HS.01 silently closed")
+
+    for key, value in packet["guardrails"].items():
+        require(value is False, f"guardrail violated: {key}")
+
+    print("UST.G3AC eta9 graph-Prym orbit: PASS")
+    print("graphs: (H,3), (H,3), (4H,6); self-squares: -25,-25,-58")
+    print("q=2p*H-Gamma1-Gamma2-Gamma3: norm=0, j*q=12H^2, q^2=-132")
+    print("smooth finite-flat graph-Prym orbit: 9 members (existential)")
+    print("open at G3AC: fixed-F_Q graph lift (excluded downstream by G3AD), beta_C and visible HYM")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Prove the exact fourth-normal selection in the component-20 source chart."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3DE = ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3EX = ROOT / "evidence/ust_g3ex/H02.component20.cohomological_source_presentation.json"
+G3EX_INDICES = ROOT / "evidence/ust_g3ex/H02.component20.cohomological.indices.npz"
+G3FF = ROOT / "evidence/ust_g3ff/H02.component20.conic_fourth_normal_source.json"
+G3FG = ROOT / "evidence/ust_g3fg/H02.component20.conic_graph_reconstruction.json"
+EVIDENCE = ROOT / "evidence/ust_g3fh"
+ALIGNMENT = EVIDENCE / "H02.component20.fourth_normal_source_selection.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.fourth_normal_source_selection.json"
+
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+SOURCE_COLUMNS = 2523
+EXPECTED_TAIL = (0, 0, 0, 2, 1, 0, 0)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, object]:
+    require(path.is_file(), f"external artifact exists: {path}")
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def main() -> None:
+    g3bi, g3de, g3ex, g3ff, g3fg = map(load, (G3BI, G3DE, G3EX, G3FF, G3FG))
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3de["checks"].values()), "G3DE checks")
+    require(all(g3ex["checks"].values()), "G3EX checks")
+    require(all(g3ff["checks"].values()), "G3FF checks")
+    require(
+        g3fg["status"]
+        == "CANONICAL_CONIC_GRAPH_RECONSTRUCTION_INCOMPLETE_MORE_EXACT_SOURCE_STRUCTURE_REQUIRED",
+        "G3FG promotion no-go status",
+    )
+    require(g3fg["reconstruction"]["holdout_passes"] == 0, "G3FG zero holdout")
+
+    normal_path = ROOT / g3ff["exact_characteristic_zero_source"]["normal_source_artifact"]["path"]
+    require(sha256(normal_path) == g3ff["exact_characteristic_zero_source"]["normal_source_artifact"]["sha256"], "G3FF normal source hash")
+    normal = np.load(normal_path, allow_pickle=False)
+    q4 = normal["q4_Sym7_basis"].astype(np.int64)
+    d7 = normal["D7_gamma_coordinates"].astype(np.int64)
+    require(q4.shape == (136, 36) and d7.shape == (36, 6), "normal source shapes")
+
+    pivot_rows = tuple(
+        int(value) for value in g3fg["canonical_graph_chart"]["q4_pivot_rows_zero_based"]
+    )
+    base_rows = tuple(
+        int(value)
+        for value in g3fg["canonical_graph_chart"]["conic_quotient_base_rows_zero_based"]
+    )
+    require(len(pivot_rows) == 36 and len(base_rows) == 100, "36+100 conic chart")
+    pivot_determinant = int(sp.Matrix(q4[np.asarray(pivot_rows), :]).det())
+    require(pivot_determinant == 1, "unimodular q4 pivot chart")
+
+    indices = np.load(G3EX_INDICES, allow_pickle=False)
+    source_support = indices["source_support"].astype(np.int32)
+    lift_support = indices["lift_support"].astype(np.int32)
+    source_lookup = {int(coordinate): local for local, coordinate in enumerate(source_support)}
+    require(
+        set(range(COMPONENT_START, COMPONENT_PAST)) <= set(source_lookup),
+        "all136 component source coordinates present",
+    )
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay = load(macaulay_path)
+    factor = load(factor_path)
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    selection_path = ROOT / g3de["factorization"]["selection"]["path"]
+    require(sha256(selection_path) == g3de["factorization"]["selection"]["sha256"], "G3DE selection hash")
+    selected_updates = np.load(selection_path, allow_pickle=False)["selected_columns"].astype(np.int32)
+    update_descriptors = [descriptors[int(value)] for value in selected_updates]
+
+    basis15 = exponents(15)
+    require(len(basis15) == 136, "Sym15 dimension")
+    for local, exponent in enumerate(basis15):
+        generator, multiplier = update_descriptors[COMPONENT_START + local]
+        require(generator == 4, f"component generator local={local}")
+        require(multiplier[:3] == exponent, f"component monomial local={local}")
+        require(multiplier[3:] == EXPECTED_TAIL, f"component tail local={local}")
+
+    lift_descriptor_to_local: dict[tuple[int, tuple[int, ...]], int] = {}
+    for local, coordinate in enumerate(lift_support):
+        descriptor = descriptors[int(coordinate)]
+        require(descriptor not in lift_descriptor_to_local, "unique lift descriptor")
+        lift_descriptor_to_local[descriptor] = local
+    full_descriptor_set = set(descriptors)
+    require(
+        all(
+            (5, update_descriptors[COMPONENT_START + local][1])
+            in full_descriptor_set
+            for local in range(136)
+        ),
+        "full characteristic-zero carrier has all136 matching t1 columns",
+    )
+
+    available: list[int] = []
+    missing: list[int] = []
+    pair_rows: list[dict[str, object]] = []
+    source_columns: list[int] = []
+    t1_columns: list[int] = []
+    for local in range(136):
+        _generator, multiplier = update_descriptors[COMPONENT_START + local]
+        descriptor = (5, multiplier)
+        source_column = source_lookup[COMPONENT_START + local]
+        source_columns.append(source_column)
+        lift_local = lift_descriptor_to_local.get(descriptor)
+        if lift_local is None:
+            missing.append(local)
+            continue
+        available.append(local)
+        t1_column = SOURCE_COLUMNS + lift_local
+        t1_columns.append(t1_column)
+        pair_rows.append(
+            {
+                "sym15_row_zero_based": local,
+                "monomial_exponent": list(basis15[local]),
+                "correction_t0_source_column_zero_based": source_column,
+                "matching_original_t1_lift_column_zero_based": t1_column,
+            }
+        )
+
+    require(tuple(available) == base_rows, "t1 availability equals conic quotient basis")
+    require(tuple(missing) == pivot_rows, "t1 omission equals fourth-normal pivots")
+    require(len(pair_rows) == 100, "100 exact source/lift pairs")
+    require(
+        all(basis15[row][1] >= 8 and basis15[row][0] <= 7 for row in pivot_rows),
+        "fourth-normal leading monomials divisible by y8",
+    )
+    require(
+        {basis15[row] for row in pivot_rows}
+        == {
+            (a, 8 + b, c)
+            for a in range(8)
+            for b in range(8 - a)
+            for c in [7 - a - b]
+        },
+        "pivot monomials are y8 Sym7",
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ALIGNMENT,
+        degree15_exponents=np.asarray(basis15, dtype=np.int16),
+        conic_quotient_rows=np.asarray(base_rows, dtype=np.int16),
+        fourth_normal_pivot_rows=np.asarray(pivot_rows, dtype=np.int16),
+        component_source_columns=np.asarray(source_columns, dtype=np.int32),
+        paired_component_rows=np.asarray(available, dtype=np.int16),
+        paired_t1_lift_columns=np.asarray(t1_columns, dtype=np.int32),
+        full_carrier_t1_rows=np.arange(136, dtype=np.int16),
+        D7_gamma_coordinates=d7,
+        q4_Sym7_basis=q4,
+    )
+
+    packet = {
+        "schema": "ust.g3fh.h02.component20.fourth-normal-source-selection.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FH",
+        "status": "CLOSED_EXACT_COMPONENT20_RESTRICTED_DERIVATIVE_TRANSGRESSION_AND_FINITE_DERIVED_SUPPORT_ALIGNMENT_SOURCE_SELECTION_OPEN",
+        "inputs": {
+            "G3BI": record(G3BI),
+            "G3DE": record(G3DE),
+            "G3EX": record(G3EX),
+            "G3EX_indices": record(G3EX_INDICES),
+            "G3FF": record(G3FF),
+            "G3FG": record(G3FG),
+            "MLD_macaulay": external_record(macaulay_path, mld),
+            "MLD_coordinate_factorization": external_record(factor_path, mld),
+        },
+        "exact_derivative_transgression": {
+            "selected_endpoint": "Phi_sel=u*K+v*E+s*(F0+t0*C0)",
+            "root_graph": "Rminus: q=xz-y^2=0 and r=w+G3=0",
+            "G3FF_restricted_source_identity": "(A0+C0-A1)|_(r=0)=q*D7",
+            "restricted_derivative_identity": "(dPhi_sel/dt0-dPhi_sel/dt1)|_(r=0)=s*q*D7",
+            "ambient_identity_boundary": (
+                "G3FF does not assert A0+C0-A1=q*D7 in the ambient ring; "
+                "the omitted r-normal coefficient is supplied separately by G3FI."
+            ),
+            "component_multiplier": "m*t2^2*u for m in Sym^15(x,y,z)",
+            "restricted_component_identity": "m*t2^2*u*(dPhi_sel/dt0-dPhi_sel/dt1)|_(r=0)=m*t2^2*u*s*q*D7",
+            "D7_dimension": 36,
+        },
+        "G3EX_finite_derived_lift_support_alignment": {
+            "component_source_generator_zero_based": 4,
+            "component_source_generator": "d(correction)/dt0=s*C0",
+            "component_multiplier_tail_w_t0_t1_t2_u_v_s": list(EXPECTED_TAIL),
+            "component_source_rows": 136,
+            "matching_original_t1_lifts": len(available),
+            "missing_original_t1_lifts": len(missing),
+            "matching_rows_zero_based": available,
+            "missing_rows_zero_based": missing,
+            "pair_table": pair_rows,
+            "provenance": (
+                "The G3EX lift support is the nonzero support of the selected "
+                "p=21817 chart solution. Its listed columns are exact Q(gamma) "
+                "columns, but the 100-row subset is finite-derived."
+            ),
+        },
+        "full_characteristic_zero_carrier_audit": {
+            "matching_original_t1_columns_available_before_G3EX_support_restriction": 136,
+            "missing_matching_original_t1_columns_before_G3EX_support_restriction": 0,
+            "consequence": (
+                "The 100+36 support partition explains the finite solution chart; "
+                "it is not yet an independent source-selection rule."
+            ),
+        },
+        "fourth_normal_identification": {
+            "q4_carrier": "(xz-y^2)^4*Sym^7",
+            "q4_pivot_submatrix_determinant": pivot_determinant,
+            "q4_pivot_rows_zero_based": list(pivot_rows),
+            "q4_leading_monomials": "y^8*Sym^7",
+            "conic_quotient_rows_zero_based": list(base_rows),
+            "exact_set_identity": "missing t1 lifts = q4 pivot rows; available t1 lifts = conic quotient rows",
+            "alignment_artifact": record(ALIGNMENT),
+        },
+        "checks": {
+            "all136_component_source_descriptors_are_exactly_the_t0_correction_lane": True,
+            "the_q4_pivot_chart_is_unimodular_over_Z": pivot_determinant == 1,
+            "the36_q4_leading_monomials_are_exactly_y8Sym7": len(pivot_rows) == 36,
+            "exactly100_matching_original_t1_lifts_are_selected": len(available) == 100,
+            "the100_matching_lifts_equal_the_conic_quotient_basis_index_for_index": tuple(available) == base_rows,
+            "the36_missing_lifts_equal_the_fourth_normal_pivots_index_for_index": tuple(missing) == pivot_rows,
+            "the_selected_derivative_difference_restricted_to_r0_factors_as_s_q_D7_over_Qgamma": True,
+            "the_full_characteristic_zero_Jacobian_carrier_contains_all136_matching_t1_columns": True,
+        },
+        "guardrails": {
+            "claims_the100_source_lift_pairs_alone_are_exact_kernel_relations": False,
+            "claims_the_normal_jet_remainder_s_q_D7_is_already_absorbed": False,
+            "claims_the100_36_lift_support_partition_is_selected_independently_of_finite_data": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fhComponent20DerivativeTransgressionAndLiftSupportAlignment",
+            "tier": "CLOSED_EXACT_DERIVATIVE_IDENTITY_AND_EXACT_FINITE_DERIVED_SUPPORT_ALIGNMENT",
+            "statement": (
+                "The exact G3EX component-20 source lane consists of all136 "
+                "Sym15 multipliers of d(correction)/dt0, and "
+                "the restriction of dPhi_sel/dt0-dPhi_sel/dt1 to w=-G3 is "
+                "s*q*D7 exactly over Q(gamma). The "
+                "finite-derived G3EX lift-support chart contains exactly the100 "
+                "conic-quotient representatives and omits exactly the36 rows of "
+                "the unimodular q4Sym7 pivot chart. The unrestricted exact carrier "
+                "contains all136 matching t1 columns."
+            ),
+        },
+        "next_required_object": (
+            "Derive, independently of the p=21817 solution support, the exact "
+            "two-normal Koszul/normal-jet homotopy H and its selected100-dimensional "
+            "quotient domain, using the ambient (q,r) normal pair supplied by G3FI. "
+            "Then replay source_t0 + prior lifts + H(s*(r*B6+q*D7))=0 on that domain. "
+            "Only such an upstream construction can leave the36 fourth-normal rows "
+            "and prove the characteristic-zero rank upper bound36."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FH component20 fourth-normal source selection: PASS "
+        "paired=100 missing=36 q4_det=1 restricted_transgression=s*q*D7"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Execute component 20 at two independent reconstruction/holdout primes."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fa_component20_two_split_prime_rank_campaign as rank_tools
+import build_ust_g3fb_component20_split_kernel_projection_campaign as kernel_tools
+
+
+ROOT = Path(__file__).resolve().parent
+G3EZ = ROOT / "evidence/ust_g3ez/H02.component20.unit_leaf_reduction.json"
+G3FB = ROOT / "evidence/ust_g3fb/H02.component20.split_kernel_projection_campaign.json"
+EVIDENCE = ROOT / "evidence/ust_g3fc"
+CERTIFICATE = EVIDENCE / "H02.component20.third_fourth_split_prime_campaign.json"
+
+FIBERS = {
+    37493: (4637, 7219, 7234, 16137, 17865, 21870),
+    38113: (8106, 8239, 12621, 23904, 24974, 36471),
+}
+
+
+def main() -> None:
+    reduction = rank_tools.load(G3EZ)
+    prior = rank_tools.load(G3FB)
+    rank_tools.require(all(reduction["checks"].values()), "G3EZ checks")
+    rank_tools.require(all(prior["checks"].values()), "G3FB checks")
+    protected = np.asarray(reduction["output"]["protected_target_columns"], dtype=np.int32)
+    canonical_relation_indices = tuple(
+        int(value) for value in prior["campaign"]["canonical_relation_indices"]
+    )
+    canonical_dependent_columns = tuple(
+        int(value) for value in prior["campaign"]["canonical_dependent_columns"]
+    )
+    rank_tools.require(len(protected) == kernel_tools.TARGET, "protected target")
+    rank_tools.require(len(canonical_relation_indices) == kernel_tools.TARGET, "canonical relation chart")
+    rank_tools.require(len(canonical_dependent_columns) == kernel_tools.NULLITY, "canonical dependent chart")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    rank_tools.compile_rank_tool()
+    kernel_tools.compile_kernel_tool()
+    row_indices, column_indices, coefficients = rank_tools.parse_source()
+    results: list[dict[str, object]] = []
+
+    for prime, roots in FIBERS.items():
+        rank_tools.require(len(set(roots)) == 6, f"six roots p={prime}")
+        for gamma in roots:
+            rank_tools.require(
+                rank_tools.evaluate(rank_tools.MINIMAL, prime, gamma) == 0,
+                f"minimal root p={prime} gamma={gamma}",
+            )
+            stem = f"H02.component20.p{prime}.g{gamma}"
+            chart = EVIDENCE / f"{stem}.chart.bin"
+            rank_log = EVIDENCE / f"{stem}.rank.log"
+            kernel = EVIDENCE / f"{stem}.kernel.bin"
+            kernel_log = EVIDENCE / f"{stem}.kernel.log"
+            nonzeros = rank_tools.write_chart(
+                chart,
+                prime,
+                gamma,
+                row_indices,
+                column_indices,
+                coefficients,
+            )
+            rank_fields, rank_stdout = rank_tools.run_rank(chart, rank_log)
+            rank = int(rank_fields["RANK"])
+            nullity = int(rank_fields["NULLITY"])
+            rank_tools.require(
+                (rank, nullity) == (kernel_tools.RANK, kernel_tools.NULLITY),
+                f"rank profile p={prime} gamma={gamma}",
+            )
+
+            kernel_fields, kernel_stdout = kernel_tools.run_kernel(
+                chart, kernel, kernel_log
+            )
+            stored_prime, kernel_matrix, dependent, selected = kernel_tools.read_kernel(
+                kernel
+            )
+            rank_tools.require(stored_prime == prime, "stored prime")
+            rank_tools.require(
+                int(kernel_fields["VERIFIED_RELATIONS"]) == kernel_tools.NULLITY,
+                "literal kernel replay",
+            )
+            projection = kernel_matrix[protected, :].toarray() % prime
+            chosen = tuple(kernel_tools.independent_columns(projection, prime))
+            dependent_profile = tuple(int(value) for value in dependent)
+            rank_tools.require(
+                dependent_profile == canonical_dependent_columns,
+                "common dependent chart",
+            )
+            rank_tools.require(
+                chosen == canonical_relation_indices,
+                "common rank100 projection chart",
+            )
+            results.append(
+                {
+                    "prime": prime,
+                    "gamma_root": gamma,
+                    "nonzero_entries": nonzeros,
+                    "rank": rank,
+                    "nullity": nullity,
+                    "kernel_nonzeros": int(kernel_matrix.nnz),
+                    "verified_relations": int(kernel_fields["VERIFIED_RELATIONS"]),
+                    "protected_projection_rank": len(chosen),
+                    "selected_relation_indices": list(chosen),
+                    "selected_dependent_columns": [
+                        int(dependent[index]) for index in chosen
+                    ],
+                    "rank_elapsed_seconds": float(rank_fields["ELAPSED_SECONDS"]),
+                    "kernel_elapsed_seconds": float(kernel_fields["ELAPSED_SECONDS"]),
+                    "chart": rank_tools.record(chart),
+                    "rank_log": rank_tools.record(rank_log),
+                    "kernel": rank_tools.record(kernel),
+                    "kernel_log": rank_tools.record(kernel_log),
+                    "rank_stdout": rank_stdout,
+                    "kernel_stdout": kernel_stdout,
+                }
+            )
+            print(
+                f"G3FC p={prime} gamma={gamma}: rank={rank} "
+                f"kernel={nullity} protected_rank={len(chosen)}",
+                flush=True,
+            )
+
+    certificate = {
+        "schema": "ust.g3fc.h02.component20.third-fourth-split-prime-campaign.v1",
+        "date": "2026-08-15",
+        "status": "CLOSED_EXACT_COMPONENT20_FOUR_SPLIT_PRIME_COMMON_KERNEL_CHART_CHARZERO_OPEN",
+        "reduction": rank_tools.record(G3EZ),
+        "prior_two_prime_kernel_campaign": rank_tools.record(G3FB),
+        "rank_tool_source": rank_tools.record(rank_tools.RANK_SOURCE),
+        "rank_tool_executable": rank_tools.record(rank_tools.RANK_EXECUTABLE),
+        "kernel_tool_source": rank_tools.record(kernel_tools.KERNEL_SOURCE),
+        "kernel_tool_executable": rank_tools.record(kernel_tools.KERNEL_EXECUTABLE),
+        "field": {
+            "minimal_polynomial_coefficients_ascending": list(rank_tools.MINIMAL),
+            "split_primes_and_roots": {
+                str(prime): list(roots) for prime, roots in FIBERS.items()
+            },
+        },
+        "campaign": {
+            "additional_split_primes": len(FIBERS),
+            "additional_fibers": len(results),
+            "total_split_primes_with_G3FB": 4,
+            "total_fibers_with_G3FB": 24,
+            "results": results,
+            "common_rank": kernel_tools.RANK,
+            "common_nullity": kernel_tools.NULLITY,
+            "common_protected_projection_rank": kernel_tools.TARGET,
+            "canonical_relation_indices": list(canonical_relation_indices),
+            "canonical_dependent_columns": list(canonical_dependent_columns),
+        },
+        "checks": {
+            "two_additional_independent_split_primes_are_executed": len(FIBERS) == 2,
+            "all_twelve_additional_split_roots_are_executed": len(results) == 12,
+            "all_additional_fibers_have_rank5025_and_nullity386": all(
+                row["rank"] == kernel_tools.RANK
+                and row["nullity"] == kernel_tools.NULLITY
+                for row in results
+            ),
+            "all_additional_kernel_relations_replay_exactly": sum(
+                row["verified_relations"] for row in results
+            )
+            == 12 * kernel_tools.NULLITY,
+            "the_common_dependent_and_rank100_projection_charts_survive": all(
+                row["selected_relation_indices"] == list(canonical_relation_indices)
+                and row["protected_projection_rank"] == kernel_tools.TARGET
+                for row in results
+            ),
+        },
+        "guardrails": {
+            "claims_four_split_primes_prove_characteristic_zero_rank": False,
+            "claims_the_normalized_kernel_has_been_reconstructed_over_Qgamma": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "next_required_object": (
+            "Normalize the common 100-relation chart at all 24 fibers, interpolate "
+            "six conjugates per prime, perform four-prime rational reconstruction, "
+            "and either replay the candidate exactly over Q(gamma) or emit the precise "
+            "coefficient-height obstruction requiring further primes."
+        ),
+    }
+    rank_tools.require(all(certificate["checks"].values()), "checks")
+    rank_tools.require(not any(certificate["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(certificate, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3FC component20 third/fourth split-prime campaign: PASS "
+        "total_primes=4 total_fibers=24 rank=5025 nullity=386 protected_rank=100"
+    )
+
+
+if __name__ == "__main__":
+    main()

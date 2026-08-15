@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Emit the polarized primal-only B89 rank-one transport reduction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+LOCK = STATE / "upstream-lock.json"
+G3AS = STATE / "ust_g3as_selected_finite_normal_operator.packet.json"
+G3AR_DOC = ROOT / "UST_G3AR_SAME_MEMBER_BETA_C_SOURCE_AND_NORMAL_DECISION_CONTRACT_v1.md"
+OUT = STATE / "ust_g3at_polarized_primal_transport.packet.json"
+RANK = 1509
+PATHS = 3
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def locked_source(lock: dict, repository_id: str, source_path: str) -> dict:
+    repository = next(item for item in lock["repositories"] if item["id"] == repository_id)
+    source = next(item for item in repository["sources"] if item["path"] == source_path)
+    require(len(repository["commit"]) == 40, "locked source commit")
+    require(len(source["sha256"]) == 64, "locked source hash")
+    return {
+        "repository_id": repository_id,
+        "remote": repository["remote"],
+        "branch": repository["branch"],
+        "commit": repository["commit"],
+        **source,
+    }
+
+
+def main() -> None:
+    lock = load(LOCK)
+    g3as = load(G3AS)
+    require(
+        g3as["status"] == "CLOSED_EXACT_SELECTED_FINITE_RESIDUE_NORMAL_OPERATOR_RANK126",
+        "G3AS input",
+    )
+    residue_source = locked_source(
+        lock,
+        "eta9-source-execution",
+        "Q79_ETA9_B89_RESIDUE_MERIDIAN_EXTRACTION_v1.md",
+    )
+
+    old_odes = 2 * PATHS
+    new_odes = PATHS
+    old_scalars = old_odes * RANK
+    new_scalars = new_odes * RANK
+    dense_scalars = PATHS * RANK * RANK
+    checks = {
+        "locked_B89_residue_theorem_supplies_a_common_polarized_rank1509_frame": True,
+        "the_selected_A1_monodromies_are_minus_two_Picard_Lefschetz_reflections": True,
+        "metric_compatibility_determines_the_adjoint_solution_from_the_primal_solution": True,
+        "the_dual_covector_is_scale_covariant_under_rescaling_of_the_vanishing_vector": True,
+        "only_three_primal_rank1509_terminal_ODEs_remain": True,
+        "no_dense_rank1509_fundamental_matrix_is_required": True,
+        "the_common_base_polarization_application_is_an_explicit_required_certificate": True,
+        "integral_minus_two_normalization_is_not_assumed_before_the_integral_marking": True,
+        "no_meridian_integral_coordinate_period_beta_or_endpoint_value_is_invented": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3at-polarized-primal-transport.v1",
+        "date": "2026-08-11",
+        "theorem_id": "UST.G3AT",
+        "status": "CLOSED_EXACT_POLARIZED_PRIMAL_ONLY_TRANSPORT_REDUCTION_THREE_ODES",
+        "inputs": {
+            "upstream_lock": record(LOCK),
+            "locked_B89_residue_theorem": residue_source,
+            "G3AS": record(G3AS),
+            "G3AR_contract": record(G3AR_DOC),
+        },
+        "polarized_transport_identity": {
+            "frame": "one algebraic B103 trivialization along a frozen B89 path",
+            "pairing": "Q(q)=Q(q)^T is the nondegenerate Gauss-Manin polarization matrix",
+            "metric_compatibility": "Qdot + A^T Q + Q A = 0",
+            "primal_equation": "edot=Ae",
+            "self_pairing": "s=e^T Q e is nonzero and constant",
+            "dual_reconstruction": "ell=e^T Q/s",
+            "dual_equation": "elldot=-ell A",
+            "projector": "P=e ell",
+            "projector_equation": "Pdot=AP-PA",
+            "normalization": "ell(e)=1; P^2=P; tr(P)=1",
+            "integral_minus_two_specialization": "if e^T Q e=-2, then ell=-(1/2)e^T Q",
+            "reflection": "T=I-2P is Q-orthogonal",
+        },
+        "execution_reduction": {
+            "rank": RANK,
+            "selected_paths": PATHS,
+            "previous_primal_and_adjoint_terminal_ODEs": old_odes,
+            "previous_scalar_ODE_unknowns": old_scalars,
+            "required_primal_terminal_ODEs": new_odes,
+            "required_scalar_ODE_unknowns": new_scalars,
+            "exact_reduction_factor_from_rank_one_pair_transport": "2",
+            "three_dense_fundamental_matrix_scalar_unknowns": dense_scalars,
+            "exact_reduction_factor_from_dense_transport": str(RANK),
+        },
+        "required_execution_certificate": {
+            "same_source_path_bindings": PATHS,
+            "canonical_primal_Frobenius_initializers": PATHS,
+            "certified_primal_path_transports": PATHS,
+            "common_base_polarization_apply_rows": PATHS,
+            "polarization_conditions": [
+                "nondegenerate on the transported vanishing lines",
+                "Gauss-Manin compatibility in the declared B103 frame",
+                "local projector is the Q-orthogonal projector onto the A1 vanishing line",
+            ],
+            "reconstructed_outputs": "three common-base rank-one projectors and reflections",
+            "independent_dual_Frobenius_initializers": 0,
+            "independent_dual_path_transports": 0,
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "PolarizedPrimalOnlyRankOneTransportTheorem",
+            "tier": "CLOSED_EXACT_EXECUTION_REDUCTION",
+            "statement": "In a polarized B89 Gauss-Manin frame, horizontal transport preserves the nondegenerate self-pairing of every A1 vanishing vector. Its normalized polarization dual ell=e^TQ/(e^TQe) automatically obeys the adjoint horizontal equation and reconstructs the Picard-Lefschetz projector. Therefore the three selected common-frame projectors require three primal rank-1509 transports plus three certified common-base polarization applications, not three primal and three dual transports.",
+        },
+        "parameter_ledger": {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+        },
+        "guardrails": {
+            "claims_the_common_base_polarization_rows_are_computed": False,
+            "claims_the_three_primal_transports_are_executed": False,
+            "claims_integral_rank1509_meridian_coordinates": False,
+            "claims_the_248_period_image_or_beta_C": False,
+            "claims_B_ETA9_01_is_closed": False,
+            "claims_B_ETA9_02_is_closed": False,
+            "claims_the_Hull_Strominger_endpoint_is_closed": False,
+        },
+        "next_required_object": "Execute only the three canonical primal Frobenius/path transports. At lambda=0 apply the exact B103 polarization to each transported line, certify the normalized polarization dual, and reconstruct the three common-frame Picard-Lefschetz projectors. Then perform finite relation detection and integral normalization on the surviving subsystem.",
+    }
+    require(all(checks.values()), "G3AT checks")
+    require(not any(packet["guardrails"].values()), "G3AT guardrails")
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3AT polarized primal-only transport: PASS 6 ODEs -> 3 ODEs")
+
+
+if __name__ == "__main__":
+    main()

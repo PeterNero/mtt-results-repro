@@ -1,0 +1,149 @@
+# UST.G3CJ Selected-Source Cyclic Full-Carrier Theorem
+
+## Status
+
+`CLOSED_EXACT_GF11_SELECTED_SOURCE_CYCLIC_FULL_AFFINE_CARRIER_PATHWISE_PROMOTION_OPEN`
+
+## Setup
+
+Let
+
+```text
+V = GF(11)^1509,
+K: V -> V
+```
+
+be the complete terminal B103 correction operator emitted by G3CD, in the
+fixed `H20(248), H11(1013), H02(248)` order. Let `b` be its selected G3CC
+affine source. G3CI has already shown that the currently selected source rule
+does not support the proposed 249-dimensional Schur-Riccati transport, so the
+full affine carrier is the mandatory linear route unless a new independent
+source-selection theorem is supplied.
+
+## Exact cyclicity theorem
+
+Form the selected-source Krylov frame
+
+```text
+B = [b, Kb, K^2 b, ..., K^1508 b].
+```
+
+The emitted exact good-reduction calculation gives
+
+```text
+det(B) = 7 mod 11.
+```
+
+Consequently `B` is a basis of `V`. In particular,
+
+```text
+rank[b, Kb, ..., K^j b] = j + 1,   0 <= j <= 1508.
+```
+
+Thus `b` is a cyclic vector for `K`. Every fixed linear `K`-invariant
+subspace containing `b` contains every column of `B`, and therefore equals
+all of `V`. There is no proper fixed linear source-reachable invariant
+subsystem at this terminal fiber.
+
+This statement is about the selected source, not a generic test vector.
+
+## Companion recurrence
+
+The independently replayed exact solve emits the unique coefficient vector
+`c in GF(11)^1509` satisfying
+
+```text
+K^1509 b = sum_{j=0}^{1508} c_j K^j b.
+```
+
+It has `1,384` nonzero entries, with
+
+```text
+c_0 = 0,
+c_1 = 8,
+c_1508 != 0.
+```
+
+In the basis `B`, the operator is therefore the emitted companion matrix.
+Its minimal and characteristic polynomials coincide:
+
+```text
+m_K(x) = chi_K(x)
+       = x^1509 - sum_{j=0}^{1508} c_j x^j.
+```
+
+Since `c_0=0` and `c_1!=0`, zero is a root of algebraic multiplicity exactly
+one. This is consistent with the one-dimensional kernel found in G3CD.
+
+## Affine lift
+
+Homogenize the selected inhomogeneous system with
+
+```text
+K_tilde = [[K,b],[0,0]],
+e_aff   = (0,...,0,1).
+```
+
+Its Krylov frame is
+
+```text
+[e_aff, K_tilde e_aff, ..., K_tilde^1509 e_aff]
+ = [e_aff, (b,0), (Kb,0), ..., (K^1508 b,0)].
+```
+
+Hence
+
+```text
+det(B_aff) = (-1)^1509 det(B) = -7 = 4 mod 11.
+```
+
+The full affine lift is cyclic in dimension `1510`, and
+
+```text
+m_Ktilde(x) = chi_Ktilde(x) = x m_K(x).
+```
+
+The zero-primary factor is exactly `x^2`. Equivalently, the affine companion
+form has one length-two zero-primary chain. This is the exact terminal
+algebraic signature of adjoining a source that pairs nontrivially with the
+unique G3CD cokernel.
+
+## Meaning of the result
+
+G3CJ does two useful things at once:
+
+1. It proves that the return to the full `1510`-dimensional affine carrier is
+   not an arbitrary fallback. The selected source reaches every terminal
+   B103 direction under repeated application of the complete operator.
+2. It replaces an unstructured dense terminal system by one exact cyclic
+   module, equivalently a full-dimensional companion recurrence.
+
+The second point is a canonical coordinate description, not dimensional
+reduction. A degree-1510 cyclic relation is not one physical degree of
+freedom, and it does not by itself integrate the varying path system.
+
+## Boundary of the theorem
+
+This packet proves terminal cyclicity only over `GF(11)` at `gamma=3` and
+family parameter `a=0`. It does not yet prove:
+
+- that the Krylov determinant remains nonzero over characteristic zero;
+- that a moving cyclic frame exists along the complete G3BJ arc;
+- that this moving frame is horizontal or has constant companion entries;
+- the required moving-frame connection term;
+- the start-endpoint chart;
+- integral Gauss-Manin transport, the B89 meridian word, or `beta_C`.
+
+Nonlinear reductions, time-dependent gauges and quotient constructions are
+not excluded. What is excluded is a smaller fixed linear invariant carrier
+containing the selected source at the certified terminal fiber.
+
+## Verification
+
+```text
+python build_ust_g3cj_selected_source_cyclic_full_carrier.py
+python verify_ust_g3cj_selected_source_cyclic_full_carrier.py
+```
+
+The canonical packet is
+`state/ust_g3cj_selected_source_cyclic_full_carrier.packet.json`.

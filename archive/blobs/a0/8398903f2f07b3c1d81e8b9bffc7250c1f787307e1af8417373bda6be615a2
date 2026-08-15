@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Execute the selected-source first-jet correction through H02/H11/H20."""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3cr"
+G3CQ = ROOT / "state" / "ust_g3cq_selected_source_transform_defect.packet.json"
+ASSEMBLER = ROOT / "assemble_ust_g3cr_selected_source_recursive_first_jet.py"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def run(arguments: list[str], cwd: Path, timeout: float | None = None) -> None:
+    print("RUN " + " ".join(arguments), flush=True)
+    subprocess.run(arguments, cwd=cwd, check=True, timeout=timeout)
+
+
+def solved(output: Path, log: Path) -> bool:
+    return output.is_file() and log.is_file() and "SUCCESS" in log.read_text(encoding="utf-8")
+
+
+def solve(
+    solver: Path,
+    mld: Path,
+    target: str,
+    rhs: Path,
+    output: Path,
+    log: Path,
+    timeout: float,
+    resume: bool,
+) -> None:
+    if resume and solved(output, log):
+        print(f"CHECKPOINT {target} coordinate solve existing: {output.name}", flush=True)
+        return
+    run(
+        [
+            sys.executable,
+            str(solver),
+            "--target",
+            target,
+            "--rhs",
+            str(rhs),
+            "--output",
+            str(output),
+            "--log",
+            str(log),
+            "--timeout",
+            str(timeout),
+            "--progress-seconds",
+            "5",
+        ],
+        cwd=mld,
+        timeout=timeout + 300,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout-per-solve", type=float, default=7200.0)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout_per_solve > 0, "positive solve timeout")
+    require(G3CQ.is_file(), "G3CQ packet")
+
+    mld = source_runtime.resolve_mld()
+    solver = mld / "run_q79_eta9_original_jacobian_coordinate_solve.py"
+    divergence = mld / "build_q79_eta9_recursive_divergence_from_coordinates.py"
+    require(solver.is_file() and divergence.is_file(), "MLD recursive tools")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+
+    h02_coordinates = EVIDENCE / "g3cr_H02.coordinates.cscbin"
+    h02_log = EVIDENCE / "g3cr_H02.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H02",
+        ROOT / "evidence" / "ust_g3cq" / "selected_source_correction_H02_ambient.rhs.cscbin",
+        h02_coordinates,
+        h02_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    run(
+        [
+            sys.executable,
+            str(divergence),
+            "--source",
+            "H02",
+            "--coordinates",
+            str(h02_coordinates),
+            "--output-prefix",
+            str(EVIDENCE / "g3cr_recursive_H11_ambient"),
+        ],
+        cwd=mld,
+    )
+
+    h11_coordinates = EVIDENCE / "g3cr_H11.coordinates.cscbin"
+    h11_log = EVIDENCE / "g3cr_H11.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H11",
+        EVIDENCE / "g3cr_recursive_H11_ambient.rhs.cscbin",
+        h11_coordinates,
+        h11_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    run(
+        [
+            sys.executable,
+            str(divergence),
+            "--source",
+            "H11",
+            "--coordinates",
+            str(h11_coordinates),
+            "--output-prefix",
+            str(EVIDENCE / "g3cr_recursive_H20_ambient"),
+        ],
+        cwd=mld,
+    )
+
+    h20_coordinates = EVIDENCE / "g3cr_H20.coordinates.cscbin"
+    h20_log = EVIDENCE / "g3cr_H20.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H20",
+        EVIDENCE / "g3cr_recursive_H20_ambient.rhs.cscbin",
+        h20_coordinates,
+        h20_log,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    run([sys.executable, str(ASSEMBLER)], cwd=ROOT, timeout=7200)
+    print("UST.G3CR selected-source recursive first jet run: PASS", flush=True)
+
+
+if __name__ == "__main__":
+    main()

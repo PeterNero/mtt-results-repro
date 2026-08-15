@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Compute the selected Cayley ordinary top Cox piece from its leading ideal."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass, field
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+BASIS_RESULT = ROOT / "state" / "ust_g3al_selected_cayley_basis.result.json"
+EXPORT_SCRIPT = ROOT / "state" / "ust_g3ap_selected_cayley_leading_exponents.sing"
+RAW_OUTPUT = ROOT / "state" / "ust_g3ap_selected_cayley_leading_exponents.singular.out"
+OUT = ROOT / "state" / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+VARIABLES = ("x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s")
+BASE_INDICES = (3, 4, 5, 6, 0, 1, 2)
+TARGET_COX_DEGREE = (18, 2, 2)
+EXPECTED_TOTAL_MONOMIALS = 174865
+EXPECTED_SOCLE = (0, 0, 0, 12, 0, 0, 4, 0, 0, 2)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@dataclass
+class DominanceTrie:
+    children: dict[int, "DominanceTrie"] = field(default_factory=dict)
+    terminal: bool = False
+
+    def insert(self, point: tuple[int, ...], depth: int = 0) -> None:
+        if depth == len(point):
+            self.terminal = True
+            return
+        self.children.setdefault(point[depth], DominanceTrie()).insert(point, depth + 1)
+
+    def has_divisor(self, point: tuple[int, ...], depth: int = 0) -> bool:
+        if self.terminal:
+            return True
+        if depth == len(point):
+            return False
+        return any(
+            child.has_divisor(point, depth + 1)
+            for exponent, child in self.children.items()
+            if exponent <= point[depth]
+        )
+
+
+def parse_exponents(output: str) -> list[tuple[int, ...]]:
+    count = re.search(r"^G3AP_LEADING_EXPONENT_COUNT=(\d+)$", output, re.MULTILINE)
+    require(count is not None, "leading exponent count")
+    require("G3AP_LEADING_EXPONENT_EXPORT_PASS" in output, "export pass")
+    values = [
+        tuple(int(item) for item in match.group(1).split(","))
+        for match in re.finditer(
+            r"^G3AP_LEADING_EXPONENT_\d+=([0-9,]+)$", output, re.MULTILINE
+        )
+    ]
+    require(len(values) == int(count.group(1)), "complete exponent export")
+    require(all(len(value) == len(VARIABLES) for value in values), "ten exponents")
+    return values
+
+
+def minimal_leaders(
+    exponents: list[tuple[int, ...]], fiber: tuple[int, int, int]
+) -> tuple[DominanceTrie, int, int]:
+    projected = {
+        tuple(exponent[index] for index in BASE_INDICES)
+        for exponent in exponents
+        if all(exponent[7 + offset] <= fiber[offset] for offset in range(3))
+    }
+    trie = DominanceTrie()
+    minimal = 0
+    for point in sorted(projected, key=lambda item: (sum(item), item)):
+        if not trie.has_divisor(point):
+            trie.insert(point)
+            minimal += 1
+    return trie, len(projected), minimal
+
+
+def enumerate_top(
+    exponents: list[tuple[int, ...]],
+) -> tuple[list[tuple[int, ...]], dict[str, dict[str, int]]]:
+    standards = []
+    sectors = {}
+    for u_power in range(3):
+        for v_power in range(3 - u_power):
+            s_power = 2 - u_power - v_power
+            trie, projected, minimal = minimal_leaders(
+                exponents, (u_power, v_power, s_power)
+            )
+            h_degree = 18 + 6 * u_power + 9 * s_power
+            l_degree = 2 + 3 * v_power + s_power
+            total = 0
+            standard_count = 0
+            for w_power in range(h_degree // 3 + 1):
+                xyz_degree = h_degree - 3 * w_power
+                for x_power in range(xyz_degree + 1):
+                    for y_power in range(xyz_degree - x_power + 1):
+                        z_power = xyz_degree - x_power - y_power
+                        for t0_power in range(l_degree + 1):
+                            for t1_power in range(l_degree - t0_power + 1):
+                                t2_power = l_degree - t0_power - t1_power
+                                exponent = (
+                                    x_power, y_power, z_power, w_power,
+                                    t0_power, t1_power, t2_power,
+                                    u_power, v_power, s_power,
+                                )
+                                total += 1
+                                base_point = tuple(exponent[index] for index in BASE_INDICES)
+                                if not trie.has_divisor(base_point):
+                                    standards.append(exponent)
+                                    standard_count += 1
+            sectors[f"u{u_power}_v{v_power}_s{s_power}"] = {
+                "H_base_degree": h_degree,
+                "L_base_degree": l_degree,
+                "enumerated_monomials": total,
+                "applicable_projected_leading_monomials": projected,
+                "minimal_projected_leading_monomials": minimal,
+                "standard_monomials": standard_count,
+            }
+    return standards, sectors
+
+
+def monomial(exponent: tuple[int, ...]) -> str:
+    terms = []
+    for name, power in zip(VARIABLES, exponent):
+        if power == 1:
+            terms.append(name)
+        elif power > 1:
+            terms.append(f"{name}^{power}")
+    return "*".join(terms) if terms else "1"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    args = parser.parse_args()
+    basis = json.loads(BASIS_RESULT.read_text(encoding="ascii"))
+    require(basis["passed"] is True and basis["cache"] is not None, "selected basis")
+    cache = ROOT / basis["cache"]["path"]
+    require(cache.is_file() and sha256(cache) == basis["cache"]["sha256"], "basis cache")
+    cache_relative = str(cache.relative_to(ROOT)).replace("\\", "/")
+    script = f'''ring r=(101,g),(x,y,z,w,t0,t1,t2,u,v,s),wp(1,1,1,3,1,1,1,6,9,2);
+minpoly=64+16*g^1+33*g^2+44*g^3+89*g^4+24*g^5+g^6;
+def cachedBasis=read("ssi:r {cache_relative}");
+ideal G=cachedBasis;
+attrib(G,"isSB",1);
+int i;
+print("G3AP_LEADING_EXPONENT_COUNT="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{ print("G3AP_LEADING_EXPONENT_"+string(i)+"="+string(leadexp(G[i]))); }}
+print("G3AP_LEADING_EXPONENT_EXPORT_PASS");
+quit;
+'''
+    EXPORT_SCRIPT.write_text(script, encoding="ascii")
+    completed = subprocess.run(
+        singular_command(ROOT, EXPORT_SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    RAW_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "leading exponent export")
+    exponents = parse_exponents(completed.stdout)
+    standards, sectors = enumerate_top(exponents)
+    total = sum(value["enumerated_monomials"] for value in sectors.values())
+    require(total == EXPECTED_TOTAL_MONOMIALS, "complete Cox-degree enumeration")
+    require(standards == [EXPECTED_SOCLE], "unique selected socle")
+    checks = {
+        "selected_standard_basis_cache_is_hash_current": True,
+        "every_leading_exponent_is_exported_from_that_cache": True,
+        "all_174865_Cox_degree_18_2_2_monomials_are_enumerated": True,
+        "standard_monomials_are_decided_by_exact_leading_ideal_divisibility": True,
+        "the_selected_ordinary_top_piece_has_dimension_one": True,
+        "its_unique_basis_is_w12_t2_4_s2": True,
+        "no_GF11_leading_monomial_is_imported": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+        "date": "2026-08-09",
+        "theorem_id": "UST.G3AP",
+        "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+        "inputs": {
+            "basis_result": {"path": str(BASIS_RESULT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(BASIS_RESULT)},
+            "basis_cache": basis["cache"],
+        },
+        "leading_ideal": {
+            "basis_size": len(exponents),
+            "export_script": {"path": str(EXPORT_SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(EXPORT_SCRIPT)},
+            "raw_output": {"path": str(RAW_OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(RAW_OUTPUT)},
+        },
+        "ordinary_top_piece": {
+            "Cox_degree": list(TARGET_COX_DEGREE),
+            "scalar_weight": 44,
+            "enumerated_monomials": total,
+            "dimension": len(standards),
+            "basis": [monomial(value) for value in standards],
+            "basis_exponent_vectors": [list(value) for value in standards],
+            "fiber_sectors": sectors,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_toric_R1_survival_without_G3AO": False,
+            "claims_characteristic_zero_rank_promotion": False,
+            "claims_beta_C_is_computed": False,
+        },
+        "next_required_object": "Combine the selected one-dimensional top line with G3AO toric regularity and the G3AN unit minor to promote the same-carrier response over a characteristic-zero lift in the G3AJ residue ball.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"UST.G3AP selected ordinary top line: PASS basis={len(exponents)} "
+        f"Cox_monomials={total} socle={monomial(EXPECTED_SOCLE)}"
+    )
+
+
+if __name__ == "__main__":
+    main()

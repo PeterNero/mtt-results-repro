@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Verify the exact SBA-warm/Hilbert-guided direct G3AP setup."""
+
+from __future__ import annotations
+
+import build_ust_g3ap_hmajor_ltrunc_hilbert_hint as hint_builder
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_hedge as sba
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_direct_ltrunc_sba_warm_hilbert_hedge as warm
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+import verify_ust_g3ap_hmajor_direct_ltrunc_routes as hilbert_routes
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def main() -> None:
+    source = warm.SOURCE.read_text(encoding="ascii")
+    hint_packet, hint = hint_builder.load_hint()
+    require(
+        hint_packet["status"] == "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE",
+        "Hilbert hint tier",
+    )
+    expected = {"graph_a": (619, 8687), "graph_b": (1383, 6853)}
+    for label, (expected_reducers, expected_upper) in expected.items():
+        order = permuted.PERMUTATIONS[label]
+        seed = sba.paths(label)
+        require(
+            all(seed[key].is_file() for key in ("script", "output", "module_cache")),
+            f"{label} SBA artifacts",
+        )
+        require(
+            seed["script"].read_text(encoding="ascii")
+            == sba.candidate_script(source, label, order, seed["module_cache"]),
+            f"{label} SBA script reconstruction",
+        )
+        seed_raw = seed["output"].read_text(encoding="utf-8")
+        require(
+            f"{sba.marker(label)}_LEADER_EXPORT_PASS" in seed_raw,
+            f"{label} SBA marker",
+        )
+        require(
+            not any(line.lstrip().startswith("?") for line in seed_raw.splitlines()),
+            f"{label} SBA execution errors",
+        )
+        seed_new = sba.parse_module(seed_raw, label)
+        _, new_to_old = permuted.position_maps(order)
+        seed_old = [
+            (new_to_old[component], exponent) for component, exponent in seed_new
+        ]
+        seed_standards, seed_sectors = fiber2.enumerate_target(seed_old)
+        require(
+            len(seed_new) == expected_reducers
+            and len(seed_standards) == expected_upper
+            and sum(
+                sector["enumerated_monomials"] for sector in seed_sectors.values()
+            )
+            == fiber2.EXPECTED_TOTAL,
+            f"{label} replayed SBA diagnostic upper bound",
+        )
+
+        route = warm.paths(label)
+        script = warm.candidate_script(
+            source,
+            label,
+            order,
+            seed["module_cache"],
+            route["module_cache"],
+            hint,
+        )
+        require(warm.direct.MODULE_RING in script, f"{label} direct polynomial module")
+        require("qring q=" not in script, f"{label} no quotient-ring premise")
+        cache_read = script.index('def cachedSBA=read("ssi:r ')
+        source_rebuild = script.index("poly K=w^2-F6;")
+        module_build = script.index("module MT=")
+        require(
+            cache_read < source_rebuild < module_build,
+            f"{label} cache ring restored before selected source reconstruction",
+        )
+        require(
+            "module Warm=MT,Seed;" in script,
+            f"{label} selected module plus SBA seed",
+        )
+        require(
+            "module G=std(Warm,truncatedHilbert,selectedWeights);" in script,
+            f"{label} ordinary Hilbert-guided continuation",
+        )
+        require(
+            str(seed["module_cache"].relative_to(warm.ROOT)).replace("\\", "/")
+            in script,
+            f"{label} hash-addressable SBA seed path",
+        )
+        require(
+            f"degBound={warm.TARGET_SCALAR_DEGREE};" in script,
+            f"{label} target bound",
+        )
+        require(script.count("*gen(") >= 204, f"{label} complete selected input")
+    hilbert_routes.verify_loader_contract("sba_warm_hilbert")
+    print(
+        "UST.G3AP direct H-major SBA-warm/Hilbert route: PASS "
+        "routes=2 selected=39 truncators=165 "
+        "SBA_seeds=619/1383 seed_upper=8687/6853 "
+        f"target={fiber2.EXPECTED_TOTAL} "
+        "proof_status=CANDIDATE_ONLY"
+    )
+
+
+if __name__ == "__main__":
+    main()

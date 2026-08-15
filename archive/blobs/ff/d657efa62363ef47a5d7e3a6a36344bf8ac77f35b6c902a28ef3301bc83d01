@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""Compute the exact cancelled-H02 Riccati source-jet target at GF(11).
+
+The H02 block of X=J^-1 L is invertible at the selected good fiber.  We use
+that fact to combine the X and y Riccati equations so that the lower graph
+vector has no H02 component.  Its actual derivative therefore needs only the
+already available H20 and H11 Griffiths-Dwork chains; the open pole-seven
+derivative of the H02 connection block is not used.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import struct
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3ce_hodge_schur_affine_reduction as schur_linear
+import probe_ust_g3bm_correction_toric_return_chunk as source_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3ch"
+OUT = ROOT / "state" / "ust_g3ch_cancelled_h02_riccati_source_jet.packet.json"
+PRIME = 11
+
+G3CD = ROOT / "state" / "ust_g3cd_correction_full_affine_operator.packet.json"
+G3CE = ROOT / "state" / "ust_g3ce_hodge_schur_affine_reduction.packet.json"
+G3CG = ROOT / "state" / "ust_g3cg_schur_riccati_transport_cutset.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def upstream_record(path: Path, repository: Path) -> dict[str, Any]:
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc().astype(np.int64)
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result.astype(np.uint8)
+
+
+def column(matrix: sparse.spmatrix, values: np.ndarray) -> sparse.csc_matrix:
+    vector = np.asarray(values, dtype=np.int64).reshape(-1, 1) % PRIME
+    return normalize(matrix.astype(np.int64) @ sparse.csc_matrix(vector))
+
+
+def write_coordinates(
+    path: Path, matrix: sparse.spmatrix, quotient_units: int, image_rank: int
+) -> None:
+    payload = normalize(matrix)
+    require(payload.shape[0] == quotient_units + image_rank, "coordinate row count")
+    with path.open("wb") as handle:
+        handle.write(b"MTTCOO1\0")
+        handle.write(
+            struct.pack(
+                "<5Q",
+                payload.shape[0],
+                payload.shape[1],
+                payload.nnz,
+                quotient_units,
+                image_rank,
+            )
+        )
+        handle.write(np.asarray(payload.indptr, dtype="<u8").tobytes(order="C"))
+        handle.write(np.asarray(payload.indices, dtype="<u4").tobytes(order="C"))
+        handle.write(np.asarray(payload.data, dtype=np.uint8).tobytes(order="C"))
+
+
+def run(arguments: list[str], cwd: Path, timeout: float) -> None:
+    print("RUN " + " ".join(arguments), flush=True)
+    subprocess.run(arguments, cwd=cwd, check=True, timeout=timeout)
+
+
+def solve(
+    solver: Path,
+    mld: Path,
+    target: str,
+    rhs: Path,
+    output: Path,
+    log: Path,
+    timeout: float,
+    resume: bool,
+) -> None:
+    stamp = output.with_suffix(output.suffix + ".rhs.sha256")
+    reusable = (
+        resume
+        and output.is_file()
+        and log.is_file()
+        and stamp.is_file()
+        and "SUCCESS" in log.read_text(encoding="utf-8")
+        and stamp.read_text(encoding="ascii").strip() == sha256(rhs)
+    )
+    if reusable:
+        print(f"CHECKPOINT {output.name}", flush=True)
+        return
+    run(
+        [
+            sys.executable,
+            str(solver),
+            "--target",
+            target,
+            "--rhs",
+            str(rhs),
+            "--output",
+            str(output),
+            "--log",
+            str(log),
+            "--timeout",
+            str(timeout),
+        ],
+        cwd=mld,
+        timeout=timeout + 300,
+    )
+    stamp.write_text(sha256(rhs) + "\n", encoding="ascii")
+
+
+def exact_difference_nonzeros(left: np.ndarray, right: np.ndarray) -> int:
+    return int(np.count_nonzero((left.astype(np.int64) - right.astype(np.int64)) % PRIME))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout-per-solve", type=float, default=7200.0)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout_per_solve > 0, "positive solve timeout")
+
+    mld = source_runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import verify_q79_eta9_original_jacobian_coordinate_solver as solver_io
+
+    solver = mld / "run_q79_eta9_original_jacobian_coordinate_solve.py"
+    divergence = mld / "build_q79_eta9_recursive_divergence_from_coordinates.py"
+    require(solver.is_file() and divergence.is_file(), "frozen coordinate tools")
+
+    g3cd = load(G3CD)
+    g3ce = load(G3CE)
+    g3cg = load(G3CG)
+    for label, packet in (("G3CD", g3cd), ("G3CE", g3ce), ("G3CG", g3cg)):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    connection_path = ROOT / g3cd["correction_operator"]["dense_uint8"]["path"]
+    connection = np.fromfile(connection_path, dtype=np.uint8).reshape(1509, 1509)
+    J = connection[248:, 248:].astype(np.int64)
+
+    x_path = ROOT / g3ce["block_decomposition"]["lower_response"]["path"]
+    y_path = ROOT / g3ce["block_decomposition"]["lower_selected_source_solution"]["path"]
+    s_path = ROOT / g3ce["schur_operator"]["operator"]["path"]
+    beff_path = ROOT / g3ce["effective_affine_source"]["source"]["path"]
+    X = np.load(x_path, allow_pickle=False).astype(np.int64)
+    y = np.load(y_path, allow_pickle=False).astype(np.int64)
+    S = np.load(s_path, allow_pickle=False).astype(np.int64)
+    b_eff = np.load(beff_path, allow_pickle=False).astype(np.int64)
+    require(X.shape == (1261, 248) and y.shape == (1261,), "Schur response shapes")
+
+    # X_H02 is a selected 248-square unit, so v is unique and w_H02 vanishes.
+    v_matrix, det_x02 = schur_linear.solve_mod_prime(
+        X[1013:].astype(np.uint8), y[1013:].reshape(-1, 1).astype(np.uint8)
+    )
+    v = v_matrix[:, 0].astype(np.int64)
+    w = (X @ v - y) % PRIME
+    require(det_x02 != 0, "X H02 determinant")
+    require(not np.any(w[1013:]), "cancelled H02 graph component")
+    w_h11 = w[:1013]
+
+    # Aggregate the already solved base preimages for the two needed directions.
+    h20_h11, q_h11, image_h11 = solver_io.read_coordinates(
+        ROOT / "evidence" / "ust_g3cd" / "g3cd_H20_H11.coordinates.cscbin"
+    )
+    h11_h02, q_h02, image_h02 = solver_io.read_coordinates(
+        ROOT / "evidence" / "ust_g3cd" / "g3cd_H11_H02.coordinates.cscbin"
+    )
+    h11_h11, q_h11_2, image_h11_2 = solver_io.read_coordinates(
+        ROOT / "evidence" / "ust_g3cd" / "g3cd_H11_H11.coordinates.cscbin"
+    )
+    require((q_h11, image_h11) == (1013, 4426), "H11 coordinate split")
+    require((q_h02, image_h02) == (248, 42458), "H02 coordinate split")
+    require((q_h11_2, image_h11_2) == (1013, 4426), "recursive H11 split")
+    base_l_h11 = column(h20_h11, v)
+    base_j_h02 = column(h11_h02, w_h11)
+    base_j_h11 = column(h11_h11, w_h11)
+
+    update_h11_path = ROOT / "evidence" / "ust_g3bk" / "g3bk_correction_family_update_H11.npz"
+    update_h02_path = ROOT / "evidence" / "ust_g3bk" / "g3bk_correction_family_update_H02.npz"
+    update_h11 = sparse.load_npz(update_h11_path).tocsc()
+    update_h02 = sparse.load_npz(update_h02_path).tocsc()
+    require(update_h11.shape == (5439, 4426), "H11 affine update shape")
+    require(update_h02.shape == (42706, 42458), "H02 affine update shape")
+
+    # First differentiate the H11-input direct solve in the H02 chart.
+    rhs_h02_prime = normalize(
+        -(update_h02.astype(np.int64) @ base_j_h02[q_h02:, :].astype(np.int64))
+    )
+    rhs_h02_path = EVIDENCE / "g3ch_Jw_H02_prime.rhs.cscbin"
+    solver_io.write_rhs(rhs_h02_path, rhs_h02_prime)
+    coord_h02_prime_path = EVIDENCE / "g3ch_Jw_H02_prime.coordinates.cscbin"
+    log_h02_path = EVIDENCE / "g3ch_Jw_H02_prime.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H02",
+        rhs_h02_path,
+        coord_h02_prime_path,
+        log_h02_path,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    coord_h02_prime, derivative_q_h02, derivative_image_h02 = solver_io.read_coordinates(
+        coord_h02_prime_path
+    )
+    require((derivative_q_h02, derivative_image_h02) == (248, 42458), "H02 derivative split")
+
+    # Divergence is linear in the image preimage, so applying the frozen exact
+    # divergence map to c' gives the derivative of the lower-pole RHS.
+    divergence_prefix = EVIDENCE / "g3ch_Jw_H02_prime_divergence_H11"
+    run(
+        [
+            sys.executable,
+            str(divergence),
+            "--source",
+            "H02",
+            "--coordinates",
+            str(coord_h02_prime_path),
+            "--output-prefix",
+            str(divergence_prefix),
+        ],
+        cwd=mld,
+        timeout=1800,
+    )
+    divergence_h11 = sparse.load_npz(divergence_prefix.with_suffix(".npz")).tocsc()
+
+    # Differentiate the H20-input direct H11 solve and the recursive H11 solve
+    # for Jw together, reusing one frozen factorization invocation.
+    rhs_l_h11_prime = normalize(
+        -(update_h11.astype(np.int64) @ base_l_h11[q_h11:, :].astype(np.int64))
+    )
+    rhs_j_h11_prime = normalize(
+        divergence_h11.astype(np.int64)
+        - update_h11.astype(np.int64) @ base_j_h11[q_h11_2:, :].astype(np.int64)
+    )
+    rhs_h11_prime = normalize(sparse.hstack([rhs_l_h11_prime, rhs_j_h11_prime], format="csc"))
+    rhs_h11_path = EVIDENCE / "g3ch_Lv_Jw_H11_prime.rhs.cscbin"
+    solver_io.write_rhs(rhs_h11_path, rhs_h11_prime)
+    coord_h11_prime_path = EVIDENCE / "g3ch_Lv_Jw_H11_prime.coordinates.cscbin"
+    log_h11_path = EVIDENCE / "g3ch_Lv_Jw_H11_prime.coordinates.solver.out"
+    solve(
+        solver,
+        mld,
+        "H11",
+        rhs_h11_path,
+        coord_h11_prime_path,
+        log_h11_path,
+        args.timeout_per_solve,
+        args.resume,
+    )
+    coord_h11_prime, derivative_q_h11, derivative_image_h11 = solver_io.read_coordinates(
+        coord_h11_prime_path
+    )
+    require((derivative_q_h11, derivative_image_h11) == (1013, 4426), "H11 derivative split")
+    require(coord_h11_prime.shape[1] == 2, "two H11 derivative columns")
+
+    l_prime_v = np.concatenate(
+        [coord_h11_prime[:1013, 0].toarray().ravel(), np.zeros(248, dtype=np.uint8)]
+    ).astype(np.int64)
+    j_prime_w = np.concatenate(
+        [
+            coord_h11_prime[:1013, 1].toarray().ravel(),
+            coord_h02_prime[:248, 0].toarray().ravel(),
+        ]
+    ).astype(np.int64)
+
+    required_w_prime = X @ ((b_eff - S @ v) % PRIME) % PRIME
+    required_b_prime = (l_prime_v - j_prime_w - J @ required_w_prime) % PRIME
+    fixed_source_residual = exact_difference_nonzeros(required_b_prime, np.zeros(1261, dtype=np.uint8))
+    require(fixed_source_residual > 0, "fixed-coordinate source jet is rejected")
+
+    v_path = EVIDENCE / "g3ch_unique_H20_cancellation_vector.mod11.npy"
+    w_path = EVIDENCE / "g3ch_cancelled_H02_lower_graph_vector.mod11.npy"
+    l_prime_path = EVIDENCE / "g3ch_actual_L_prime_v.mod11.npy"
+    j_prime_path = EVIDENCE / "g3ch_actual_J_prime_w.mod11.npy"
+    w_prime_path = EVIDENCE / "g3ch_required_w_prime.mod11.npy"
+    b_prime_path = EVIDENCE / "g3ch_unique_required_source_prime.mod11.npy"
+    for path, array in (
+        (v_path, v),
+        (w_path, w),
+        (l_prime_path, l_prime_v),
+        (j_prime_path, j_prime_w),
+        (w_prime_path, required_w_prime),
+        (b_prime_path, required_b_prime),
+    ):
+        np.save(path, np.asarray(array, dtype=np.uint8), allow_pickle=False)
+
+    identity_residual = (
+        J @ required_w_prime + j_prime_w + required_b_prime - l_prime_v
+    ) % PRIME
+    require(not np.any(identity_residual), "combined differentiated identity")
+
+    checks = {
+        "G3CD_G3CE_and_G3CG_are_hash_bound_and_passing": True,
+        "the_H02_block_of_X_is_invertible_at_the_selected_good_fiber": True,
+        "the_unique_cancellation_vector_v_is_solved_exactly": True,
+        "w_equals_Xv_minus_y_and_has_identically_zero_H02_component": True,
+        "only_H20_and_H11_connection_inputs_are_differentiated": True,
+        "every_affine_chart_derivative_uses_c_prime_equals_M0_inverse_of_r_prime_minus_M1c": True,
+        "the_recursive_H02_to_H11_divergence_is_differentiated_linearly": True,
+        "the_actual_L_prime_v_and_J_prime_w_vectors_are_emitted": True,
+        "the_unique_source_jet_required_by_the_combined_Riccati_identity_is_emitted": True,
+        "the_fixed_coordinate_source_jet_zero_fails_the_required_identity": True,
+        "the_combined_identity_reconstructs_with_zero_residual_using_the_required_source_jet": True,
+        "no_H02_connection_derivative_or_pole_seven_return_is_assumed": True,
+    }
+    require(all(checks.values()), "G3CH checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3ch-cancelled-h02-riccati-source-jet.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CH",
+        "status": "CLOSED_EXACT_GF11_CANCELLED_H02_RICCATI_SOURCE_JET_TARGET_FIXED_COORDINATE_SOURCE_REJECTED_SELECTED_SOURCE_JET_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "field": "GF(11) at gamma=3 and terminal family parameter a=0",
+        "inputs": {
+            "G3CD": record(G3CD),
+            "G3CE": record(G3CE),
+            "G3CG": record(G3CG),
+            "H11_family_update": record(update_h11_path),
+            "H02_family_update": record(update_h02_path),
+            "coordinate_solver": upstream_record(solver, mld),
+            "recursive_divergence_builder": upstream_record(divergence, mld),
+        },
+        "cancellation": {
+            "equations": [
+                "X_H02 v = y_H02",
+                "w = X v - y",
+                "w_H02 = 0",
+            ],
+            "determinant_X_H02_mod11": det_x02,
+            "v_nonzero_entries": int(np.count_nonzero(v)),
+            "w_H11_nonzero_entries": int(np.count_nonzero(w_h11)),
+            "w_H02_nonzero_entries": int(np.count_nonzero(w[1013:])),
+            "v": record(v_path),
+            "w": record(w_path),
+        },
+        "differentiated_connection": {
+            "coordinate_rule": "For M(a)c(a)=r(a), c'(0)=M(0)^-1(r'(0)-M'(0)c(0)).",
+            "actual_L_prime_v_nonzero_entries": int(np.count_nonzero(l_prime_v)),
+            "actual_J_prime_w_nonzero_entries": int(np.count_nonzero(j_prime_w)),
+            "actual_L_prime_v": record(l_prime_path),
+            "actual_J_prime_w": record(j_prime_path),
+            "H02_derivative_coordinates": record(coord_h02_prime_path),
+            "H11_derivative_coordinates": record(coord_h11_prime_path),
+        },
+        "source_jet_cutset": {
+            "combined_Riccati_requirement": "w' = X (b_eff - S v)",
+            "differentiated_static_identity": "J w' + J' w = L' v - b_lower'",
+            "unique_required_source_jet_formula": "b_lower' = L'v - J'w - J X(b_eff-Sv)",
+            "required_w_prime_nonzero_entries": int(np.count_nonzero(required_w_prime)),
+            "required_source_jet_nonzero_entries": int(np.count_nonzero(required_b_prime)),
+            "required_source_jet_H11_nonzero_entries": int(np.count_nonzero(required_b_prime[:1013])),
+            "required_source_jet_H02_nonzero_entries": int(np.count_nonzero(required_b_prime[1013:])),
+            "fixed_coordinate_source_jet_residual_nonzeros": fixed_source_residual,
+            "required_w_prime": record(w_prime_path),
+            "unique_required_source_jet": record(b_prime_path),
+            "interpretation": "Any selected path source compatible with the 249-dimensional Schur-Riccati transport must have exactly this terminal lower-source jet. The constant B103-coordinate extension has zero jet and is therefore incompatible. A geometrically selected nonconstant source jet must now be computed and compared; no such selection is inferred here.",
+        },
+        "execution": {
+            "H02_derivative_RHS": record(rhs_h02_path),
+            "H02_solver_log": record(log_h02_path),
+            "H02_derivative_divergence": record(divergence_prefix.with_suffix(".packet.json")),
+            "H11_derivative_RHS": record(rhs_h11_path),
+            "H11_solver_log": record(log_h11_path),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_full_X_prime_or_y_prime_is_computed": False,
+            "claims_the_open_H02_connection_derivative_is_computed": False,
+            "claims_the_required_source_jet_is_geometrically_selected": False,
+            "claims_the_249_dimensional_transport_is_valid": False,
+            "claims_characteristic_zero_or_pathwise_promotion": False,
+        },
+        "theorem": {
+            "name": "ustG3chCancelledH02RiccatiSourceJet",
+            "tier": "CLOSED_EXACT_GOOD_FIBER_NECESSARY_SOURCE_JET_CUTSET",
+            "statement": "At the selected good fiber, X_H02 is invertible. The unique v satisfying X_H02 v=y_H02 makes w=Xv-y an H11-only lower graph vector. Differentiating its H20/H11 reduction chains exactly determines L'v and J'w without any H02-connection or pole-seven derivative. Consequently the combined Schur-Riccati identity determines one unique 1261-entry lower-source jet. The emitted target is nonzero, so the constant B103-coordinate source extension is rigorously excluded.",
+        },
+        "next_required_object": "Compute the terminal jet of the geometrically selected G3CA source section in the same B103 frame and compare it entrywise with the emitted unique required source jet. A mismatch rejects the 249-dimensional Schur transport; equality is necessary but still requires the remaining independent Riccati jet and pathwise identities.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print("UST.G3CH cancelled-H02 Riccati source-jet verifier: PASS")
+    print(
+        f"det_X02={det_x02} w_H02_nnz=0 "
+        f"required_source_jet_nnz={np.count_nonzero(required_b_prime)} "
+        f"fixed_source_residual={fixed_source_residual}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

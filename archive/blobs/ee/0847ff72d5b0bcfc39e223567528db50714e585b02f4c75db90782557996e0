@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""Run an exact target-preserving L-truncated weighted G3AP hedge.
+
+For component ``j`` the target coefficient has a fixed L-degree.  Adding every
+monomial of L-degree one above that value to component ``j`` cannot change the
+target Cox piece, while it removes scalar-order detours with excessive L-degree.
+The emitted result is candidate evidence only until the truncation provenance
+and the independent lower/upper target squeeze are certified.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_predecessor_hilbert_hint as predecessor
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import run_ust_g3ap_selected_cayley_fiber2_qring_weighted_hilbert_hedge as weighted_hilbert
+import ust_g3ap_module_cache_recovery as cache_recovery
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+BASE_CACHE = weighted_hilbert.BASE_CACHE
+HINT_SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hint.sing"
+HINT_OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hint.singular.out"
+HINT_PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hint.packet.json"
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert.singular.out"
+MODULE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_degree254.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert.packet.json"
+RECOVERY_SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_leader_recovery.sing"
+RECOVERY_OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_leader_recovery.singular.out"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def compositions3(total: int):
+    for first in range(total + 1):
+        for second in range(total - first + 1):
+            yield first, second, total - first - second
+
+
+def monomial(exponent: tuple[int, ...]) -> str:
+    names = ("x", "y", "z", "w", "t0", "t1", "t2")
+    factors = []
+    for name, power in zip(names, exponent):
+        if power == 1:
+            factors.append(name)
+        elif power > 1:
+            factors.append(f"{name}^{power}")
+    return "*".join(factors) or "1"
+
+
+def truncation_generators() -> list[str]:
+    generators = []
+    for component, _, (_, l_degree), _ in fiber2.COMPONENTS:
+        for t0_power, t1_power, t2_power in compositions3(l_degree + 1):
+            term = monomial((0, 0, 0, 0, t0_power, t1_power, t2_power))
+            generators.append(f"{term}*gen({component})")
+    require(len(generators) == 165, "165 minimal L-truncation generators")
+    return generators
+
+
+def predecessor_leaders() -> list[tuple[int, tuple[int, ...]]]:
+    source = predecessor.DEFAULT_SOURCE
+    require(source.is_file() and sha256(source) == predecessor.SOURCE_SHA256, "predecessor hash")
+    return predecessor.induced_module_leaders(predecessor.parse_source(source))
+
+
+def hint_script(leaders: list[tuple[int, tuple[int, ...]]]) -> str:
+    generators = [
+        f"{monomial(exponent)}*gen({component})" for component, exponent in leaders
+    ] + truncation_generators()
+    shifts = ",".join(str(value) for value in weighted.COMPONENT_SHIFTS)
+    return f'''{weighted.WEIGHTED_MODULE_RING}
+module H=
+  {',\n  '.join(generators)};
+intvec componentShifts={shifts};
+attrib(H,"isHomog",componentShifts);
+attrib(H,"isSB",1);
+bigintvec truncatedHilbert=hilb(H,1);
+print("G3AP_F2_WLTRUNC_HINT_LEADERS="+string(size(H)));
+print("G3AP_F2_WLTRUNC_HINT_HILBERT="+string(truncatedHilbert));
+print("G3AP_F2_WLTRUNC_HINT_PASS");
+quit;
+'''
+
+
+def parse_hilbert(raw: str) -> list[int]:
+    match = re.search(
+        r"^G3AP_F2_WLTRUNC_HINT_HILBERT=([0-9, -]+)$",
+        raw,
+        re.MULTILINE,
+    )
+    require(match is not None, "L-truncated Hilbert numerator")
+    values = [int(value.strip()) for value in match.group(1).split(",")]
+    require(values and values[0] == 1, "normalized L-truncated Hilbert numerator")
+    return values
+
+
+def candidate_script(source: str, hilbert: list[int]) -> str:
+    before, after = qring.derivative_representatives()
+    generators = qring.derivative_generators() + truncation_generators()
+    shifts = ",".join(str(value) for value in weighted.COMPONENT_SHIFTS)
+    weights = ",".join(str(value) for value in weighted.BASE_WEIGHTS)
+    hint = ",".join(str(value) for value in hilbert)
+    base_relative = str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    module_relative = str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/")
+    return weighted.weighted_base_prefix(source) + f'''option(noredTail);
+{before}
+def cachedBase=read("ssi:r {base_relative}");
+ideal GI=cachedBase;
+attrib(GI,"isSB",1);
+int i;
+print("G3AP_F2_WLTRUNC_BASE_GB_SIZE="+string(size(GI)));
+for (i=1;i<=size(GI);i++)
+{{ print("G3AP_F2_WLTRUNC_BASE_LEADER_"+string(i)+"_EXP="+string(leadexp(GI[i]))); }}
+qring q=GI;
+{after}
+module MT=
+  {',\n  '.join(generators)};
+intvec componentShifts={shifts};
+attrib(MT,"isHomog",componentShifts);
+bigintvec truncatedHilbert={hint};
+intvec selectedWeights={weights};
+degBound={weighted.TARGET_SCALAR_DEGREE};
+module G=std(MT,truncatedHilbert,selectedWeights);
+print("G3AP_F2_WLTRUNC_BOUND="+string(degBound));
+print("G3AP_F2_WLTRUNC_MODULE_GENERATORS="+string(size(MT)));
+print("G3AP_F2_WLTRUNC_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("G3AP_F2_WLTRUNC_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("G3AP_F2_WLTRUNC_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {module_relative}",G);
+print("G3AP_F2_WLTRUNC_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_bases(raw: str):
+    return qring.parse_leaders(raw.replace("G3AP_F2_WLTRUNC_", "G3AP_F2_QRING_"))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--hint-timeout", type=int, default=1800)
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    parser.add_argument("--postprocess-existing", action="store_true")
+    args = parser.parse_args()
+    weighted.validate_grading()
+    require(BASE_CACHE.is_file() and BASE_CACHE.stat().st_size > 0, "weighted base cache")
+    leaders = predecessor_leaders()
+    if not args.postprocess_existing:
+        HINT_SCRIPT.write_text(hint_script(leaders), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {HINT_SCRIPT.relative_to(ROOT)}")
+        return
+    if args.postprocess_existing:
+        require(HINT_PACKET.is_file(), "existing L-truncated hint packet")
+        hint_packet = json.loads(HINT_PACKET.read_text(encoding="ascii"))
+        hilbert = [int(value) for value in hint_packet["hilbert_numerator"]]
+    else:
+        hint_completed = subprocess.run(
+            singular_command(ROOT, HINT_SCRIPT),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.hint_timeout,
+            check=False,
+        )
+        HINT_OUTPUT.write_text(hint_completed.stdout, encoding="utf-8")
+        require(hint_completed.returncode == 0, "L-truncated hint execution")
+        require("G3AP_F2_WLTRUNC_HINT_PASS" in hint_completed.stdout, "L-truncated hint pass")
+        hilbert = parse_hilbert(hint_completed.stdout)
+        hint_packet = {
+        "schema": "mtt.unified-source.g3ap-fiber2-weighted-ltrunc-hilbert-hint.v1",
+        "status": "ACCELERATION_HINT_AND_TARGET_PRESERVING_TRUNCATION_ONLY",
+        "predecessor": {
+            "sha256": predecessor.SOURCE_SHA256,
+            "source_repository_commit": predecessor.SOURCE_COMMIT,
+            "induced_module_leaders": len(leaders),
+        },
+        "truncation": {
+            "kind": "componentwise_L_degree_above_target",
+            "target_L_degrees": [entry[2][1] for entry in fiber2.COMPONENTS],
+            "minimal_monomial_generators": 165,
+            "target_piece_of_truncation_module_is_zero": True,
+        },
+        "hilbert_numerator": hilbert,
+        "script": {"path": str(HINT_SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(HINT_SCRIPT)},
+        "output": {"path": str(HINT_OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(HINT_OUTPUT)},
+        "guardrails": {
+            "claims_predecessor_flatness": False,
+            "claims_selected_G3AP_dimension": False,
+        },
+        }
+        HINT_PACKET.write_text(json.dumps(hint_packet, indent=2) + "\n", encoding="ascii")
+
+    source = SOURCE.read_text(encoding="ascii")
+    if not args.postprocess_existing:
+        SCRIPT.write_text(candidate_script(source, hilbert), encoding="ascii")
+    else:
+        require(SCRIPT.is_file(), "executed L-truncated script")
+    recovery_used = False
+    evidence_output = OUTPUT
+    if args.postprocess_existing:
+        require(OUTPUT.is_file(), "existing L-truncated output")
+        raw = OUTPUT.read_text(encoding="utf-8")
+        if "G3AP_F2_WLTRUNC_MODULE_LEADER_1_COMP=" not in raw:
+            raw = cache_recovery.recover(
+                source_path=SOURCE, base_cache=BASE_CACHE, module_cache=MODULE_CACHE,
+                marker="G3AP_F2_WLTRUNC", module_generator_count=186,
+                canonical_component=6, script_path=RECOVERY_SCRIPT,
+                output_path=RECOVERY_OUTPUT, timeout=args.timeout,
+            )
+            recovery_used = True
+            evidence_output = RECOVERY_OUTPUT
+        returncode = 0
+        elapsed_seconds = None
+    else:
+        MODULE_CACHE.unlink(missing_ok=True)
+        started = time.time()
+        completed = subprocess.run(
+            singular_command(ROOT, SCRIPT), cwd=ROOT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=args.timeout, check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+        elapsed_seconds = time.time() - started
+        OUTPUT.write_text(raw, encoding="utf-8")
+    require(returncode == 0, "weighted L-truncated execution")
+    require("G3AP_F2_WLTRUNC_LEADER_EXPORT_PASS" in raw, "weighted L-truncated pass")
+    require(MODULE_CACHE.is_file() and MODULE_CACHE.stat().st_size > 0, "weighted L-truncated cache")
+    base, module = parse_bases(raw)
+    standards, sectors = fiber2.enumerate_target(qring.combined_leaders(base, module))
+    weighted_hilbert.annotate_weighted_sectors(sectors)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(standards == [fiber2.EXPECTED_STANDARD], "candidate unique top standard")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-weighted-ltrunc-hilbert-candidate.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_REQUIRES_INDEPENDENT_TARGET_TRUNCATION_CERTIFICATION",
+        "inputs": {
+            "selected_source": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SOURCE)},
+            "weighted_base_cache": {"path": str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(BASE_CACHE), "bytes": BASE_CACHE.stat().st_size, "isSB_trust_attribute_stored": False},
+            "truncated_hint": {"path": str(HINT_PACKET.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(HINT_PACKET)},
+        },
+        "grading": json.loads(weighted.PACKET.read_text(encoding="ascii"))["grading"],
+        "truncation": hint_packet["truncation"],
+        "execution": {
+            "script": {"path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SCRIPT)},
+            "output": {"path": str(evidence_output.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(evidence_output)},
+            "original_execution_output": {"path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(OUTPUT)},
+            "leader_recovery_used": recovery_used,
+            "leader_recovery": None if not recovery_used else {"script": {"path": str(RECOVERY_SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(RECOVERY_SCRIPT)}, "output": {"path": str(RECOVERY_OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(RECOVERY_OUTPUT)}},
+            "returncode": returncode,
+            "elapsed_seconds": elapsed_seconds,
+            "base_basis_size": len(base),
+            "selected_derivative_generator_count": 21,
+            "truncation_generator_count": 165,
+            "candidate_basis_size_through_bound": len(module),
+            "candidate_module_cache": {"path": str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(MODULE_CACHE), "bytes": MODULE_CACHE.stat().st_size, "valid_through_weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE, "isSB_trust_attribute_stored": False},
+        },
+        "fiber_degree_two_module": {"base_quotient": "B/(K,E,C)", "components": [name for _, name, _, _ in fiber2.COMPONENTS], "sectors": sectors},
+        "candidate_top_piece": {"Cox_degree": [18, 2, 2], "weighted_scalar_degree": weighted.TARGET_SCALAR_DEGREE, "enumerated_monomials": total, "dimension_if_truncation_is_certified": 1, "basis_if_truncation_is_certified": ["w^12*t2^4*s^2"]},
+        "checks": {
+            "selected_source_is_hash_bound": True,
+            "the_21_exact_selected_derivative_generators_are_used": True,
+            "the_165_truncators_start_one_L_degree_above_each_component_target": True,
+            "the_truncation_module_has_zero_target_Cox_piece": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "candidate_leading_module_leaves_one_target_standard": True,
+        },
+        "guardrails": {
+            "claims_the_predecessor_hint_is_selected_evidence": False,
+            "claims_target_effective_reducers_are_certified": False,
+            "claims_G3AP_is_closed": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+        },
+        "next_required_object": "Certify Cox homogeneity and target-truncation provenance, then combine the target leading upper bound with G3AP.LOWER.",
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(f"G3AP weighted L-truncated Hilbert candidate: PASS module={len(module)} monomials={total} certification=OPEN")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,541 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <flint/flint.h>
+#include <flint/fmpq.h>
+#include <flint/fmpq_poly.h>
+#include <flint/fmpz.h>
+#include <flint/fmpz_poly.h>
+#include <flint/gr.h>
+#include <flint/gr_mat.h>
+#include <flint/nf.h>
+#include <flint/nf_elem.h>
+
+typedef struct
+{
+    nf_struct *nf;
+    char *var;
+} ust_gr_nf_ctx_struct;
+
+static nf_struct *ust_nf_ctx(gr_ctx_t ctx)
+{
+    return ((ust_gr_nf_ctx_struct *) ctx)->nf;
+}
+
+static void die(const char *message)
+{
+    fprintf(stderr, "ust_nf_kernel_replay: %s\n", message);
+    exit(EXIT_FAILURE);
+}
+
+static slong read_slong(FILE *input, fmpz_t value, const char *label)
+{
+    if (!fmpz_fread(input, value))
+        die(label);
+    if (!fmpz_fits_si(value))
+        die("integer does not fit slong");
+    return fmpz_get_si(value);
+}
+
+static void read_fmpq(FILE *input, fmpq_t value, fmpz_t numerator, fmpz_t denominator)
+{
+    int separator;
+    if (!fmpz_fread(input, numerator))
+        die("truncated rational numerator");
+    separator = fgetc(input);
+    if (separator != '/')
+        die("missing rational separator");
+    if (!fmpz_fread(input, denominator))
+        die("truncated rational denominator");
+    if (fmpz_is_zero(denominator))
+        die("zero rational denominator");
+    fmpq_set_fmpz_frac(value, numerator, denominator);
+}
+
+static void set_integer_nf_entry(
+    gr_ptr entry,
+    fmpq_poly_t polynomial,
+    fmpz_t coefficient,
+    slong degree,
+    FILE *input,
+    nf_struct *nf)
+{
+    slong k;
+    fmpq_poly_zero(polynomial);
+    for (k = 0; k < degree; k++)
+    {
+        if (!fmpz_fread(input, coefficient))
+            die("truncated matrix coefficient");
+        fmpq_poly_set_coeff_fmpz(polynomial, k, coefficient);
+    }
+    nf_elem_set_fmpq_poly((nf_elem_struct *) entry, polynomial, nf);
+}
+
+static void skip_integer_nf_entry(
+    fmpz_t coefficient,
+    slong degree,
+    FILE *input)
+{
+    slong k;
+    for (k = 0; k < degree; k++)
+    {
+        if (!fmpz_fread(input, coefficient))
+            die("truncated matrix coefficient");
+    }
+}
+
+static void set_rational_nf_entry(
+    gr_ptr entry,
+    fmpq_poly_t polynomial,
+    fmpq_t coefficient,
+    fmpz_t numerator,
+    fmpz_t denominator,
+    slong degree,
+    FILE *input,
+    nf_struct *nf)
+{
+    slong k;
+    fmpq_poly_zero(polynomial);
+    for (k = 0; k < degree; k++)
+    {
+        read_fmpq(input, coefficient, numerator, denominator);
+        fmpq_poly_set_coeff_fmpq(polynomial, k, coefficient);
+    }
+    nf_elem_set_fmpq_poly((nf_elem_struct *) entry, polynomial, nf);
+}
+
+static void skip_rational_nf_entry(
+    fmpz_t numerator,
+    fmpz_t denominator,
+    slong degree,
+    FILE *input)
+{
+    slong k;
+    for (k = 0; k < degree; k++)
+    {
+        int separator;
+        if (!fmpz_fread(input, numerator))
+            die("truncated rational numerator");
+        separator = fgetc(input);
+        if (separator != '/')
+            die("missing rational separator");
+        if (!fmpz_fread(input, denominator))
+            die("truncated rational denominator");
+        if (fmpz_is_zero(denominator))
+            die("zero rational denominator");
+    }
+}
+
+static slong count_nonzero_slots(const gr_mat_t residual, gr_ctx_t ctx)
+{
+    slong j;
+    slong count = 0;
+    for (j = 0; j < gr_mat_ncols(residual, ctx); j++)
+    {
+        if (gr_is_zero(gr_mat_entry_srcptr(residual, 0, j, ctx), ctx) != T_TRUE)
+            count++;
+    }
+    return count;
+}
+
+static void write_entry(
+    FILE *output,
+    slong source_row,
+    slong relation,
+    gr_srcptr value,
+    slong degree,
+    fmpq_poly_t polynomial,
+    fmpq_t coefficient,
+    nf_struct *nf)
+{
+    slong k;
+    fprintf(output, "%ld %ld", (long) (source_row + 1), (long) (relation + 1));
+    nf_elem_get_fmpq_poly(polynomial, (const nf_elem_struct *) value, nf);
+    for (k = 0; k < degree; k++)
+    {
+        fmpq_poly_get_coeff_fmpq(coefficient, polynomial, k);
+        fputc(' ', output);
+        fmpz_fprint(output, fmpq_numref(coefficient));
+        fputc('/', output);
+        fmpz_fprint(output, fmpq_denref(coefficient));
+    }
+    fputc('\n', output);
+}
+
+static void capture_residual(
+    gr_mat_t defects,
+    slong defect_row,
+    const gr_mat_t residual,
+    gr_ctx_t ctx,
+    int *status)
+{
+    slong relation;
+    for (relation = 0; relation < gr_mat_ncols(residual, ctx); relation++)
+    {
+        *status |= gr_set(
+            gr_mat_entry_ptr(defects, defect_row, relation, ctx),
+            gr_mat_entry_srcptr(residual, 0, relation, ctx),
+            ctx);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    FILE *matrix_input;
+    FILE *kernel_input;
+    FILE *defect_output;
+    slong rows, columns, degree, entries;
+    slong kernel_rows, relations, kernel_degree;
+    slong row, column, index, relation, current_row, checked_rows, nonzero_slots;
+    slong row_nonzeros, defect_count, defect_rank;
+    slong *defect_source_rows;
+    slong *free_columns;
+    unsigned char *active_rows;
+    unsigned char *active_columns;
+    slong active_row_count;
+    slong active_column_count;
+    int exit_code;
+    int status;
+    int skip_residual_rank;
+    fmpz_t integer, numerator, denominator;
+    fmpz_poly_t minimal;
+    fmpq_poly_t polynomial;
+    fmpq_t rational;
+    gr_ctx_t ctx;
+    gr_mat_t kernel;
+    gr_mat_t residual;
+    gr_mat_t defects;
+    gr_mat_t defect_window;
+    gr_ptr matrix_coefficient;
+
+    if (argc != 3 && argc != 4)
+        die("usage: ust_nf_kernel_replay MATRIX.sms KERNEL.nfk [DEFECT.nfr]");
+    skip_residual_rank = 0;
+    if (getenv("UST_NF_SKIP_RESIDUAL_RANK") != NULL)
+        skip_residual_rank = strcmp(getenv("UST_NF_SKIP_RESIDUAL_RANK"), "0") != 0;
+    matrix_input = fopen(argv[1], "r");
+    if (matrix_input == NULL)
+        die("cannot open matrix");
+    kernel_input = fopen(argv[2], "r");
+    if (kernel_input == NULL)
+        die("cannot open kernel");
+
+    fmpz_init(integer);
+    fmpz_init(numerator);
+    fmpz_init(denominator);
+    rows = read_slong(matrix_input, integer, "missing row count");
+    columns = read_slong(matrix_input, integer, "missing column count");
+    degree = read_slong(matrix_input, integer, "missing field degree");
+    entries = read_slong(matrix_input, integer, "missing entry count");
+    if (rows <= 0 || columns <= 0 || degree <= 0 || entries < 0)
+        die("invalid matrix dimensions");
+
+    active_rows = NULL;
+    active_row_count = rows;
+    if (getenv("UST_NF_ACTIVE_ROWS") != NULL)
+    {
+        FILE *active_input = fopen(getenv("UST_NF_ACTIVE_ROWS"), "r");
+        if (active_input == NULL)
+            die("cannot open active-row cutset");
+        active_row_count = read_slong(active_input, integer, "missing active-row count");
+        if (active_row_count <= 0 || active_row_count > rows)
+            die("invalid active-row count");
+        active_rows = (unsigned char *) flint_calloc(rows, sizeof(unsigned char));
+        for (index = 0; index < active_row_count; index++)
+        {
+            row = read_slong(active_input, integer, "truncated active-row cutset") - 1;
+            if (row < 0 || row >= rows || active_rows[row])
+                die("invalid or duplicate active row");
+            active_rows[row] = 1;
+        }
+        fclose(active_input);
+    }
+    active_columns = NULL;
+    free_columns = NULL;
+    active_column_count = columns;
+    if (getenv("UST_NF_ACTIVE_COLUMNS") != NULL)
+    {
+        FILE *active_input = fopen(getenv("UST_NF_ACTIVE_COLUMNS"), "r");
+        if (active_input == NULL)
+            die("cannot open active-column cutset");
+        active_column_count = read_slong(active_input, integer, "missing active-column count");
+        if (active_column_count <= 0 || active_column_count > columns)
+            die("invalid active-column count");
+        active_columns = (unsigned char *) flint_calloc(columns, sizeof(unsigned char));
+        for (index = 0; index < active_column_count; index++)
+        {
+            column = read_slong(active_input, integer, "truncated active-column cutset") - 1;
+            if (column < 0 || column >= columns || active_columns[column])
+                die("invalid or duplicate active column");
+            active_columns[column] = 1;
+        }
+        fclose(active_input);
+    }
+
+    fmpz_poly_init(minimal);
+    for (index = 0; index <= degree; index++)
+    {
+        if (!fmpz_fread(matrix_input, integer))
+            die("truncated minimal polynomial");
+        fmpz_poly_set_coeff_fmpz(minimal, index, integer);
+    }
+    if (fmpz_poly_degree(minimal) != degree)
+        die("minimal polynomial degree mismatch");
+
+    gr_ctx_init_nf_fmpz_poly(ctx, minimal);
+    kernel_rows = read_slong(kernel_input, integer, "missing kernel row count");
+    relations = read_slong(kernel_input, integer, "missing relation count");
+    kernel_degree = read_slong(kernel_input, integer, "missing kernel degree");
+    if (kernel_rows != columns || relations <= 0 || kernel_degree != degree)
+        die("kernel shape mismatch");
+
+    gr_mat_init(kernel, kernel_rows, relations, ctx);
+    gr_mat_init(residual, 1, relations, ctx);
+    gr_mat_init(defects, rows, relations, ctx);
+    defect_source_rows = (slong *) flint_malloc(rows * sizeof(slong));
+    matrix_coefficient = gr_heap_init(ctx);
+    fmpq_poly_init(polynomial);
+    fmpq_init(rational);
+
+    for (row = 0; row < kernel_rows; row++)
+    {
+        for (column = 0; column < relations; column++)
+        {
+            if (read_slong(kernel_input, integer, "truncated kernel row") != row + 1)
+                die("kernel row order mismatch");
+            if (read_slong(kernel_input, integer, "truncated kernel column") != column + 1)
+                die("kernel column order mismatch");
+            if (active_columns != NULL && !active_columns[row])
+            {
+                skip_rational_nf_entry(
+                    numerator, denominator, degree, kernel_input);
+            }
+            else
+            {
+                set_rational_nf_entry(
+                    gr_mat_entry_ptr(kernel, row, column, ctx),
+                    polynomial,
+                    rational,
+                    numerator,
+                    denominator,
+                    degree,
+                    kernel_input,
+                    ust_nf_ctx(ctx));
+            }
+        }
+    }
+    fclose(kernel_input);
+
+    if (getenv("UST_NF_FREE_COLUMNS") != NULL)
+    {
+        FILE *free_input = fopen(getenv("UST_NF_FREE_COLUMNS"), "r");
+        slong free_count;
+        if (free_input == NULL)
+            die("cannot open free-column certificate");
+        free_count = read_slong(free_input, integer, "missing free-column count");
+        if (free_count != relations)
+            die("free-column count does not match kernel nullity");
+        free_columns = (slong *) flint_malloc(relations * sizeof(slong));
+        for (row = 0; row < relations; row++)
+        {
+            free_columns[row] =
+                read_slong(free_input, integer, "truncated free-column certificate") - 1;
+            if (free_columns[row] < 0 || free_columns[row] >= columns)
+                die("free column is outside the kernel carrier");
+            if (row > 0 && free_columns[row] <= free_columns[row - 1])
+                die("free columns are not strictly increasing");
+        }
+        fclose(free_input);
+        for (row = 0; row < relations; row++)
+        {
+            for (column = 0; column < relations; column++)
+            {
+                gr_srcptr value =
+                    gr_mat_entry_srcptr(kernel, free_columns[row], column, ctx);
+                truth_t expected = row == column ? gr_is_one(value, ctx) : gr_is_zero(value, ctx);
+                if (expected != T_TRUE)
+                    die("component-16 free-coordinate identity failed");
+            }
+        }
+    }
+
+    status = gr_mat_zero(residual, ctx);
+    current_row = -1;
+    checked_rows = 0;
+    nonzero_slots = 0;
+    defect_count = 0;
+    for (index = 0; index < entries; index++)
+    {
+        row = read_slong(matrix_input, integer, "truncated entry row") - 1;
+        column = read_slong(matrix_input, integer, "truncated entry column") - 1;
+        if (row < 0 || row >= rows || column < 0 || column >= columns)
+            die("matrix index out of range");
+        if (row != current_row)
+        {
+            if (current_row >= 0)
+            {
+                if (active_rows == NULL || active_rows[current_row])
+                {
+                    row_nonzeros = count_nonzero_slots(residual, ctx);
+                    nonzero_slots += row_nonzeros;
+                    if (row_nonzeros != 0)
+                    {
+                        defect_source_rows[defect_count] = current_row;
+                        capture_residual(defects, defect_count, residual, ctx, &status);
+                        defect_count++;
+                    }
+                    checked_rows++;
+                }
+            }
+            if (row != current_row + 1)
+                die("matrix rows are not complete and ordered");
+            current_row = row;
+            status |= gr_mat_zero(residual, ctx);
+        }
+        if (active_rows != NULL && !active_rows[row])
+        {
+            skip_integer_nf_entry(integer, degree, matrix_input);
+            continue;
+        }
+        set_integer_nf_entry(
+            matrix_coefficient,
+            polynomial,
+            integer,
+            degree,
+            matrix_input,
+            ust_nf_ctx(ctx));
+        for (relation = 0; relation < relations; relation++)
+        {
+            status |= gr_addmul(
+                gr_mat_entry_ptr(residual, 0, relation, ctx),
+                matrix_coefficient,
+                gr_mat_entry_srcptr(kernel, column, relation, ctx),
+                ctx);
+        }
+    }
+    fclose(matrix_input);
+    if (current_row >= 0)
+    {
+        if (active_rows == NULL || active_rows[current_row])
+        {
+            row_nonzeros = count_nonzero_slots(residual, ctx);
+            nonzero_slots += row_nonzeros;
+            if (row_nonzeros != 0)
+            {
+                defect_source_rows[defect_count] = current_row;
+                capture_residual(defects, defect_count, residual, ctx, &status);
+                defect_count++;
+            }
+            checked_rows++;
+        }
+    }
+    if (status != GR_SUCCESS)
+        die("number-field replay operation failed");
+    if (checked_rows != active_row_count)
+        die("not all matrix rows were replayed");
+    defect_rank = 0;
+    if (defect_count != 0)
+    {
+        gr_mat_window_init(defect_window, defects, 0, 0, defect_count, relations, ctx);
+        if (skip_residual_rank)
+        {
+            defect_rank = -1;
+        }
+        else
+        {
+            status = gr_mat_rank(&defect_rank, defect_window, ctx);
+            if (status != GR_SUCCESS)
+                die("exact residual-rank computation failed");
+        }
+        if (argc == 4)
+        {
+            defect_output = fopen(argv[3], "w");
+            if (defect_output == NULL)
+                die("cannot open defect output");
+            fprintf(
+                defect_output,
+                "%ld %ld %ld %ld\n",
+                (long) defect_count,
+                (long) relations,
+                (long) degree,
+                (long) defect_rank);
+            for (row = 0; row < defect_count; row++)
+            {
+                for (relation = 0; relation < relations; relation++)
+                {
+                    write_entry(
+                        defect_output,
+                        defect_source_rows[row],
+                        relation,
+                        gr_mat_entry_srcptr(defects, row, relation, ctx),
+                        degree,
+                        polynomial,
+                        rational,
+                        ust_nf_ctx(ctx));
+                }
+            }
+            fclose(defect_output);
+        }
+        gr_mat_window_clear(defect_window, ctx);
+    }
+
+    if (nonzero_slots == 0)
+    {
+        printf(
+            "ust_nf_kernel_replay: PASS rows=%ld entries=%ld slots=%ld nonzero=0\n",
+            (long) checked_rows,
+            (long) entries,
+            (long) (checked_rows * relations));
+        exit_code = EXIT_SUCCESS;
+    }
+    else
+    {
+        if (skip_residual_rank)
+        {
+            printf(
+                "ust_nf_kernel_replay: NONZERO checked=%ld defects=%ld slots=%ld "
+                "residual_rank=skipped source_rows=",
+                (long) checked_rows,
+                (long) defect_count,
+                (long) nonzero_slots);
+        }
+        else
+        {
+            printf(
+                "ust_nf_kernel_replay: NONZERO checked=%ld defects=%ld slots=%ld residual_rank=%ld "
+                "full_rank=%ld full_nullity=%ld source_rows=",
+                (long) checked_rows,
+                (long) defect_count,
+                (long) nonzero_slots,
+                (long) defect_rank,
+                (long) (columns - relations + defect_rank),
+                (long) (relations - defect_rank));
+        }
+        for (row = 0; row < defect_count; row++)
+            printf("%s%ld", row == 0 ? "" : ",", (long) (defect_source_rows[row] + 1));
+        fputc('\n', stdout);
+        exit_code = EXIT_FAILURE;
+    }
+
+    fmpq_clear(rational);
+    fmpq_poly_clear(polynomial);
+    gr_heap_clear(matrix_coefficient, ctx);
+    flint_free(defect_source_rows);
+    if (active_rows != NULL)
+        flint_free(active_rows);
+    if (active_columns != NULL)
+        flint_free(active_columns);
+    if (free_columns != NULL)
+        flint_free(free_columns);
+    gr_mat_clear(defects, ctx);
+    gr_mat_clear(residual, ctx);
+    gr_mat_clear(kernel, ctx);
+    gr_ctx_clear(ctx);
+    fmpz_poly_clear(minimal);
+    fmpz_clear(denominator);
+    fmpz_clear(numerator);
+    fmpz_clear(integer);
+    flint_cleanup_master();
+    return exit_code;
+}

@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Probe the exact chart support behind the component-12 cohomological kernel."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+from scipy.sparse.csgraph import connected_components
+
+from build_ust_g3eb_h02_component12_two_level_cayley_lift import (
+    ONE,
+    PRIME,
+    ROOT,
+    ZERO,
+    add_entry,
+    exact_action,
+    load,
+    runtime,
+    write_number_field_matrix,
+)
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as dm_runtime
+
+
+def evaluate(value: tuple[int, ...], root: int) -> int:
+    result = 0
+    for coefficient in reversed(value):
+        result = (result * root + coefficient) % PRIME
+    return result
+
+
+def sparse_rank_mod(
+    entries: dict[tuple[int, int], tuple[int, ...]], rows_count: int
+) -> tuple[int, int]:
+    rows: list[dict[int, int]] = [{} for _ in range(rows_count)]
+    for (row, column), value in entries.items():
+        scalar = evaluate(value, 5)
+        if scalar:
+            rows[row][column] = scalar
+    pivots: dict[int, dict[int, int]] = {}
+    eliminations = 0
+    for row in rows:
+        while row:
+            column = min(row)
+            value = row[column]
+            pivot = pivots.get(column)
+            if pivot is None:
+                inverse = pow(value, -1, PRIME)
+                pivots[column] = {
+                    key: item * inverse % PRIME for key, item in row.items() if item
+                }
+                break
+            for key, item in pivot.items():
+                reduced = (row.get(key, 0) - value * item) % PRIME
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+            eliminations += 1
+    return len(pivots), eliminations
+
+
+def independent_rows_mod(matrix: np.ndarray) -> np.ndarray:
+    pivots: list[np.ndarray] = []
+    pivot_columns: list[int] = []
+    selected: list[int] = []
+    for row_index, source in enumerate(matrix.astype(np.int64) % PRIME):
+        row = source.copy()
+        for pivot, column in zip(pivots, pivot_columns, strict=True):
+            factor = int(row[column] % PRIME)
+            if factor:
+                row = (row - factor * pivot) % PRIME
+        nonzero = np.flatnonzero(row % PRIME)
+        if nonzero.size == 0:
+            continue
+        column = int(nonzero[0])
+        row = row * pow(int(row[column]), -1, PRIME) % PRIME
+        pivots.append(row)
+        pivot_columns.append(column)
+        selected.append(row_index)
+    return np.asarray(selected, dtype=np.int32)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--exact", action="store_true")
+    parser.add_argument("--ordered-exact", action="store_true")
+    arguments = parser.parse_args()
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+
+    macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json")
+    factor = load(mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json")
+    csc = load(mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json")
+    target = [tuple(int(value) for value in row) for row in macaulay["target_monomial_basis"]["exponent_vectors"]]
+    target_lookup = {value: index for index, value in enumerate(target)}
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+
+    g3bi = load(ROOT / "state/ust_g3bi_explicit_root_start.packet.json")
+    g3de = load(ROOT / "state/ust_g3de_h02_fraction_free_path_woodbury.packet.json")
+    selection = np.load(
+        ROOT / g3de["factorization"]["selection"]["path"], allow_pickle=False
+    )
+    selected_updates = selection["selected_columns"].astype(np.int32)
+    source_update_coordinates = np.concatenate(
+        (
+            np.arange(0, 190),
+            np.arange(380, 570),
+            np.arange(2890, 2998),
+            np.arange(3106, 3187),
+        )
+    ).astype(np.int32)
+    source_descriptors = [
+        descriptors[int(selected_updates[int(coordinate)])]
+        for coordinate in source_update_coordinates
+    ]
+    assert len(source_descriptors) == 569
+
+    solution_path = ROOT / "evidence/ust_g3eb_probe/H02.component12.observed_action.solution.bin"
+    solution = split_io.as_scipy(
+        arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+    ).tocsc()
+    quotient_support = np.unique(solution[:248, :].nonzero()[0]).astype(np.int32)
+    lift_support = np.unique(solution[248:, :].nonzero()[0]).astype(np.int32)
+    assert quotient_support.size == 227 and lift_support.size == 1345
+    assert {descriptors[int(value)][0] for value in lift_support} == {5, 6, 7}
+
+    base = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, _, _ = oracle.exact_generators(base, global_f0, b89)
+    correction = dm_runtime.correction_derivatives_exact(g3bi)
+
+    source_identity = {(index, index): ONE for index in range(569)}
+    lift_identity = {(int(coordinate), index): ONE for index, coordinate in enumerate(lift_support)}
+    source_action = exact_action(
+        source_identity, source_descriptors, correction, target_lookup
+    )
+    lift_action = exact_action(lift_identity, descriptors, generators0, target_lookup)
+    entries = dict(source_action)
+    lift_offset = 569
+    quotient_offset = lift_offset + int(lift_support.size)
+    for (row, column), value in lift_action.items():
+        add_entry(entries, (row, lift_offset + column), value)
+    quotient_rows = [int(value) for value in csc["binary"]["quotient_unit_rows"]]
+    for local, quotient_coordinate in enumerate(quotient_support):
+        add_entry(
+            entries,
+            (quotient_rows[int(quotient_coordinate)], quotient_offset + local),
+            ONE,
+        )
+    columns = quotient_offset + int(quotient_support.size)
+    evidence = ROOT / "evidence/ust_g3eb_probe"
+    evidence.mkdir(parents=True, exist_ok=True)
+    exact_matrix_path = evidence / "H02.component12.restricted_cohomological.number_field.sms"
+    write_number_field_matrix(exact_matrix_path, entries, (42706, columns))
+    active_rows = len({row for row, _ in entries})
+    pattern_rows = np.asarray([row for row, _ in entries], dtype=np.int32)
+    pattern_columns = np.asarray([column for _, column in entries], dtype=np.int32)
+    pattern = sparse.csr_matrix(
+        (np.ones(len(entries), dtype=np.uint8), (pattern_rows, pattern_columns)),
+        shape=(42706, columns),
+    )
+    structural_rank = int(
+        np.count_nonzero(maximum_bipartite_matching(pattern, perm_type="column") >= 0)
+    )
+    active_row_values = np.asarray(sorted({row for row, _ in entries}), dtype=np.int32)
+    active_row_lookup = {int(row): index for index, row in enumerate(active_row_values)}
+    compressed_rows = np.asarray(
+        [active_row_lookup[int(row)] for row in pattern_rows], dtype=np.int32
+    )
+    bipartite = sparse.coo_matrix(
+        (
+            np.ones(2 * len(entries), dtype=np.uint8),
+            (
+                np.concatenate((compressed_rows, active_row_values.size + pattern_columns)),
+                np.concatenate((active_row_values.size + pattern_columns, compressed_rows)),
+            ),
+        ),
+        shape=(active_row_values.size + columns, active_row_values.size + columns),
+    ).tocsr()
+    component_count, labels = connected_components(
+        bipartite, directed=False, return_labels=True
+    )
+    print(
+        f"presentation=42706x{columns} active_rows={active_rows} nonzeros={len(entries)} "
+        f"source=569 lift={lift_support.size} quotient={quotient_support.size} "
+        f"structural_rank={structural_rank}",
+        flush=True,
+    )
+    rank, eliminations = sparse_rank_mod(entries, 42706)
+    print(
+        f"root=5 rank={rank} nullity={columns-rank} eliminations={eliminations}",
+        flush=True,
+    )
+    component_summaries = []
+    for component in range(component_count):
+        local_active = np.flatnonzero(labels[:active_row_values.size] == component)
+        local_columns = np.flatnonzero(labels[active_row_values.size:] == component)
+        if local_columns.size == 0:
+            continue
+        row_map = {int(active_row_values[int(value)]): index for index, value in enumerate(local_active)}
+        column_map = {int(value): index for index, value in enumerate(local_columns)}
+        local_entries = {
+            (row_map[row], column_map[column]): value
+            for (row, column), value in entries.items()
+            if row in row_map and column in column_map
+        }
+        local_rank, local_eliminations = sparse_rank_mod(local_entries, len(local_active))
+        local_pattern = sparse.csr_matrix(
+            (
+                np.ones(len(local_entries), dtype=np.uint8),
+                (
+                    np.asarray([row for row, _ in local_entries], dtype=np.int32),
+                    np.asarray([column for _, column in local_entries], dtype=np.int32),
+                ),
+            ),
+            shape=(len(local_active), len(local_columns)),
+        )
+        local_structural = int(
+            np.count_nonzero(
+                maximum_bipartite_matching(local_pattern, perm_type="column") >= 0
+            )
+        )
+        component_summaries.append(
+            (
+                component,
+                len(local_active),
+                len(local_columns),
+                local_structural,
+                local_rank,
+                len(local_columns) - local_rank,
+                local_eliminations,
+            )
+        )
+    nontrivial = [row for row in component_summaries if row[5] or row[3] != row[4]]
+    print(
+        f"support_components={len(component_summaries)} nontrivial_components={len(nontrivial)}",
+        flush=True,
+    )
+    for row in nontrivial:
+        print(
+            "component=" + str(row[0])
+            + f" rows={row[1]} columns={row[2]} structural={row[3]} "
+            + f"finite_rank={row[4]} nullity={row[5]} eliminations={row[6]}",
+            flush=True,
+        )
+
+    g3dz = load(ROOT / "state/ust_g3dz_h02_component0_cayley_lift.packet.json")
+    component0_source = sparse.load_npz(
+        ROOT / g3dz["exact_lift"]["source_numerator"]["path"]
+    ).tocsc()
+    assert component0_source.shape == (6022, 28)
+    assert component0_source[190:, :].nnz == 0
+    component0_pivots = independent_rows_mod(component0_source[:190, :].toarray())
+    assert component0_pivots.size == 28
+    g3dz_indices = np.load(
+        ROOT / g3dz["exact_lift"]["indices"]["path"], allow_pickle=False
+    )
+    g3dz_lift_support = g3dz_indices["core_columns"][
+        g3dz_indices["used_core_coordinates"]
+    ].astype(np.int32)
+    assert g3dz_lift_support.size == 317
+    assert set(g3dz_lift_support.tolist()) <= set(lift_support.tolist())
+
+    removed_source_columns = set(component0_pivots.astype(int).tolist())
+    retained_old_columns = [
+        column for column in range(columns) if column not in removed_source_columns
+    ]
+    quotient_column_lookup = {
+        old: new for new, old in enumerate(retained_old_columns)
+    }
+    quotient_entries = {
+        (row, quotient_column_lookup[column]): value
+        for (row, column), value in entries.items()
+        if column in quotient_column_lookup
+    }
+    quotient_columns = len(retained_old_columns)
+    quotient_matrix_path = evidence / "H02.component12.after_component0_quotient.number_field.sms"
+    write_number_field_matrix(
+        quotient_matrix_path, quotient_entries, (42706, quotient_columns)
+    )
+    quotient_pattern = sparse.csr_matrix(
+        (
+            np.ones(len(quotient_entries), dtype=np.uint8),
+            (
+                np.asarray([row for row, _ in quotient_entries], dtype=np.int32),
+                np.asarray([column for _, column in quotient_entries], dtype=np.int32),
+            ),
+        ),
+        shape=(42706, quotient_columns),
+    )
+    quotient_structural_rank = int(
+        np.count_nonzero(
+            maximum_bipartite_matching(quotient_pattern, perm_type="column") >= 0
+        )
+    )
+    quotient_rank, quotient_eliminations = sparse_rank_mod(
+        quotient_entries, 42706
+    )
+    print(
+        f"component0_quotient_columns={quotient_columns} removed_exact_relations=28 "
+        f"G3DZ_lift_support_subset={g3dz_lift_support.size} "
+        f"structural_rank={quotient_structural_rank} finite_rank={quotient_rank} "
+        f"nullity={quotient_columns-quotient_rank} eliminations={quotient_eliminations}",
+        flush=True,
+    )
+
+    if arguments.ordered_exact:
+        g3di = load(ROOT / "state/ust_g3di_h02_split_algebra_kernel_relations.packet.json")
+        finite_selection = np.load(
+            ROOT / g3di["split_algebra_kernel"]["selection"]["path"],
+            allow_pickle=False,
+        )
+        finite_selected = set(
+            finite_selection["selected_update_columns"].astype(np.int32).tolist()
+        )
+        source_selected_local = [
+            local
+            for local, coordinate in enumerate(source_update_coordinates.tolist())
+            if coordinate in finite_selected
+        ]
+        source_dependent_local = [
+            local
+            for local, coordinate in enumerate(source_update_coordinates.tolist())
+            if coordinate not in finite_selected
+        ]
+        assert len(source_selected_local) == 531
+        assert len(source_dependent_local) == 38
+        base_columns = list(range(569, columns))
+        column_permutation = base_columns + source_selected_local + source_dependent_local
+        assert len(column_permutation) == columns and len(set(column_permutation)) == columns
+        inverse_column = {
+            old: new for new, old in enumerate(column_permutation)
+        }
+        permuted_entries = {
+            (row, inverse_column[column]): value
+            for (row, column), value in entries.items()
+        }
+        pivot_column_count = 2103
+        finite_row_maps: dict[int, dict[int, int]] = {
+            int(row): {} for row in active_row_values
+        }
+        for (entry_row, column), value in permuted_entries.items():
+            if column >= pivot_column_count:
+                continue
+            scalar = evaluate(value, 5)
+            if scalar:
+                finite_row_maps[entry_row][column] = scalar
+        finite_rows = list(finite_row_maps.items())
+        finite_rows.sort(key=lambda item: (len(item[1]), item[0]))
+        finite_pivots: dict[int, dict[int, int]] = {}
+        pivot_row_order: list[int] = []
+        for ambient_row, row in finite_rows:
+            row = dict(row)
+            while row:
+                column = min(row)
+                value = row[column]
+                pivot = finite_pivots.get(column)
+                if pivot is None:
+                    inverse = pow(value, -1, PRIME)
+                    finite_pivots[column] = {
+                        key: item * inverse % PRIME
+                        for key, item in row.items()
+                        if item
+                    }
+                    pivot_row_order.append(ambient_row)
+                    break
+                for key, item in pivot.items():
+                    reduced = (row.get(key, 0) - value * item) % PRIME
+                    if reduced:
+                        row[key] = reduced
+                    else:
+                        row.pop(key, None)
+        assert len(finite_pivots) == pivot_column_count
+        assert sorted(finite_pivots) == list(range(pivot_column_count))
+        pivot_row_set = set(pivot_row_order)
+        row_permutation = pivot_row_order + [
+            int(row) for row in active_row_values if int(row) not in pivot_row_set
+        ]
+        inverse_row = {old: new for new, old in enumerate(row_permutation)}
+        ordered_entries = {
+            (inverse_row[row], column): value
+            for (row, column), value in permuted_entries.items()
+        }
+        matrix_path = evidence / "H02.component12.restricted_cohomological.ordered.number_field.sms"
+        certificate = evidence / "H02.component12.restricted_cohomological.ordered.number_field.rank.json"
+        write_number_field_matrix(
+            matrix_path, ordered_entries, (len(active_row_values), columns)
+        )
+        print(
+            f"ordered_exact rows={len(active_row_values)} columns={columns} "
+            f"pivot_rows={len(pivot_row_order)} trailing_rows={len(active_row_values)-len(pivot_row_order)}",
+            flush=True,
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "ust_number_field_sparse_rank.py"),
+                str(matrix_path),
+                "--certificate",
+                str(certificate),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        print(completed.stdout.strip())
+        if completed.returncode:
+            print(completed.stderr.strip())
+            raise SystemExit(completed.returncode)
+
+    if arguments.exact:
+        matrix_path = exact_matrix_path
+        certificate = evidence / "H02.component12.restricted_cohomological.number_field.rank.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "ust_number_field_sparse_rank.py"),
+                str(matrix_path),
+                "--certificate",
+                str(certificate),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        print(completed.stdout.strip())
+        if completed.returncode:
+            print(completed.stderr.strip())
+            raise SystemExit(completed.returncode)
+
+
+if __name__ == "__main__":
+    main()

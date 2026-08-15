@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Test the G3BI endpoint in a frozen good-reduction Macaulay chart."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import struct
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bk_correction_pencil_operator_compiler as compiler
+
+
+ROOT = Path(__file__).resolve().parent
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def resolve_mld() -> Path:
+    configured = os.environ.get("MTT_MLD_REPO")
+    candidates = ([Path(configured)] if configured else []) + [
+        ROOT.parent / "20 Mathematical Language Discovery Program",
+        ROOT.parent / "Mathematical Language Discovery Program",
+    ]
+    for candidate in candidates:
+        if (candidate / "solve_q79_eta9_original_jacobian_coordinates").is_file():
+            return candidate.resolve()
+    raise FileNotFoundError("Mathematical Language Discovery Program repository")
+
+
+def wsl_path(path: Path) -> str:
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    require(len(drive) == 1, "single-letter drive")
+    return f"/mnt/{drive}{resolved.as_posix().split(':', 1)[1]}"
+
+
+def write_rhs(path: Path, matrix: sparse.csc_matrix) -> None:
+    value = matrix.copy().tocsc()
+    value.sum_duplicates()
+    value.data %= PRIME
+    value.eliminate_zeros()
+    with path.open("wb") as handle:
+        handle.write(b"MTTRHS1\0")
+        handle.write(struct.pack("<3Q", value.shape[0], value.shape[1], value.nnz))
+        handle.write(np.asarray(value.indptr, dtype="<u8").tobytes(order="C"))
+        handle.write(np.asarray(value.indices, dtype="<u4").tobytes(order="C"))
+        handle.write(np.asarray(value.data, dtype=np.uint8).tobytes(order="C"))
+
+
+def read_coordinates(path: Path) -> tuple[sparse.csc_matrix, int, int]:
+    raw = path.read_bytes()
+    require(raw[:8] == b"MTTCOO1\0", "coordinate magic")
+    rows, columns, nonzeros, quotient_units, image_rank = struct.unpack_from("<5Q", raw, 8)
+    offset = 8 + 5 * 8
+    indptr = np.frombuffer(raw, dtype="<u8", count=columns + 1, offset=offset)
+    offset += indptr.nbytes
+    indices = np.frombuffer(raw, dtype="<u4", count=nonzeros, offset=offset)
+    offset += indices.nbytes
+    data = np.frombuffer(raw, dtype=np.uint8, count=nonzeros, offset=offset)
+    offset += data.nbytes
+    require(offset == len(raw), "coordinate byte count")
+    matrix = sparse.csc_matrix(
+        (data.copy(), indices.copy(), indptr.astype(np.int64)), shape=(rows, columns)
+    )
+    return matrix, int(quotient_units), int(image_rank)
+
+
+def determinant_and_rank_mod11(matrix: np.ndarray) -> tuple[int, int]:
+    work = np.asarray(matrix, dtype=np.int16) % PRIME
+    rows, columns = work.shape
+    require(rows == columns, "square determinant lemma matrix")
+    rank = 0
+    determinant = 1
+    sign = 1
+    for column in range(columns):
+        candidates = np.flatnonzero(work[rank:, column])
+        if candidates.size == 0:
+            continue
+        pivot = rank + int(candidates[0])
+        if pivot != rank:
+            work[[rank, pivot]] = work[[pivot, rank]]
+            sign = -sign
+        pivot_value = int(work[rank, column])
+        determinant = determinant * pivot_value % PRIME
+        work[rank] = work[rank] * pow(pivot_value, -1, PRIME) % PRIME
+        if rank + 1 < rows:
+            factors = work[rank + 1 :, column].copy()
+            active = np.flatnonzero(factors)
+            if active.size:
+                target = rank + 1 + active
+                work[target] = (work[target] - factors[active, None] * work[rank]) % PRIME
+        rank += 1
+        if rank == rows:
+            break
+    return rank, determinant * sign % PRIME if rank == rows else 0
+
+
+def null_vector_mod11(matrix: np.ndarray) -> np.ndarray:
+    work = np.asarray(matrix, dtype=np.int16) % PRIME
+    rows, columns = work.shape
+    pivot_columns: list[int] = []
+    rank = 0
+    for column in range(columns):
+        candidates = np.flatnonzero(work[rank:, column])
+        if candidates.size == 0:
+            continue
+        pivot = rank + int(candidates[0])
+        work[[rank, pivot]] = work[[pivot, rank]]
+        pivot_value = int(work[rank, column])
+        work[rank] = work[rank] * pow(pivot_value, -1, PRIME) % PRIME
+        if rank + 1 < rows:
+            factors = work[rank + 1 :, column].copy()
+            active = np.flatnonzero(factors)
+            if active.size:
+                target = rank + 1 + active
+                work[target] = (work[target] - factors[active, None] * work[rank]) % PRIME
+        pivot_columns.append(column)
+        rank += 1
+        if rank == rows:
+            break
+    free_columns = [column for column in range(columns) if column not in set(pivot_columns)]
+    require(free_columns, "nontrivial nullspace")
+    vector = np.zeros(columns, dtype=np.int16)
+    vector[free_columns[0]] = 1
+    for row in range(rank - 1, -1, -1):
+        column = pivot_columns[row]
+        vector[column] = -int(np.dot(work[row, column + 1 :], vector[column + 1 :])) % PRIME
+    require(np.any(vector), "nonzero null vector")
+    require(np.all(np.asarray(matrix, dtype=np.int64) @ vector % PRIME == 0), "null vector identity")
+    return vector.astype(np.uint8)
+
+
+def execute_solver(
+    solver: Path,
+    source_path: Path,
+    factor_path: Path,
+    rhs: sparse.csc_matrix,
+    rhs_path: Path,
+    coordinates_path: Path,
+    log_path: Path,
+    timeout: int,
+) -> tuple[sparse.csc_matrix, int, int]:
+    write_rhs(rhs_path, rhs)
+    command = " ".join(
+        shlex.quote(value)
+        for value in (
+            wsl_path(solver),
+            "--source",
+            wsl_path(source_path),
+            "--factorization",
+            wsl_path(factor_path),
+            "--rhs",
+            wsl_path(rhs_path),
+            "--output",
+            wsl_path(coordinates_path),
+            "--progress-seconds",
+            "10",
+        )
+    )
+    completed = subprocess.run(
+        ["wsl", "sh", "-lc", command],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    log_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
+    require("SUCCESS" in completed.stdout, "solver success")
+    return read_coordinates(coordinates_path)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target", choices=("H11", "H02"), default="H11")
+    parser.add_argument("--timeout", type=int, default=7200)
+    args = parser.parse_args()
+    mld = resolve_mld()
+    g3bk = load(ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json")
+    update_record = g3bk["good_reduction_family_updates"][args.target]["matrix"]
+    update = sparse.load_npz(ROOT / update_record["path"]).tocsc()
+    active_columns = np.flatnonzero(np.diff(update.indptr)).astype(np.int32)
+    require(active_columns.size > 0, "active correction columns")
+    rhs = update[:, active_columns].tocsc()
+
+    factor_packet = load(
+        mld / f"q79_eta9_original_jacobian_coordinate_factorization_{args.target}.packet.json"
+    )
+    csc_packet = load(mld / f"q79_eta9_original_jacobian_macaulay_{args.target}_csc.packet.json")
+    factor_path = Path(factor_packet["inputs"]["factorization_binary"]["path"])
+    source_path = Path(csc_packet["binary"]["path"])
+    solver = mld / "solve_q79_eta9_original_jacobian_coordinates"
+    output_dir = ROOT / "evidence" / "ust_g3bl"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rhs_path = output_dir / f"g3bk_{args.target}_endpoint_active_update.rhs.cscbin"
+    coordinates_path = output_dir / f"g3bk_{args.target}_endpoint_active_update.coordinates.cscbin"
+    log_path = output_dir / f"g3bk_{args.target}_endpoint_active_update.solver.out"
+    coordinates, quotient_units, image_rank = execute_solver(
+        solver,
+        source_path,
+        factor_path,
+        rhs,
+        rhs_path,
+        coordinates_path,
+        log_path,
+        args.timeout,
+    )
+    require(coordinates.shape == (update.shape[0], active_columns.size), "coordinate shape")
+    require(image_rank == update.shape[1], "image rank")
+    selected_rows = quotient_units + active_columns
+    lemma = coordinates[selected_rows, :].toarray().astype(np.int16)
+    lemma[np.arange(active_columns.size), np.arange(active_columns.size)] += 1
+    lemma %= PRIME
+    rank, determinant = determinant_and_rank_mod11(lemma)
+    repair: dict[str, Any] | None = None
+    if determinant == 0 and args.target == "H11":
+        require(rank + 1 == active_columns.size, "H11 endpoint corank one")
+        left_null = null_vector_mod11(lemma.T)
+        right_null = null_vector_mod11(lemma)
+        active_coordinates = coordinates.astype(np.int64)
+        full_right_null = np.asarray(active_coordinates @ right_null, dtype=np.int64).ravel() % PRIME
+        require(np.any(full_right_null), "full endpoint right null")
+
+        macaulay = load(mld / "q79_eta9_original_jacobian_macaulay_H11.packet.json")
+        g3bi = load(ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json")
+        correction = compiler.correction_terms(g3bi)
+        derivatives = compiler.derivative_generators(correction)
+        all_columns_factor = {
+            "exact_coordinate_identity": {
+                "selected_original_Jacobian_columns": list(range(int(macaulay["matrix"]["shape"][1])))
+            }
+        }
+        full_update = compiler.build_update(macaulay, all_columns_factor, derivatives)
+        base_matrix = sparse.load_npz(csc_packet["inputs"]["Macaulay_matrix"]["path"]).tocsc()
+        require(base_matrix.shape == full_update.shape, "full H11 update shape")
+        selected_original = np.asarray(
+            factor_packet["exact_coordinate_identity"]["selected_original_Jacobian_columns"],
+            dtype=np.int32,
+        )
+        extras = np.setdiff1d(
+            np.arange(base_matrix.shape[1], dtype=np.int32), selected_original, assume_unique=True
+        )
+        require(extras.size == 1071, "H11 unselected column count")
+        endpoint_extras = (base_matrix[:, extras].astype(np.int16) + full_update[:, extras].astype(np.int16)).tocsc()
+        endpoint_extras.data %= PRIME
+        endpoint_extras.eliminate_zeros()
+        extra_rhs_path = output_dir / "g3bk_H11_endpoint_unused_columns.rhs.cscbin"
+        extra_coordinates_path = output_dir / "g3bk_H11_endpoint_unused_columns.coordinates.cscbin"
+        extra_log_path = output_dir / "g3bk_H11_endpoint_unused_columns.solver.out"
+        extra_coordinates, extra_quotient, extra_image = execute_solver(
+            solver,
+            source_path,
+            factor_path,
+            endpoint_extras,
+            extra_rhs_path,
+            extra_coordinates_path,
+            extra_log_path,
+            args.timeout,
+        )
+        require(extra_quotient == quotient_units and extra_image == image_rank, "extra coordinate typing")
+        left_evaluations = np.asarray(
+            left_null.astype(np.int64) @ extra_coordinates[selected_rows, :].astype(np.int64),
+            dtype=np.int64,
+        ).ravel() % PRIME
+        repairing_positions = np.flatnonzero(left_evaluations)
+        repair = {
+            "endpoint_corank": 1,
+            "left_null_support": int(np.count_nonzero(left_null)),
+            "right_null_support_in_lemma": int(np.count_nonzero(right_null)),
+            "right_null_support_in_full_chart": int(np.count_nonzero(full_right_null)),
+            "unused_columns_tested": int(extras.size),
+            "repairing_unused_columns": int(repairing_positions.size),
+            "full_augmented_endpoint_rank_mod11": int(update.shape[0] - 1),
+            "replacement_chart_is_unit_mod11": bool(repairing_positions.size),
+            "proof_prime_is_admissible_for_H11_initializer": bool(repairing_positions.size),
+            "extra_rhs_path": extra_rhs_path.relative_to(ROOT).as_posix(),
+            "extra_coordinates_path": extra_coordinates_path.relative_to(ROOT).as_posix(),
+            "extra_solver_log": extra_log_path.relative_to(ROOT).as_posix(),
+        }
+        if repairing_positions.size:
+            extra_position = int(repairing_positions[0])
+            removed_augmented_position = int(np.flatnonzero(full_right_null)[0])
+            removed_kind = (
+                "quotient_unit"
+                if removed_augmented_position < quotient_units
+                else "selected_original_Jacobian"
+            )
+            repair.update(
+                {
+                    "selected_repair_extra_position": extra_position,
+                    "inserted_original_Jacobian_column": int(extras[extra_position]),
+                    "left_null_evaluation_mod11": int(left_evaluations[extra_position]),
+                    "removed_augmented_column_position": removed_augmented_position,
+                    "removed_column_kind": removed_kind,
+                    "removed_original_Jacobian_column": (
+                        None
+                        if removed_kind == "quotient_unit"
+                        else int(selected_original[removed_augmented_position - quotient_units])
+                    ),
+                }
+            )
+    result = {
+        "schema": "mtt.unified-source.g3bl-endpoint-chart-probe.v1",
+        "target": args.target,
+        "prime": PRIME,
+        "active_columns": int(active_columns.size),
+        "determinant_lemma_shape": list(lemma.shape),
+        "rank_mod11": rank,
+        "determinant_mod11": determinant,
+        "endpoint_chart_is_unit_mod11": determinant != 0,
+        "one_column_repair": repair,
+        "rhs_path": rhs_path.relative_to(ROOT).as_posix(),
+        "coordinates_path": coordinates_path.relative_to(ROOT).as_posix(),
+        "solver_log": log_path.relative_to(ROOT).as_posix(),
+    }
+    result_path = output_dir / f"g3bk_{args.target}_endpoint_chart.probe.json"
+    result_path.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

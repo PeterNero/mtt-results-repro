@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Independently replay the G3FO component-20 Artinian resolution."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+
+
+ROOT = Path(__file__).resolve().parent
+CERTIFICATE = ROOT / "evidence/ust_g3fo/H02.component20.artinian_resolution.json"
+EXPECTED_STATUS = "CLOSED_EXACT_48_FIBER_ARTINIAN_RESOLUTION_QGAMMA_DIFFERENTIALS_OPEN"
+EXPECTED_HILBERT = (
+    1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 66,
+    74, 80, 85, 74, 36, 11, 6, 3, 1, 0,
+)
+EXPECTED_SOCLE = {15: 18, 16: 1, 19: 1}
+EXPECTED_NUMERATOR = {
+    0: 1, 11: -4, 12: 1, 13: 1, 14: -15, 15: -11,
+    16: 40, 17: 7, 18: -18, 19: -1, 22: -1,
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def bound_path(row: dict[str, object]) -> Path:
+    path = ROOT / str(row["path"])
+    require(path.is_file(), f"bound path exists: {path}")
+    require(path.stat().st_size == int(row["bytes"]), f"bound size: {path.name}")
+    require(sha256(path) == row["sha256"], f"bound hash: {path.name}")
+    return path
+
+
+def generated_piece(
+    generators: dict[int, np.ndarray], degree: int, prime: int
+) -> tuple[np.ndarray, int]:
+    pieces = [
+        graded.multiply_space(generators[source], source, degree, prime)
+        for source in (11, 14, 15)
+        if degree >= source
+    ]
+    ambient = len(graded.homogeneous_exponents(degree))
+    if not pieces:
+        return np.zeros((ambient, 0), dtype=np.int64), 0
+    matrix = np.concatenate(pieces, axis=1)
+    rank, pivots, _ = graded.rref(matrix, prime)
+    return matrix[:, pivots] % prime, rank
+
+
+def quotient_socle(
+    ideal_degree: np.ndarray,
+    ideal_next_degree: np.ndarray,
+    degree: int,
+    prime: int,
+) -> int:
+    current_monomials = graded.homogeneous_exponents(degree)
+    next_monomials = graded.homogeneous_exponents(degree + 1)
+    next_lookup = {exponent: row for row, exponent in enumerate(next_monomials)}
+
+    if ideal_next_degree.shape[1]:
+        _, _, nullspace = graded.rref(
+            ideal_next_degree.T, prime, emit_nullspace=True
+        )
+        require(nullspace is not None, "next-degree annihilator")
+        annihilator = nullspace.T
+    else:
+        annihilator = np.eye(len(next_monomials), dtype=np.int64)
+
+    variables = graded.homogeneous_exponents(1)
+    equations = np.zeros(
+        (len(variables) * annihilator.shape[0], len(current_monomials)),
+        dtype=np.int64,
+    )
+    for variable_index, variable in enumerate(variables):
+        first = variable_index * annihilator.shape[0]
+        past = first + annihilator.shape[0]
+        for column, monomial in enumerate(current_monomials):
+            product = tuple(
+                monomial[index] + variable[index] for index in range(3)
+            )
+            equations[first:past, column] = annihilator[:, next_lookup[product]]
+    rank, _, _ = graded.rref(equations, prime)
+    preimage_dimension = len(current_monomials) - rank
+    return preimage_dimension - ideal_degree.shape[1]
+
+
+def numerator(hilbert: tuple[int, ...]) -> dict[int, int]:
+    values = hilbert + (0, 0)
+    result: dict[int, int] = {}
+    for degree in range(len(values)):
+        coefficient = values[degree]
+        coefficient -= 3 * values[degree - 1] if degree >= 1 else 0
+        coefficient += 3 * values[degree - 2] if degree >= 2 else 0
+        coefficient -= values[degree - 3] if degree >= 3 else 0
+        if coefficient:
+            result[degree] = coefficient
+    return result
+
+
+def main() -> None:
+    packet = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    require(packet["schema"] == "ust.g3fo.h02.component20.artinian-resolution.v1", "schema")
+    require(packet["status"] == EXPECTED_STATUS, "status")
+    require(all(packet["checks"].values()), "declared checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    bound_path(packet["inputs"]["G3FN"])
+    packet_paths = [bound_path(row) for row in packet["inputs"]["split_prime_packets"]]
+    require(tuple(packet_paths) == conic.SPLIT_PACKETS, "ordered split packets")
+
+    archived_rows = {
+        (int(row["prime"]), int(row["gamma_root"])): row
+        for row in packet["campaign"]["rows"]
+    }
+    require(len(archived_rows) == 48, "48 archived rows")
+
+    checked = 0
+    for packet_path in packet_paths:
+        split = conic.load(packet_path)
+        prime = int(split["field"]["prime"])
+        kernels = {int(row["gamma_root"]): row for row in split["root_kernels"]}
+        for root in (int(value) for value in split["field"]["roots"]):
+            generators, _, _ = g3fe.extract_fiber(
+                ROOT / kernels[root]["kernel"]["path"], prime
+            )
+            bases: dict[int, np.ndarray] = {}
+            hilbert: list[int] = []
+            for degree in range(21):
+                bases[degree], rank = generated_piece(generators, degree, prime)
+                hilbert.append(len(graded.homogeneous_exponents(degree)) - rank)
+            require(tuple(hilbert) == EXPECTED_HILBERT, "replayed Hilbert function")
+
+            socle = {
+                degree: value
+                for degree in range(11, 20)
+                if (
+                    value := quotient_socle(
+                        bases[degree], bases[degree + 1], degree, prime
+                    )
+                )
+            }
+            require(socle == EXPECTED_SOCLE, "replayed socle")
+            require(numerator(tuple(hilbert)) == EXPECTED_NUMERATOR, "Hilbert numerator")
+
+            archived = archived_rows[(prime, root)]
+            require(archived["length"] == sum(hilbert) == 656, "archived length")
+            require(
+                {int(key): int(value) for key, value in archived["socle_by_degree"].items()}
+                == socle,
+                "archived socle",
+            )
+            checked += 1
+        print(f"G3FO verify p={prime}: six Artinian fibers PASS", flush=True)
+
+    require(checked == 48, "all fibers checked")
+    resolution = packet["minimal_resolution"]
+    require(resolution["total_ranks"] == [1, 30, 49, 20], "resolution ranks")
+    require(
+        resolution["betti_1"] == {"11": 4, "14": 15, "15": 11}
+        and resolution["betti_2"] == {"12": 1, "13": 1, "16": 40, "17": 7}
+        and resolution["betti_3"] == {"18": 18, "19": 1, "22": 1},
+        "graded Betti rows",
+    )
+    print(
+        "UST.G3FO independent replay: PASS fibers=48 "
+        "length=656 resolution_ranks=1,30,49,20",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

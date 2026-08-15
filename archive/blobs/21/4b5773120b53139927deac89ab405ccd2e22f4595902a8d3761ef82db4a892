@@ -1,0 +1,187 @@
+# UST.G3AL: selected-carrier response Schur reduction
+
+Date: 2026-08-09
+
+## Verdict
+
+The complete G3AK graph-preserving tangent is no longer one undifferentiated
+122-column response problem.  It has the exact ordered split
+
+```text
+T_graph = T_principal + T_extra,
+rank(T_principal)=33,
+rank(T_extra mod T_principal)=89.
+```
+
+For any **same-carrier** primitive response matrix
+
+```text
+D = [D0 | D1] : k^33 + k^89 -> k^248
+```
+
+with `rank(D0)=33`, the remaining full-rank question is exactly one
+`215 x 89` Schur-block question.  This is an exact reduction, not a proxy for
+the analytic response and not a transfer of the old fixed-`GF(11)` entries.
+
+## Theorem
+
+Let `N0:k^248 -> k^215` be any quotient map with
+
+```text
+ker(N0)=im(D0).
+```
+
+Set
+
+```text
+E=N0 D1.
+```
+
+Then
+
+```text
+rank(D)=33+rank(E).
+```
+
+Consequently,
+
+```text
+rank(D)=122  <=>  rank(E)=89.
+```
+
+If `E` has rank 89, choose `L:k^215 -> k^126` with
+
+```text
+ker(L)=im(E).
+```
+
+The full normal operator is the factored map
+
+```text
+Nfull = L N0 : k^248 -> k^126,
+ker(Nfull)=im(D).
+```
+
+Therefore a carrier-specific Deligne row `beta_C` is tangent-solvable exactly
+when
+
+```text
+Nfull beta_C = 0.
+```
+
+For left inverses `S0 D0=I33` and `T E=I89`, its unique coordinates in the
+displayed frame are
+
+```text
+b1 = T N0 beta_C,
+b0 = S0(beta_C-D1 b1).
+```
+
+## Proof
+
+The map `N0` induces an isomorphism
+
+```text
+k^248 / im(D0)  ~=  k^215.
+```
+
+The image of `D1` in this quotient is `im(E)`.  Rank additivity in the short
+exact sequence therefore gives
+
+```text
+dim(im(D0)+im(D1)) = dim(im(D0)) + dim(im(E))
+                    = 33 + rank(E).
+```
+
+When `rank(E)=89`, `ker(L)=im(E)` has dimension 89 and `L` has rank 126.
+The inverse image of `ker(L)` under `N0` is precisely
+`im(D0)+im(D1)`, proving `ker(LN0)=im(D)`.  The solver formulas follow by
+first taking quotient coordinates and then removing the `D1` component.
+
+## Selected coefficient-control replay
+
+The theorem is instantiated independently on the selected G3AK coefficient
+frame over
+
+```text
+F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64).
+```
+
+After normalizing by the first nonzero coefficient of the selected member and
+dropping that radial chart coordinate, the emitted binary certificate proves
+
+```text
+principal chart rank       33
+additional quotient rank   89
+full projective rank       122
+final normal rank          126
+```
+
+All 122 displayed control directions round-trip through the factored solver.
+This proves the algebra and fixes the row/column conventions that the analytic
+response must use.  It does **not** identify the coefficient-control matrix
+with the Deligne/Gauss-Manin matrix.
+
+## Executable analytic campaign
+
+G3AL also emits a self-contained Singular input for the selected special
+fiber, using the same `F_101^6` carrier, the exact selected `A0,A1,A2`, and
+
+```text
+Phi = u(w^2-F6) + v(t0^3+t1^3+t2^3)
+      + s(A0*t0+A1*t1+A2*t2).
+```
+
+The response entries are to be computed from
+
+```text
+NF(u*v*Pdelta*t0*t1*t2*p_i*d_j) = D_ij*socle.
+```
+
+The execution order is now fixed:
+
+1. build the selected Cayley Jacobian basis;
+2. compute the `248 x 33` principal response `D0`;
+3. construct its actual response quotient `N0`;
+4. compute the quotient products for `E=N0D1`, only `215 x 89` entries;
+5. decide `rank(E)=89` or exhibit its rank defect;
+6. apply the resulting `126`-row normal map to an independently emitted
+   carrier-specific `beta_C`.
+
+Once `D0` is known, the added-direction rank test drops from `248*89=22072`
+raw entries to `215*89=19135` quotient entries.  Relative to rebuilding the
+whole `248 x 122` block at that stage, the isolated Schur test has 11,121
+fewer entries.  The complete campaign, including `D0`, has 2,937 fewer
+normal-form coefficients than the naive full block.
+
+## Boundaries
+
+G3AL does not claim:
+
+- that the selected Cayley basis has already completed;
+- that the finite residue response has rank 122;
+- that finite-field entries are automatically characteristic-zero periods;
+- that the old `GF(11)` `D/N/S` values transfer to this carrier;
+- that `beta_C` has been emitted, is zero, or lies in the response image;
+- that the visible `V3` HYM or Hull-Strominger endpoint is selected.
+
+Thus `B.ETA9.01`, `B.ETA9.02`, and `B.HS.01` remain open.  What closes here is
+the exact reduction and executable same-carrier input needed to attack them
+without returning to the obsolete 33-direction cutset.
+
+## Reproduction
+
+```powershell
+python build_ust_g3al_selected_carrier_response_schur.py
+python verify_ust_g3al_selected_carrier_response_schur.py
+python run_ust_g3al_selected_cayley_basis.py --timeout 86400
+python run_ust_g3al_selected_cayley_principal_campaign.py --rows-per-chunk 8
+```
+
+Primary artifacts:
+
+- `state/ust_g3al_selected_carrier_response_schur.packet.json`
+- `state/ust_g3al_coefficient_schur.f101e6.u8`
+- `state/ust_g3al_selected_cayley_basis.sing`
+- `build_ust_g3al_selected_cayley_response_chunk.py`
+- `run_ust_g3al_selected_cayley_principal_campaign.py`

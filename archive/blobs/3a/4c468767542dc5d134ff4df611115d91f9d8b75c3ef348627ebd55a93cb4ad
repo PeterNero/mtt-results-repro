@@ -1,0 +1,171 @@
+# UST.G3EJ: Exact H02 Component-12 Kernel Promotion Theorem
+
+**Status:** closed at the exact characteristic-zero component-promotion tier
+**Coefficient field:** \(K=\mathbb Q(\gamma)\), with
+\[
+\gamma^6+24\gamma^5+89\gamma^4+44\gamma^3+33\gamma^2+16\gamma+64=0.
+\]
+
+## 1. Scope
+
+UST.G3EB identified the necessary quotient-retaining component-12
+presentation. UST.G3EG reduced it exactly to a \(1324\times956\) matrix while
+preserving nullity, but left characteristic-zero promotion open. UST.G3EJ
+emits and independently verifies the missing ten exact kernel vectors.
+
+This theorem fixes the component-12 rank increment and tightens the global H02
+rank interval. It does not prove the final global rank, execute the evolving
+source, or select a physical endpoint.
+
+## 2. Candidate construction
+
+The six-embedding G3EF calculation supplied ten candidate transformation
+vectors. Their six powers under multiplication by \(\gamma\) form a
+60-dimensional warm span; its rank is 60 modulo
+\((21817,\gamma-5)\). G3EI successively targets the unresolved coordinates in
+lattices of dimensions 90, 120 and 150. The literal exact-replay residuals are
+
+\[
+2861,\qquad 2020,\qquad 0.
+\]
+
+The corresponding counts of coefficients above 500 bits are
+
+\[
+760,\qquad157,\qquad0.
+\]
+
+This lattice calculation is a discovery mechanism only. No rank statement is
+deduced from LLL quality, shortness, or p-adic agreement.
+
+## 3. Exact kernel certificate
+
+Let
+
+\[
+M_{12}^{\mathrm{red}}\in K^{1324\times956}
+\]
+
+be the exact G3EC matrix. G3EJ emits ten vectors
+
+\[
+v_1,\ldots,v_{10}\in K^{956}.
+\]
+
+Every coordinate is represented in the power basis
+\(1,\gamma,\ldots,\gamma^5\). Direct coefficient arithmetic modulo the defining
+minimal polynomial gives
+
+\[
+M_{12}^{\mathrm{red}}v_i=0
+\qquad (1\le i\le10).
+\]
+
+The independent verifier checks all
+
+\[
+1324\cdot10=13240
+\]
+
+residual slots and finds zero nonzero coefficients. The emitted vector
+coefficients have bit lengths between 127 and 164, so the certificate is a
+literal exact basis rather than a high-precision approximation.
+
+The selected reduction has ten free component-12 columns, numbered 531 through
+540 in zero-based reduced coordinates. Projection of the ten vectors to those
+columns gives a \(10\times10\) matrix. Its determinant satisfies
+
+\[
+\det P\equiv1071\not\equiv0
+\pmod{(21817,\gamma-5)}.
+\]
+
+Therefore \(\det P\ne0\) in \(K\), and the ten exact kernel vectors are
+\(K\)-independent. Their component-12 source projections are independent as
+well.
+
+## 4. Exact rank squeeze
+
+The same reduced matrix has rank 946 at the good reduction
+\((21817,\gamma-5)\). Reduction cannot increase rank, hence
+
+\[
+\operatorname{rank}_K M_{12}^{\mathrm{red}}\ge946.
+\]
+
+Ten independent exact kernel vectors in a 956-column matrix give
+
+\[
+\operatorname{rank}_K M_{12}^{\mathrm{red}}\le956-10=946.
+\]
+
+The bounds meet:
+
+\[
+\boxed{\operatorname{rank}_K M_{12}^{\mathrm{red}}=946,
+\qquad\dim_K\ker M_{12}^{\mathrm{red}}=10.}
+\]
+
+G3EC obtained this matrix from the 2,113-column post-G3DZ presentation by
+1,157 exact unit-pivot contractions. Reversing them preserves nullity and adds
+one rank per pivot. Thus the original presentation has
+
+\[
+\operatorname{rank}_K M_{12}=946+1157=2103,
+\qquad\dim_K\ker M_{12}=10.
+\]
+
+The 81-dimensional new source block therefore has exact rank increment
+
+\[
+\boxed{\Delta r_{12}=81-10=71.}
+\]
+
+## 5. Global consequence
+
+UST.G3EA supplied
+
+\[
+4748\le\operatorname{rank}_K Q\le5112.
+\]
+
+Replacing component 12's structural increment 81 by its exact increment 71
+lowers the upper endpoint by ten:
+
+\[
+\boxed{4748\le\operatorname{rank}_K Q\le5102.}
+\]
+
+The remaining gap is 354. The next ordered positive defect is component 16,
+whose structural and finite increments differ by 21.
+
+## 6. Reproducibility
+
+The accepted proof does not rerun LLL. Run:
+
+```text
+python build_ust_g3ej_h02_component12_exact_kernel_promotion.py
+python verify_ust_g3ej_h02_component12_exact_kernel_promotion.py
+```
+
+The exact vectors are stored in
+`evidence/ust_g3ej/H02.component12.exact_kernel_vectors.json.gz`; the theorem
+packet is
+`state/ust_g3ej_h02_component12_exact_kernel_promotion.packet.json`.
+
+The optional candidate-search reproduction is:
+
+```text
+python probe_ust_g3ei_component12_warm_span_target_lattice.py
+python probe_ust_g3ei_component12_warm_span_target_lattice.py --resume
+python probe_ust_g3ei_component12_warm_span_target_lattice.py --resume
+```
+
+It requires WSL `fplll` 5.5.0. The exact builder and verifier do not.
+
+## 7. Remaining frontier
+
+Components 0, 9 and 12 are now frozen at exact characteristic-zero rank. The
+next permitted H02 action is component 16's 21-unit defect. Its source
+presentation and exact lift must be derived before moving to later components
+or claiming global rank 4,748.

@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Extract the finite root-restriction data used by UST.G3BH.
+
+This is the only G3BH program that reads the historical MLD repository.  The
+result is a small, hash-bound evidence blob; the theorem builder and verifier
+use that vendored blob only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+DEFAULT_OUT = (
+    ROOT
+    / "evidence"
+    / "ust_g3bh"
+    / "q79_fixed_b89_root_containment_screen.v1.json.blob"
+)
+
+EXPECTED_HASHES = {
+    "q79_degree2_k3_base": "2f7dd722c5e387baf9438e6c2e14fe66f564de2109030ab08516552dabb86035",
+    "B89_projective_lefschetz": "2fb3bdf9f4ff5c8fcc83d685b588d5634647be0dbd2736191ea703c8e572db83",
+    "concrete_pencil_seed": "072ef55069251960b328c7b81013962397421172635ef769172d5dc78580b56c",
+    "global_f0_lift": "e718a2c28d6394005d2430a366f7951bce0037edf216b8ce90dd06a8006e44bb",
+    "number_field_smooth_lift": "3ff964264bd0973393be80e67cf1662524d77f9ba210a7da9794cffa1ec8545c",
+    "root_graph_tube": "87822e48f0f1c66a5253f4b3803472b89efea239e48f6eccd7cf4c7fb570bda0",
+    "graph_cayley_compiler": "9e872562b4ca24dbf707c33e2f4eeaaccdc8f90152bd34fdc0bbe2370a3595e9",
+}
+
+SOURCE_NAMES = {
+    "B89_projective_lefschetz": "q79_eta9_B89_projective_lefschetz_certificate.packet.json",
+    "concrete_pencil_seed": "q79_eta9_concrete_pencil_seed.packet.json",
+    "global_f0_lift": "q79_eta9_global_f0_lift.packet.json",
+    "number_field_smooth_lift": "q79_eta9_number_field_smooth_lift.packet.json",
+    "root_graph_tube": "q79_eta9_root_graph_tube_index_bound.packet.json",
+    "graph_cayley_compiler": "q79_eta9_graph_cayley_block_compiler.packet.json",
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing source file: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def add_vector(left: list[int], right: list[int], prime: int = 101) -> list[int]:
+    return [(a + b) % prime for a, b in zip(left, right)]
+
+
+def scale_vector(coefficient: int, value: list[int], prime: int = 101) -> list[int]:
+    return [(coefficient * entry) % prime for entry in value]
+
+
+def polynomial_add(left: list[int], right: list[int]) -> list[int]:
+    size = max(len(left), len(right))
+    result = [0] * size
+    for index in range(size):
+        result[index] = (
+            (left[index] if index < len(left) else 0)
+            + (right[index] if index < len(right) else 0)
+        )
+    return result
+
+
+def polynomial_mul(left: list[int], right: list[int]) -> list[int]:
+    result = [0] * (len(left) + len(right) - 1)
+    for i, a in enumerate(left):
+        for j, b in enumerate(right):
+            result[i + j] += a * b
+    return result
+
+
+def parse_polynomial(expression: str) -> dict[tuple[int, int, int, int], int]:
+    """Parse the simple x,y,z,w polynomial syntax emitted by the packets."""
+    normalized = expression.replace(" ", "").replace("**", "^").replace("-", "+-")
+    terms: dict[tuple[int, int, int, int], int] = {}
+    variables = {"x": 0, "y": 1, "z": 2, "w": 3}
+    for raw in normalized.split("+"):
+        if not raw:
+            continue
+        sign = -1 if raw.startswith("-") else 1
+        if sign < 0:
+            raw = raw[1:]
+        coefficient = sign
+        powers = [0, 0, 0, 0]
+        for factor in raw.split("*"):
+            if not factor:
+                continue
+            if factor.lstrip("-").isdigit():
+                coefficient *= int(factor)
+                continue
+            pieces = factor.split("^")
+            variable = pieces[0]
+            require(variable in variables and len(pieces) <= 2, f"unsupported factor {factor}")
+            powers[variables[variable]] += int(pieces[1]) if len(pieces) == 2 else 1
+        exponent = tuple(powers)
+        terms[exponent] = terms.get(exponent, 0) + coefficient
+    return {exponent: value for exponent, value in terms.items() if value}
+
+
+def restrict_term(
+    exponent: tuple[int, int, int, int],
+    w_restriction: list[int],
+) -> list[int]:
+    x_power, y_power, z_power, w_power = exponent
+    base_t_power = y_power + 2 * z_power
+    value = [0] * (base_t_power + 1)
+    value[base_t_power] = 1
+    for _ in range(w_power):
+        value = polynomial_mul(value, w_restriction)
+    return value
+
+
+def restrict_polynomial(
+    polynomial: dict[tuple[int, int, int, int], int],
+    w_restriction: list[int],
+) -> list[int]:
+    result: list[int] = []
+    for exponent, coefficient in polynomial.items():
+        term = [coefficient * value for value in restrict_term(exponent, w_restriction)]
+        result = polynomial_add(result, term)
+    while result and result[-1] == 0:
+        result.pop()
+    return result or [0]
+
+
+def monomial_restriction(powers_xyz: list[int]) -> list[int]:
+    x_power, y_power, z_power = powers_xyz
+    t_power = y_power + 2 * z_power
+    result = [0] * (t_power + 1)
+    result[t_power] = 1
+    return result
+
+
+def restrict_f0_row(row: dict[str, Any], w_restriction: list[int]) -> list[list[int]]:
+    output = [[0] * 6 for _ in range(19)]
+    for entry in row["base_degree9"]:
+        coefficient = [int(value) for value in entry["one"] + entry["mu"]]
+        restriction = monomial_restriction(entry["powers_xyz"])
+        for t_power, scalar in enumerate(restriction):
+            output[t_power] = add_vector(output[t_power], scale_vector(scalar, coefficient))
+    for entry in row["K3_sheet_times_degree6"]:
+        coefficient = [int(value) for value in entry["one"] + entry["mu"]]
+        restriction = polynomial_mul(monomial_restriction(entry["powers_xyz"]), w_restriction)
+        for t_power, scalar in enumerate(restriction):
+            output[t_power] = add_vector(output[t_power], scale_vector(scalar, coefficient))
+    return output
+
+
+def restrict_scalar_row(expression: str, w_restriction: list[int]) -> list[list[int]]:
+    values = restrict_polynomial(parse_polynomial(expression), w_restriction)
+    require(len(values) <= 19, "F1 restriction degree")
+    values += [0] * (19 - len(values))
+    return [[value % 101, 0, 0, 0, 0, 0] for value in values]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument("--base-certificate", type=Path)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    args = parser.parse_args()
+
+    source_root = args.source_root.resolve()
+    base_path = (
+        args.base_certificate.resolve()
+        if args.base_certificate
+        else source_root.parent
+        / "mtt-protospinor-gr-response-proof"
+        / "certificates"
+        / "q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json"
+    )
+    paths = {name: source_root / filename for name, filename in SOURCE_NAMES.items()}
+    paths["q79_degree2_k3_base"] = base_path
+    for name, path in paths.items():
+        require(sha256(path) == EXPECTED_HASHES[name], f"source hash drift: {name}")
+
+    base = load(base_path)
+    pencil = load(paths["concrete_pencil_seed"])
+    f0_packet = load(paths["global_f0_lift"])
+    graph_packet = load(paths["graph_cayley_compiler"])
+
+    g3_expression = base["explicit_K3"]["G3"]
+    g3_restriction = restrict_polynomial(parse_polynomial(g3_expression), [1])
+    require(g3_restriction == [-2, 0, -1, 0, 2, -2, -1], "Rminus G3 restriction")
+    w_restriction = [-value for value in g3_restriction]
+
+    f0_rows = [
+        restrict_f0_row(row, w_restriction)
+        for row in f0_packet["eta9_equation"]["coefficient_rows"]
+    ]
+    require(len(f0_rows) == 3 and all(len(row) == 19 for row in f0_rows), "F0 rows")
+    f1_rows = [
+        restrict_scalar_row(expression, w_restriction)
+        for expression in pencil["pencil"]["F1_coefficient_rows"]
+    ]
+    require(len(f1_rows) == 3 and all(len(row) == 19 for row in f1_rows), "F1 rows")
+
+    s_union = [[0] * 6 for _ in range(13)]
+    for entry in graph_packet["graph_union"]["s_union_sparse_coefficients"]:
+        coefficient = [int(value) for value in entry["coefficient"]] + [0, 0, 0]
+        restriction = monomial_restriction(entry["powers_xyz"])
+        for t_power, scalar in enumerate(restriction):
+            s_union[t_power] = add_vector(
+                s_union[t_power], scale_vector(scalar, coefficient)
+            )
+
+    evidence = {
+        "schema": "mtt.unified-source.g3bh-fixed-b89-root-containment-evidence.v1",
+        "date": "2026-08-12",
+        "extraction": {
+            "rule": "exact substitution x=s^2,y=s*t,z=t^2,w=-G3 followed by reduction modulo the locked prime 101",
+            "external_paths_are_not_runtime_dependencies": True,
+        },
+        "source_packets": {
+            name: {
+                "path": (
+                    "mtt-protospinor-gr-response-proof/certificates/"
+                    + path.name
+                    if name == "q79_degree2_k3_base"
+                    else path.name
+                ),
+                "sha256": EXPECTED_HASHES[name],
+                "bytes": path.stat().st_size,
+            }
+            for name, path in paths.items()
+        },
+        "field": {
+            "prime": 101,
+            "alpha_modulus_coefficients_ascending": [31, 69, 12, 1],
+            "mu_square": -3,
+            "coordinate_order": ["1", "alpha", "alpha^2", "mu", "alpha*mu", "alpha^2*mu"],
+        },
+        "root_model": {
+            "name": "Rminus",
+            "equations": ["Q2=x*z-y^2=0", "w+G3=0"],
+            "parameterization": {"x": "s^2", "y": "s*t", "z": "t^2"},
+            "G3_restriction_coefficients_by_t_power": g3_restriction,
+            "w_restriction_coefficients_by_t_power": w_restriction,
+        },
+        "fixed_B89_pencil_restrictions": {
+            "formula": "F_lambda=(A0_lambda*T0+A1_lambda*T1+A2_lambda*T2), A_i_lambda=A_i_0+lambda*A_i_1",
+            "coefficient_order": "t^0 through t^18 in homogeneous degree 18",
+            "F0_rows": f0_rows,
+            "F1_rows": f1_rows,
+        },
+        "principal_graph_slice_restriction": {
+            "formula": "F=F0+s_union*H, H|Rminus in Sym^6",
+            "s_union_coefficients_by_t_power": s_union,
+            "Sym6_basis_t_powers": list(range(7)),
+        },
+    }
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(evidence, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print(f"UST.G3BH evidence: PASS -> {args.out}")
+
+
+if __name__ == "__main__":
+    main()

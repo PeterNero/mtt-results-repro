@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Independently verify the G3BP endpoint-determinant CRT screen."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import sys
+from pathlib import Path
+from typing import Any
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3bp_h11_endpoint_determinant_crt.packet.json"
+PRIMES = [21817, 33863, 37493, 38113, 68213, 69011, 72271, 73673]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], base: Path) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    path = base / relative
+    require(path.is_file(), f"missing recorded file: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"size: {path}")
+    require(sha256(path) == record["sha256"], f"hash: {path}")
+    return path
+
+
+def parse_log(path: Path) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2:
+            fields[parts[0]] = parts[1]
+    return fields
+
+
+def signed(value: int, modulus: int) -> int:
+    value %= modulus
+    return value if value <= modulus // 2 else value - modulus
+
+
+def main() -> None:
+    require(PACKET.is_file(), "G3BP packet")
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["schema"] == "mtt.unified-source.g3bp-h11-endpoint-determinant-crt.v1", "schema")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_CRT_reconstruction_probe_v2 as crt
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+
+    for key in ("G3BI", "G3BK", "G3BL", "G3BN"):
+        verify_record(packet["inputs"][key], ROOT)
+    for key in ("H11_Macaulay", "H11_factorization", "split_prime_solver"):
+        verify_record(packet["inputs"][key], mld)
+    for item in packet["inputs"]["base_split_prime_packets"]:
+        verify_record(item, mld)
+
+    minpoly = packet["selected_chart"]["minimal_polynomial_coefficients_ascending"]
+    residues: list[list[int]] = []
+    nonzero = 0
+    rows = packet["prime_residues"]
+    require([int(row["prime"]) for row in rows] == PRIMES, "prime order")
+    for row in rows:
+        prime = int(row["prime"])
+        roots = [int(value) for value in row["roots"]]
+        determinants = [int(value) for value in row["determinants_at_roots"]]
+        coefficients = [
+            int(value) for value in row["determinant_power_basis_coefficients_mod_prime"]
+        ]
+        require(len(roots) == len(determinants) == 6, f"six roots p={prime}")
+        require(len(set(roots)) == 6, f"distinct roots p={prime}")
+        require(
+            all(arithmetic.evaluate(minpoly, root, prime) == 0 for root in roots),
+            f"selected roots p={prime}",
+        )
+        require(
+            all(
+                arithmetic.evaluate(coefficients, root, prime) == determinant
+                for root, determinant in zip(roots, determinants, strict=True)
+            ),
+            f"interpolation p={prime}",
+        )
+        require(coefficients == arithmetic.interpolate(roots, determinants, prime), f"coefficients p={prime}")
+        root_rows = row["root_factorizations"]
+        require(len(root_rows) == 6, f"factorization count p={prime}")
+        for root_row, root, determinant in zip(root_rows, roots, determinants, strict=True):
+            require(int(root_row["gamma_root"]) == root, f"root row p={prime}")
+            verify_record(root_row["base_chart"], mld)
+            verify_record(root_row["determinant_RHS"], mld)
+            verify_record(root_row["endpoint_chart"], ROOT)
+            log_path = verify_record(root_row["factorization_log"], ROOT)
+            fields = parse_log(log_path)
+            require(fields.get("STATUS") == "SUCCESS", f"log status p={prime} g={root}")
+            require(int(fields["PRIME"]) == prime, f"log prime p={prime} g={root}")
+            require(int(fields["ROWS"]) == 5439, f"log rows p={prime} g={root}")
+            require(int(fields["CHART_DETERMINANT"]) == determinant, f"log determinant p={prime} g={root}")
+            nonzero += determinant != 0
+        residues.append(coefficients)
+
+    prefix_primes = PRIMES[:-1]
+    holdout_prime = PRIMES[-1]
+    prefix_modulus = math.prod(prefix_primes)
+    full_modulus = math.prod(PRIMES)
+    prefix_candidates: list[int] = []
+    full_candidates: list[int] = []
+    holdout_matches: list[bool] = []
+    for degree in range(6):
+        prefix_value, checked_prefix = crt.crt_scalar(
+            [row[degree] for row in residues[:-1]], prefix_primes
+        )
+        full_value, checked_full = crt.crt_scalar(
+            [row[degree] for row in residues], PRIMES
+        )
+        require(checked_prefix == prefix_modulus and checked_full == full_modulus, "CRT modulus")
+        prefix_candidate = signed(prefix_value, prefix_modulus)
+        full_candidate = signed(full_value, full_modulus)
+        prefix_candidates.append(prefix_candidate)
+        full_candidates.append(full_candidate)
+        holdout_matches.append(prefix_candidate % holdout_prime == residues[-1][degree])
+
+    result = packet["CRT"]
+    require(prefix_candidates == result["prefix_signed_coefficient_candidates"], "prefix candidates")
+    require(full_candidates == result["full_signed_coefficient_candidates"], "full candidates")
+    require(holdout_matches == result["prefix_candidates_predict_holdout"], "holdout vector")
+    require(sum(holdout_matches) == int(result["holdout_matches"]) == 0, "holdout mismatch count")
+    gf11 = arithmetic.evaluate(full_candidates, 3, 11)
+    require(gf11 == int(result["full_candidate_GF11_gamma3_evaluation"]) == 3, "GF11 screen")
+    require(int(result["known_GF11_gamma3_endpoint_determinant"]) == 0, "known GF11 endpoint")
+    require(nonzero == int(result["nonzero_split_root_determinants"]) == 48, "nonzero roots")
+    print("UST.G3BP H11 endpoint determinant CRT verifier: PASS")
+    print(f"split_roots={nonzero}/48 holdout_matches=0/6 GF11_candidate={gf11} expected=0")
+
+
+if __name__ == "__main__":
+    main()

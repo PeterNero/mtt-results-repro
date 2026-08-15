@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo="$(cd "$(dirname "$0")" && pwd)"
+cd "$repo"
+
+if [ "${1:-}" = "--check-runtime" ]; then
+  test -x state/ust_f1016_sparse_column_minor
+  test -x state/ust_f1016_sparse_column_minor_weighted_fast_native
+  test -x state/ust_f1016_sparse_column_minor_weighted_free_fast_native
+  test -x state/ust_f1016_sparse_rank
+  test -x state/ust_f1016_sparse_functional_check
+  test -x state/ust_f1016_givaro_map_pivot_replay
+  ! ldd state/ust_f1016_sparse_rank | grep -q "not found"
+  ! ldd state/ust_f1016_sparse_functional_check | grep -q "not found"
+  ! ldd state/ust_f1016_givaro_map_pivot_replay | grep -q "not found"
+  printf 'UST_NATIVE_RUNTIME_PASS\n'
+  exit 0
+fi
+
+prefix_override="${1:-}"
+prefix=""
+linux_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+for candidate in "$prefix_override" "$linux_home"/.local/opt/linbox-*/root/usr /usr; do
+  [ -n "$candidate" ] || continue
+  if [ -f "$candidate/include/givaro/extension.h" ] && [ -d "$candidate/include/linbox" ]; then
+    prefix="$candidate"
+    break
+  fi
+done
+[ -n "$prefix" ] || {
+  echo "LinBox/Givaro headers not found" >&2
+  exit 69
+}
+
+libdir=""
+for candidate in \
+  "$prefix/lib/$(gcc -dumpmachine)" \
+  "$prefix/lib/x86_64-linux-gnu" \
+  "$prefix/lib64" \
+  "$prefix/lib"; do
+  if compgen -G "$candidate/libgivaro.so*" >/dev/null && \
+     compgen -G "$candidate/liblinbox*.so*" >/dev/null; then
+    libdir="$candidate"
+    break
+  fi
+done
+[ -n "$libdir" ] || {
+  echo "LinBox/Givaro libraries not found" >&2
+  exit 69
+}
+
+mkdir -p state
+g++ -O3 -std=c++17 ust_f1016_sparse_column_minor.cpp \
+  -o state/ust_f1016_sparse_column_minor.tmp
+g++ -O3 -flto -march=native -std=c++17 \
+  ust_f1016_sparse_column_minor_weighted_fast.cpp \
+  -o state/ust_f1016_sparse_column_minor_weighted_fast_native.tmp
+g++ -O3 -flto -march=native -std=c++17 \
+  ust_f1016_sparse_column_minor_weighted_free_fast.cpp \
+  -o state/ust_f1016_sparse_column_minor_weighted_free_fast_native.tmp
+g++ -O2 -std=c++17 -I"$prefix/include" -pthread \
+  ust_f1016_sparse_rank.cpp -L"$libdir" -Wl,-rpath,"$libdir" \
+  -llinbox -lntl -lgivaro -lgmpxx -lgmp -lgf2x \
+  -o state/ust_f1016_sparse_rank.tmp
+g++ -O2 -std=c++17 -I"$prefix/include" \
+  ust_f1016_sparse_functional_check.cpp -L"$libdir" -Wl,-rpath,"$libdir" \
+  -lgivaro -lgmpxx -lgmp \
+  -o state/ust_f1016_sparse_functional_check.tmp
+g++ -O3 -std=c++17 -I"$prefix/include" \
+  ust_f1016_givaro_map_pivot_replay.cpp -L"$libdir" -Wl,-rpath,"$libdir" \
+  -lgivaro -lgmpxx -lgmp \
+  -o state/ust_f1016_givaro_map_pivot_replay.tmp
+
+mv state/ust_f1016_sparse_column_minor.tmp state/ust_f1016_sparse_column_minor
+mv state/ust_f1016_sparse_column_minor_weighted_fast_native.tmp \
+  state/ust_f1016_sparse_column_minor_weighted_fast_native
+mv state/ust_f1016_sparse_column_minor_weighted_free_fast_native.tmp \
+  state/ust_f1016_sparse_column_minor_weighted_free_fast_native
+mv state/ust_f1016_sparse_rank.tmp state/ust_f1016_sparse_rank
+mv state/ust_f1016_sparse_functional_check.tmp state/ust_f1016_sparse_functional_check
+mv state/ust_f1016_givaro_map_pivot_replay.tmp \
+  state/ust_f1016_givaro_map_pivot_replay
+
+printf 'UST_NATIVE_PREFIX=%s\n' "$prefix"
+printf 'UST_NATIVE_LIBDIR=%s\n' "$libdir"
+printf 'UST_NATIVE_COMPILER=%s\n' "$(g++ --version | head -1)"
+printf 'UST_NATIVE_BUILD_PASS\n'

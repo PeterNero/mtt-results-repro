@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Verify UST.G3Q: the zero-section buffer cannot yield a rank-nine monad map."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3q_zero_section_buffer_injection_nogo.packet.json"
+LOCK_PATH = ROOT / "state" / "upstream-lock.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def verify_inputs(packet: dict, lock: dict) -> tuple[dict, dict]:
+    local_g3p = packet["inputs"]["local_G3P_packet"]
+    local_g3g = packet["inputs"]["local_G3G_packet"]
+    g3p_path = ROOT / local_g3p["path"]
+    g3g_path = ROOT / local_g3g["path"]
+    require(sha256(g3p_path) == local_g3p["sha256"], "G3P packet hash")
+    require(sha256(g3g_path) == local_g3g["sha256"], "G3G packet hash")
+
+    source = packet["inputs"]["fiber_WIT_cutset"]
+    repository = next(
+        item for item in lock["repositories"] if item["id"] == source["repository_id"]
+    )
+    locked = next(item for item in repository["sources"] if item["path"] == source["path"])
+    require(source["sha256"] == locked["sha256"], "fiber WIT source hash")
+    return load(g3p_path), load(g3g_path)
+
+
+def verify_fiber_rank_cutset(packet: dict, g3p: dict) -> None:
+    rows = packet["fiber_rows"]
+    require(rows["outside_support_kappa"] == "O_E^3", "generic fiber row")
+    require("L direct-sum Qdual" == rows["support_generic_kappa"], "support fiber row")
+    require(rows["degree_L"] == 3, "positive line degree")
+    require(rows["induced_positive_line_count"] == 3, "induced L count")
+    require(rows["buffer_restriction"] == "O_E^18", "buffer fiber row")
+
+    # A line of negative degree on a compact elliptic curve has no sections.
+    degree_l_inverse = -rows["degree_L"]
+    h0_l_inverse = 0 if degree_l_inverse < 0 else None
+    require(h0_l_inverse == 0, "negative line unexpectedly has a section")
+
+    source_rank = 9
+    forced_kernel_rank = rows["induced_positive_line_count"]
+    maximum_rank = source_rank - forced_kernel_rank
+    vanishing = packet["hom_vanishing"]
+    require(vanishing["degree_L_inverse"] == degree_l_inverse == -3, "inverse degree")
+    require(vanishing["dimension"] == h0_l_inverse == 0, "Hom dimension")
+    require(vanishing["source_rank"] == source_rank, "source rank")
+    require(vanishing["forced_kernel_rank"] == forced_kernel_rank == 3, "kernel rank")
+    require(vanishing["maximum_map_rank_on_support"] == maximum_rank == 6, "rank bound")
+    require(not vanishing["constant_rank_nine_possible"], "rank-nine map overclaimed")
+
+    reduction = g3p["local_freeness_reduction"]
+    require(reduction["constant_rank_required"] == 9, "G3P rank target")
+    require(maximum_rank < reduction["constant_rank_required"], "no-go not strict")
+
+
+def verify_vertical_generalization(packet: dict, g3g: dict) -> None:
+    cutset = packet["vertical_buffer_cutset"]
+    require(cutset["finite_section_FM_output"] == "semistable degree-zero line sum", "vertical FM type")
+    require(cutset["positive_to_slope_zero_Hom"] == 0, "slope Hom cutset")
+    require(cutset["all_vertical_finite_section_buffers_excluded"], "vertical buffers left live")
+    require(not cutset["G3P_perfect_complex_excluded"], "perfect complex incorrectly retired")
+    require(cutset["G3P_direct_cokernel_promotion_excluded"], "direct monad left live")
+
+    repair = g3g["fourier_mukai_repair"]
+    forced = packet["forced_exit"]
+    require(repair["total_twisted_output"] == forced["locked_local_twisted_output"] == [9, -3], "G3G twisted row")
+    require(repair["total_ordinary_output"] == forced["locked_local_Bfield_corrected_output"] == [9, 0], "G3G ordinary row")
+    require(repair["matches_selected_hidden_fiber_pair"], "G3G does not match hidden fiber")
+
+
+def verify_scope(packet: dict) -> None:
+    scope = packet["scope"]
+    require(scope["G3P_hidden_Chern_rows_remain_closed"], "G3P rows reopened")
+    require(scope["G3P_global_perfect_complex_remains_closed"], "G3P object reopened")
+    require(scope["zero_section_buffer_monad_retires"], "failed map not retired")
+    require(not scope["all_hidden_perfect_complex_presentations_excluded"], "overbroad no-go")
+    require(not scope["holomorphic_W9_constructed"], "W9 overclaimed")
+    require(not scope["target_HYM_or_Bianchi_closed"], "analytic endpoint overclaimed")
+    require(not scope["B_HS_01_closed"], "B.HS.01 overclaimed")
+    require(packet["continuous_fit_parameters"] == 0, "continuous fit introduced")
+    require(packet["observed_inputs"] == 0, "observed input introduced")
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    lock = load(LOCK_PATH)
+    require(
+        packet["schema"] == "mtt.unified-source.q79-zero-section-buffer-injection-nogo.v1",
+        "packet schema",
+    )
+    require(packet["theorem_id"] == "UST.G3Q", "theorem id")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_ZERO_SECTION_MONAD_PROMOTION_NOGO_HORIZONTAL_G3G_REPAIR_FORCED",
+        "status",
+    )
+    g3p, g3g = verify_inputs(packet, lock)
+    verify_fiber_rank_cutset(packet, g3p)
+    verify_vertical_generalization(packet, g3g)
+    verify_scope(packet)
+
+    print("UST.G3Q zero-section buffer injection no-go: PASS")
+    print("support-fiber Hom(L,O^18)=0 for deg(L)=3")
+    print("every A9->B18 map has support-fiber rank <= 6")
+    print("G3P perfect complex/Chern rows: retained")
+    print("direct zero-section monad promotion: RETIRED")
+    print("forced horizontal G3G/G3H exit: closed downstream by G3R")
+
+
+if __name__ == "__main__":
+    main()

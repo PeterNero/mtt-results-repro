@@ -1,0 +1,93 @@
+# UST.G3BN H11 Alternate Split-Prime Initializer Theorem
+
+## Result
+
+The selected H11 chart at the G3BI root-containing endpoint is invertible over
+`Q(gamma)`. G3BN proves this by exact reduction at the completely split place
+
+```text
+(21817, gamma-5).
+```
+
+The resulting `5439 x 5439` endpoint chart has
+
+```text
+determinant = 276 mod 21817,
+```
+
+which is nonzero. This closes the characteristic-zero H11 endpoint chart-
+existence question left by G3BK and resolves the G3BL proof-prime obstruction.
+
+## Construction
+
+Start from the hash-certified selected B89 H11 chart evaluated at
+`(21817,gamma-5)`. Its 5,439 columns consist of
+
+```text
+1013 quotient units + 4426 selected original-Jacobian columns.
+```
+
+G3BN reconstructs the G3BI correction `C` from all 19 exact `Q(gamma)` terms,
+differentiates `sC` in all ten Cayley variables, evaluates at the split place,
+and compiles the result in the same 4,426 selected-column order. The finite
+endpoint chart is therefore exactly
+
+```text
+A_G3BI = A_B89 + Delta_C.
+```
+
+The correction update has 18,748 nonzero entries at this place. An independent
+verifier rebuilds this update from the number-field coefficients, reconstructs
+the endpoint chart byte for byte, and reruns the sparse modular factorization.
+
+## Why One Split Root Suffices
+
+Every selected-chart entry belongs to `Z[gamma]`, so its determinant is an
+element of `Z[gamma]`. If that determinant were zero in `Q(gamma)`, every good
+reduction at every root of the minimal polynomial would be zero. The displayed
+nonzero reduction therefore proves
+
+```text
+det(A_G3BI) != 0 in Q(gamma).
+```
+
+No CRT reconstruction of the determinant is needed for this existence claim.
+CRT is still required to recover a large inverse action over `Q(gamma)` from
+modular solutions.
+
+## Relation To G3BL
+
+G3BL proved that the same endpoint presentation has corank one at
+`(11,gamma-3)`, even after every unused original-Jacobian column is restored.
+G3BN shows that this is bad reduction of the finite presentation:
+
+```text
+GF(11), gamma=3:      rank 5438/5439,
+GF(21817), gamma=5:   rank 5439/5439.
+```
+
+Thus the G3BI endpoint and its H11 characteristic-zero chart survive. The
+correct transport implementation initializes H11 through an admissible split
+place such as G3BN, while retaining G3BK's algebraic-pole avoidance on the
+transcendental interior.
+
+## Claim Boundary
+
+G3BN does not yet emit:
+
+- the H11 inverse action over `Q(gamma)`;
+- the H02 endpoint initializer;
+- the recursive H02-to-H11-to-H20 return;
+- the integral continuation of the selected G3BG vector;
+- terminal B89 coordinates; or
+- the normalized 248-row decision.
+
+## Reproduction
+
+```powershell
+python build_ust_g3bn_h11_alternate_split_prime_initializer.py
+python verify_ust_g3bn_h11_alternate_split_prime_initializer.py
+```
+
+Set `MTT_MLD_REPO` only when the sibling Mathematical Language Discovery
+repository is not in its usual location.

@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Localize the four-relation H02 rank correction by ordered component."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3gh"
+ARRAYS = EVIDENCE / "H02.rank_jump_component_localization.npz"
+CERTIFICATE = EVIDENCE / "H02.rank_jump_component_localization.json"
+G3DW = ROOT / "state/ust_g3dw_h02_kernel_component_triangularity.packet.json"
+G3GF = ROOT / "evidence/ust_g3gf/H02.global_rank_profile_correction.json"
+OLD_KERNEL = ROOT / "evidence/ust_g3di/H02.Q_kernel.p21817.g5.bin"
+GENERIC_KERNEL = ROOT / "evidence/ust_g3gg/H02.p81359.g26027.kernel.bin"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"packet exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    g3dw = load(G3DW)
+    old = kernel_io.read_kernel(OLD_KERNEL)
+    generic = kernel_io.read_kernel(GENERIC_KERNEL)
+    require(
+        (old["prime"], old["matrix"].shape) == (21817, (6022, 1274)),
+        "old kernel",
+    )
+    require(
+        (generic["prime"], generic["matrix"].shape) == (81359, (6022, 1270)),
+        "generic kernel",
+    )
+    old_dependent = set(int(value) for value in old["dependent"])
+    generic_dependent = set(int(value) for value in generic["dependent"])
+    common = sorted(old_dependent & generic_dependent)
+    old_only = sorted(old_dependent - generic_dependent)
+    generic_only = sorted(generic_dependent - old_dependent)
+    require((len(common), len(old_only), len(generic_only)) == (1269, 5, 1), "set profile")
+    require(old_only == [4937, 4938, 4939, 5151, 5152], "old-only coordinates")
+    require(generic_only == [5061], "generic-only coordinate")
+
+    component_rows = g3dw["component_partition"]["component_rows"]
+    table: list[dict[str, object]] = []
+    changed: list[dict[str, object]] = []
+    for row in component_rows:
+        component = int(row["component"])
+        start = int(row["coordinate_start"])
+        past = int(row["coordinate_past"])
+        old_set = sorted(value for value in old_dependent if start <= value < past)
+        generic_set = sorted(
+            value for value in generic_dependent if start <= value < past
+        )
+        item = {
+            "component": component,
+            "coordinate_start": start,
+            "coordinate_past": past,
+            "old_dependent": len(old_set),
+            "generic_dependent": len(generic_set),
+            "delta": len(generic_set) - len(old_set),
+            "old_only_global": sorted(set(old_set) - set(generic_set)),
+            "generic_only_global": sorted(set(generic_set) - set(old_set)),
+            "old_only_local": [value - start for value in set(old_set) - set(generic_set)],
+            "generic_only_local": [
+                value - start for value in set(generic_set) - set(old_set)
+            ],
+        }
+        item["old_only_local"].sort()
+        item["generic_only_local"].sort()
+        table.append(item)
+        if old_set != generic_set:
+            changed.append(item)
+    require([row["component"] for row in changed] == [23, 24], "changed components")
+    require(
+        (changed[0]["delta"], changed[1]["delta"]) == (-3, -1),
+        "component deltas",
+    )
+    component20 = table[20]
+    require(
+        component20["old_dependent"] == component20["generic_dependent"] == 100
+        and not component20["old_only_global"]
+        and not component20["generic_only_global"],
+        "component20 unchanged",
+    )
+
+    np.savez_compressed(
+        ARRAYS,
+        components=np.asarray([row["component"] for row in table], dtype=np.uint8),
+        coordinate_start=np.asarray(
+            [row["coordinate_start"] for row in table], dtype=np.uint16
+        ),
+        coordinate_past=np.asarray(
+            [row["coordinate_past"] for row in table], dtype=np.uint16
+        ),
+        old_dependent_count=np.asarray(
+            [row["old_dependent"] for row in table], dtype=np.uint16
+        ),
+        generic_dependent_count=np.asarray(
+            [row["generic_dependent"] for row in table], dtype=np.uint16
+        ),
+        common_dependent_coordinates=np.asarray(common, dtype=np.uint16),
+        old_only_dependent_coordinates=np.asarray(old_only, dtype=np.uint16),
+        generic_only_dependent_coordinates=np.asarray(
+            generic_only, dtype=np.uint16
+        ),
+    )
+    packet = {
+        "schema": "ust.g3gh.h02.rank-jump-component-localization.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GH",
+        "status": "CLOSED_EXACT_FOUR_RELATION_RANK_JUMP_LOCALIZED_TO_COMPONENTS23_24",
+        "inputs": {
+            "G3DW": record(G3DW),
+            "G3GF": record(G3GF),
+            "old_kernel": record(OLD_KERNEL),
+            "generic_kernel": record(GENERIC_KERNEL),
+        },
+        "coordinate_comparison": {
+            "common_dependent_coordinates": len(common),
+            "old_only_coordinates": old_only,
+            "generic_only_coordinates": generic_only,
+            "changed_component_rows": changed,
+            "component20": component20,
+            "artifact": record(ARRAYS),
+        },
+        "checks": {
+            "the_two_kernel_charts_share1269_dependent_coordinates": True,
+            "the_net_four_relation_loss_is_exactly_five_removed_and_one_added": True,
+            "only_components23_and24_change": True,
+            "component23_loses_three_relations": True,
+            "component24_loses_one_net_relation": True,
+            "component20_retains_the_identical100_dependent_coordinates": True,
+        },
+        "guardrails": {
+            "claims_component23_or24_characteristic_zero_kernel_dimensions": False,
+            "claims_global_rank4752_equality": False,
+            "reopens_the_component20_finite_source_theorem": False,
+            "claims_component20_Qgamma_promotion": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3ghH02RankJumpComponentLocalization",
+            "tier": "CLOSED_EXACT_FINITE_COMPONENT_CUTSET",
+            "statement": (
+                "The old 1274-column and larger-prime 1270-column kernel charts "
+                "share 1269 dependent coordinates. Their complete difference is "
+                "localized to components 23 and 24; component 20 retains exactly "
+                "the same 100 dependent coordinates."
+            ),
+        },
+        "next_required_object": (
+            "Treat global rank promotion only in components23/24. Treat the "
+            "component20 characteristic-zero source independently through the "
+            "G3GG fixed-minor operator and the Cox/H02 transfer."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3GH rank-jump localization: PASS "
+        "common=1269 component23=-3 component24=-1 component20=unchanged"
+    )
+
+
+if __name__ == "__main__":
+    main()

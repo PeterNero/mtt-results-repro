@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Verify exact reconstruction of the uneliminated G3AO uvs F4 inputs."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_dual_msolve_inputs as builder
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> None:
+    packet = json.loads(builder.OUT.read_text(encoding="ascii"))
+    require(packet["source_sha256"] == sha256(direct.SOURCE), "selected source")
+    require(all(packet["checks"].values()), "input checks")
+    polynomials = direct.selected_polynomials()
+    g = sp.symbols("g")
+    minpoly = sp.Poly(
+        sp.sympify(polynomials["minpoly"].replace("^", "**")),
+        g,
+        modulus=101,
+    )
+    require(minpoly.degree() == 6 and minpoly.is_irreducible, "irreducible F101 extension")
+    script = direct.CAMPAIGN / packet["export_script"]["path"]
+    raw_path = direct.CAMPAIGN / packet["raw_output"]["path"]
+    require(script.is_file() and sha256(script) == packet["export_script"]["sha256"], "export script")
+    require(raw_path.is_file() and sha256(raw_path) == packet["raw_output"]["sha256"], "raw export")
+    require(script.read_text(encoding="ascii") == builder.make_export_script(polynomials), "exact script")
+    raw = raw_path.read_text(encoding="utf-8")
+    require("G3AO_MSOLVE_EXPORT_PASS" in raw, "export marker")
+    for locus in ("smooth", "singular"):
+        generators = common.parse_locus(raw, locus)
+        expected = builder.make_msolve_input(polynomials, generators)
+        record = packet["loci"][locus]["input"]
+        path = direct.CAMPAIGN / record["path"]
+        require(path.is_file() and sha256(path) == record["sha256"], f"{locus} input")
+        require(path.read_text(encoding="ascii") == expected, f"{locus} exact reconstruction")
+        require(packet["loci"][locus]["generator_count"] == len(generators) + 1, f"{locus} count")
+    print("UST.G3AO uvs bidual msolve input verifier: PASS")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,601 @@
+#!/usr/bin/env python3
+"""Prove the exact Q(gamma) rank of the selected affine H02 path update."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from array import array
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components, maximum_bipartite_matching
+from sympy import Poly, QQ, symbols
+from sympy.polys.matrices import DomainMatrix
+
+import build_ust_g3bw_g3bi_h02_dm_woodbury_reduction as endpoint
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3bz"
+OUT = ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json"
+PRIME = 21817
+GAMMA_ROOT = 5
+GAMMA_ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    path = path.resolve()
+    repository = repository.resolve()
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository),
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def evaluate(coefficients: tuple[int, ...], value: int, prime: int) -> int:
+    result = 0
+    for coefficient in reversed(coefficients):
+        result = (result * value + coefficient) % prime
+    return result
+
+
+def exact_path_update(
+    descriptors: list[tuple[int, tuple[int, ...]]],
+    corrections: list[dict[tuple[int, ...], tuple[int, ...]]],
+    target_lookup: dict[tuple[int, ...], int],
+    complement_lookup: dict[int, int],
+    gamma_root: int = GAMMA_ROOT,
+) -> tuple[sparse.csr_matrix, sparse.csr_matrix]:
+    pattern_rows = array("i")
+    pattern_columns = array("i")
+    evaluated_rows = array("i")
+    evaluated_columns = array("i")
+    evaluated_values = array("I")
+    zero = (0, 0, 0, 0, 0, 0)
+    for column, (generator, multiplier) in enumerate(descriptors):
+        entries: dict[int, tuple[int, ...]] = {}
+        for exponent, coefficients in corrections[generator].items():
+            product = tuple(a + b for a, b in zip(multiplier, exponent, strict=True))
+            ambient_row = target_lookup.get(product)
+            require(ambient_row is not None, "path-update term in H02 target")
+            entries[ambient_row] = endpoint.coefficient_add(
+                entries.get(ambient_row, zero), coefficients
+            )
+        for ambient_row, coefficients in entries.items():
+            if not any(coefficients):
+                continue
+            local_row = complement_lookup.get(ambient_row)
+            if local_row is None:
+                continue
+            pattern_rows.append(local_row)
+            pattern_columns.append(column)
+            value = evaluate(coefficients, gamma_root, PRIME)
+            if value:
+                evaluated_rows.append(local_row)
+                evaluated_columns.append(column)
+                evaluated_values.append(value)
+    dimension = len(descriptors)
+    pattern = sparse.csr_matrix(
+        (
+            np.ones(len(pattern_rows), dtype=np.uint8),
+            (
+                np.frombuffer(pattern_rows, dtype=np.int32),
+                np.frombuffer(pattern_columns, dtype=np.int32),
+            ),
+        ),
+        shape=(dimension, dimension),
+    )
+    pattern.sum_duplicates()
+    pattern.data[:] = 1
+    evaluated = sparse.csr_matrix(
+        (
+            np.frombuffer(evaluated_values, dtype=np.uint32),
+            (
+                np.frombuffer(evaluated_rows, dtype=np.int32),
+                np.frombuffer(evaluated_columns, dtype=np.int32),
+            ),
+        ),
+        shape=(dimension, dimension),
+        dtype=np.uint32,
+    )
+    evaluated.sum_duplicates()
+    evaluated.data %= PRIME
+    evaluated.eliminate_zeros()
+    return pattern, evaluated
+
+
+def exact_coefficient_matrices(
+    descriptors: list[tuple[int, tuple[int, ...]]],
+    corrections: list[dict[tuple[int, ...], tuple[int, ...]]],
+    target_lookup: dict[tuple[int, ...], int],
+    complement_lookup: dict[int, int],
+) -> list[sparse.csr_matrix]:
+    rows = [[] for _ in range(6)]
+    columns = [[] for _ in range(6)]
+    values = [[] for _ in range(6)]
+    zero = (0, 0, 0, 0, 0, 0)
+    for column, (generator, multiplier) in enumerate(descriptors):
+        entries: dict[int, tuple[int, ...]] = {}
+        for exponent, coefficients in corrections[generator].items():
+            product = tuple(a + b for a, b in zip(multiplier, exponent, strict=True))
+            ambient_row = target_lookup.get(product)
+            require(ambient_row is not None, "path-update term in H02 target")
+            entries[ambient_row] = endpoint.coefficient_add(
+                entries.get(ambient_row, zero), coefficients
+            )
+        for ambient_row, coefficients in entries.items():
+            local_row = complement_lookup.get(ambient_row)
+            if local_row is None:
+                continue
+            for degree, coefficient in enumerate(coefficients):
+                if coefficient:
+                    rows[degree].append(local_row)
+                    columns[degree].append(column)
+                    values[degree].append(coefficient)
+    dimension = len(descriptors)
+    result = []
+    for degree in range(6):
+        matrix = sparse.csr_matrix(
+            (values[degree], (rows[degree], columns[degree])),
+            shape=(dimension, dimension),
+            dtype=np.int64,
+        )
+        matrix.sum_duplicates()
+        matrix.eliminate_zeros()
+        result.append(matrix)
+    return result
+
+
+def pivot_columns_mod_prime(matrix: np.ndarray, prime: int) -> list[int]:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    pivot_columns: list[int] = []
+    pivot_row = 0
+    for column in range(work.shape[1]):
+        candidates = np.flatnonzero(work[pivot_row:, column])
+        if candidates.size == 0:
+            continue
+        selected = pivot_row + int(candidates[0])
+        if selected != pivot_row:
+            work[[pivot_row, selected]] = work[[selected, pivot_row]]
+        inverse = pow(int(work[pivot_row, column]), -1, prime)
+        work[pivot_row] = work[pivot_row] * inverse % prime
+        if pivot_row + 1 < work.shape[0]:
+            factors = work[pivot_row + 1 :, column].copy()
+            nonzero = np.flatnonzero(factors)
+            if nonzero.size:
+                rows = pivot_row + 1 + nonzero
+                work[rows] = (
+                    work[rows] - factors[nonzero, None] * work[pivot_row]
+                ) % prime
+        pivot_columns.append(column)
+        pivot_row += 1
+        if pivot_row == work.shape[0]:
+            break
+    return pivot_columns
+
+
+def component_rank_certificate(
+    matrix: sparse.csr_matrix,
+    prime: int,
+    *,
+    select_minor: bool,
+) -> tuple[list[dict[str, int]], np.ndarray, np.ndarray]:
+    coo = matrix.tocoo()
+    dimension = matrix.shape[0]
+    graph = sparse.csr_matrix(
+        (
+            np.ones(2 * coo.nnz, dtype=np.uint8),
+            (
+                np.concatenate((coo.row, dimension + coo.col)),
+                np.concatenate((dimension + coo.col, coo.row)),
+            ),
+        ),
+        shape=(2 * dimension, 2 * dimension),
+    )
+    _, labels = connected_components(graph, directed=False, return_labels=True)
+    active_components = np.unique(labels[coo.row])
+    summaries: list[dict[str, int]] = []
+    selected_rows: list[np.ndarray] = []
+    selected_columns: list[np.ndarray] = []
+    for component in active_components.tolist():
+        rows = np.flatnonzero(labels[:dimension] == component).astype(np.int32)
+        columns = np.flatnonzero(labels[dimension:] == component).astype(np.int32)
+        dense = matrix[rows, :][:, columns].toarray()
+        local_columns = pivot_columns_mod_prime(dense, prime)
+        rank = len(local_columns)
+        summaries.append(
+            {
+                "rows": int(rows.size),
+                "columns": int(columns.size),
+                "rank": rank,
+            }
+        )
+        if select_minor and rank:
+            local_rows = pivot_columns_mod_prime(dense.T, prime)
+            require(len(local_rows) == rank, "component row and column ranks agree")
+            selected_rows.append(rows[np.asarray(local_rows, dtype=np.int32)])
+            selected_columns.append(columns[np.asarray(local_columns, dtype=np.int32)])
+    if not select_minor:
+        return summaries, np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+    return (
+        summaries,
+        np.concatenate(selected_rows).astype(np.int32),
+        np.concatenate(selected_columns).astype(np.int32),
+    )
+
+
+def exact_defective_component_ranks(
+    coefficient_matrices: list[sparse.csr_matrix],
+    evaluated: sparse.csr_matrix,
+    minimal_polynomial: list[int],
+    modular_summaries: list[dict[str, int]],
+) -> list[dict[str, int]]:
+    coo = evaluated.tocoo()
+    dimension = evaluated.shape[0]
+    graph = sparse.csr_matrix(
+        (
+            np.ones(2 * coo.nnz, dtype=np.uint8),
+            (
+                np.concatenate((coo.row, dimension + coo.col)),
+                np.concatenate((dimension + coo.col, coo.row)),
+            ),
+        ),
+        shape=(2 * dimension, 2 * dimension),
+    )
+    _, labels = connected_components(graph, directed=False, return_labels=True)
+    active_components = np.unique(labels[coo.row])
+    gamma = symbols("gamma")
+    field = QQ.alg_field_from_poly(
+        Poly(
+            sum(
+                value * gamma**degree
+                for degree, value in enumerate(minimal_polynomial)
+            ),
+            gamma,
+        ),
+        alias="gamma",
+    )
+    results = []
+    for component_index, component in enumerate(active_components.tolist()):
+        rows = np.flatnonzero(labels[:dimension] == component).astype(np.int32)
+        columns = np.flatnonzero(labels[dimension:] == component).astype(np.int32)
+        pattern = evaluated[rows, :][:, columns].copy()
+        pattern.data = np.ones(pattern.nnz, dtype=np.uint8)
+        matching = maximum_bipartite_matching(pattern, perm_type="column")
+        structural_rank = int(np.count_nonzero(matching >= 0))
+        modular_rank = modular_summaries[component_index]["rank"]
+        if modular_rank == structural_rank:
+            continue
+        coordinate_coefficients: dict[tuple[int, int], list[int]] = {}
+        for degree, coefficient_matrix in enumerate(coefficient_matrices):
+            block = coefficient_matrix[rows, :][:, columns].tocoo()
+            for row, column, value in zip(
+                block.row.tolist(), block.col.tolist(), block.data.tolist(), strict=True
+            ):
+                coordinate_coefficients.setdefault((row, column), [0] * 6)[degree] += int(
+                    value
+                )
+        entries: dict[int, dict[int, object]] = {}
+        for (row, column), ascending in coordinate_coefficients.items():
+            entries.setdefault(row, {})[column] = field(list(reversed(ascending)))
+        exact_rank = int(
+            DomainMatrix(entries, (int(rows.size), int(columns.size)), field).rank()
+        )
+        results.append(
+            {
+                "component": component_index,
+                "rows": int(rows.size),
+                "columns": int(columns.size),
+                "structural_rank": structural_rank,
+                "split_place_rank": modular_rank,
+                "exact_Q_gamma_rank": exact_rank,
+                "algebraic_defect_from_matching": structural_rank - exact_rank,
+            }
+        )
+    return results
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bk_path = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+    g3br_path = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+    g3by_path = ROOT / "state" / "ust_g3by_g3bi_h02_exact_update_rank.packet.json"
+    g3bi = load(g3bi_path)
+    g3bk = load(g3bk_path)
+    g3br = load(g3br_path)
+    g3by = load(g3by_path)
+    for packet, label in ((g3bi, "G3BI"), (g3bk, "G3BK"), (g3br, "G3BR"), (g3by, "G3BY")):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    csc_path = mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay = load(macaulay_path)
+    csc = load(csc_path)
+    factor = load(factor_path)
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    quotient_rows = {int(value) for value in csc["binary"]["quotient_unit_rows"]}
+    complement_rows = np.asarray(
+        [row for row in range(len(target)) if row not in quotient_rows], dtype=np.int32
+    )
+    complement_lookup = {
+        int(ambient_row): local_row
+        for local_row, ambient_row in enumerate(complement_rows.tolist())
+    }
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    require(len(descriptors) == complement_rows.size == 42458, "H02 complement dimensions")
+    corrections = endpoint.correction_derivatives_exact(g3bi)
+    coefficient_matrices = exact_coefficient_matrices(
+        descriptors, corrections, target_lookup, complement_lookup
+    )
+    pattern, evaluated = exact_path_update(
+        descriptors, corrections, target_lookup, complement_lookup, GAMMA_ROOT
+    )
+
+    exact_matching = maximum_bipartite_matching(pattern, perm_type="column").astype(np.int32)
+    exact_upper = int(np.count_nonzero(exact_matching >= 0))
+    split_evaluations: dict[int, sparse.csr_matrix] = {}
+    split_ranks: dict[int, int] = {}
+    split_components: dict[int, list[dict[str, int]]] = {}
+    split_matching_bounds: dict[int, int] = {}
+    for gamma_root in GAMMA_ROOTS:
+        root_pattern, root_evaluated = exact_path_update(
+            descriptors, corrections, target_lookup, complement_lookup, gamma_root
+        )
+        require((root_pattern != pattern).nnz == 0, "root-independent exact support")
+        root_evaluated_pattern = root_evaluated.copy()
+        root_evaluated_pattern.data = np.ones(
+            root_evaluated_pattern.nnz, dtype=np.uint8
+        )
+        root_matching = maximum_bipartite_matching(
+            root_evaluated_pattern, perm_type="column"
+        ).astype(np.int32)
+        split_matching_bounds[gamma_root] = int(np.count_nonzero(root_matching >= 0))
+        summaries, _, _ = component_rank_certificate(
+            root_evaluated, PRIME, select_minor=False
+        )
+        split_evaluations[gamma_root] = root_evaluated
+        split_components[gamma_root] = summaries
+        split_ranks[gamma_root] = sum(item["rank"] for item in summaries)
+    best_root = max(GAMMA_ROOTS, key=lambda root: split_ranks[root])
+    best_evaluated = split_evaluations[best_root]
+    best_components, matched_rows, matched_columns = component_rank_certificate(
+        best_evaluated, PRIME, select_minor=True
+    )
+    modular_lower = split_ranks[best_root]
+    defective_components = exact_defective_component_ranks(
+        coefficient_matrices,
+        best_evaluated,
+        g3bi["selected_source"]["minimal_polynomial_coefficients_ascending"],
+        best_components,
+    )
+    exact_algebraic_defect = sum(
+        item["algebraic_defect_from_matching"] for item in defective_components
+    )
+    exact_rank = exact_upper - exact_algebraic_defect
+    require(exact_rank == modular_lower, "exact field rank reaches modular lower bound")
+    exact_rank_closed = True
+
+    g3br_update_path = ROOT / g3br["endpoint_update"]["matrix"]["path"]
+    g3br_update = sparse.load_npz(g3br_update_path).tocsr()[complement_rows, :]
+    require((g3br_update != evaluated).nnz == 0, "G3BR evaluated update replay")
+
+    require(np.unique(matched_columns).size == matched_columns.size, "matching columns unique")
+    require(np.unique(matched_rows).size == matched_rows.size, "matching rows unique")
+    minor = best_evaluated[matched_rows, :][:, matched_columns].tocsc()
+    require(minor.shape == (modular_lower, modular_lower), "square path-update minor")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    arrays_path = EVIDENCE / "G3BI_H02_affine_path_update_rank_arrays.npz"
+    coefficient_paths = [
+        EVIDENCE / f"G3BI_H02_affine_path_update.gamma_degree{degree}.npz"
+        for degree in range(6)
+    ]
+    minor_path = EVIDENCE / "H02.G3BI.affine_path_update.rank_minor.chart.bin"
+    rhs_path = EVIDENCE / "H02.G3BI.affine_path_update.unit.rhs.bin"
+    log_path = EVIDENCE / "H02.G3BI.affine_path_update.rank_minor.log"
+    np.savez_compressed(
+        arrays_path,
+        complement_rows=complement_rows,
+        exact_matching_column_by_row=exact_matching,
+        gamma_roots=np.asarray(GAMMA_ROOTS, dtype=np.int32),
+        split_ranks=np.asarray([split_ranks[root] for root in GAMMA_ROOTS], dtype=np.int32),
+        matched_rows=matched_rows,
+        matched_columns=matched_columns,
+    )
+    for path, matrix in zip(coefficient_paths, coefficient_matrices, strict=True):
+        sparse.save_npz(path, matrix, compressed=True)
+    exporter.write_chart(
+        minor_path,
+        PRIME,
+        modular_lower,
+        0,
+        modular_lower,
+        minor.indptr.astype(np.uint64).tolist(),
+        minor.indices.astype(np.uint32).tolist(),
+        minor.data.astype(np.uint32).tolist(),
+    )
+    exporter.write_rhs(rhs_path, PRIME, modular_lower, [0, 1], [0], [1])
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    command = [
+        "wsl",
+        runtime.wsl_path(solver),
+        "--chart",
+        runtime.wsl_path(minor_path),
+        "--rhs",
+        runtime.wsl_path(rhs_path),
+        "--log",
+        runtime.wsl_path(log_path),
+        "--determinant-only",
+    ]
+    completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = initializer.parse_log(log_path)
+    require(fields.get("STATUS") == "SUCCESS", "path-update determinant status")
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(determinant != 0, "nonzero path-update minor")
+
+    exact_rank_description = str(exact_rank)
+    checks = {
+        "the_exact_Q_gamma_affine_path_update_support_is_reconstructed": True,
+        "the_split_place_evaluation_matches_the_certified_G3BR_update": True,
+        "all_six_selected_split_roots_are_rank_evaluated": len(split_ranks) == 6,
+        "the_exact_support_has_structural_rank_upper_bound6037": exact_upper == 6037,
+        "exact_number_field_elimination_finds_five_rank359_defective_blocks": (
+            len(defective_components) == 5
+            and all(item["exact_Q_gamma_rank"] == 359 for item in defective_components)
+        ),
+        "the_rank_revealing_minor_has_nonzero_determinant_mod21817": determinant != 0,
+        "matching_upper_minus_exact_block_defects_equals_modular_lower": (
+            exact_rank == modular_lower == 6022
+        ),
+        "no_integral_transport_period_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3BZ checks")
+    packet = {
+        "schema": "mtt.unified-source.g3bz-g3bi-h02-exact-path-update-rank.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BZ",
+        "status": (
+            "CLOSED_EXACT_SELECTED_AFFINE_PATH_UPDATE_RANK_6022"
+            if exact_rank_closed
+            else "CLOSED_SELECTED_AFFINE_PATH_UPDATE_RANK_INTERVAL"
+        ),
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BK": record(g3bk_path),
+            "G3BR": record(g3br_path),
+            "G3BY": record(g3by_path),
+            "G3BR_update": record(g3br_update_path),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_CSC": external_record(csc_path, mld),
+            "H02_factorization": external_record(factor_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+        },
+        "affine_path_update": {
+            "family": "A(a,gamma)=A_B89(gamma)+a Delta_C(gamma)",
+            "field": "Q(gamma)",
+            "shape": [42458, 42458],
+            "exact_polynomial_support_nonzeros": int(pattern.nnz),
+            "replay_split_place": {"prime": PRIME, "gamma_root": GAMMA_ROOT},
+            "selected_rank_place": {"prime": PRIME, "gamma_root": best_root},
+            "split_place_nonzeros": int(evaluated.nnz),
+            "active_rows_at_split_place": int(np.unique(evaluated.nonzero()[0]).size),
+            "active_columns_at_split_place": int(np.unique(evaluated.nonzero()[1]).size),
+            "structural_rank_upper_bound": exact_upper,
+            "split_root_matching_bounds": {
+                str(root): split_matching_bounds[root] for root in GAMMA_ROOTS
+            },
+            "split_root_algebraic_ranks": {
+                str(root): split_ranks[root] for root in GAMMA_ROOTS
+            },
+            "selected_root_components": best_components,
+            "exact_number_field_defective_components": defective_components,
+            "exact_algebraic_defect_from_structural_matching": exact_algebraic_defect,
+            "modular_rank_lower_bound": modular_lower,
+            "selected_minor_shape": list(minor.shape),
+            "selected_minor_nonzero_entries": int(minor.nnz),
+            "selected_minor_determinant_mod21817": determinant,
+            "exact_rank_over_Q_gamma": exact_rank,
+            "certified_rank_interval_over_Q_gamma": [exact_rank, exact_rank],
+            "construction_arrays": record(arrays_path),
+            "exact_gamma_coefficient_matrices": [
+                record(path) for path in coefficient_paths
+            ],
+            "selected_minor": record(minor_path),
+            "unit_RHS": record(rhs_path),
+            "factorization_log": record(log_path),
+        },
+        "comparison": {
+            "generic_uniform_gamma_coefficient_update_rank_G3BY": 14419,
+            "selected_affine_path_update_rank": exact_rank,
+            "selected_affine_path_update_rank_interval": [exact_rank, exact_rank],
+            "exact_dimension_reduction": 14419 - exact_rank,
+            "interpretation": (
+                "The selected affine path rank is exactly 6022 over Q(gamma)."
+                if exact_rank_closed
+                else "The selected affine path has a certified modular lower bound and an exact-support matching upper bound; equality is not claimed."
+            ),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the6037_Woodbury_kernel_is_evaluated": False,
+            "claims_a_rank1509_relative_de_Rham_source_lift": False,
+            "claims_integral_Gauss_Manin_transport": False,
+            "claims_terminal248_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3bzSelectedG3biH02ExactAffinePathUpdateRank",
+            "tier": (
+                "CLOSED_EXACT_SELECTED_PATH_UPDATE_RANK"
+                if exact_rank_closed
+                else "CLOSED_SELECTED_PATH_UPDATE_RANK_INTERVAL"
+            ),
+            "statement": (
+                "For the selected correction pencil A(a,gamma)=A_B89(gamma)+a Delta_C(gamma), exact-support matching gives rank at most 6037. Exact number-field elimination identifies five repeated blocks of rank 359 rather than matching rank 362, lowering the exact upper bound by 15. A 6022-square split-place minor is nonzero, so rank over Q(gamma) of Delta_C is exactly 6022."
+            ),
+        },
+        "next_required_object": "Reduce the explicit H02 residue source [u v P_delta (t0 t1 t2) C] into the frozen B103 H02 basis and evaluate its one-vector action through the A_B89-anchored rank-6022 selected-path kernel. This does not replace the separate integral Betti transgression needed for the terminal B89 marking.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BZ selected G3BI H02 exact affine-path update rank: PASS")
+    print(
+        f"shape=42458x42458 exact_nnz={pattern.nnz} split_nnz={evaluated.nnz} "
+        f"rank_Qgamma={exact_rank_description} best_root={best_root} "
+        f"minor_det={determinant} exact_reduction_from_G3BY={14419-exact_rank}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

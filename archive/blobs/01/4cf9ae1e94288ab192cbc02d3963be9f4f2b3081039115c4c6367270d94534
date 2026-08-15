@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Independently replay the UST.G3AL finite-field Schur certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import verify_ust_g3ak_full_graph_incidence_normal_decomposition as arithmetic
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3al_selected_carrier_response_schur.packet.json"
+P = 101
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def transpose(matrix):
+    return [list(row) for row in zip(*matrix)]
+
+
+def add(left, right):
+    return arithmetic.add(left, right)
+
+
+def sub(left, right):
+    return arithmetic.sub(left, right)
+
+
+def mul(left, right, relation):
+    return arithmetic.mul(left, right, relation)
+
+
+def dot(left, right, relation, zero):
+    value = zero
+    for a, b in zip(left, right):
+        value = add(value, mul(a, b, relation))
+    return value
+
+
+def matvec(matrix, vector, relation, zero):
+    return [dot(row, vector, relation, zero) for row in matrix]
+
+
+def decode(raw: bytes, record: dict) -> list[list[tuple[int, ...]]]:
+    rows, columns, degree = record["shape"]
+    require(degree == 6, "extension degree")
+    start = int(record["byte_offset"])
+    length = int(record["byte_length"])
+    require(length == rows * columns * degree, "matrix byte length")
+    data = raw[start : start + length]
+    matrix = []
+    offset = 0
+    for _ in range(rows):
+        row = []
+        for _ in range(columns):
+            row.append(tuple(data[offset : offset + degree]))
+            offset += degree
+        matrix.append(row)
+    require(offset == len(data), "matrix fully decoded")
+    require(
+        canonical_hash([[list(value) for value in row] for row in matrix])
+        == record["canonical_sha256"],
+        "matrix canonical hash",
+    )
+    return matrix
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(packet["theorem_id"] == "UST.G3AL", "theorem id")
+    for name, record in packet["inputs"].items():
+        path = ROOT / record["path"]
+        require(path.is_file() and sha256(path) == record["sha256"], f"input {name}")
+
+    field = packet["residue_field"]
+    relation = tuple(int(value) for value in field["gamma_relation_coefficients_ascending"])
+    require(field["prime"] == P and field["extension_degree"] == 6, "selected field")
+    zero = arithmetic.arithmetic.qzero(6)
+    one = arithmetic.arithmetic.qone(6)
+
+    artifact = packet["selected_coefficient_control"]["binary_artifact"]
+    path = ROOT / artifact["path"]
+    raw = path.read_bytes()
+    require(sha256(path) == artifact["sha256"] and len(raw) == artifact["bytes"], "bundle")
+    layout = artifact["layout"]
+    selected = decode(raw, layout["selected_member"])[0]
+    d0_rows = decode(raw, layout["principal_chart_rows"])
+    d1_rows = decode(raw, layout["extra_chart_rows"])
+    e_rows = decode(raw, layout["extra_schur_rows"])
+    r0_inverse = decode(raw, layout["principal_pivot_inverse"])
+    e0_inverse = decode(raw, layout["extra_pivot_inverse"])
+    require(len(selected) == 249, "selected member length")
+    require((len(d0_rows), len(d0_rows[0])) == (248, 33), "D0 shape")
+    require((len(d1_rows), len(d1_rows[0])) == (248, 89), "D1 shape")
+    require((len(e_rows), len(e_rows[0])) == (215, 89), "E shape")
+
+    _, d0_pivots = arithmetic.rref(d0_rows, relation, 6)
+    _, full_pivots = arithmetic.rref(
+        [left + right for left, right in zip(d0_rows, d1_rows)], relation, 6
+    )
+    _, e_pivots = arithmetic.rref(e_rows, relation, 6)
+    require(len(d0_pivots) == 33, "rank D0")
+    require(len(full_pivots) == 122, "rank full control")
+    require(len(e_pivots) == 89, "rank E")
+
+    control = packet["selected_coefficient_control"]
+    principal_rows = [int(value) for value in control["principal_pivot_rows_zero_based"]]
+    quotient_rows = [int(value) for value in control["principal_quotient_rows_zero_based"]]
+    extra_rows = [int(value) for value in control["extra_pivot_rows_in_principal_quotient_zero_based"]]
+    final_rows = [int(value) for value in control["final_normal_rows_in_principal_quotient_zero_based"]]
+    require(len(principal_rows) == 33 and len(quotient_rows) == 215, "principal split")
+    require(len(extra_rows) == 89 and len(final_rows) == 126, "extra split")
+    require(sorted(principal_rows + quotient_rows) == list(range(248)), "248 partition")
+    require(sorted(extra_rows + final_rows) == list(range(215)), "215 partition")
+
+    r0 = [d0_rows[row] for row in principal_rows]
+    require(
+        all(
+            dot(r0_inverse[i], [r0[k][j] for k in range(33)], relation, zero)
+            == (one if i == j else zero)
+            for i in range(33)
+            for j in range(33)
+        ),
+        "R0 inverse",
+    )
+
+    def n0(vector):
+        coordinates = matvec(r0_inverse, [vector[row] for row in principal_rows], relation, zero)
+        return [
+            sub(vector[row], dot(d0_rows[row], coordinates, relation, zero))
+            for row in quotient_rows
+        ]
+
+    d0_columns = transpose(d0_rows)
+    d1_columns = transpose(d1_rows)
+    require(all(all(value == zero for value in n0(column)) for column in d0_columns), "N0D0")
+    recomputed_e_columns = [n0(column) for column in d1_columns]
+    require(transpose(recomputed_e_columns) == e_rows, "E=N0D1")
+
+    e0 = [e_rows[row] for row in extra_rows]
+    require(
+        all(
+            dot(e0_inverse[i], [e0[k][j] for k in range(89)], relation, zero)
+            == (one if i == j else zero)
+            for i in range(89)
+            for j in range(89)
+        ),
+        "E0 inverse",
+    )
+
+    def left_normal(vector):
+        coordinates = matvec(e0_inverse, [vector[row] for row in extra_rows], relation, zero)
+        return [
+            sub(vector[row], dot(e_rows[row], coordinates, relation, zero))
+            for row in final_rows
+        ]
+
+    require(
+        all(
+            all(value == zero for value in left_normal(column))
+            for column in recomputed_e_columns
+        ),
+        "LE=0",
+    )
+    require(packet["schur_reduction"]["rank_identity"] == "rank(D)=33+rank(E)", "rank identity")
+    require(packet["schur_reduction"]["calculation_reduction"]["entry_reduction"] == 11121, "entry reduction")
+
+    script_record = packet["selected_cayley_campaign"]["basis_script"]
+    script_path = ROOT / script_record["path"]
+    script = script_path.read_text(encoding="ascii")
+    require(sha256(script_path) == script_record["sha256"], "basis script hash")
+    for token in (
+        "ring r=(101,g)",
+        "minpoly=64+16*g^1+33*g^2+44*g^3+89*g^4+24*g^5+g^6",
+        "poly Phi=u*K+v*E+s*C",
+        "ideal G=slimgb(J)",
+        "G3AL_SELECTED_CAYLEY_BASIS_PASS",
+    ):
+        require(token in script, f"basis script token {token}")
+    require("ring r=11" not in script and "q79_eta9_cayley_direct_graph_block" not in script, "no GF11 import")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    print("UST.G3AL selected-carrier Schur reduction: PASS")
+    print("ranks: D0=33, coefficient control=122, E=89, final normal=126")
+    print("analytic Cayley response and beta_C remain open")
+
+
+if __name__ == "__main__":
+    main()

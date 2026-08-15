@@ -1,0 +1,226 @@
+# UST.G3AV Scale-Free B103 Socle-Polarization Application Theorem
+
+## Purpose
+
+UST.G3AT reduced the three B89 common-frame projector transports to three
+primal rank-1509 ODEs plus three applications of the common-base polarization.
+The remaining question was whether that application requires an independently
+constructed dense `1509 x 1509` matrix.
+
+It does not. The locked q79 eta9 residue algebra already gives a scale-free
+coefficient formula for each required row.
+
+## Locked carrier
+
+In the frozen B103 order, the selected vanishing de Rham carrier is
+
+```text
+V = H20 + H11 + H02,
+dim V = 248 + 1013 + 248 = 1509.
+```
+
+The three blocks are represented by Cayley-Jacobian residue classes in degrees
+
+```text
+H20: 3 beta - beta0 = (9,1,0),
+H11: 4 beta - beta0 = (9,1,1),
+H02: 5 beta - beta0 = (9,1,2).
+```
+
+Every complementary product therefore lies in
+
+```text
+8 beta - 2 beta0 = (18,2,2).
+```
+
+The locked Cayley reducer and top-dimension theorem prove that this piece is
+one-dimensional, with selected generator
+
+```text
+Omega_top = w^12 t2^4 s^2.
+```
+
+Let `tau(f)` be the coefficient of `Omega_top` in the exact
+characteristic-zero normal form of `f`. Changing the generator rescales `tau`
+by one common nonzero scalar.
+
+## Relative cup weights
+
+For a regular semiample hypersurface in toric ambient dimension `d`,
+Mavlyutov's residue cup-product formula is
+
+```text
+c_ab = (-1)^[a(a+1)/2 + b(b+1)/2 + a^2 + d - 1] / (a! b!),
+a+b=d-1.
+```
+
+Here `d=7`. Consequently,
+
+```text
+c_24 = -1/48,
+c_33 = -1/36,
+c_42 = -1/48.
+```
+
+The middle-block weight is therefore `4/3` times the complementary outer-block
+weight. This relative factor matters and cannot be replaced by an unweighted
+Jacobian Gram matrix.
+
+## Cayley-trick pairing compatibility
+
+The residue carrier lives on the Cayley hypersurface, while the B89 vanishing
+cycles are the variable middle cohomology of the three-equation eta9 complete
+intersection. The comparison does not introduce a hidden block-dependent
+factor.
+
+Let `p: Z=P(E|_X) -> X` be the `P^2` incidence bundle and `j: Z -> Y` its
+codimension-two embedding in the Cayley hypersurface. The Cayley
+correspondence is
+
+```text
+kappa(alpha)=j_*(p^*alpha).
+```
+
+By the Gysin self-intersection formula,
+
+```text
+integral_Y kappa(alpha) kappa(beta)
+  = integral_Z p^*(alpha beta) c2(N_{Z/Y}).
+```
+
+On every incidence fiber, `N_{Z/Y}=Omega^1_{P^2}(1)`. The Euler sequence gives
+
+```text
+c(Omega^1_{P^2}(1))=(1+H)^(-1),
+c2(Omega^1_{P^2}(1))=H^2,
+integral_{P^2} H^2=1.
+```
+
+Hence the Cayley correspondence preserves the intersection pairing under the
+stated projectivization convention. Reversing a residue or projectivization
+orientation can at most introduce one common sign; it cannot alter the
+relative Hodge-block weights, and it cancels in the normalized dual below.
+
+## Theorem
+
+Write common-base vectors as
+
+```text
+e = e20 + e11 + e02,
+y = y20 + y11 + y02.
+```
+
+Define
+
+```text
+qhat(e,y)
+  = (-1/48) [tau(e20 y02) + tau(e02 y20)]
+    + (-1/36) tau(e11 y11).
+```
+
+The selected de Rham polarization has the form
+
+```text
+Q(e,y) = Lambda qhat(e,y)
+```
+
+for one common nonzero top-line integration scale `Lambda`. If `e` is
+nonisotropic, its normalized polarization dual is
+
+```text
+ell_e(y) = Q(e,y)/Q(e,e)
+         = qhat(e,y)/qhat(e,e).
+```
+
+Thus `Lambda` cancels exactly. The same is true for every nonzero rescaling of
+`Omega_top` or `tau`. The projector and reflection are
+
+```text
+P_e = e ell_e,
+T_e = I - 2 P_e.
+```
+
+They obey
+
+```text
+ell_e(e)=1,
+P_e^2=P_e,
+tr(P_e)=1.
+```
+
+### Proof
+
+1. The locked B103 theorem identifies all three residue blocks with the full
+   selected vanishing de Rham carrier.
+2. Degree addition sends only `H20 x H02`, `H11 x H11`, and `H02 x H20` to
+   the complementary one-dimensional top piece.
+3. The Cayley Gysin calculation above identifies the Cayley and eta9
+   intersection pairings by one common factor, equal to `+1` in the declared
+   convention.
+4. Mavlyutov's cup-product theorem identifies topological cup product on these
+   residue summands with multiplication followed by the top functional, with
+   the three constants displayed above.
+5. The selected top piece is one-dimensional and survives in characteristic
+   zero. Its integration map is multiplication by one common nonzero scalar
+   `Lambda`.
+6. Dividing the row `Q(e,-)` by `Q(e,e)` cancels `Lambda`. Bilinearity then
+   gives `ell_e(e)=1`, and the projector identities follow immediately.
+
+This proves the formula independently of an absolute polarization
+normalization. The integral `-2` normalization remains a later Betti-lattice
+certificate; it is not needed to reconstruct the rational projector.
+
+## Matrix-free execution
+
+For a transported vector `e`, the B103 row is emitted blockwise:
+
+```text
+H20 columns: (-1/48) tau(e02 b_j),
+H11 columns: (-1/36) tau(e11 b_j),
+H02 columns: (-1/48) tau(e20 b_j).
+```
+
+This requires exactly `1509` top-coefficient reductions per line, hence
+
+```text
+3 x 1509 = 4527
+```
+
+reductions for the three selected B89 lines. It stores no dense polarization
+matrix. Even the Hodge-compatible dense block support would contain
+`1,149,177` entries; the full dense matrix would contain `2,277,081`.
+
+## What is closed
+
+- the exact B103 block pairing formula;
+- the previously missing relative `H11` weight `4/3`;
+- cancellation of the unknown common integration scale;
+- replacement of the dense polarization matrix by 4527 scalar top reductions;
+- exact projector reconstruction from each nonisotropic transported line.
+
+## What remains
+
+- completion of the three G3AT primal path transports;
+- execution of the 4527 characteristic-zero product normal forms;
+- three nonzero self-pairing certificates;
+- finite relation detection and integral normalization of the survivor;
+- G3AU normal-first evaluation and, only for a survivor, full `beta_C`.
+
+No meridian coordinate, period, `beta_C` value, endpoint, observed value, or
+fit parameter is supplied by this theorem.
+
+## Verification
+
+```powershell
+python build_ust_g3av_scale_free_b103_polarization.py
+python verify_ust_g3av_scale_free_b103_polarization.py
+```
+
+The independent verifier recomputes all three Mavlyutov constants and checks
+the row formula, scale cancellation, normalized dual, idempotence, trace, and
+polarization self-adjointness in an exact rational Frobenius model.
+
+## Primary reference
+
+- Anvar R. Mavlyutov, *Semiample hypersurfaces in toric varieties*, Theorems
+  3.5 and 4.5: <https://arxiv.org/abs/math/9812163>.

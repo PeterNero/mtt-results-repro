@@ -1,0 +1,87 @@
+# UST.G3BO H11 Endpoint Correction Action At One Split Prime
+
+## Result
+
+The exact H11 inverse action at the G3BI endpoint has now been executed on the
+complete selected correction source modulo one completely split prime. For
+every H20 residue basis element `P`, G3BO solves
+
+```text
+A_G3BI X_P = -3 P sC
+```
+
+at all six roots of the selected sextic modulo `21817`.
+
+All six endpoint charts are invertible, every `5439 x 248` linear-system
+residual is zero, and six-root interpolation emits the unique power-basis
+residue
+
+```text
+X mod 21817 in (GF(21817)[gamma]/M(gamma))^(5439 x 248).
+```
+
+The tensor contains `5,994,683` nonzero coefficients in shape
+`5439 x 248 x 6`.
+
+## Exact Source Binding
+
+The right-hand side is not inherited from the old B89 physical direction. It
+is rebuilt coefficientwise from G3BI's 19-term correction and the formula
+
+```text
+R_P = -3 P sC.
+```
+
+Its canonical characteristic-zero coordinate-stream hash agrees exactly with
+G3BK. For each split root, the verifier independently reconstructs the
+endpoint chart, reconstructs all 248 right-hand sides, multiplies the stored
+solution back through the chart, and checks zero residual.
+
+## What This Closes
+
+G3BN proved only that an H11 endpoint inverse exists over `Q(gamma)`. G3BO
+performs that inverse action at one fully split prime and retains both parts
+needed downstream:
+
+```text
+1013 quotient coordinates,
+4426 original-Jacobian preimage coordinates.
+```
+
+Thus the H11 correction action has moved from an unevaluated source stream to
+an exact modular operator action.
+
+## Why The Characteristic-Zero Action Is Still Open
+
+One split prime determines the answer only modulo `21817`. The six roots
+recover the degree-less-than-six power-basis representation inside that finite
+field, but they do not determine the rational numerator and denominator over
+`Q(gamma)`.
+
+Promotion requires one of:
+
+1. enough additional split primes, CRT accumulation, and a proved rational-
+   reconstruction bound; or
+2. an independent exact annihilating relation that uniquely determines the
+   characteristic-zero action.
+
+No measured value, floating-point fit, or free parameter enters this modular
+calculation.
+
+## Claim Boundary
+
+G3BO does not yet prove:
+
+- exact rational reconstruction of the H11 action over `Q(gamma)`;
+- the recursive divergence back to H20;
+- an H02 endpoint inverse action;
+- integral transport along the whole G3BJ arc;
+- terminal B89 coordinates; or
+- the 248-row G3BD decision.
+
+## Reproduction
+
+```powershell
+python build_ust_g3bo_h11_endpoint_correction_action.py
+python verify_ust_g3bo_h11_endpoint_correction_action.py
+```

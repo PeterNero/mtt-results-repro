@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mtt.unified-source.q79-yoneda-mc-certificate.v1",
+  "title": "UST.G3K q79 Yoneda-Maurer-Cartan completion certificate",
+  "type": "object",
+  "required": [
+    "schema",
+    "candidate_id",
+    "source_hash",
+    "orbit_members",
+    "yoneda_products",
+    "cohesive_mc",
+    "generator_maps",
+    "relations",
+    "empirical_inputs",
+    "physical_promotion_requested"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mtt.unified-source.q79-yoneda-mc-certificate.v1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "orbit_members": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "forward_class_artifact",
+          "reverse_class_artifact",
+          "reverse_class_nonzero",
+          "g3g_restriction_match"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "forward_class_artifact": {
+            "$ref": "#/$defs/artifact"
+          },
+          "reverse_class_artifact": {
+            "$ref": "#/$defs/artifact"
+          },
+          "reverse_class_nonzero": {
+            "type": "boolean"
+          },
+          "g3g_restriction_match": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "yoneda_products": {
+      "type": "object",
+      "required": [
+        "mu_L_artifact",
+        "mu_E_artifact",
+        "trace_cyclicity_artifact",
+        "mu_L_follows_from_mu_E",
+        "f_rho_zero_all_members",
+        "rho_f_zero_all_members"
+      ],
+      "properties": {
+        "mu_L_artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "mu_E_artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "trace_cyclicity_artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "mu_L_follows_from_mu_E": {
+          "type": "boolean"
+        },
+        "f_rho_zero_all_members": {
+          "type": "boolean"
+        },
+        "rho_f_zero_all_members": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cohesive_mc": {
+      "type": "object",
+      "required": [
+        "artifact",
+        "globally_perfect",
+        "alpha_triple_law_verified",
+        "mc_square_zero",
+        "simple"
+      ],
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "globally_perfect": {
+          "type": "boolean"
+        },
+        "alpha_triple_law_verified": {
+          "type": "boolean"
+        },
+        "mc_square_zero": {
+          "type": "boolean"
+        },
+        "simple": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "generator_maps": {
+      "type": "object",
+      "required": [
+        "X",
+        "Z"
+      ],
+      "properties": {
+        "X": {
+          "$ref": "#/$defs/artifact"
+        },
+        "Z": {
+          "$ref": "#/$defs/artifact"
+        }
+      },
+      "additionalProperties": false
+    },
+    "relations": {
+      "type": "object",
+      "required": [
+        "X_cube_identity",
+        "Z_cube_identity",
+        "commutator",
+        "sigma_matches"
+      ],
+      "properties": {
+        "X_cube_identity": {
+          "type": "boolean"
+        },
+        "Z_cube_identity": {
+          "type": "boolean"
+        },
+        "commutator": {
+          "enum": [
+            "omega",
+            "omega^2",
+            "1",
+            "open"
+          ]
+        },
+        "sigma_matches": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "empirical_inputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "physical_promotion_requested": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^$|^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

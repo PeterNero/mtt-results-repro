@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Verify every exact-candidate H-only/L-truncated G3AP route.
+
+This verifier certifies only the construction of the computational routes.  In
+particular, the zero L weights and a successful Singular process do not prove
+the G3AP upper bound.  A completed candidate still requires the independent
+Cox-bigraded leading-squeeze certificate.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import run_ust_g3ap_selected_cayley_fiber2_honly_ltrunc_hedge as route
+import run_ust_g3ap_selected_cayley_fiber2_weighted_ltrunc_hilbert_hedge as ltrunc
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def exact_h_monomials(degree: int) -> int:
+    """Count x,y,z,w monomials with x+y+z+3w = degree."""
+    return sum(
+        math.comb(degree - 3 * w_power + 2, 2)
+        for w_power in range(degree // 3 + 1)
+    )
+
+
+def exact_l_monomials(degree: int) -> int:
+    """Count t0,t1,t2 monomials of ordinary degree ``degree``."""
+    return math.comb(degree + 2, 2)
+
+
+def main() -> None:
+    route.validate_grading()
+    source = route.SOURCE.read_text(encoding="ascii")
+    selected_old = qring.derivative_generators()
+    truncators_old = ltrunc.truncation_generators()
+    require(len(selected_old) == 21, "selected generator count")
+    require(len(truncators_old) == 165, "L-boundary count")
+    require(all(value >= 0 for value in route.BASE_WEIGHTS), "nonnegative order weights")
+    require(route.BASE_WEIGHTS[-3:] == (0, 0, 0), "zero L order weights")
+
+    target_by_old = {
+        component: (h_degree, l_degree)
+        for component, _, (h_degree, l_degree), _ in fiber2.COMPONENTS
+    }
+    exact_target_count = 0
+    for old_component, (target_h, target_l) in target_by_old.items():
+        shift = route.COMPONENT_SHIFTS[old_component - 1]
+        require(
+            target_h + shift == route.TARGET_H_DEGREE,
+            f"component {old_component} common H degree",
+        )
+        require(
+            target_h + 1 + shift > route.TARGET_H_DEGREE,
+            f"component {old_component} H exclusion",
+        )
+        # Every boundary has L degree target_l+1.  Cox homogeneity therefore
+        # gives it a zero piece in bidegree (target_h, target_l).
+        component_boundaries = [
+            value for value in truncators_old if value.endswith(f"*gen({old_component})")
+        ]
+        require(
+            len(component_boundaries) == math.comb(target_l + 3, 2),
+            f"component {old_component} minimal L boundary",
+        )
+        exact_target_count += exact_h_monomials(target_h) * exact_l_monomials(target_l)
+    require(exact_target_count == fiber2.EXPECTED_TOTAL, "complete exact target count")
+
+    for label, order in permuted.PERMUTATIONS.items():
+        old_to_new, _ = permuted.position_maps(order)
+        generated = route.hmajor.mapped_generators(order)
+        expected = [
+            permuted.map_components(value, old_to_new)
+            for value in selected_old + truncators_old
+        ]
+        require(generated == expected and len(generated) == 186, f"{label} mapped module")
+        require(
+            route.mapped_shifts(order)
+            == tuple(route.COMPONENT_SHIFTS[old - 1] for old in order),
+            f"{label} shifts",
+        )
+        for engine in route.ENGINES:
+            paths = route.paths(label, engine)
+            script = route.candidate_script(
+                source,
+                label,
+                order,
+                paths["base_cache"],
+                paths["module_cache"],
+                engine,
+            )
+            require(route.HONLY_MODULE_RING in script, f"{label}/{engine} H-only ring")
+            require(
+                f"degBound={route.TARGET_H_DEGREE};" in script,
+                f"{label}/{engine} bound",
+            )
+            require(f"module G={engine}(MT);" in script, f"{label}/{engine} engine")
+            require(
+                ("LIB(\"standard.lib\");" in script) == (engine == "qslimgb"),
+                f"{label}/{engine} sparse library identity",
+            )
+            require(
+                script.count("ideal GI=std(I0);") == 1,
+                f"{label}/{engine} reconstructed base",
+            )
+            shifts_match = re.search(r"intvec componentShifts=([^;]+);", script)
+            require(shifts_match is not None, f"{label}/{engine} script shifts")
+            require(
+                tuple(int(value) for value in shifts_match.group(1).split(","))
+                == route.mapped_shifts(order),
+                f"{label}/{engine} script shift identity",
+            )
+            require(
+                "claims_zero_weight_order_is_a_proof" not in script,
+                f"{label}/{engine} no proof claim in Singular process",
+            )
+
+    print(
+        "UST.G3AP H-only/L-truncated routes: PASS "
+        "routes=4 engines=2 selected=21 truncators=165 "
+        f"target={exact_target_count} bound=H36 proof_status=CANDIDATE_ONLY"
+    )
+
+
+if __name__ == "__main__":
+    main()

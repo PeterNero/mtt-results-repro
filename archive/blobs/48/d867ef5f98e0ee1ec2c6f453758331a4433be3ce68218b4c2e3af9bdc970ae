@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Independently verify G3CJ cyclicity, recurrence, and affine minimality."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cj_selected_source_cyclic_full_carrier.packet.json"
+PRIME = 11
+DIMENSION = 1509
+AFFINE_DIMENSION = 1510
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local(record: dict) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record["bytes"], f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def eliminate_and_solve(matrix: np.ndarray, rhs: np.ndarray) -> tuple[np.ndarray, int]:
+    """Independent exact GF(11) elimination for the square Krylov frame."""
+    reduced = np.asarray(matrix, dtype=np.int64).copy() % PRIME
+    values = np.asarray(rhs, dtype=np.int64).reshape(-1, 1).copy() % PRIME
+    require(reduced.shape == (DIMENSION, DIMENSION), "elimination matrix shape")
+    require(values.shape == (DIMENSION, 1), "elimination RHS shape")
+    determinant = 1
+    for column in range(DIMENSION):
+        choices = np.flatnonzero(reduced[column:, column])
+        require(choices.size > 0, f"Krylov pivot {column}")
+        pivot_row = column + int(choices[0])
+        if pivot_row != column:
+            reduced[[column, pivot_row]] = reduced[[pivot_row, column]]
+            values[[column, pivot_row]] = values[[pivot_row, column]]
+            determinant = -determinant
+        pivot = int(reduced[column, column])
+        determinant = determinant * pivot % PRIME
+        inverse = pow(pivot, -1, PRIME)
+        reduced[column, column:] = reduced[column, column:] * inverse % PRIME
+        values[column] = values[column] * inverse % PRIME
+        if column + 1 < DIMENSION:
+            factors = reduced[column + 1 :, column].copy()
+            active = np.flatnonzero(factors)
+            if active.size:
+                rows = column + 1 + active
+                reduced[rows, column:] = (
+                    reduced[rows, column:]
+                    - factors[active, None] * reduced[column, column:]
+                ) % PRIME
+                values[rows] = (
+                    values[rows] - factors[active, None] * values[column]
+                ) % PRIME
+    for row in range(DIMENSION - 1, -1, -1):
+        if row + 1 < DIMENSION:
+            values[row] = (
+                values[row]
+                - reduced[row, row + 1 :] @ values[row + 1 :]
+            ) % PRIME
+    require(
+        not np.any(
+            (np.asarray(matrix, dtype=np.int64) @ values[:, 0] - np.asarray(rhs, dtype=np.int64))
+            % PRIME
+        ),
+        "independent recurrence solve residual",
+    )
+    return values[:, 0].astype(np.uint8), determinant % PRIME
+
+
+def rebuild_krylov(operator: np.ndarray, source: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    frame = np.empty((DIMENSION, DIMENSION), dtype=np.uint8)
+    operator64 = operator.astype(np.int64)
+    current = source.astype(np.uint8).copy()
+    for column in range(DIMENSION):
+        frame[:, column] = current
+        current = (operator64 @ current.astype(np.int64) % PRIME).astype(np.uint8)
+    return frame, current
+
+
+def expected_companion(recurrence: np.ndarray) -> sparse.csc_matrix:
+    size = recurrence.size
+    matrix = sparse.lil_matrix((size, size), dtype=np.uint8)
+    matrix[np.arange(1, size), np.arange(size - 1)] = 1
+    matrix[:, size - 1] = recurrence.reshape(-1, 1)
+    return matrix.tocsc()
+
+
+def sparse_residual(left: sparse.spmatrix, right: sparse.spmatrix) -> int:
+    difference = (left.astype(np.int32) - right.astype(np.int32)).tocsc()
+    difference.data %= PRIME
+    difference.eliminate_zeros()
+    return int(difference.nnz)
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(all(packet["checks"].values()), "packet checks")
+    require(
+        packet["status"]
+        == "CLOSED_EXACT_GF11_SELECTED_SOURCE_CYCLIC_FULL_AFFINE_CARRIER_PATHWISE_PROMOTION_OPEN",
+        "packet status",
+    )
+    g3cd = load(local(packet["inputs"]["G3CD"]))
+    g3ci = load(local(packet["inputs"]["G3CI"]))
+    require(all(g3cd["checks"].values()), "G3CD checks")
+    require(all(g3ci["checks"].values()), "G3CI checks")
+    require(
+        g3ci["status"]
+        == "CLOSED_EXACT_GF11_RAW_SOURCE_DOES_NOT_ANCHOR_AND_H02_GRADED_SOURCE_RICCATI_JET_REJECTED",
+        "G3CI status",
+    )
+
+    operator_path = local(g3cd["correction_operator"]["dense_uint8"])
+    source_path = local(g3cd["selected_affine_source"]["source_vector"])
+    require(
+        sha256(operator_path) == packet["inputs"]["terminal_operator"]["sha256"],
+        "terminal operator binding",
+    )
+    require(
+        sha256(source_path) == packet["inputs"]["selected_source"]["sha256"],
+        "selected source binding",
+    )
+    operator = np.fromfile(operator_path, dtype=np.uint8).reshape(DIMENSION, DIMENSION)
+    source = np.load(source_path, allow_pickle=False).astype(np.uint8)
+    require(source.shape == (DIMENSION,), "source shape")
+    require(int(np.count_nonzero(source)) == 229, "source support")
+
+    reconstructed_frame, next_vector = rebuild_krylov(operator, source)
+    stored_frame = np.load(
+        local(packet["homogeneous_cyclic_frame"]["frame"]), allow_pickle=False
+    ).astype(np.uint8)
+    require(np.array_equal(stored_frame, reconstructed_frame), "full Krylov frame replay")
+    recurrence, determinant = eliminate_and_solve(reconstructed_frame, next_vector)
+    stored_recurrence = np.load(
+        local(packet["homogeneous_companion"]["recurrence_coefficients"]),
+        allow_pickle=False,
+    ).astype(np.uint8)
+    require(np.array_equal(recurrence, stored_recurrence), "recurrence coefficients")
+    require(determinant == packet["homogeneous_cyclic_frame"]["determinant_mod11"] == 7, "Krylov determinant")
+    require(packet["homogeneous_cyclic_frame"]["rank_mod11"] == DIMENSION, "Krylov rank")
+    support = np.flatnonzero(recurrence)
+    require(support.size == packet["homogeneous_companion"]["recurrence_nonzero_entries"] == 1384, "recurrence support")
+    require(int(support[0]) == 1 and int(support[-1]) == 1508, "recurrence support endpoints")
+    require(int(recurrence[0]) == 0 and int(recurrence[1]) == 8, "simple zero-root coefficients")
+
+    expected_polynomial = np.concatenate(
+        [(-recurrence.astype(np.int64) % PRIME).astype(np.uint8), np.ones(1, dtype=np.uint8)]
+    )
+    stored_polynomial = np.load(
+        local(packet["homogeneous_companion"]["minimal_polynomial_ascending_coefficients"]),
+        allow_pickle=False,
+    ).astype(np.uint8)
+    require(np.array_equal(expected_polynomial, stored_polynomial), "homogeneous polynomial")
+    require(
+        packet["homogeneous_companion"]["minimal_polynomial_equals_characteristic_polynomial"],
+        "cyclic minimal/characteristic identity",
+    )
+    require(packet["homogeneous_companion"]["zero_root_algebraic_multiplicity"] == 1, "simple zero root")
+
+    stored_companion = sparse.load_npz(
+        local(packet["homogeneous_companion"]["companion_operator"])
+    ).tocsc()
+    require(sparse_residual(stored_companion, expected_companion(recurrence)) == 0, "homogeneous companion")
+    require(
+        np.array_equal(
+            reconstructed_frame[:, 1:],
+            (operator.astype(np.int64) @ reconstructed_frame[:, :-1].astype(np.int64) % PRIME).astype(np.uint8),
+        ),
+        "successor identities",
+    )
+    require(
+        not np.any(
+            (
+                operator.astype(np.int64) @ reconstructed_frame[:, -1].astype(np.int64)
+                - reconstructed_frame.astype(np.int64) @ recurrence.astype(np.int64)
+            )
+            % PRIME
+        ),
+        "last companion column identity",
+    )
+
+    affine_path = local(g3cd["selected_affine_source"]["dense_uint8"])
+    affine_operator = np.fromfile(affine_path, dtype=np.uint8).reshape(
+        AFFINE_DIMENSION, AFFINE_DIMENSION
+    )
+    require(np.array_equal(affine_operator[:DIMENSION, :DIMENSION], operator), "affine K block")
+    require(np.array_equal(affine_operator[:DIMENSION, DIMENSION], source), "affine source block")
+    require(not np.any(affine_operator[DIMENSION, :]), "affine bottom row")
+    affine_recurrence = np.load(
+        local(packet["affine_cyclic_frame"]["recurrence_coefficients"]), allow_pickle=False
+    ).astype(np.uint8)
+    require(np.array_equal(affine_recurrence, np.concatenate([np.zeros(1, dtype=np.uint8), recurrence])), "affine recurrence")
+    require(packet["affine_cyclic_frame"]["determinant_mod11"] == (-determinant) % PRIME == 4, "affine determinant")
+    require(packet["affine_cyclic_frame"]["rank_mod11"] == AFFINE_DIMENSION, "affine cyclic rank")
+
+    affine_polynomial = np.load(
+        local(packet["affine_cyclic_frame"]["minimal_polynomial_ascending_coefficients"]),
+        allow_pickle=False,
+    ).astype(np.uint8)
+    require(np.array_equal(affine_polynomial[1:], stored_polynomial), "m_affine=x*m_K")
+    require(not affine_polynomial[0] and not affine_polynomial[1] and affine_polynomial[2], "double affine zero root")
+    require(packet["affine_cyclic_frame"]["zero_root_algebraic_multiplicity"] == 2, "affine zero multiplicity")
+    stored_affine_companion = sparse.load_npz(
+        local(packet["affine_cyclic_frame"]["companion_operator"])
+    ).tocsc()
+    require(
+        sparse_residual(stored_affine_companion, expected_companion(affine_recurrence)) == 0,
+        "affine companion",
+    )
+
+    require(not packet["guardrails"]["claims_a_lower_dimensional_transport_reduction"], "dimension guardrail")
+    require(not packet["guardrails"]["claims_characteristic_zero_cyclicity"], "characteristic-zero guardrail")
+    require(not packet["guardrails"]["claims_integral_transport_or_beta_C"], "physical guardrail")
+    print("UST.G3CJ selected-source cyclic full-carrier verifier: PASS")
+    print("detB=7 rankB=1509 recurrence_nnz=1384 c0=0 c1=8 detB_aff=4 rankB_aff=1510")
+
+
+if __name__ == "__main__":
+    main()

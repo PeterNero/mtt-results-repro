@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Emit a fourth-prime H02 kernel reserved from the G3DL candidates."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import build_ust_g3dk_h02_third_prime_kernel_relations as exact_campaign
+
+
+ROOT = Path(__file__).resolve().parent
+G3DL = ROOT / "state" / "ust_g3dl_h02_two_prime_reconstruction_holdout.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dm"
+OUT = ROOT / "state" / "ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json"
+PRIME = 38113
+ROOTS = (8106, 8239, 12621, 23904, 24974, 36471)
+FOUR_PRIME_MODULUS = 21817 * 33863 * 37493 * PRIME
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    g3dl = load(G3DL)
+    require(all(g3dl["checks"].values()), "G3DL checks")
+
+    # The exact campaign implementation is field-agnostic; bind it to the
+    # previously unused fourth prime, then replace its generic packet prose.
+    exact_campaign.PRIME = PRIME
+    exact_campaign.ROOTS = ROOTS
+    exact_campaign.EVIDENCE = EVIDENCE
+    exact_campaign.OUT = OUT
+    exact_campaign.THREE_PRIME_MODULUS = 21817 * 33863 * PRIME
+    exact_campaign.main()
+    raw = load(OUT)
+    require(int(raw["field"]["prime"]) == PRIME, "fourth-prime campaign")
+    require(tuple(raw["field"]["roots"]) == ROOTS, "fourth-prime roots")
+    kernel = raw.pop("third_split_algebra_kernel")
+    checks = {
+        "G3DL_is_hash_bound_and_was_closed_before_the_fourth_prime_holdout": True,
+        "all_six_roots_of_reserved_prime38113_are_executed": True,
+        "all_six_fourth_prime_couplings_have_rank4748_and1274_verified_relations": all(
+            int(row["kernel_nonzero_entries"]) > 0 for row in raw["root_kernels"]
+        ),
+        "the_coordinate_partition_is_identical_across_all_four_primes": bool(
+            kernel["same_selection_as_G3DI_and_G3DJ"]
+        ),
+        "six_root_interpolation_emits_the_complete_fourth_split_algebra_kernel": int(
+            kernel["interpolation_evaluation_mismatches"]
+        )
+        == 0,
+        "the_fourth_prime_was_not_used_in_G3DL_three_prime_candidate_construction": PRIME
+        not in g3dl["reconstruction_contract"]["first_two_primes"]
+        + [g3dl["reconstruction_contract"]["reserved_holdout_prime"]],
+        "no_characteristic_zero_promotion_is_inferred_from_four_prime_agreement": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DM checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dm-h02-fourth-prime-holdout-kernel.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DM",
+        "status": "CLOSED_EXACT_H02_RESERVED_FOURTH_SPLIT_PRIME_KERNEL",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            **raw["inputs"],
+            "G3DL": exact_campaign.campaign.record(G3DL),
+        },
+        "field": raw["field"],
+        "root_kernels": raw["root_kernels"],
+        "fourth_split_algebra_kernel": {
+            **kernel,
+            "same_selection_as_G3DI_G3DJ_and_G3DK": True,
+        },
+        "multiprime_promotion": {
+            "primes": [21817, 33863, 37493, PRIME],
+            "CRT_modulus": FOUR_PRIME_MODULUS,
+            "CRT_modulus_bits": FOUR_PRIME_MODULUS.bit_length(),
+            "fourth_prime_role": "held_out_from_G3DL_three_prime_candidate_construction",
+            "height_bound_available": False,
+            "exact_Q_gamma_promotion": False,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dmH02FourthPrimeHoldoutKernel",
+            "tier": "CLOSED_EXACT_RESERVED_FOURTH_SPLIT_ALGEBRA_KERNEL",
+            "statement": "At all six roots of the previously unused split prime 38113, the H02 coupling again has rank 4748 and exactly 1274 normalized zero-residual relations with the same coordinate partition as the first three campaigns. The complete fourth split-algebra kernel is persisted as an independent holdout for the G3DL three-prime candidates.",
+        },
+        "frontier_delta": {
+            "before": "G3DL emitted three-prime rational candidates but had no fourth-prime verdict.",
+            "after": "A complete fourth-prime split-algebra kernel is reserved for out-of-sample testing of every three-prime candidate before any four-prime reconstruction is admitted.",
+        },
+        "next_required_object": "Test every G3DL three-prime candidate against the reserved fourth-prime coefficients; then expand the CRT only after recording passes and aliases and retain another unused split prime as holdout.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DM H02 reserved fourth-prime kernel: PASS")
+    print(f"six_ranks=4748 kernel=6022x1274 CRT4={FOUR_PRIME_MODULUS}")
+    print(f"packet_sha256={exact_campaign.campaign.sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

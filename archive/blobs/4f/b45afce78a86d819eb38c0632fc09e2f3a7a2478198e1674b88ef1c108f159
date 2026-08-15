@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Verify the G3Z nontransverse full-residual endpoint compiler."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET_PATH = ROOT / "state" / "ust_g3z_nontransverse_endpoint_compiler.packet.json"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_locked(packet: dict, key: str) -> dict:
+    item = packet["inputs"][key]
+    path = ROOT / item["path"]
+    require(path.is_file(), f"{key}: input exists")
+    require(sha256(path) == item["sha256"], f"{key}: input hash")
+    return load(path)
+
+
+def frac(value: str) -> Fraction:
+    return Fraction(value)
+
+
+def main() -> None:
+    packet = load(PACKET_PATH)
+    g2p = load_locked(packet, "local_G2P_full_residual")
+    g3x = load_locked(packet, "local_G3X_full_bott_chern")
+    g3y = load_locked(packet, "local_G3Y_transverse_cutset")
+
+    compiler = packet["full_residual_compiler"]
+    theorem = packet["majorant_theorem"]
+    witness = packet["exact_reference_witness"]
+    source = packet["same_source_contract"]
+    physical = packet["physical_instantiation"]
+    frontier = packet["frontier_change"]
+
+    expected_lanes = [
+        "Phi_0",
+        "mu_TX",
+        "mu_V",
+        "mu_W",
+        "balanced",
+        "anomaly_Bianchi",
+        "SU3_normalization",
+    ]
+    require(g2p["physical_residual"]["base"] == "Phi_0", "G2P base residual")
+    require(
+        [g2p["physical_residual"]["base"], *g2p["physical_residual"]["extra_rows"]]
+        == expected_lanes,
+        "G2P complete residual lanes",
+    )
+    require(compiler["residual_lanes"] == expected_lanes, "compiler residual lanes")
+    require(compiler["gauge_fixed_sobolev_slice_required"] is True, "gauge slice")
+    require(compiler["adjoint_obstruction_space_zero_required"] is True, "cokernel test")
+    require(compiler["linearization_bijective_required"] is True, "linear isomorphism")
+    require(compiler["elliptic_regular_bootstrap_required"] is True, "smooth bootstrap")
+    require(compiler["vertical_fourier_projection_used"] is False, "no Fourier truncation")
+    require(compiler["transverse_curvature_assumed"] is False, "no transverse ansatz")
+    require(compiler["mixed_curvature_allowed"] is True, "mixed curvature retained")
+
+    require(
+        g3x["zero_mode_promotion"]["full_real_BC22_to_deRham_injective"] is True,
+        "G3X full Bott-Chern injection",
+    )
+    require(
+        g3y["route_decision"]["nontransverse_hym_curvature_required"] is True,
+        "G3Y nontransverse route",
+    )
+    require(
+        g3y["route_decision"]["general_hull_strominger_existence_excluded"] is False,
+        "general Hull-Strominger route retained",
+    )
+
+    Gamma = frac(witness["Gamma"])
+    L = frac(witness["L"])
+    eta = frac(witness["eta"])
+    h = Gamma * Gamma * L * eta
+    require(h == frac(witness["h"]) == Fraction(3, 8), "exact h witness")
+    require(h < Fraction(1, 2), "strict Kantorovich inequality")
+
+    discriminant = 1 - 2 * h
+    root = frac(witness["sqrt_1_minus_2h"])
+    require(root * root == discriminant == Fraction(1, 4), "exact discriminant root")
+    radius = (1 - root) / (Gamma * L)
+    require(radius == frac(witness["r_minus"]) == Fraction(1, 2), "certified radius")
+    ratio = Gamma * L * radius
+    require(ratio == frac(witness["q"]) == Fraction(1, 2), "contraction ratio")
+    require(ratio < 1, "strict contraction")
+
+    self_map = Gamma * eta + (Gamma * L / 2) * radius * radius
+    require(self_map == frac(witness["self_map_majorant"]) == radius, "self-map equality")
+    require(radius <= frac(witness["domain_radius_R"]), "domain containment")
+    require(radius < frac(witness["positivity_radius_r_pos"]), "positivity containment")
+    require(witness["physical_q79_values"] is False, "reference is not physical data")
+
+    require(theorem["strict_acceptance"] == "h<1/2", "strict acceptance formula")
+    require(theorem["fixed_point_implies_full_residual_zero"] is True, "fixed point implication")
+    require(theorem["unique_in_certified_ball"] is True, "local uniqueness")
+
+    require(source["one_source_hash_for_state_and_all_bounds"] is True, "one source hash")
+    require(source["same_norm_and_target_metric_for_all_bounds"] is True, "one norm")
+    require(source["unique_fixed_point_preserves_declared_symmetry"] is True, "symmetry preservation")
+    require(source["fixed_bundle_iteration_preserves_c3"] is True, "c3 preservation")
+    require(set(source["selected_visible_c3_options"]) == {6, -6}, "selected chirality")
+
+    for key, value in physical.items():
+        require(value is False, f"physical nonpromotion boundary: {key}")
+    require(frontier["bespoke_transverse_scalar_equation_required"] is False, "transverse scalar retired")
+    require(frontier["bespoke_generalized_scalar_equation_required"] is False, "bespoke scalar not required")
+    require(frontier["full_nontransverse_residual_compiler_closed"] is True, "compiler closure")
+    require(packet["continuous_fit_parameters"] == 0, "no fit parameters")
+    require(packet["observed_inputs"] == 0, "no observed inputs")
+
+    print("UST.G3Z nontransverse endpoint compiler: PASS")
+    print("full physical residual lanes: 7/7")
+    print(f"exact witness: h={h}, r_minus={radius}, q={ratio}")
+    print("bespoke scalar reduction: not required")
+    print("physical eta9 source and interval bounds: open")
+
+
+if __name__ == "__main__":
+    main()

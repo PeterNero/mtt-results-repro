@@ -1,0 +1,112 @@
+# UST.G3FD: H02 Component-20 Graded Kernel Generator Reduction Theorem
+
+## Status
+
+`CLOSED_EXACT_COMPONENT20_SPLIT_ALGEBRA_GRADED_GENERATOR_REDUCTION_CHARZERO_OPEN`
+
+This theorem is exact over the complete split algebra
+
+```text
+F_21817[gamma] / (m_gamma)
+```
+
+at all six roots of the selected sextic. It does not yet promote the result to
+`Q(gamma)`.
+
+## Setup
+
+The ordered component-20 carrier is
+
+```text
+S_15 = Sym^15(k^3),  dim(S_15) = 136.
+```
+
+UST.G3DI supplies, at each of the six split embeddings, the canonical
+lower-triangular component kernel
+
+```text
+K_15 subset S_15,  dim(K_15) = 100.
+```
+
+For `0 <= d <= 15`, define the largest graded ideal piece whose degree-15
+multiples remain in this kernel:
+
+```text
+I_d = {f in Sym^d(k^3) : f Sym^(15-d)(k^3) subset K_15}.
+```
+
+## Theorem
+
+At every one of the six roots, the dimensions of these pieces are
+
+```text
+(dim I_0, ..., dim I_15)
+  = (0,0,0,0,0,0,0,0,0,0,0,4,11,20,46,100).
+```
+
+The same normalization charts occur at all six roots. The graded ideal has
+exactly
+
+```text
+4  minimal generators in degree 11,
+15 minimal generators in degree 14,
+11 minimal generators in degree 15.
+```
+
+Their monomial multiples span all of `K_15`. In particular, the ranks grow as
+
+```text
+degree 11 generators -> ranks 11, 20, 31 in degrees 12, 13, 14;
+add degree 14 generators -> rank 46 in degree 14;
+lift these generators to degree 15 -> rank 89;
+add degree 15 generators -> rank 100 = dim K_15.
+```
+
+The six normalized values interpolate with zero mismatch to a unique
+power-basis object over the complete split algebra.
+
+## Proof Certificate
+
+The builder independently extracts the 100 canonical relations from every
+UST.G3DI kernel, computes the 36-dimensional annihilator, constructs each
+`I_d` by exact finite-field elimination, and verifies the generator ranks and
+the final equality of subspaces.
+
+The independent verifier repeats the ideal construction from the G3DI kernels,
+evaluates the stored power-basis generators at every root, and checks that the
+generated degree-15 space and the canonical kernel have combined rank 100.
+
+Artifacts:
+
+```text
+build_ust_g3fd_component20_graded_kernel_generators.py
+verify_ust_g3fd_component20_graded_kernel_generators.py
+evidence/ust_g3fd/H02.component20.graded_kernel_generators.json
+evidence/ust_g3fd/H02.component20.graded_kernel_generators.p21817.npz
+```
+
+## Consequence
+
+A direct normalized `5411 x 100` kernel requires 541,100 field coefficients,
+or 3,246,600 scalar residues in a sextic power basis. The graded presentation
+requires only
+
+```text
+4*dim Sym^11 + 15*dim Sym^14 + 11*dim Sym^15
+  = 4*78 + 15*120 + 11*136
+  = 3,608
+```
+
+field coefficients, or 21,648 power-basis residues. This is a factor of about
+149.97 reduction in the characteristic-zero promotion target.
+
+## Claim Boundary
+
+UST.G3FD proves the graded presentation over one complete split algebra. It
+does not prove that the 30 generators lift to `Q(gamma)`, does not reconstruct
+the full 5,411-coordinate cohomological lift, and does not yet prove
+component-20 rank 36 over `Q(gamma)`.
+
+The next object is the same normalized 30-generator family at independent
+split primes, followed by rational reconstruction and literal
+characteristic-zero replay.

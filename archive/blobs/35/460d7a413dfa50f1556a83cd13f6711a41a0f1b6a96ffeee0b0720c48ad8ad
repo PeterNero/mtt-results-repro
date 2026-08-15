@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Read the component-20 lane from the selected G3GK chart decomposition.
+
+The 136-coordinate output is not an intrinsic projection of the 248-dimensional
+H02 quotient.  It is the coefficient readout from the full, frozen endpoint
+chart decomposition: 248 quotient-unit columns followed by the 42,458 selected
+corrected-Jacobian columns.  This distinction is part of the certificate.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3gl"
+ARRAYS = EVIDENCE / "H02.component20.selected_chart_preimage_projection.npz"
+OUT = ROOT / "state" / "ust_g3gl_component20_chart_preimage_projection.packet.json"
+
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3BT = ROOT / "state" / "ust_g3bt_h02_endpoint_action_one_split_prime.packet.json"
+G3FH = ROOT / "evidence" / "ust_g3fh" / "H02.component20.fourth_normal_source_selection.json"
+G3FH_ARRAYS = ROOT / "evidence" / "ust_g3fh" / "H02.component20.fourth_normal_source_selection.npz"
+G3FR = ROOT / "evidence" / "ust_g3fr" / "H02.component20.inverse_system_source.json"
+G3FR_ARRAYS = ROOT / "evidence" / "ust_g3fr" / "H02.component20.inverse_system_source.npz"
+G3GK = ROOT / "state" / "ust_g3gk_same_field_endpoint_griffiths_dwork.packet.json"
+G3GJ_SOLUTION = ROOT / "evidence" / "ust_g3gj" / "H02.p21817.g5.K6_C_section_source.solution.bin"
+
+PRIME = 21817
+ROOT_VALUE = 5
+AMBIENT_DIMENSION = 42706
+QUOTIENT_DIMENSION = 248
+COMPLEMENT_DIMENSION = 42458
+SOURCE_DIMENSION = 18
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+COMPONENT_DIMENSION = 136
+EXPECTED_GENERATOR = 4
+EXPECTED_TAIL = (0, 0, 0, 2, 1, 0, 0)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path, *, repository: Path = ROOT) -> dict[str, Any]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    require(path.is_file(), f"external artifact exists: {path}")
+    return {
+        "repository": repository.name,
+        "repository_relative_path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def exponents(degree: int) -> list[tuple[int, int, int]]:
+    return [
+        (x_power, y_power, degree - x_power - y_power)
+        for x_power in range(degree + 1)
+        for y_power in range(degree - x_power + 1)
+    ]
+
+
+def inverse_mod(matrix: np.ndarray, prime: int) -> np.ndarray:
+    matrix = np.asarray(matrix, dtype=np.int64) % prime
+    require(matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1], "square inverse input")
+    size = matrix.shape[0]
+    work = np.concatenate((matrix.copy(), np.eye(size, dtype=np.int64)), axis=1)
+    for column in range(size):
+        choices = np.flatnonzero(work[column:, column])
+        require(choices.size > 0, "invertible pivot")
+        selected = column + int(choices[0])
+        if selected != column:
+            work[[column, selected]] = work[[selected, column]]
+        work[column] = work[column] * pow(int(work[column, column]), -1, prime) % prime
+        for row in range(size):
+            if row != column and work[row, column]:
+                work[row] = (work[row] - int(work[row, column]) * work[column]) % prime
+    require(np.array_equal(work[:, :size], np.eye(size, dtype=np.int64)), "inverse replay")
+    return work[:, size:] % prime
+
+
+def determinant_mod(matrix: np.ndarray, prime: int) -> int:
+    work = np.asarray(matrix, dtype=np.int64).copy() % prime
+    require(work.ndim == 2 and work.shape[0] == work.shape[1], "square determinant input")
+    result = 1
+    sign = 1
+    for column in range(work.shape[0]):
+        choices = np.flatnonzero(work[column:, column])
+        if choices.size == 0:
+            return 0
+        selected = column + int(choices[0])
+        if selected != column:
+            work[[column, selected]] = work[[selected, column]]
+            sign = -sign
+        pivot = int(work[column, column])
+        result = result * pivot % prime
+        inverse = pow(pivot, -1, prime)
+        for row in range(column + 1, work.shape[0]):
+            if work[row, column]:
+                factor = int(work[row, column]) * inverse % prime
+                work[row, column:] = (work[row, column:] - factor * work[column, column:]) % prime
+    return result if sign > 0 else (-result) % prime
+
+
+def selected_component_rows(
+    g3de: dict[str, Any], mld: Path
+) -> tuple[np.ndarray, np.ndarray, Path, Path, Path]:
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay = load(macaulay_path)
+    factor = load(factor_path)
+    require(all(macaulay["checks"].values()), "H02 Macaulay checks")
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+    require(len(descriptors) == COMPLEMENT_DIMENSION, "42,458 selected descriptor rows")
+
+    selection_path = ROOT / g3de["factorization"]["selection"]["path"]
+    require(
+        selection_path.is_file()
+        and sha256(selection_path) == g3de["factorization"]["selection"]["sha256"],
+        "G3DE selection hash",
+    )
+    selected_updates = np.load(selection_path, allow_pickle=False)["selected_columns"].astype(np.int64)
+    require(selected_updates.shape == (6022,), "6,022 selected update columns")
+    component_columns = selected_updates[COMPONENT_START:COMPONENT_PAST]
+    require(component_columns.shape == (COMPONENT_DIMENSION,), "136 component columns")
+    require(np.unique(component_columns).size == COMPONENT_DIMENSION, "unique component columns")
+
+    basis15 = exponents(15)
+    for local, exponent in enumerate(basis15):
+        generator, multiplier = descriptors[int(component_columns[local])]
+        require(generator == EXPECTED_GENERATOR, f"component generator local={local}")
+        require(tuple(multiplier[:3]) == exponent, f"component exponent local={local}")
+        require(tuple(multiplier[3:]) == EXPECTED_TAIL, f"component tail local={local}")
+    solution_rows = QUOTIENT_DIMENSION + component_columns
+    require(np.all(solution_rows < AMBIENT_DIMENSION), "component solution-row bounds")
+    return component_columns, solution_rows, selection_path, macaulay_path, factor_path
+
+
+def read_solution(path: Path, mld: Path) -> np.ndarray:
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+
+    solution = split_io.as_scipy(
+        arithmetic.read_csc(path, b"MTTSCO1\0", 6)
+    ).tocsc()
+    require(solution.shape == (AMBIENT_DIMENSION, SOURCE_DIMENSION), "chart solution shape")
+    return solution
+
+
+def target_plane() -> tuple[np.ndarray, int, int]:
+    arrays = np.load(G3FR_ARRAYS, allow_pickle=False)
+    primes = arrays["primes"].astype(np.int64)
+    roots = arrays["roots"].astype(np.int64)
+    prime_positions = np.flatnonzero(primes == PRIME)
+    require(prime_positions.size == 1, "unique anchor prime")
+    prime_index = int(prime_positions[0])
+    root_positions = np.flatnonzero(roots[prime_index] == ROOT_VALUE)
+    require(root_positions.size == 1, "unique anchor root")
+    root_index = int(root_positions[0])
+    target = arrays["degree15_primitives"][prime_index, root_index].astype(np.int64) % PRIME
+    require(target.shape == (COMPONENT_DIMENSION, SOURCE_DIMENSION), "G3FR target shape")
+    return target, prime_index, root_index
+
+
+def comparison(projected: np.ndarray, target: np.ndarray) -> dict[str, Any]:
+    projected = np.asarray(projected, dtype=np.int64) % PRIME
+    target = np.asarray(target, dtype=np.int64) % PRIME
+    projected_rank = graded.rref(projected, PRIME)[0]
+    target_rank = graded.rref(target, PRIME)[0]
+    joint_rank = graded.rref(np.concatenate((projected, target), axis=1), PRIME)[0]
+    target_row_rank, pivot_rows, _ = graded.rref(target.T, PRIME)
+    require(target_row_rank == SOURCE_DIMENSION and len(pivot_rows) == SOURCE_DIMENSION, "target pivot rows")
+    pivot_array = np.asarray(pivot_rows, dtype=np.int64)
+    transfer = inverse_mod(target[pivot_array, :], PRIME) @ projected[pivot_array, :] % PRIME
+    residual = (target @ transfer - projected) % PRIME
+    transfer_rank = graded.rref(transfer, PRIME)[0]
+    transfer_determinant = determinant_mod(transfer, PRIME)
+    equal = (
+        projected_rank == SOURCE_DIMENSION
+        and target_rank == SOURCE_DIMENSION
+        and joint_rank == SOURCE_DIMENSION
+        and np.count_nonzero(residual) == 0
+        and transfer_rank == SOURCE_DIMENSION
+        and transfer_determinant != 0
+    )
+    return {
+        "projected_rank": projected_rank,
+        "target_rank": target_rank,
+        "joint_rank": joint_rank,
+        "target_pivot_rows": pivot_array,
+        "transfer": transfer,
+        "transfer_rank": transfer_rank,
+        "transfer_determinant": transfer_determinant,
+        "residual": residual,
+        "residual_nonzeros": int(np.count_nonzero(residual)),
+        "planes_equal": equal,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--diagnostic-g3gj",
+        action="store_true",
+        help="test the readout on the pre-connection G3GJ solution without emitting evidence",
+    )
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="validate the fixed component index map without requiring G3GK output",
+    )
+    args = parser.parse_args()
+
+    g3de = load(G3DE)
+    g3bt = load(G3BT)
+    g3fh = load(G3FH)
+    g3fr = load(G3FR)
+    require(all(g3de["checks"].values()), "G3DE checks")
+    require(all(g3bt["checks"].values()), "G3BT checks")
+    require(all(g3fh["checks"].values()), "G3FH checks")
+    require(all(g3fr["checks"].values()), "G3FR checks")
+
+    alignment = np.load(G3FH_ARRAYS, allow_pickle=False)
+    basis15 = np.asarray(exponents(15), dtype=np.int16)
+    require(np.array_equal(alignment["degree15_exponents"], basis15), "G3FH Sym15 order")
+
+    mld = runtime.resolve_mld()
+    component_columns, solution_rows, selection_path, macaulay_path, factor_path = (
+        selected_component_rows(g3de, mld)
+    )
+    if args.prepare_only:
+        print(
+            "G3GL fixed component readout prepared: PASS "
+            f"columns={component_columns.size} rows=[{solution_rows.min()},{solution_rows.max()}]"
+        )
+        return
+
+    if args.diagnostic_g3gj:
+        require(G3GJ_SOLUTION.is_file(), "G3GJ diagnostic solution")
+        solution = read_solution(G3GJ_SOLUTION, mld)
+        projected = solution[solution_rows, :].toarray().astype(np.int64) % PRIME
+        target, _, _ = target_plane()
+        decision = comparison(projected, target)
+        print(
+            "G3GL non-promotional G3GJ diagnostic: PASS "
+            f"projected_rank={decision['projected_rank']} "
+            f"target_rank={decision['target_rank']} joint_rank={decision['joint_rank']} "
+            f"equal={decision['planes_equal']}"
+        )
+        return
+
+    g3gk = load(G3GK)
+    require(
+        g3gk["status"]
+        == "CLOSED_EXACT_ANCHOR_SAME_FIELD_K6_TORIC_RETURN_136_PROJECTION_OPEN",
+        "positive G3GK return required",
+    )
+    require(all(g3gk["checks"].values()), "G3GK checks")
+    require(
+        g3bt["operator_action"]["quotient_rows"] == QUOTIENT_DIMENSION
+        and g3bt["operator_action"]["original_Jacobian_preimage_rows"]
+        == COMPLEMENT_DIMENSION,
+        "G3BT full solution ordering",
+    )
+    root_five = next(
+        row for row in g3bt["root_solves"] if int(row["gamma_root"]) == ROOT_VALUE
+    )
+    require(
+        int(root_five["endpoint_determinant_mod21817"])
+        == int(g3gk["same_field_return"]["endpoint_chart_determinant_mod21817"]),
+        "G3BT/G3GK endpoint determinant",
+    )
+    solution_path = ROOT / g3gk["artifacts"]["chart_solution"]["path"]
+    require(
+        solution_path.is_file()
+        and sha256(solution_path) == g3gk["artifacts"]["chart_solution"]["sha256"],
+        "G3GK chart solution hash",
+    )
+    solution = read_solution(solution_path, mld)
+    projected = solution[solution_rows, :].toarray().astype(np.int64) % PRIME
+    target, prime_index, root_index = target_plane()
+    decision = comparison(projected, target)
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ARRAYS,
+        prime=np.asarray([PRIME], dtype=np.uint32),
+        gamma=np.asarray([ROOT_VALUE], dtype=np.uint32),
+        component_selected_original_columns=component_columns.astype(np.int32),
+        component_solution_rows=solution_rows.astype(np.int32),
+        degree15_exponents=basis15,
+        projected_component20_image=projected.astype(np.uint32),
+        G3FR_primitive15_target=target.astype(np.uint32),
+        target_pivot_rows=decision["target_pivot_rows"].astype(np.int16),
+        target_to_projected_transfer=decision["transfer"].astype(np.uint32),
+        target_transfer_residual=decision["residual"].astype(np.uint32),
+    )
+
+    equal = bool(decision["planes_equal"])
+    status = (
+        "CLOSED_EXACT_ANCHOR_SELECTED_CHART_PREIMAGE_EQUALS_G3FR_PRIMITIVE15"
+        if equal
+        else "CLOSED_EXACT_ANCHOR_SELECTED_CHART_PREIMAGE_G3FR_MISMATCH"
+    )
+    checks = {
+        "the_G3GK_return_and_full_chart_solution_are_hash_bound": True,
+        "the_frozen_chart_orders248_quotient_units_before42458_selected_Jacobian_columns": True,
+        "the136_component_rows_are_identified_from_the_G3DE_update_selection": True,
+        "every_component_descriptor_is_generator4_with_the_G3FH_Sym15_order_and_tail": True,
+        "the_component_readout_is_replayed_from_the_full_chart_solution": True,
+        "the_G3FR_anchor_target_has_rank18": decision["target_rank"] == SOURCE_DIMENSION,
+        "the_plane_decision_is_made_by_exact_modular_rank_and_transfer_replay": True,
+        "no_holdout_Qgamma_global_rank_or_physical_endpoint_promotion_is_inferred": True,
+    }
+    require(all(checks.values()), "G3GL checks")
+    packet = {
+        "schema": "mtt.unified-source.g3gl-component20-chart-preimage-projection.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3GL",
+        "status": status,
+        "controlling_blockers": ["B.ETA9.01", "B.HS.01"],
+        "inputs": {
+            "G3DE": record(G3DE),
+            "G3BT": record(G3BT),
+            "G3FH": record(G3FH),
+            "G3FH_arrays": record(G3FH_ARRAYS),
+            "G3FR": record(G3FR),
+            "G3FR_arrays": record(G3FR_ARRAYS),
+            "G3GK": record(G3GK),
+            "G3GK_chart_solution": record(solution_path),
+            "G3DE_selection": record(selection_path),
+            "MLD_H02_Macaulay": external_record(macaulay_path, mld),
+            "MLD_H02_coordinate_factorization": external_record(factor_path, mld),
+        },
+        "selected_fixed_chart_readout": {
+            "field": {"prime": PRIME, "gamma_root": ROOT_VALUE},
+            "chart_column_order": "248 quotient units followed by 42458 selected corrected-Jacobian columns",
+            "component_update_interval_zero_based": [COMPONENT_START, COMPONENT_PAST],
+            "component_dimension": COMPONENT_DIMENSION,
+            "solution_row_formula": "248 + selected_updates[4327:4463]",
+            "selected_original_column_minimum": int(component_columns.min()),
+            "selected_original_column_maximum": int(component_columns.max()),
+            "solution_row_minimum": int(solution_rows.min()),
+            "solution_row_maximum": int(solution_rows.max()),
+            "projected_nonzero_entries": int(np.count_nonzero(projected)),
+            "artifact": record(ARRAYS),
+            "scope_boundary": (
+                "This is a canonical coefficient readout relative to the frozen selected endpoint "
+                "chart and the supplied ambient representative. It is not asserted to descend to "
+                "an intrinsic linear map on the 248-dimensional quotient alone."
+            ),
+        },
+        "anchor_plane_decision": {
+            "G3FR_prime_index": prime_index,
+            "G3FR_root_index": root_index,
+            "projected_rank": decision["projected_rank"],
+            "target_rank": decision["target_rank"],
+            "joint_rank": decision["joint_rank"],
+            "target_to_projected_transfer_rank": decision["transfer_rank"],
+            "target_to_projected_transfer_determinant_mod21817": decision["transfer_determinant"],
+            "transfer_residual_nonzeros": decision["residual_nonzeros"],
+            "planes_equal": equal,
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_values_used": 0,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_an_intrinsic_map_from_the_H02_quotient_alone": False,
+            "claims_the_anchor_decision_holds_at_the47_other_fibers": False,
+            "claims_Qgamma_or_characteristic_zero_promotion": False,
+            "claims_component20_rank36_or_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3glSelectedChartComponent20PreimageReadout",
+            "tier": "CLOSED_EXACT_ANCHOR_SELECTED_CHART_COMPONENT_READOUT_AND_PLANE_DECISION",
+            "statement": (
+                "At the exact (21817,5) anchor, the frozen endpoint chart supplies a unique full "
+                "decomposition of every G3GK ambient return into 248 quotient-unit and 42458 "
+                "corrected-Jacobian coefficients. The G3DE descriptor selection identifies exactly "
+                "136 of those preimage rows with the G3FH generator-4 Sym15 component lane. Reading "
+                "those rows gives a 136x18 matrix. Its exact comparison with the G3FR primitive15 "
+                f"plane has ranks ({decision['projected_rank']},{decision['target_rank']},"
+                f"{decision['joint_rank']}) and plane_equality={equal}."
+            ),
+        },
+        "next_required_object": (
+            "Replay the same selected-chart readout and plane equality on all47 held-out fibers, "
+            "then promote the matrix-valued compiler over Q(gamma) and insert it into G3GG."
+            if equal
+            else "The selected G3GK compiler does not land in the G3FR primitive15 plane at the "
+            "anchor under the frozen component readout. Localize the exact complementary rows and "
+            "revise the connection source or derived readout before any holdout campaign."
+        ),
+    }
+    require(not any(packet["guardrails"].values()), "G3GL guardrails")
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print(
+        "UST.G3GL selected-chart component20 readout: PASS "
+        f"projected_rank={decision['projected_rank']} target_rank={decision['target_rank']} "
+        f"joint_rank={decision['joint_rank']} equal={equal}"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""Search coordinate normalizations for a short exact component-16 basis."""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import math
+import random
+import statistics
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+from probe_ust_g3ec_component12_padic_kernel import (
+    invert_matrix_mod,
+    rational_reconstruct,
+)
+from probe_ust_g3en_component16_six_embedding_lattice import (
+    COLUMNS,
+    FIELD_DEGREE,
+    PRIME,
+    RELATIONS,
+    ROOT,
+    exact_replay,
+)
+
+
+RESIDUE = ROOT / "evidence/ust_g3em/H02.component16.reduced.padic-exp32.residue.json.gz"
+REDUCTION = ROOT / "evidence/ust_g3el/H02.component16.unit_pivot_reduction.json"
+INDICES = ROOT / "evidence/ust_g3ek/H02.component16.cohomological.indices.npz"
+OUTPUT = ROOT / "evidence/ust_g3ep/H02.component16.coordinate_basis_search.json.gz"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load_gzip(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_gzip_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with gzip.open(temporary, "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"))
+        handle.write("\n")
+    temporary.replace(path)
+
+
+def select_independent_rows(
+    order: list[int], root_kernel: list[list[int]]
+) -> tuple[int, ...]:
+    pivots: dict[int, list[int]] = {}
+    selected: list[int] = []
+    for coordinate in order:
+        row = [int(value) % PRIME for value in root_kernel[coordinate]]
+        while any(row):
+            column = next(index for index, value in enumerate(row) if value)
+            prior = pivots.get(column)
+            if prior is None:
+                inverse = pow(row[column], -1, PRIME)
+                pivots[column] = [value * inverse % PRIME for value in row]
+                selected.append(coordinate)
+                break
+            factor = row[column]
+            row = [
+                (value - factor * prior_value) % PRIME
+                for value, prior_value in zip(row, prior, strict=True)
+            ]
+        if len(selected) == RELATIONS:
+            return tuple(selected)
+    raise AssertionError("candidate coordinate pool has rank below 21")
+
+
+def transform_matrices(
+    kernels: list[list[list[int]]], selected: tuple[int, ...], modulus: int
+) -> list[list[list[int]]]:
+    output = []
+    for root in range(FIELD_DEGREE):
+        minor = [
+            [int(value) % modulus for value in kernels[root][coordinate]]
+            for coordinate in selected
+        ]
+        output.append(invert_matrix_mod(minor, modulus))
+    return output
+
+
+def coefficient_residue(
+    kernels: list[list[list[int]]],
+    transforms: list[list[list[int]]],
+    inverse_vandermonde: list[list[int]],
+    modulus: int,
+    coordinate: int,
+    vector: int,
+    degree: int,
+) -> int:
+    values = [
+        sum(
+            int(kernels[root][coordinate][source])
+            * transforms[root][source][vector]
+            for source in range(RELATIONS)
+        )
+        % modulus
+        for root in range(FIELD_DEGREE)
+    ]
+    return sum(
+        inverse_vandermonde[degree][root] * values[root]
+        for root in range(FIELD_DEGREE)
+    ) % modulus
+
+
+def score_candidate(
+    kernels: list[list[list[int]]],
+    selected: tuple[int, ...],
+    inverse_vandermonde: list[list[int]],
+    modulus: int,
+    coordinates: list[int],
+) -> tuple[dict[str, Any], list[list[list[tuple[int, int] | None]]]]:
+    try:
+        transforms = transform_matrices(kernels, selected, modulus)
+    except (AssertionError, StopIteration, ValueError):
+        return {
+            "selected_rows": list(selected),
+            "valid_at_all_embeddings": False,
+            "reconstructed": 0,
+            "total": len(coordinates) * RELATIONS * FIELD_DEGREE,
+        }, []
+    bound = math.isqrt((modulus - 1) // 2)
+    reconstructed: list[list[list[tuple[int, int] | None]]] = []
+    numerator_bits: list[int] = []
+    denominator_bits: list[int] = []
+    successes = 0
+    for coordinate in coordinates:
+        coordinate_rows = []
+        for vector in range(RELATIONS):
+            coefficients = []
+            for degree in range(FIELD_DEGREE):
+                candidate = rational_reconstruct(
+                    coefficient_residue(
+                        kernels,
+                        transforms,
+                        inverse_vandermonde,
+                        modulus,
+                        coordinate,
+                        vector,
+                        degree,
+                    ),
+                    modulus,
+                    bound,
+                )
+                coefficients.append(candidate)
+                if candidate is not None:
+                    successes += 1
+                    numerator_bits.append(abs(candidate[0]).bit_length())
+                    denominator_bits.append(candidate[1].bit_length())
+            coordinate_rows.append(coefficients)
+        reconstructed.append(coordinate_rows)
+    total = len(coordinates) * RELATIONS * FIELD_DEGREE
+    return {
+        "selected_rows": list(selected),
+        "valid_at_all_embeddings": True,
+        "reconstructed": successes,
+        "total": total,
+        "fraction": successes / total,
+        "numerator_bit_median": statistics.median(numerator_bits) if numerator_bits else None,
+        "numerator_bit_max": max(numerator_bits) if numerator_bits else None,
+        "denominator_bit_median": statistics.median(denominator_bits) if denominator_bits else None,
+        "denominator_bit_max": max(denominator_bits) if denominator_bits else None,
+    }, reconstructed
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--random-candidates", type=int, default=24)
+    parser.add_argument("--sample-coordinates", type=int, default=60)
+    parser.add_argument("--residue", type=Path, default=RESIDUE)
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    arguments = parser.parse_args()
+    started = time.monotonic()
+
+    residue_path = arguments.residue
+    if not residue_path.is_absolute():
+        residue_path = ROOT / residue_path
+    output_path = arguments.output
+    if not output_path.is_absolute():
+        output_path = ROOT / output_path
+    residue = load_gzip(residue_path)
+    require(residue["shape"] == [FIELD_DEGREE, COLUMNS, RELATIONS], "residue shape")
+    modulus = int(residue["modulus"])
+    roots = [int(value) for value in residue["lifted_roots"]]
+    kernels = residue["kernels"]
+    inverse_vandermonde = invert_matrix_mod(
+        [
+            [pow(root, degree, modulus) for degree in range(FIELD_DEGREE)]
+            for root in roots
+        ],
+        modulus,
+    )
+
+    reduction = json.loads(REDUCTION.read_text(encoding="utf-8"))
+    retained_old = [int(value) for value in reduction["output"]["retained_old_columns"]]
+    free = tuple(int(value) for value in reduction["output"]["free_component16_columns"])
+    require(len(retained_old) == COLUMNS and len(free) == RELATIONS, "reduction index sizes")
+    indices = np.load(INDICES, allow_pickle=False)
+    source_support = indices["source_support"].astype(np.int32)
+    lift_support = indices["lift_support"].astype(np.int32)
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_family_macaulay_update as family_update
+
+    macaulay = json.loads(
+        (mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json").read_text()
+    )
+    factor = json.loads(
+        (mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json").read_text()
+    )
+    selected_original = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_original)
+
+    pools: dict[str, list[int]] = {"free": list(free)}
+    component_ranges = {
+        "component4": (760, 1119),
+        "component6": (1478, 1837),
+        "component14": (3268, 3454),
+        "component16": (3668, 3827),
+    }
+    for name, (start, past) in component_ranges.items():
+        pools[name] = [
+            local
+            for local, coordinate in enumerate(source_support)
+            if start <= int(coordinate) < past
+        ]
+    pools["source"] = list(range(1007))
+    pools["lift"] = list(range(1007, COLUMNS))
+    pools["lift_h0"] = []
+    pools["lift_h1"] = []
+    for reduced_column, old_column in enumerate(retained_old):
+        if old_column < 1007:
+            continue
+        local = old_column - 1007
+        generator, multiplier = descriptors[int(lift_support[local])]
+        require(generator == 6, "retained lift is generator6 difference")
+        pools[f"lift_h{multiplier[3]}"].append(reduced_column)
+    pools["all"] = list(range(COLUMNS))
+
+    root_mod_prime = [
+        [int(value) % PRIME for value in row] for row in kernels[0]
+    ]
+    candidate_sets: list[tuple[str, tuple[int, ...]]] = []
+    seen: set[tuple[int, ...]] = set()
+    all_coordinates = list(range(COLUMNS))
+    for name, pool in pools.items():
+        for suffix, order in (
+            ("forward", pool + [value for value in all_coordinates if value not in set(pool)]),
+            ("reverse", list(reversed(pool)) + [value for value in all_coordinates if value not in set(pool)]),
+        ):
+            selected = select_independent_rows(order, root_mod_prime)
+            if selected not in seen:
+                seen.add(selected)
+                candidate_sets.append((f"{name}_{suffix}", selected))
+    for seed in range(arguments.random_candidates):
+        order = list(all_coordinates)
+        random.Random(seed).shuffle(order)
+        selected = select_independent_rows(order, root_mod_prime)
+        if selected not in seen:
+            seen.add(selected)
+            candidate_sets.append((f"random_{seed}", selected))
+
+    sample_count = arguments.sample_coordinates
+    sample = sorted(
+        {
+            round(index * (COLUMNS - 1) / (sample_count - 1))
+            for index in range(sample_count)
+        }
+        | set(free)
+    )
+    scores: list[dict[str, Any]] = []
+    for index, (name, selected) in enumerate(candidate_sets):
+        score, _ = score_candidate(
+            kernels, selected, inverse_vandermonde, modulus, sample
+        )
+        score["name"] = name
+        scores.append(score)
+        print(
+            f"G3EP candidate={index+1}/{len(candidate_sets)} name={name} "
+            f"valid={score.get('valid_at_all_embeddings')} "
+            f"reconstructed={score.get('reconstructed')}/{score.get('total')}",
+            flush=True,
+        )
+    valid = [row for row in scores if row.get("valid_at_all_embeddings")]
+    require(valid, "at least one all-embedding coordinate basis")
+    best = max(
+        valid,
+        key=lambda row: (
+            int(row["reconstructed"]),
+            -int(row.get("denominator_bit_max") or 10**9),
+            -int(row.get("numerator_bit_max") or 10**9),
+        ),
+    )
+
+    full_score, full = score_candidate(
+        kernels,
+        tuple(int(value) for value in best["selected_rows"]),
+        inverse_vandermonde,
+        modulus,
+        list(range(COLUMNS)),
+    )
+    full_success = full_score["reconstructed"] == full_score["total"]
+    exact_vectors: list[list[tuple[int, ...]]] = []
+    exact_nonzeros: int | None = None
+    exact_slots: int | None = None
+    denominator_lcm_bits: list[int] = []
+    if full_success:
+        for vector in range(RELATIONS):
+            denominator = 1
+            for coordinate in range(COLUMNS):
+                for degree in range(FIELD_DEGREE):
+                    candidate = full[coordinate][vector][degree]
+                    require(candidate is not None, "complete reconstruction")
+                    denominator = math.lcm(denominator, candidate[1])
+            denominator_lcm_bits.append(denominator.bit_length())
+            exact_vectors.append(
+                [
+                    tuple(
+                        int(full[coordinate][vector][degree][0])
+                        * (denominator // int(full[coordinate][vector][degree][1]))
+                        for degree in range(FIELD_DEGREE)
+                    )
+                    for coordinate in range(COLUMNS)
+                ]
+            )
+        exact_nonzeros, exact_slots = exact_replay(exact_vectors)
+
+    payload = {
+        "schema": "ust.g3ep.h02.component16.coordinate-basis-search.v1",
+        "date": "2026-08-14",
+        "residue": residue_path.relative_to(ROOT).as_posix(),
+        "matrix": reduction["output"]["matrix"]["path"],
+        "candidate_count": len(candidate_sets),
+        "sample_coordinates": sample,
+        "candidate_scores": scores,
+        "best_sample_candidate": best,
+        "best_full_score": full_score,
+        "full_rational_reconstruction": full_success,
+        "denominator_lcm_bits": denominator_lcm_bits,
+        "exact_replay_nonzero_slots": exact_nonzeros,
+        "exact_replay_slots": exact_slots,
+        "exact_kernel_closed": exact_nonzeros == 0 if exact_nonzeros is not None else False,
+        "elapsed_seconds": time.monotonic() - started,
+        "claim_boundary": (
+            "Coordinate normalization is a deterministic candidate search. Only full "
+            "rational reconstruction followed by literal zero replay promotes component16."
+        ),
+    }
+    write_gzip_atomic(output_path, payload)
+    print(
+        f"G3EP_FINAL candidates={len(candidate_sets)} best={best['name']} "
+        f"sample={best['reconstructed']}/{best['total']} "
+        f"full={full_score['reconstructed']}/{full_score['total']} "
+        f"exact_nonzeros={exact_nonzeros} elapsed={payload['elapsed_seconds']:.3f}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

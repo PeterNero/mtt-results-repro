@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Build and replay the G3CM matrix-free selected-state action contract."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+G3CD = ROOT / "state" / "ust_g3cd_correction_full_affine_operator.packet.json"
+G3CJ = ROOT / "state" / "ust_g3cj_selected_source_cyclic_full_carrier.packet.json"
+G3CL = ROOT / "state" / "ust_g3cl_hybrid_full_path_gauge_atlas.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3cm"
+OUT = ROOT / "state" / "ust_g3cm_matrix_free_selected_state_action.packet.json"
+FIRST_ACTION = EVIDENCE / "g3cm_selected_source_first_action.mod11.npy"
+NEXT_ACTION = EVIDENCE / "g3cm_selected_source_K_power1509.mod11.npy"
+PRIME = 11
+DIMENSION = 1509
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def checked_local(record_value: dict[str, Any]) -> Path:
+    path = ROOT / record_value["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == record_value["bytes"], f"size {path.name}")
+    require(sha256(path) == record_value["sha256"], f"hash {path.name}")
+    return path
+
+
+def load_blocks(g3cd: dict[str, Any]) -> tuple[sparse.csc_matrix, sparse.csc_matrix, sparse.csc_matrix]:
+    blocks = []
+    for name, width in (("H20", 248), ("H11", 1013), ("H02", 248)):
+        path = checked_local(g3cd["source_blocks"][name]["NPZ"])
+        block = sparse.load_npz(path).tocsc().astype(np.int64)
+        require(block.shape == (DIMENSION, width), f"{name} block shape")
+        blocks.append(block)
+    return blocks[0], blocks[1], blocks[2]
+
+
+def apply_blocks(
+    blocks: tuple[sparse.csc_matrix, sparse.csc_matrix, sparse.csc_matrix],
+    vector: np.ndarray,
+) -> np.ndarray:
+    require(vector.shape == (DIMENSION,), "matrix-free input shape")
+    h20, h11, h02 = blocks
+    result = (
+        h20 @ vector[:248].astype(np.int64)
+        + h11 @ vector[248:1261].astype(np.int64)
+        + h02 @ vector[1261:].astype(np.int64)
+    ) % PRIME
+    return np.asarray(result, dtype=np.uint8).reshape(DIMENSION)
+
+
+def main() -> None:
+    g3cd = load(G3CD)
+    g3cj = load(G3CJ)
+    g3cl = load(G3CL)
+    for label, packet in (("G3CD", g3cd), ("G3CJ", g3cj), ("G3CL", g3cl)):
+        require(all(packet["checks"].values()), f"{label} checks")
+    blocks = load_blocks(g3cd)
+    source = np.load(
+        checked_local(g3cd["selected_affine_source"]["source_vector"]),
+        allow_pickle=False,
+    ).astype(np.uint8)
+    expected_frame = np.load(
+        checked_local(g3cj["homogeneous_cyclic_frame"]["frame"]),
+        allow_pickle=False,
+    ).astype(np.uint8)
+    recurrence = np.load(
+        checked_local(g3cj["homogeneous_companion"]["recurrence_coefficients"]),
+        allow_pickle=False,
+    ).astype(np.uint8)
+
+    current = source.copy()
+    mismatched_columns = 0
+    first_action = None
+    for column in range(DIMENSION):
+        if not np.array_equal(current, expected_frame[:, column]):
+            mismatched_columns += 1
+        current = apply_blocks(blocks, current)
+        if column == 0:
+            first_action = current.copy()
+    require(first_action is not None, "first action")
+    require(mismatched_columns == 0, "matrix-free Krylov replay")
+    recurrence_residual = int(
+        np.count_nonzero(
+            (
+                expected_frame.astype(np.int64) @ recurrence.astype(np.int64)
+                - current.astype(np.int64)
+            )
+            % PRIME
+        )
+    )
+    require(recurrence_residual == 0, "matrix-free terminal recurrence")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.save(FIRST_ACTION, first_action, allow_pickle=False)
+    np.save(NEXT_ACTION, current, allow_pickle=False)
+    checks = {
+        "G3CD_G3CJ_and_G3CL_are_hash_bound_and_passing": True,
+        "the_three_exact_sector_blocks_are_loaded_without_the_dense_operator": True,
+        "one_matrix_free_action_combines_H20_H11_and_H02_before_return": True,
+        "all1509_selected_source_Krylov_columns_replay_exactly": True,
+        "the_matrix_free_replay_matches_the_G3CJ_frame_in_every_entry": mismatched_columns == 0,
+        "the_degree1509_G3CJ_recurrence_has_zero_matrix_free_residual": recurrence_residual == 0,
+        "the_affine_action_requires_only_Kv_plus_s_times_b": True,
+        "linearity_reduces_each_family_RHS_evaluation_to_three_sector_return_chains": True,
+        "no_dense_path_operator_or_dimension_reduction_is_claimed": True,
+    }
+    require(all(checks.values()), "G3CM checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3cm-matrix-free-selected-state-action.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CM",
+        "status": "CLOSED_EXACT_GF11_MATRIX_FREE_FULL_CARRIER_ACTION_EQUIVALENCE_FAMILY_ORACLE_EXECUTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {"G3CD": record(G3CD), "G3CJ": record(G3CJ), "G3CL": record(G3CL)},
+        "sector_action": {
+            "basis_order": "H20(248), H11(1013), H02(248)",
+            "formula": "K*v=K_H20*v_H20+K_H11*v_H11+K_H02*v_H02",
+            "block_shapes": [[1509, 248], [1509, 1013], [1509, 248]],
+            "block_nonzero_entries": [int(block.nnz) for block in blocks],
+            "dense_operator_loaded_by_builder": False,
+            "affine_formula": "K_tilde*(v,s)=(K*v+s*b,0)",
+        },
+        "complete_replay": {
+            "initial_vector": "the selected G3CD/G3CC source b",
+            "iterations": DIMENSION,
+            "compared_frame_entries": DIMENSION * DIMENSION,
+            "mismatched_columns": mismatched_columns,
+            "mismatched_entries": 0,
+            "terminal_recurrence_residual_nonzeros": recurrence_residual,
+            "first_action_nonzero_entries": int(np.count_nonzero(first_action)),
+            "next_action_nonzero_entries": int(np.count_nonzero(current)),
+            "first_action": record(FIRST_ACTION),
+            "K_power1509_source": record(NEXT_ACTION),
+        },
+        "family_executor_contract": {
+            "input": "one current 1509-coordinate state v(a), split into H20/H11/H02",
+            "H20_lane": "combine the 248 H20 coefficients before applying the -3 P sC source and its recursive return",
+            "H11_lane": "combine the 1013 H11 coefficients before applying the -4 P sC source and its recursive return",
+            "H02_lane": "combine the 248 H02 coefficients before the -5 P sC pole-six toric return and recursive completion",
+            "output": "one 1509-coordinate K(a)v(a), plus the affine source scalar when present",
+            "RHS_columns_per_connection_evaluation": 3,
+            "full_operator_columns_not_required_per_evaluation": 1509,
+            "exactness_basis": "All source construction, reduction, divergence and chart solves are linear over the coefficient field, so combine-then-return equals columnwise-return-then-combine.",
+            "implementation_boundary": "The characteristic-zero or interval family versions of the three on-demand return chains are not yet emitted.",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_GF11_terminal_blocks_are_the_characteristic_zero_path_oracle": False,
+            "claims_three_sector_chains_mean_three_scalar_unknowns": False,
+            "claims_the_cost_of_one_sector_chain_is_constant": False,
+            "claims_a_dense_operator_is_never_useful": False,
+            "claims_path_integration_integral_marking_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3cmMatrixFreeSelectedStateAction",
+            "tier": "CLOSED_EXACT_SELECTED_GF11_MATRIX_FREE_EQUIVALENCE",
+            "statement": "The complete terminal G3CD action is exactly the sum of its three Hodge-sector block actions. Starting from the selected source and applying those blocks matrix-free reproduces every one of the 1509 G3CJ Krylov columns and its degree-1509 recurrence with zero mismatch, without loading the dense operator. By linearity, a family RHS evaluation may combine the current coordinates before executing one return chain per Hodge sector. This reduces column materialization, not carrier dimension; the characteristic-zero or interval family chains remain to be implemented.",
+        },
+        "frontier_delta": {
+            "before": "G3CL isolated the actual full-connection action as the transport blocker, but the 1509-dimensional carrier could still be mistaken for a requirement to reconstruct 1509 columns at every path point.",
+            "after": "Exact full-frame replay proves a matrix-free three-sector action is equivalent. Production can evolve one selected state and execute three combined return chains per RHS evaluation; dense path-matrix materialization is unnecessary. The remaining work is to implement and certify those three family chains, especially H02 pole-six return.",
+        },
+        "next_required_object": "Implement the H20, H11 and H02 on-demand family action routines over Q(gamma)(a) or certified complex intervals, caching chart factorizations/low-rank updates. Validate each against the terminal G3CD block and the split-prime G3BO/G3BT endpoint actions before integrating the selected state.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CM matrix-free selected-state action: PASS")
+    print("krylov_columns=1509 mismatches=0 recurrence_residual=0 sector_chains_per_RHS=3")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,97 @@
+# UST.G3AT Polarized Primal-Only Rank-One Transport Theorem
+
+## Purpose
+
+The current B89 reduction transports one primal vector and one dual covector
+for each of three selected `A1` paths. That is already far smaller than three
+dense `1509 x 1509` fundamental matrices, but the dual transports are still
+redundant. The locked residue theorem places the projectors in one polarized
+Gauss-Manin system and identifies their monodromies as Picard-Lefschetz
+reflections. Polarization therefore reconstructs each dual from its primal.
+
+## Exact statement
+
+Let `A(q)` be the Gauss-Manin connection matrix in an algebraic B103 frame and
+let `Q(q)=Q(q)^T` be its nondegenerate polarization matrix. Metric
+compatibility is
+
+```text
+Qdot + A^T Q + Q A = 0.
+```
+
+For a horizontal nonisotropic vanishing vector `e`, put
+
+```text
+edot = A e,
+s = e^T Q e,
+ell = e^T Q / s,
+P = e ell.
+```
+
+Direct differentiation gives
+
+```text
+sdot = 0,
+elldot = -ell A,
+Pdot = A P - P A,
+ell(e)=1,
+P^2=P,
+tr(P)=1.
+```
+
+Thus `ell` is exactly the adjoint horizontal solution selected by the
+polarization. In an integral Picard-Lefschetz normalization `s=-2`, this is
+the familiar formula `ell=-(1/2)e^TQ`, and `I-2P` is a `Q`-orthogonal
+reflection. The scale-free formula is used before integral normalization so
+that no unproved integral marking is smuggled into the local complex frame.
+
+## Computational consequence
+
+Across the three frozen paths, the terminal ODE payload changes from
+
+```text
+3 primal + 3 adjoint rank-1509 ODEs = 9,054 scalar unknowns
+```
+
+to
+
+```text
+3 primal rank-1509 ODEs = 4,527 scalar unknowns,
+plus 3 common-base polarization applications.
+```
+
+This is an exact factor-two reduction over the prior rank-one route and a
+factor-1509 reduction relative to three dense fundamental matrices. The
+polarization application may be implemented as a residue/cup-product oracle;
+the full `1509 x 1509` Gram matrix need not be materialized when only the
+three rows `e_i^TQ` are required.
+
+## Execution contract
+
+A carrier-specific execution must still emit, on one source orbit:
+
+1. the three canonical primal Frobenius initializers;
+2. three certified primal transports to `lambda=0`;
+3. a hash-bound B103 polarization-application evaluator;
+4. compatibility of that evaluator with the declared Gauss-Manin connection;
+5. the three normalized polarization duals and reconstructed projectors.
+
+The local projector must be the `Q`-orthogonal projector onto the emitted
+vanishing line. This is automatic for a genuine polarized Picard-Lefschetz
+residue, but it remains an explicit machine certificate at the numerical
+boundary.
+
+## Proof boundary
+
+G3AT does not execute the three primal transports or emit the polarization
+rows. It does not provide an integral meridian, the 248-coordinate period
+image, `beta_C`, or a Hull-Strominger endpoint. It replaces three unnecessary
+adjoint ODEs by a sharper algebraic input; it does not claim that input is
+already computed.
+
+## Reproduction
+
+```powershell
+python build_ust_g3at_polarized_primal_transport.py
+python verify_ust_g3at_polarized_primal_transport.py
+```

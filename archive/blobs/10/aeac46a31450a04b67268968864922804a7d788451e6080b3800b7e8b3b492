@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""Reduce the static G3CD affine obstruction to its exact Schur core."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import assemble_ust_g3cd_correction_full_operator as g3cd_linear
+
+
+ROOT = Path(__file__).resolve().parent
+G3CD = ROOT / "state" / "ust_g3cd_correction_full_affine_operator.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3ce"
+OUT = ROOT / "state" / "ust_g3ce_hodge_schur_affine_reduction.packet.json"
+PRIME = 11
+
+LOWER_RESPONSE = EVIDENCE / "g3ce_lower_response_to_H20_source.mod11.npy"
+LOWER_SOURCE = EVIDENCE / "g3ce_lower_selected_source_solution.mod11.npy"
+SCHUR = EVIDENCE / "g3ce_H20_schur_operator.mod11.npy"
+EFFECTIVE_SOURCE = EVIDENCE / "g3ce_H20_effective_source.mod11.npy"
+SCHUR_RIGHT = EVIDENCE / "g3ce_schur_right_kernel.mod11.npy"
+SCHUR_LEFT = EVIDENCE / "g3ce_schur_left_cokernel.mod11.npy"
+SCHUR_MINOR = EVIDENCE / "g3ce_schur_rank247_minor.npz"
+AFFINE = EVIDENCE / "g3ce_schur_affine_operator.mod11.npy"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def solve_mod_prime(matrix: np.ndarray, rhs: np.ndarray) -> tuple[np.ndarray, int]:
+    """Solve a square full-rank system over GF(11), retaining an exact determinant."""
+    work = np.asarray(matrix, dtype=np.int64).copy() % PRIME
+    values = np.asarray(rhs, dtype=np.int64).copy() % PRIME
+    require(work.ndim == 2 and work.shape[0] == work.shape[1], "square solve matrix")
+    require(values.ndim == 2 and values.shape[0] == work.shape[0], "solve RHS shape")
+    size = work.shape[0]
+    determinant = 1
+    for column in range(size):
+        candidates = np.flatnonzero(work[column:, column])
+        require(candidates.size > 0, f"invertible pivot {column}")
+        selected = column + int(candidates[0])
+        if selected != column:
+            work[[column, selected]] = work[[selected, column]]
+            values[[column, selected]] = values[[selected, column]]
+            determinant = -determinant
+        pivot = int(work[column, column])
+        determinant = determinant * pivot % PRIME
+        inverse = pow(pivot, -1, PRIME)
+        work[column, column:] = work[column, column:] * inverse % PRIME
+        values[column] = values[column] * inverse % PRIME
+        if column + 1 < size:
+            factors = work[column + 1 :, column].copy()
+            active = np.flatnonzero(factors)
+            if active.size:
+                target = column + 1 + active
+                work[target, column:] = (
+                    work[target, column:]
+                    - factors[active, None] * work[column, column:]
+                ) % PRIME
+                values[target] = (
+                    values[target] - factors[active, None] * values[column]
+                ) % PRIME
+    for row in range(size - 1, -1, -1):
+        if row + 1 < size:
+            values[row] = (
+                values[row] - work[row, row + 1 :] @ values[row + 1 :]
+            ) % PRIME
+    residual = (
+        np.asarray(matrix, dtype=np.int64) @ values
+        - np.asarray(rhs, dtype=np.int64)
+    ) % PRIME
+    require(not np.any(residual), "solve residual")
+    return values.astype(np.uint8), determinant % PRIME
+
+
+def main() -> None:
+    packet = load(G3CD)
+    require(all(packet["checks"].values()), "G3CD checks")
+    require(not any(packet["guardrails"].values()), "G3CD guardrails")
+    operator_path = ROOT / packet["correction_operator"]["dense_uint8"]["path"]
+    source_path = ROOT / packet["selected_affine_source"]["source_vector"]["path"]
+    right_path = ROOT / packet["selected_affine_source"]["right_kernel"]["vector"]["path"]
+    left_path = ROOT / packet["selected_affine_source"]["left_cokernel"]["vector"]["path"]
+    for path, item in (
+        (operator_path, packet["correction_operator"]["dense_uint8"]),
+        (source_path, packet["selected_affine_source"]["source_vector"]),
+        (right_path, packet["selected_affine_source"]["right_kernel"]["vector"]),
+        (left_path, packet["selected_affine_source"]["left_cokernel"]["vector"]),
+    ):
+        require(path.is_file() and sha256(path) == item["sha256"], f"G3CD input hash {path.name}")
+    matrix = np.fromfile(operator_path, dtype=np.uint8).reshape(1509, 1509)
+    source = np.load(source_path, allow_pickle=False).astype(np.uint8)
+    full_right = np.load(right_path, allow_pickle=False).astype(np.uint8)
+    full_left = np.load(left_path, allow_pickle=False).astype(np.uint8)
+
+    top = 248
+    A = matrix[:top, :top].astype(np.int64)
+    U = matrix[:top, top:].astype(np.int64)
+    L = matrix[top:, :top].astype(np.int64)
+    J = matrix[top:, top:].astype(np.int64)
+    b_lower = source[top:].astype(np.int64)
+    require(J.shape == (1261, 1261), "lower H11-H02 block shape")
+    require(not np.any(source[:top]), "selected source has no H20 component")
+
+    combined_rhs = np.column_stack([L, b_lower])
+    solved, lower_determinant = solve_mod_prime(J, combined_rhs)
+    require(lower_determinant == 4, "lower-block determinant")
+    lower_response = solved[:, :top].astype(np.int64)
+    lower_source = solved[:, top].astype(np.int64)
+    schur = (A - U @ lower_response) % PRIME
+    effective_source = (-U @ lower_source) % PRIME
+    require(schur.shape == (248, 248), "Schur shape")
+    require(effective_source.shape == (248,), "effective source shape")
+
+    schur_right, right_pivots, right_rows, minor_determinant = g3cd_linear.normalized_null_vector(schur)
+    schur_left, left_pivots, _, _ = g3cd_linear.normalized_null_vector(schur.T)
+    require(len(right_pivots) == len(left_pivots) == 247, "Schur rank 247")
+    obstruction = int(schur_left.astype(np.int64) @ effective_source % PRIME)
+    require(obstruction == 2, "effective obstruction pairing")
+
+    reconstructed_right_lower = (-lower_response @ schur_right.astype(np.int64)) % PRIME
+    reconstructed_right = np.concatenate(
+        [schur_right.astype(np.int64), reconstructed_right_lower]
+    ).astype(np.uint8)
+    require(np.array_equal(reconstructed_right, full_right), "full right-kernel reconstruction")
+
+    dual_rhs = (U.T @ schur_left.astype(np.int64) % PRIME).reshape(-1, 1)
+    dual_solution, transpose_determinant = solve_mod_prime(J.T, dual_rhs)
+    require(transpose_determinant == lower_determinant, "transpose determinant")
+    reconstructed_left = np.concatenate(
+        [schur_left.astype(np.int64), (-dual_solution[:, 0].astype(np.int64)) % PRIME]
+    ).astype(np.uint8)
+    require(np.array_equal(reconstructed_left, full_left), "full left-cokernel reconstruction")
+    require(not np.any(matrix.astype(np.int64) @ reconstructed_right.astype(np.int64) % PRIME), "full right identity")
+    require(not np.any(reconstructed_left.astype(np.int64) @ matrix.astype(np.int64) % PRIME), "full left identity")
+
+    affine = np.zeros((249, 249), dtype=np.uint8)
+    affine[:248, :248] = schur.astype(np.uint8)
+    affine[:248, 248] = effective_source.astype(np.uint8)
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.save(LOWER_RESPONSE, lower_response.astype(np.uint8), allow_pickle=False)
+    np.save(LOWER_SOURCE, lower_source.astype(np.uint8), allow_pickle=False)
+    np.save(SCHUR, schur.astype(np.uint8), allow_pickle=False)
+    np.save(EFFECTIVE_SOURCE, effective_source.astype(np.uint8), allow_pickle=False)
+    np.save(SCHUR_RIGHT, schur_right, allow_pickle=False)
+    np.save(SCHUR_LEFT, schur_left, allow_pickle=False)
+    np.savez_compressed(
+        SCHUR_MINOR,
+        rows=np.asarray(right_rows, dtype=np.int32),
+        columns=np.asarray(right_pivots, dtype=np.int32),
+    )
+    np.save(AFFINE, affine, allow_pickle=False)
+
+    checks = {
+        "G3CD_is_hash_bound_and_passing": True,
+        "the_lower_H11_H02_block_has_determinant4_mod11": True,
+        "all248_lower_responses_and_the_selected_source_are_solved_together": True,
+        "the_248_square_H20_Schur_operator_is_emitted": True,
+        "the_Schur_operator_has_rank247_with_a_nonzero_minor": True,
+        "the_reduced_affine_source_pairs2_with_the_unique_Schur_cokernel": True,
+        "the_249_square_affine_Schur_operator_has_rank248": True,
+        "the_Schur_kernel_reconstructs_the_full_G3CD_right_kernel_exactly": True,
+        "the_Schur_cokernel_reconstructs_the_full_G3CD_left_cokernel_exactly": True,
+        "no_characteristic_zero_rank_defect_horizontal_solution_or_beta_value_is_inferred": True,
+    }
+    packet_out = {
+        "schema": "mtt.unified-source.g3ce-hodge-schur-affine-reduction.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CE",
+        "status": "CLOSED_EXACT_GF11_STATIC_1510_TO249_AFFINE_SCHUR_OBSTRUCTION_REDUCTION_DYNAMIC_PATH_REDUCTION_OPEN",
+        "field": "GF(11) at gamma=3",
+        "input": record(G3CD),
+        "block_decomposition": {
+            "formula": "K_C=[[A,U],[L,J]] with H20 size248 and lower H11+H02 size1261",
+            "lower_block_shape": [1261, 1261],
+            "lower_block_determinant_mod11": lower_determinant,
+            "lower_block_rank_mod11": 1261,
+            "lower_response_shape": list(lower_response.shape),
+            "lower_response": record(LOWER_RESPONSE),
+            "lower_selected_source_solution": record(LOWER_SOURCE),
+            "characteristic_zero_consequence": "Because the determinant reduces to a unit, the corresponding canonical lower block is invertible over the characteristic-zero fraction field wherever this chart model is defined; its explicit characteristic-zero entries are not reconstructed here.",
+        },
+        "schur_operator": {
+            "formula": "S_C=A-U*J^-1*L",
+            "shape": [248, 248],
+            "nonzero_entries": int(np.count_nonzero(schur)),
+            "rank_mod11": 247,
+            "operator": record(SCHUR),
+            "right_kernel_nonzero_entries": int(np.count_nonzero(schur_right)),
+            "right_kernel": record(SCHUR_RIGHT),
+            "left_cokernel_nonzero_entries": int(np.count_nonzero(schur_left)),
+            "left_cokernel": record(SCHUR_LEFT),
+            "rank247_minor": {
+                "determinant_mod11": minor_determinant,
+                "certificate": record(SCHUR_MINOR),
+            },
+        },
+        "effective_affine_source": {
+            "formula": "b_eff=-U*J^-1*b_lower",
+            "shape": [248],
+            "nonzero_entries": int(np.count_nonzero(effective_source)),
+            "source": record(EFFECTIVE_SOURCE),
+            "obstruction_pairing_mod11": obstruction,
+            "affine_operator_formula": "S_tilde_C=[[S_C,b_eff],[0,0]]",
+            "affine_shape": [249, 249],
+            "affine_rank_mod11": 248,
+            "affine_operator": record(AFFINE),
+        },
+        "full_reconstruction": {
+            "right_formula": "r_full=(r_S,-J^-1*L*r_S)",
+            "right_equals_G3CD": True,
+            "left_formula": "ell_full=(ell_S,-J^-T*U^T*ell_S)",
+            "left_equals_G3CD": True,
+            "pairing_identity": "ell_full^T*b_C=ell_S^T*b_eff=2 mod11",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_Schur_rank247_defect_persists_in_characteristic_zero": False,
+            "claims_the_complete_characteristic_zero_Schur_entries": False,
+            "claims_J_is_invertible_at_the_G3BJ_start_endpoint": False,
+            "claims_the_parameter_dependent_Schur_atlas_is_emitted": False,
+            "claims_the_rank249_path_system_is_integrated": False,
+            "claims_static_row_elimination_reduces_the_rank1510_transport_ODE": False,
+            "claims_integral_transport_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3ceHodgeSchurAffineReduction",
+            "tier": "CLOSED_EXACT_SELECTED_GF11_AFFINE_SCHUR_REDUCTION",
+            "statement": "At the terminal good fiber, the static rank/cokernel problem for the complete 1510-dimensional G3CD affine coefficient matrix is exactly equivalent, after eliminating the invertible 1261-dimensional H11+H02 block, to an emitted 249-dimensional affine Schur matrix. Its 248-square homogeneous part has rank 247, and its selected effective source fills the unique cokernel with pairing 2. The reduced null witnesses reconstruct the full G3CD witnesses exactly. This row equivalence is not an ODE gauge equivalence.",
+        },
+        "frontier_delta": {
+            "before": "G3CD closed the terminal affine coupling but left it as a 1510-dimensional system.",
+            "after": "Exact Hodge-block elimination reduces the static terminal affine obstruction test to 249 dimensions without losing its kernel, cokernel or selected-source pairing. A separate invariant-graph/Riccati theorem is required before any transport-dimension reduction; characteristic-zero parameter dependence and path integration remain.",
+        },
+        "next_required_object": "Test the dynamic invariant-graph identities for X(a)=J(a)^-1L(a) and y(a)=J(a)^-1b_lower(a). Only if their Riccati derivative identities hold may transport be reduced to 249 variables; otherwise execute the selected rank-1510 affine continuation, using the static Schur block only for obstruction tests and preconditioning.",
+    }
+    require(all(checks.values()), "G3CE checks")
+    OUT.write_text(json.dumps(packet_out, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CE Hodge Schur affine reduction: PASS")
+    print(
+        f"detJ={lower_determinant} rankS=247 minor={minor_determinant} "
+        f"source_nnz={np.count_nonzero(effective_source)} obstruction={obstruction} "
+        f"affine_rank=248"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

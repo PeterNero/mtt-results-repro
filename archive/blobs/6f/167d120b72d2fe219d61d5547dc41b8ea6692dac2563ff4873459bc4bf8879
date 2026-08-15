@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Run an isolated Hilbert-guided selected Cayley basis hedge.
+
+The predecessor Hilbert numerator is only an acceleration hint. A result from
+this runner must be certified separately by recomputing a standard basis of
+the emitted candidate before it can be adopted.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "state" / "ust_g3al_selected_cayley_basis.sing"
+SCRIPT = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert.sing"
+OUTPUT = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert.singular.out"
+CACHE = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert.ssi"
+RESULT = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert.result.json"
+NORED_SCRIPT = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert_nored.sing"
+NORED_OUTPUT = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert_nored.singular.out"
+NORED_CACHE = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert_nored.ssi"
+NORED_RESULT = ROOT / "state" / "ust_g3am_selected_cayley_basis_hilbert_nored.result.json"
+WEIGHTS = (1, 1, 1, 3, 1, 1, 1, 6, 9, 2)
+PREDECESSOR_HILBERT = (
+    1, 0, 0, -1, 0, 0, -1, 0, 0, 0, -1, -6, 3, 1, 6, -1, 1, 6,
+    -3, 0, 0, 6, 13, -18, -2, -4, -12, 1, -17, 330, -418, -544,
+    480, 271, 1366, -2638, 1423, -195, 349, -522, -706, 2043,
+    -1565, -547, 1632, -685, -189, -743, 1243, 1277, -2798, 1257,
+    -515, 955, -759, 185, 295, -394, 55, 65, 158, -196, 60, -8, 16,
+    -9, -14, 24, -17, 8, -3, -2, 12, -21, 24, -15, 2, -1, 3, 3,
+    -12, 15, -20, 28, -20, 4, 3, -5, 12, -19, 12, -1, -1, 0,
+)
+PREDECESSOR_BASIS_SHA256 = (
+    "06ba3013ff81ba85a0130e681cbac276d2728e789a30f796add8409f0f2b2853"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=86400)
+    parser.add_argument("--no-red", action="store_true")
+    args = parser.parse_args()
+    source = SOURCE.read_text(encoding="ascii")
+    script_path = NORED_SCRIPT if args.no_red else SCRIPT
+    output_path = NORED_OUTPUT if args.no_red else OUTPUT
+    cache_path = NORED_CACHE if args.no_red else CACHE
+    result_path = NORED_RESULT if args.no_red else RESULT
+    cache_relative = str(cache_path.relative_to(ROOT)).replace("\\", "/")
+    require(source.count("ideal G=slimgb(J);") == 1, "one slimgb command")
+    require(
+        source.count(
+            'write("ssi:w state/ust_g3al_selected_cayley_basis.ssi",G);'
+        )
+        == 1,
+        "one canonical cache write",
+    )
+    guided = (
+        "bigintvec predecessorHilbert="
+        + ",".join(str(value) for value in PREDECESSOR_HILBERT)
+        + ";\nintvec selectedWeights="
+        + ",".join(str(value) for value in WEIGHTS)
+        + ";\nideal G=std(J,predecessorHilbert,selectedWeights);"
+    )
+    script_source = source
+    if args.no_red:
+        require(source.count("option(redSB);\n") == 1, "one redSB option")
+        script_source = source.replace("option(redSB);\n", "", 1)
+    script = script_source.replace("ideal G=slimgb(J);", guided).replace(
+        'write("ssi:w state/ust_g3al_selected_cayley_basis.ssi",G);',
+        f'write("ssi:w {cache_relative}",G);',
+    )
+    script_path.write_text(script, encoding="ascii")
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            singular_command(ROOT, script_path),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        output = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        raw = error.stdout or b""
+        output = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+        returncode = 124
+    output_path.write_text(output, encoding="utf-8")
+    elapsed = time.time() - started
+    candidate_completed = (
+        not timed_out
+        and returncode == 0
+        and "G3AL_SELECTED_CAYLEY_BASIS_PASS" in output
+        and "G3AL_SOCLE_ZERO=0" in output
+        and cache_path.is_file()
+        and cache_path.stat().st_size > 0
+    )
+    result = {
+        "schema": "mtt.unified-source.g3am-selected-cayley-basis-hilbert-hedge-result.v1",
+        "status": (
+            "CANDIDATE_REQUIRES_INDEPENDENT_STANDARD_BASIS_CERTIFICATION"
+            if candidate_completed
+            else "HILBERT_HEDGE_DID_NOT_COMPLETE"
+        ),
+        "source": {
+            "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(SOURCE),
+        },
+        "script": {
+            "path": str(script_path.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(script_path),
+        },
+        "output": {
+            "path": str(output_path.relative_to(ROOT)).replace("\\", "/"),
+            "sha256": sha256(output_path),
+        },
+        "cache": (
+            {
+                "path": cache_relative,
+                "sha256": sha256(cache_path),
+                "bytes": cache_path.stat().st_size,
+            }
+            if cache_path.is_file()
+            else None
+        ),
+        "algorithm": (
+            "std_with_predecessor_hilbert_hint_nored"
+            if args.no_red
+            else "std_with_predecessor_hilbert_hint_redSB"
+        ),
+        "uses_redSB": not args.no_red,
+        "predecessor_hint": {
+            "basis_sha256": PREDECESSOR_BASIS_SHA256,
+            "weights": list(WEIGHTS),
+            "hilbert_numerator": list(PREDECESSOR_HILBERT),
+            "hilbert_numerator_sha256": canonical_hash(PREDECESSOR_HILBERT),
+            "is_used_as_a_proof_of_selected_flatness": False,
+        },
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "candidate_completed": candidate_completed,
+        "independently_certified": False,
+        "passed": False,
+    }
+    result_path.write_text(json.dumps(result, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AM selected Cayley Hilbert hedge "
+        f"variant={'nored' if args.no_red else 'redSB'} "
+        f"candidate_completed={candidate_completed} elapsed={elapsed:.1f}s"
+    )
+    if not candidate_completed:
+        raise SystemExit(returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

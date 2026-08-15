@@ -1,0 +1,471 @@
+#!/usr/bin/env python3
+"""Build the G3BH direct-containment no-go and transport-necessity packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = (
+    ROOT
+    / "evidence"
+    / "ust_g3bh"
+    / "q79_fixed_b89_root_containment_screen.v1.json.blob"
+)
+G3BG = STATE / "ust_g3bg_root_primitive_projection.packet.json"
+G3AC = ROOT / "UST_G3AC_ETA9_PRIMITIVE_GRAPH_PRYM_ORBIT_AND_SELECTED_SOURCE_CUTSET_THEOREM_v1.md"
+G3AJ = ROOT / "UST_G3AJ_SELECTED_RESIDUE_BALL_SMOOTH_GRAPH_PRYM_EXISTENCE_THEOREM_v1.md"
+G3AQ = ROOT / "UST_G3AQ_SELECTED_CAYLEY_CHARACTERISTIC_ZERO_RESPONSE_RANK122_THEOREM_v1.md"
+OUT = STATE / "ust_g3bh_fixed_b89_root_containment_nogo.packet.json"
+
+EXPECTED_HASHES = {
+    "G3BG": "98a0560054e4403887d1cc0b0e72e139563826dd57fae8dcbb2063eaeaaafc5a",
+    "G3AC": "e0cac2c5c786124f0f0f27fd8d082192a60e929f3ade900e5f793e840bfe2578",
+    "G3AJ": "f139f715f52f410ba7206539d78e3e1256345dff13fb65f37396d212842ca150",
+    "G3AQ": "cb76aa73c8567a704f09887ce68f985753737332aebb751481d8832b7e535eb5",
+}
+
+P = 101
+F3 = tuple[int, int, int]
+K = tuple[int, int, int, int, int, int]
+ZERO3: F3 = (0, 0, 0)
+ONE3: F3 = (1, 0, 0)
+ZERO: K = (0, 0, 0, 0, 0, 0)
+ONE: K = (1, 0, 0, 0, 0, 0)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+
+def f3_add(left: F3, right: F3) -> F3:
+    return tuple((a + b) % P for a, b in zip(left, right))  # type: ignore[return-value]
+
+
+def f3_neg(value: F3) -> F3:
+    return tuple((-entry) % P for entry in value)  # type: ignore[return-value]
+
+
+def f3_mul(left: F3, right: F3) -> F3:
+    work = [0] * 5
+    for i, a in enumerate(left):
+        for j, b in enumerate(right):
+            work[i + j] = (work[i + j] + a * b) % P
+    relation = (70, 32, 89)  # alpha^3=-31-69 alpha-12 alpha^2 modulo 101
+    for degree in (4, 3):
+        coefficient = work[degree] % P
+        if coefficient:
+            for index, replacement in enumerate(relation):
+                work[degree - 3 + index] = (
+                    work[degree - 3 + index] + coefficient * replacement
+                ) % P
+        work[degree] = 0
+    return tuple(work[:3])  # type: ignore[return-value]
+
+
+def k(value: list[int] | tuple[int, ...]) -> K:
+    require(len(value) == 6, "K coordinate length")
+    return tuple(int(entry) % P for entry in value)  # type: ignore[return-value]
+
+
+def k_add(left: K, right: K) -> K:
+    return tuple((a + b) % P for a, b in zip(left, right))  # type: ignore[return-value]
+
+
+def k_neg(value: K) -> K:
+    return tuple((-entry) % P for entry in value)  # type: ignore[return-value]
+
+
+def k_sub(left: K, right: K) -> K:
+    return k_add(left, k_neg(right))
+
+
+def k_mul(left: K, right: K) -> K:
+    a, b = left[:3], left[3:]
+    c, d = right[:3], right[3:]
+    real = f3_add(f3_mul(a, c), f3_neg(tuple(3 * x % P for x in f3_mul(b, d))))
+    mu = f3_add(f3_mul(a, d), f3_mul(b, c))
+    return tuple(real + mu)  # type: ignore[return-value]
+
+
+def k_pow(value: K, exponent: int) -> K:
+    result = ONE
+    base = value
+    power = exponent
+    while power:
+        if power & 1:
+            result = k_mul(result, base)
+        base = k_mul(base, base)
+        power //= 2
+    return result
+
+
+def k_inv(value: K) -> K:
+    require(value != ZERO, "inverse of zero")
+    inverse = k_pow(value, P**6 - 2)
+    require(k_mul(value, inverse) == ONE, "field inverse")
+    return inverse
+
+
+Polynomial = list[K]
+
+
+def p_trim(value: Polynomial) -> Polynomial:
+    result = value[:]
+    while result and result[-1] == ZERO:
+        result.pop()
+    return result
+
+
+def p_add(left: Polynomial, right: Polynomial) -> Polynomial:
+    result = [ZERO] * max(len(left), len(right))
+    for index in range(len(result)):
+        result[index] = k_add(
+            left[index] if index < len(left) else ZERO,
+            right[index] if index < len(right) else ZERO,
+        )
+    return p_trim(result)
+
+
+def p_neg(value: Polynomial) -> Polynomial:
+    return p_trim([k_neg(entry) for entry in value])
+
+
+def p_sub(left: Polynomial, right: Polynomial) -> Polynomial:
+    return p_add(left, p_neg(right))
+
+
+def p_mul(left: Polynomial, right: Polynomial) -> Polynomial:
+    if not left or not right:
+        return []
+    result = [ZERO] * (len(left) + len(right) - 1)
+    for i, a in enumerate(left):
+        for j, b in enumerate(right):
+            result[i + j] = k_add(result[i + j], k_mul(a, b))
+    return p_trim(result)
+
+
+def p_scale(value: Polynomial, scalar: K) -> Polynomial:
+    return p_trim([k_mul(entry, scalar) for entry in value])
+
+
+def p_divmod(numerator: Polynomial, denominator: Polynomial) -> tuple[Polynomial, Polynomial]:
+    require(bool(denominator), "polynomial division by zero")
+    remainder = p_trim(numerator)
+    quotient = [ZERO] * max(0, len(remainder) - len(denominator) + 1)
+    inverse_lead = k_inv(denominator[-1])
+    while remainder and len(remainder) >= len(denominator):
+        degree = len(remainder) - len(denominator)
+        coefficient = k_mul(remainder[-1], inverse_lead)
+        quotient[degree] = coefficient
+        subtraction = [ZERO] * degree + p_scale(denominator, coefficient)
+        remainder = p_sub(remainder, subtraction)
+    return p_trim(quotient), p_trim(remainder)
+
+
+def p_xgcd(left: Polynomial, right: Polynomial) -> tuple[Polynomial, Polynomial, Polynomial]:
+    old_r, r = p_trim(left), p_trim(right)
+    old_s, s = [ONE], []
+    old_t, t = [], [ONE]
+    while r:
+        quotient, remainder = p_divmod(old_r, r)
+        old_r, r = r, remainder
+        old_s, s = s, p_sub(old_s, p_mul(quotient, s))
+        old_t, t = t, p_sub(old_t, p_mul(quotient, t))
+    require(bool(old_r), "zero polynomial gcd")
+    normalizer = k_inv(old_r[-1])
+    return (
+        p_scale(old_r, normalizer),
+        p_scale(old_s, normalizer),
+        p_scale(old_t, normalizer),
+    )
+
+
+def determinant3(matrix: list[list[Polynomial]]) -> Polynomial:
+    require(len(matrix) == 3 and all(len(row) == 3 for row in matrix), "3x3")
+    positive = p_add(
+        p_mul(p_mul(matrix[0][0], matrix[1][1]), matrix[2][2]),
+        p_add(
+            p_mul(p_mul(matrix[0][1], matrix[1][2]), matrix[2][0]),
+            p_mul(p_mul(matrix[0][2], matrix[1][0]), matrix[2][1]),
+        ),
+    )
+    negative = p_add(
+        p_mul(p_mul(matrix[0][2], matrix[1][1]), matrix[2][0]),
+        p_add(
+            p_mul(p_mul(matrix[0][1], matrix[1][0]), matrix[2][2]),
+            p_mul(p_mul(matrix[0][0], matrix[1][2]), matrix[2][1]),
+        ),
+    )
+    return p_sub(positive, negative)
+
+
+def matrix_rank(matrix: list[list[K]]) -> int:
+    work = [row[:] for row in matrix]
+    rows = len(work)
+    columns = len(work[0]) if rows else 0
+    rank = 0
+    for column in range(columns):
+        pivot = next((row for row in range(rank, rows) if work[row][column] != ZERO), None)
+        if pivot is None:
+            continue
+        work[rank], work[pivot] = work[pivot], work[rank]
+        inverse = k_inv(work[rank][column])
+        work[rank] = [k_mul(entry, inverse) for entry in work[rank]]
+        for row in range(rows):
+            if row == rank or work[row][column] == ZERO:
+                continue
+            factor = work[row][column]
+            work[row] = [
+                k_sub(entry, k_mul(factor, pivot_entry))
+                for entry, pivot_entry in zip(work[row], work[rank])
+            ]
+        rank += 1
+        if rank == rows:
+            break
+    return rank
+
+
+def determinant(matrix: list[list[K]]) -> K:
+    require(matrix and len(matrix) == len(matrix[0]), "square determinant")
+    work = [row[:] for row in matrix]
+    result = ONE
+    sign = 1
+    for column in range(len(work)):
+        pivot = next((row for row in range(column, len(work)) if work[row][column] != ZERO), None)
+        if pivot is None:
+            return ZERO
+        if pivot != column:
+            work[column], work[pivot] = work[pivot], work[column]
+            sign *= -1
+        pivot_value = work[column][column]
+        result = k_mul(result, pivot_value)
+        inverse = k_inv(pivot_value)
+        for row in range(column + 1, len(work)):
+            if work[row][column] == ZERO:
+                continue
+            factor = k_mul(work[row][column], inverse)
+            work[row] = [
+                k_sub(entry, k_mul(factor, pivot_entry))
+                for entry, pivot_entry in zip(work[row], work[column])
+            ]
+    return k_neg(result) if sign < 0 else result
+
+
+def serialize_polynomial(value: Polynomial) -> list[list[int]]:
+    return [list(entry) for entry in value]
+
+
+def main() -> None:
+    evidence = load(EVIDENCE)
+    require(
+        evidence["schema"]
+        == "mtt.unified-source.g3bh-fixed-b89-root-containment-evidence.v1",
+        "evidence schema",
+    )
+    require(
+        {name: item["sha256"] for name, item in evidence["source_packets"].items()}
+        == {
+            "B89_projective_lefschetz": "2fb3bdf9f4ff5c8fcc83d685b588d5634647be0dbd2736191ea703c8e572db83",
+            "concrete_pencil_seed": "072ef55069251960b328c7b81013962397421172635ef769172d5dc78580b56c",
+            "global_f0_lift": "e718a2c28d6394005d2430a366f7951bce0037edf216b8ce90dd06a8006e44bb",
+            "number_field_smooth_lift": "3ff964264bd0973393be80e67cf1662524d77f9ba210a7da9794cffa1ec8545c",
+            "root_graph_tube": "87822e48f0f1c66a5253f4b3803472b89efea239e48f6eccd7cf4c7fb570bda0",
+            "graph_cayley_compiler": "9e872562b4ca24dbf707c33e2f4eeaaccdc8f90152bd34fdc0bbe2370a3595e9",
+            "q79_degree2_k3_base": "2f7dd722c5e387baf9438e6c2e14fe66f564de2109030ab08516552dabb86035",
+        },
+        "evidence source locks",
+    )
+    for name, path in (("G3BG", G3BG), ("G3AC", G3AC), ("G3AJ", G3AJ), ("G3AQ", G3AQ)):
+        require(sha256(path) == EXPECTED_HASHES[name], f"{name} hash")
+
+    restrictions = evidence["fixed_B89_pencil_restrictions"]
+    f0 = [[[k(entry) for entry in row] for row in restrictions["F0_rows"]]][0]
+    f1 = [[[k(entry) for entry in row] for row in restrictions["F1_rows"]]][0]
+    require(len(f0) == len(f1) == 3 and all(len(row) == 19 for row in f0 + f1), "restriction shape")
+
+    def minor(row_indices: list[int]) -> Polynomial:
+        matrix = [
+            [[[f0[column][row], f1[column][row]] for column in range(3)][column] for column in range(3)]
+            for row in row_indices
+        ]
+        return determinant3(matrix)
+
+    # The serialized binary forms are ordered by t-power.  Thus homogeneous
+    # s-degrees (0,1,2) and (0,1,3) occur at t-powers (18,17,16) and
+    # (18,17,15), respectively.
+    minor_012 = minor([18, 17, 16])
+    minor_013 = minor([18, 17, 15])
+    require(
+        serialize_polynomial(minor_012)
+        == [
+            [0, 0, 0, 0, 0, 0],
+            [61, 13, 28, 19, 66, 84],
+            [99, 4, 25, 5, 91, 4],
+            [17, 0, 0, 0, 0, 0],
+        ],
+        "minor 012 regression",
+    )
+    require(
+        serialize_polynomial(minor_013)
+        == [
+            [97, 82, 98, 80, 66, 10],
+            [25, 80, 35, 25, 39, 100],
+            [48, 77, 44, 7, 95, 60],
+            [2, 0, 0, 0, 0, 0],
+        ],
+        "minor 013 regression",
+    )
+    gcd, bezout_012, bezout_013 = p_xgcd(minor_012, minor_013)
+    require(gcd == [ONE], "pencil minors are coprime")
+    require(
+        p_add(p_mul(bezout_012, minor_012), p_mul(bezout_013, minor_013)) == [ONE],
+        "Bezout identity",
+    )
+    require(minor_013[0] != ZERO, "selected F0 rank-three witness")
+
+    s_union = [k(entry) for entry in evidence["principal_graph_slice_restriction"]["s_union_coefficients_by_t_power"]]
+    principal_matrix: list[list[K]] = []
+    for row in range(19):
+        principal_matrix.append(
+            [f0[column][row] for column in range(3)]
+            + [s_union[row - shift] if 0 <= row - shift < len(s_union) else ZERO for shift in range(7)]
+        )
+    principal_rank = matrix_rank(principal_matrix)
+    require(principal_rank == 10, "principal graph-slice rank")
+    witness_rows: list[int] = []
+    witness_rank = 0
+    for row_index, row in enumerate(principal_matrix):
+        candidate_rank = matrix_rank([principal_matrix[index] for index in witness_rows] + [row])
+        if candidate_rank > witness_rank:
+            witness_rows.append(row_index)
+            witness_rank = candidate_rank
+        if witness_rank == 10:
+            break
+    require(len(witness_rows) == 10, "principal witness rows")
+    witness_determinant = determinant([principal_matrix[index] for index in witness_rows])
+    require(witness_determinant != ZERO, "principal unit minor")
+
+    checks = {
+        "the_Rminus_parameterization_satisfies_Q2_and_w_plus_G3": True,
+        "the_three_selected_F0_rows_restrict_to_degree18_binary_forms": True,
+        "a_nonzero_F0_three_by_three_minor_excludes_Rminus_times_any_projective_theta_point": True,
+        "the_two_displayed_B89_pencil_minors_are_coprime_in_K101_lambda": True,
+        "there_is_no_algebraic_lambda_for_which_the_fixed_B89_pencil_contains_Rminus_times_a_point": True,
+        "properness_promotes_the_empty_good_reduction_incidence_to_characteristic_zero": True,
+        "the_selected_residue_ball_cannot_restore_direct_root_containment": True,
+        "the_principal_33_direction_graph_slice_has_restriction_rank10": True,
+        "the_principal_graph_slice_contains_no_Rminus_times_a_point": True,
+        "G3AQ_rank122_response_does_not_supply_the_missing_integral_marking": True,
+        "a_nontrivial_Gauss_Manin_transport_or_equivalent_integral_cycle_construction_is_required": True,
+        "no_period_value_meridian_word_or_observed_physics_value_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3bh-fixed-b89-root-containment-nogo.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BH",
+        "status": "CLOSED_EXACT_DIRECT_ROOT_CONTAINMENT_NOGO_NONTRIVIAL_TRANSPORT_REQUIRED_TRANSPORT_AND_READOUT_OPEN",
+        "inputs": {
+            "finite_evidence": record(EVIDENCE),
+            "G3BG": record(G3BG),
+            "G3AC": record(G3AC),
+            "G3AJ": record(G3AJ),
+            "G3AQ": record(G3AQ),
+        },
+        "root_restriction": {
+            "parameterization": "x=s^2, y=s*t, z=t^2, w=-G3",
+            "G3_on_Rminus_by_t_power": evidence["root_model"]["G3_restriction_coefficients_by_t_power"],
+            "w_on_Rminus_by_t_power": evidence["root_model"]["w_restriction_coefficients_by_t_power"],
+        },
+        "selected_residue_nogo": {
+            "minor_s_degree_rows": [0, 1, 3],
+            "minor_t_power_rows": [18, 17, 15],
+            "minor": list(minor_013[0]),
+            "consequence": "rank(F0 restricted to Rminus)=3, so F0 contains no Rminus times p even for p in P2 over the algebraic closure",
+            "selected_residue_ball_consequence": "every integral same-residue characteristic-zero member reduces to F0; projectivity of the point carrier makes direct containment impossible throughout the G3AJ ball",
+        },
+        "fixed_B89_pencil_nogo": {
+            "minor_012_coefficients_low_to_high": serialize_polynomial(minor_012),
+            "minor_013_coefficients_low_to_high": serialize_polynomial(minor_013),
+            "normalized_gcd": serialize_polynomial(gcd),
+            "Bezout_for_minor_012": serialize_polynomial(bezout_012),
+            "Bezout_for_minor_013": serialize_polynomial(bezout_013),
+            "identity": "u_012(lambda)*m_012(lambda)+u_013(lambda)*m_013(lambda)=1",
+            "consequence": "no lambda over the algebraic closure makes all 3x3 restriction minors vanish",
+            "characteristic_zero_promotion": "the root-point incidence is projective over the integral pencil; an empty good-reduction fiber forces the generic incidence to be empty",
+        },
+        "principal_graph_slice_nogo": {
+            "restriction_matrix_shape": [19, 10],
+            "columns": ["F0_T0", "F0_T1", "F0_T2"] + [f"s_union*t^{power}*s^{6-power}" for power in range(7)],
+            "rank": principal_rank,
+            "nonzero_minor_rows": witness_rows,
+            "nonzero_minor_determinant": list(witness_determinant),
+            "consequence": "no member of the locked F0+s_union*H principal 33-direction family contains Rminus times a point",
+        },
+        "transport_necessity": {
+            "G3BG_source": "z4=(-e2+2f2) tensor u_B=-delta tensor u_B",
+            "retired_shortcut": "identify z4 with a root graph already contained in the fixed B89 pencil or selected graph-Prym endpoint",
+            "required_route": "construct a nonconstant smooth-moduli path from a certified root-containing start family to the fixed B89 fiber and integrate its integral Gauss-Manin marking, or emit an equivalent fixed-B89 integral cycle construction",
+            "minimal_transport_dimension": "one sparse integral vector; the result does not require transporting all 1509 basis vectors",
+            "required_outputs": [
+                "integral B89 coordinates or a certified meridian word for z4",
+                "the normalized 248-row readout",
+                "G3BD root-decision result",
+            ],
+        },
+        "checks": checks,
+        "readiness_effect": {
+            "direct_B89_root_containment": "CLOSED_EXACT_IMPOSSIBLE",
+            "selected_residue_identity_marking": "CLOSED_EXACT_IMPOSSIBLE",
+            "principal_33_graph_slice_root_containment": "CLOSED_EXACT_IMPOSSIBLE",
+            "nontrivial_root_to_B89_transport": "REQUIRED_OPEN_PRODUCTION",
+            "root_248_readout": "OPEN_PRODUCTION",
+            "beta_C_zero_or_nonzero": "OPEN",
+        },
+        "guardrails": {
+            "claims_the_full_rank123_or_rank122_family_has_no_root_incidence_at_other_residues": False,
+            "claims_the_root_tube_itself_does_not_exist": False,
+            "claims_the_Gauss_Manin_transport_is_computed": False,
+            "claims_a_rank1509_root_vector_is_emitted": False,
+            "claims_the_248_readout_is_emitted": False,
+            "claims_beta_C_is_decided": False,
+            "claims_B_ETA9_02_is_closed": False,
+        },
+        "next_required_object": "Construct a hash-bound nonconstant smooth path from the certified root-containing family to the fixed B89 fiber, transport only z4=(-e2+2f2) tensor u_B in the integral Gauss-Manin local system, emit its fixed-marking coordinates or meridian word and normalized 248-row readout, then execute G3BD.",
+    }
+    write_json(OUT, packet)
+    print("UST.G3BH fixed-B89 root containment: PASS direct shortcut excluded")
+    print(f"B89 pencil minor gcd: 1; principal graph-slice rank: {principal_rank}")
+    print(f"principal 10x10 witness rows: {witness_rows}")
+
+
+if __name__ == "__main__":
+    main()

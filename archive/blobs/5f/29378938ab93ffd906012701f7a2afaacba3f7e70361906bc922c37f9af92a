@@ -1,0 +1,287 @@
+#!/usr/bin/env python3
+"""Prove the exact H02 DM corridor for the rank-6022 Woodbury kernel."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+
+ROOT = Path(__file__).resolve().parent
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3BW = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3df"
+OUT = ROOT / "state" / "ust_g3df_h02_dm_source_observation_corridor.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def union_pattern(records: list[dict[str, Any]]) -> sparse.csr_matrix:
+    result = sparse.csr_matrix(tuple(records[0]["shape"]), dtype=np.uint8)
+    for value in records:
+        path = ROOT / value["path"]
+        require(sha256(path) == value["sha256"], f"coefficient hash {path.name}")
+        current = sparse.load_npz(path).tocsr()
+        current.data = np.ones(current.nnz, dtype=np.uint8)
+        result = result + current
+    result.data[:] = 1
+    result.eliminate_zeros()
+    return result
+
+
+def closure(seed: set[int], adjacency: list[set[int]]) -> set[int]:
+    reached = set(seed)
+    stack = list(seed)
+    while stack:
+        current = stack.pop()
+        for target in adjacency[current]:
+            if target not in reached:
+                reached.add(target)
+                stack.append(target)
+    return reached
+
+
+def component_dag(
+    pattern: sparse.csr_matrix,
+    component_by_row: np.ndarray,
+    component_by_column: np.ndarray,
+    component_count: int,
+) -> tuple[list[set[int]], list[set[int]], np.ndarray]:
+    coo = pattern.tocoo()
+    pairs = np.stack(
+        (component_by_row[coo.row], component_by_column[coo.col]), axis=1
+    )
+    pairs = pairs[pairs[:, 0] != pairs[:, 1]]
+    pairs = np.unique(pairs.astype(np.int32), axis=0)
+    successors = [set() for _ in range(component_count)]
+    predecessors = [set() for _ in range(component_count)]
+    for source, target in pairs.tolist():
+        successors[int(source)].add(int(target))
+        predecessors[int(target)].add(int(source))
+    return successors, predecessors, pairs
+
+
+def active_kernel_coordinates(
+    u_pattern: sparse.csr_matrix,
+    w_pattern: sparse.csr_matrix,
+    component_by_row: np.ndarray,
+    component_by_column: np.ndarray,
+    observation_descendants: set[int],
+    solution_components: set[int],
+) -> tuple[list[int], list[int], list[int], list[int]]:
+    u_csc = u_pattern.tocsc()
+    active_columns: list[int] = []
+    zero_columns: list[int] = []
+    for column in range(u_csc.shape[1]):
+        rows = u_csc.indices[u_csc.indptr[column] : u_csc.indptr[column + 1]]
+        components = set(int(value) for value in component_by_row[rows])
+        (active_columns if components & observation_descendants else zero_columns).append(column)
+
+    active_rows: list[int] = []
+    zero_rows: list[int] = []
+    for row in range(w_pattern.shape[0]):
+        columns = w_pattern.indices[w_pattern.indptr[row] : w_pattern.indptr[row + 1]]
+        components = set(int(value) for value in component_by_column[columns])
+        (active_rows if components & solution_components else zero_rows).append(row)
+    return active_columns, zero_columns, active_rows, zero_rows
+
+
+def main() -> None:
+    g3de = load(G3DE)
+    g3bw = load(G3BW)
+    require(all(g3de["checks"].values()), "G3DE checks")
+    require(all(g3bw["checks"].values()), "G3BW checks")
+
+    reduction = g3bw["DM_reduction"]
+    pattern_path = ROOT / reduction["pattern"]["path"]
+    arrays_path = ROOT / reduction["arrays"]["path"]
+    require(sha256(pattern_path) == reduction["pattern"]["sha256"], "pattern hash")
+    require(sha256(arrays_path) == reduction["arrays"]["sha256"], "DM arrays hash")
+    pattern = sparse.load_npz(pattern_path).tocsr()
+    arrays = np.load(arrays_path, allow_pickle=False)
+    component_by_column = arrays["component_by_column"].astype(np.int32)
+    component_by_row = arrays["component_by_row"].astype(np.int32)
+    component_sizes = arrays["component_sizes"].astype(np.int32)
+    topological_order = arrays["topological_component_order"].astype(np.int32)
+    component_count = int(component_sizes.size)
+    require(component_count == 17692, "H02 DM component count")
+    require(pattern.shape == (42458, 42458), "H02 pattern shape")
+
+    successors, predecessors, edge_pairs = component_dag(
+        pattern, component_by_row, component_by_column, component_count
+    )
+    order_position = np.empty(component_count, dtype=np.int32)
+    order_position[topological_order] = np.arange(component_count, dtype=np.int32)
+    require(
+        all(order_position[left] < order_position[right] for left, right in edge_pairs),
+        "exact upper-triangular component DAG",
+    )
+
+    factor = g3de["factorization"]
+    u_pattern = union_pattern(factor["U_gamma_coefficients"])
+    w_pattern = union_pattern(factor["W_gamma_coefficients"])
+    source_components = set(
+        int(value) for value in np.unique(component_by_row[u_pattern.nonzero()[0]])
+    )
+    observation_components = set(
+        int(value) for value in np.unique(component_by_column[w_pattern.nonzero()[1]])
+    )
+    solution_components = closure(source_components, predecessors)
+    observation_descendants = closure(observation_components, successors)
+    corridor_components = solution_components & observation_descendants
+
+    active_columns, zero_columns, active_rows, zero_rows = active_kernel_coordinates(
+        u_pattern,
+        w_pattern,
+        component_by_row,
+        component_by_column,
+        observation_descendants,
+        solution_components,
+    )
+    corridor_histogram = Counter(
+        int(component_sizes[component]) for component in corridor_components
+    )
+
+    require(len(source_components) == 1, "one H02 update source component")
+    require(len(observation_components) == 19, "nineteen H02 observation components")
+    require(len(solution_components) == 95, "H02 solution ancestor components")
+    require(int(component_sizes[list(solution_components)].sum()) == 24861, "H02 solution ancestor dimension")
+    require(len(observation_descendants) == 17598, "H02 observation descendant components")
+    require(int(component_sizes[list(observation_descendants)].sum()) == 42364, "H02 observation descendant dimension")
+    require(len(corridor_components) == 1, "one H02 corridor component")
+    require(int(component_sizes[list(corridor_components)].sum()) == 24767, "H02 corridor dimension")
+    require(corridor_histogram == Counter({24767: 1}), "H02 corridor is the unique core")
+    require(len(active_columns) == len(active_rows) == 6022, "all H02 kernel coordinates active")
+    require(not zero_columns and not zero_rows, "no structural kernel zeros")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    output_arrays = EVIDENCE / "H02.DM.source_observation_corridor.npz"
+    np.savez_compressed(
+        output_arrays,
+        source_components=np.asarray(sorted(source_components), dtype=np.int32),
+        observation_components=np.asarray(sorted(observation_components), dtype=np.int32),
+        solution_components=np.asarray(sorted(solution_components), dtype=np.int32),
+        observation_descendants=np.asarray(sorted(observation_descendants), dtype=np.int32),
+        corridor_components=np.asarray(sorted(corridor_components), dtype=np.int32),
+        active_kernel_columns=np.asarray(active_columns, dtype=np.int32),
+        structurally_zero_kernel_columns=np.asarray(zero_columns, dtype=np.int32),
+        active_kernel_rows=np.asarray(active_rows, dtype=np.int32),
+        structurally_zero_kernel_rows=np.asarray(zero_rows, dtype=np.int32),
+    )
+
+    checks = {
+        "G3DE_and_G3BW_are_hash_bound_and_passing": True,
+        "the_exact_H02_component_condensation_is_upper_triangular": True,
+        "the6022_update_columns_enter_one_DM_component": len(source_components) == 1,
+        "the6022_observation_rows_touch_nineteen_DM_components": len(observation_components) == 19,
+        "the_Q_source_observation_corridor_is_exactly_the24767_dimensional_core": corridor_histogram == Counter({24767: 1}),
+        "recovery_requires_the_core_plus94_singletons_of_total_dimension24861": len(solution_components) == 95 and int(component_sizes[list(solution_components)].sum()) == 24861,
+        "all6022_kernel_rows_and_columns_are_structurally_active": len(active_columns) == len(active_rows) == 6022 and not zero_columns and not zero_rows,
+        "no_finite_field_rank_Archimedean_value_or_fit_parameter_is_inferred": True,
+    }
+    require(all(checks.values()), "G3DF checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3df-h02-dm-source-observation-corridor.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DF",
+        "status": "CLOSED_EXACT_H02_DM_SOURCE_OBSERVATION_CORE_AND_NO_STRUCTURAL_KERNEL_ZERO",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3DE": record(G3DE),
+            "G3BW": record(G3BW),
+            "H02_pattern": record(pattern_path),
+            "H02_DM_arrays": record(arrays_path),
+        },
+        "exact_component_DAG": {
+            "components": component_count,
+            "total_dimension": int(component_sizes.sum()),
+            "directed_edges": int(edge_pairs.shape[0]),
+            "source_components": len(source_components),
+            "observation_components": len(observation_components),
+            "solution_ancestor_components": len(solution_components),
+            "solution_ancestor_dimension": int(component_sizes[list(solution_components)].sum()),
+            "observation_descendant_components": len(observation_descendants),
+            "observation_descendant_dimension": int(component_sizes[list(observation_descendants)].sum()),
+            "source_observation_corridor_components": len(corridor_components),
+            "source_observation_corridor_dimension": int(component_sizes[list(corridor_components)].sum()),
+            "corridor_size_histogram": [
+                {"component_size": size, "count": count}
+                for size, count in sorted(corridor_histogram.items())
+            ],
+            "arrays": record(output_arrays),
+        },
+        "kernel_reduction": {
+            "Q": "W*A0^-1*U",
+            "full_shape": [6022, 6022],
+            "structurally_nonzero_rows": len(active_rows),
+            "structurally_nonzero_columns": len(active_columns),
+            "identically_zero_rows_over_Q_gamma": len(zero_rows),
+            "identically_zero_columns_over_Q_gamma": len(zero_columns),
+            "rank_is_computed": False,
+        },
+        "execution_contract": {
+            "precompute_Q": "propagate all 6022 U columns only through the unique 24767-dimensional H02 DM core before W contraction",
+            "recover_Pz": "after z is known, solve one combined A0 action through the core and 94 singleton ancestors, total dimension 24861",
+            "structural_dimension_reduction": 42458 - 24767,
+            "kernel_coordinate_reduction": 0,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_a_smaller_than6022_Woodbury_kernel": False,
+            "claims_rank_Q_gamma_Q": False,
+            "claims_the_Archimedean_Q_action_is_evaluated": False,
+            "claims_source_contraction_path_integration_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dfH02DmSourceObservationCorridor",
+            "tier": "CLOSED_EXACT_SOURCE_OBSERVATION_GRAPH_REDUCTION",
+            "statement": "In the exact H02 DM condensation DAG, every source-to-observation path for Q=W*A0^-1*U lies in the unique 24767-dimensional nontrivial component. Recovery requires that core and 94 singleton ancestors, of total dimension 24861. All 6022 rows and columns of Q are structurally active, so the H11-style zero-column shortcut does not occur. This selects the exact core calculation and rules out an unsupported smaller kernel before coefficient evaluation.",
+        },
+        "frontier_delta": {
+            "before": "G3DE emitted the exact 6022-dimensional factorization, but the B89 inverse still appeared to involve the full 42458-dimensional complement.",
+            "after": "Q evaluation is confined exactly to one 24767-dimensional DM core, and one-vector recovery to that core plus 94 scalar ancestors. No one of the 6022 kernel coordinates can be deleted by support separation.",
+        },
+        "next_required_object": "Evaluate P=A_H02,B89^-1 U through the selected 24767-dimensional core, contract Q=W P, and determine its exact or certified Archimedean rank before constructing the source-dependent reduced RHS.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DF H02 DM source-observation corridor: PASS")
+    print(
+        "corridor_components=1 corridor_dimension=24767 "
+        "recovery_dimension=24861 active_rows=6022 active_columns=6022"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

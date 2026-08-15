@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""Audit three-prime H02 rational reconstructions against a fourth prime."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+try:
+    from numba import njit
+except ImportError as error:  # pragma: no cover
+    raise RuntimeError("G3DN requires numba for the exact coefficient audit") from error
+
+
+ROOT = Path(__file__).resolve().parent
+G3DI = ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+G3DJ = ROOT / "state" / "ust_g3dj_h02_second_prime_kernel_relations.packet.json"
+G3DK = ROOT / "state" / "ust_g3dk_h02_third_prime_kernel_relations.packet.json"
+G3DL = ROOT / "state" / "ust_g3dl_h02_two_prime_reconstruction_holdout.packet.json"
+G3DM = ROOT / "state" / "ust_g3dm_h02_fourth_prime_holdout_kernel.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dn"
+OUT = ROOT / "state" / "ust_g3dn_h02_three_prime_reconstruction_holdout.packet.json"
+P1, P2, P3, P4 = 21817, 33863, 37493, 38113
+M2 = P1 * P2
+M3 = M2 * P3
+M4 = M3 * P4
+B3 = math.isqrt((M3 - 1) // 2)
+B4 = math.isqrt((M4 - 1) // 2)
+INV12 = pow(P1, -1, P2)
+INV123 = pow(M2, -1, P3)
+INV1234 = pow(M3, -1, P4)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {"path": path.relative_to(ROOT).as_posix(), "sha256": sha256(path), "bytes": path.stat().st_size}
+
+
+@njit(cache=True)
+def gcd_int(left: int, right: int) -> int:
+    if left < 0:
+        left = -left
+    if right < 0:
+        right = -right
+    while right:
+        left, right = right, left % right
+    return left
+
+
+@njit(cache=True)
+def reconstruct(residue: int, modulus: int, bound: int) -> tuple[int, int, bool]:
+    old_remainder = modulus
+    remainder = residue
+    old_denominator = 0
+    denominator = 1
+    while remainder > bound:
+        quotient = old_remainder // remainder
+        old_remainder, remainder = remainder, old_remainder - quotient * remainder
+        old_denominator, denominator = denominator, old_denominator - quotient * denominator
+    numerator = remainder
+    if denominator < 0:
+        numerator = -numerator
+        denominator = -denominator
+    # The extended-Euclidean invariant gives numerator = residue*denominator
+    # modulo modulus. Avoid an overflowing redundant product at the 60-bit M4.
+    valid = (
+        denominator > 0
+        and denominator <= bound
+        and abs(numerator) <= bound
+        and gcd_int(numerator, denominator) == 1
+    )
+    return numerator, denominator, valid
+
+
+@njit(cache=True)
+def audit_degree(
+    first: np.ndarray, second: np.ndarray, third: np.ndarray, fourth: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    size = first.size
+    three_candidate = np.zeros(size, dtype=np.bool_)
+    three_holdout_pass = np.zeros(size, dtype=np.bool_)
+    four_candidate = np.zeros(size, dtype=np.bool_)
+    three_numerator = np.zeros(size, dtype=np.int64)
+    three_denominator = np.zeros(size, dtype=np.int64)
+    four_numerator = np.zeros(size, dtype=np.int64)
+    four_denominator = np.zeros(size, dtype=np.int64)
+    for index in range(size):
+        r1 = int(first[index])
+        r2 = int(second[index])
+        r3 = int(third[index])
+        r4 = int(fourth[index])
+        residue12 = r1 + P1 * (((r2 - r1) * INV12) % P2)
+        residue123 = residue12 + M2 * (((r3 - residue12 % P3) * INV123) % P3)
+        numerator3, denominator3, valid3 = reconstruct(residue123, M3, B3)
+        if valid3:
+            three_candidate[index] = True
+            three_numerator[index] = numerator3
+            three_denominator[index] = denominator3
+            if (numerator3 - r4 * denominator3) % P4 == 0:
+                three_holdout_pass[index] = True
+        residue1234 = residue123 + M3 * (((r4 - residue123 % P4) * INV1234) % P4)
+        numerator4, denominator4, valid4 = reconstruct(residue1234, M4, B4)
+        if valid4:
+            four_candidate[index] = True
+            four_numerator[index] = numerator4
+            four_denominator[index] = denominator4
+    return (
+        three_candidate,
+        three_holdout_pass,
+        four_candidate,
+        three_numerator,
+        three_denominator,
+        four_numerator,
+        four_denominator,
+    )
+
+
+def coordinate(index: int) -> dict[str, int]:
+    row, column = divmod(index, 1274)
+    return {"row": row, "column": column}
+
+
+def sample_rows(
+    mask: np.ndarray,
+    degree: int,
+    numerator: np.ndarray,
+    denominator: np.ndarray,
+    residues: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for index in np.flatnonzero(mask)[:limit]:
+        output.append(
+            {
+                "degree": degree,
+                **coordinate(int(index)),
+                "numerator": int(numerator[index]),
+                "denominator": int(denominator[index]),
+                "residues": [int(value[index]) for value in residues],
+            }
+        )
+    return output
+
+
+def main() -> None:
+    packets = {
+        label: load(path)
+        for label, path in (("G3DI", G3DI), ("G3DJ", G3DJ), ("G3DK", G3DK), ("G3DL", G3DL), ("G3DM", G3DM))
+    }
+    require(all(all(packet["checks"].values()) for packet in packets.values()), "input checks")
+    paths = (
+        ROOT / packets["G3DI"]["split_algebra_kernel"]["power_basis_coefficients"]["path"],
+        ROOT / packets["G3DJ"]["second_split_algebra_kernel"]["power_basis_coefficients"]["path"],
+        ROOT / packets["G3DK"]["third_split_algebra_kernel"]["power_basis_coefficients"]["path"],
+        ROOT / packets["G3DM"]["fourth_split_algebra_kernel"]["power_basis_coefficients"]["path"],
+    )
+    arrays = tuple(np.load(path, allow_pickle=False)["coefficients"] for path in paths)
+    require(all(value.shape == (6, 6022, 1274) for value in arrays), "coefficient shapes")
+    prior_masks = np.load(
+        ROOT / packets["G3DL"]["evidence"]["masks"]["path"], allow_pickle=False
+    )
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    packed_three_candidate: list[np.ndarray] = []
+    packed_three_pass: list[np.ndarray] = []
+    packed_four_candidate: list[np.ndarray] = []
+    per_degree: list[dict[str, Any]] = []
+    samples = {"three_prime_pass": [], "three_prime_alias": [], "new_stable_beyond_two_prime": [], "four_prime_new": []}
+    digest = hashlib.sha256()
+    totals = {
+        "entries": 0,
+        "three_prime_candidates": 0,
+        "three_prime_holdout_passes": 0,
+        "three_prime_holdout_failures": 0,
+        "three_prime_no_candidate": 0,
+        "three_prime_pass_integers": 0,
+        "three_prime_pass_zeros": 0,
+        "retained_two_prime_passes": 0,
+        "lost_two_prime_passes": 0,
+        "new_stable_beyond_two_prime": 0,
+        "four_prime_candidates": 0,
+        "four_prime_no_candidate": 0,
+        "four_prime_integers": 0,
+        "four_prime_zeros": 0,
+        "four_prime_same_as_passed_three_prime": 0,
+        "four_prime_changed_from_three_prime_candidate": 0,
+        "four_prime_new_where_three_prime_absent": 0,
+    }
+    for degree in range(6):
+        print(f"G3DN auditing power-basis degree {degree}/5", flush=True)
+        values = tuple(array[degree].reshape(-1) for array in arrays)
+        (
+            candidate3,
+            passed3,
+            candidate4,
+            numerator3,
+            denominator3,
+            numerator4,
+            denominator4,
+        ) = audit_degree(*values)
+        expected3 = np.unpackbits(
+            prior_masks["three_prime_candidate"][degree], bitorder="little"
+        )[: values[0].size].astype(bool)
+        require(np.array_equal(candidate3, expected3), f"G3DL three-prime mask degree {degree}")
+        passed2 = np.unpackbits(
+            prior_masks["two_prime_holdout_pass"][degree], bitorder="little"
+        )[: values[0].size].astype(bool)
+        alias3 = candidate3 & ~passed3
+        absent3 = ~candidate3
+        retained2 = passed2 & passed3
+        lost2 = passed2 & ~passed3
+        new_stable = passed3 & ~passed2
+        same34 = candidate3 & candidate4 & (numerator4 * denominator3 == numerator3 * denominator4)
+        changed34 = candidate3 & candidate4 & ~same34
+        new4 = absent3 & candidate4
+        row = {
+            "degree": degree,
+            "entries": int(values[0].size),
+            "three_prime_candidates": int(np.count_nonzero(candidate3)),
+            "three_prime_holdout_passes": int(np.count_nonzero(passed3)),
+            "three_prime_holdout_failures": int(np.count_nonzero(alias3)),
+            "three_prime_no_candidate": int(np.count_nonzero(absent3)),
+            "three_prime_pass_integers": int(np.count_nonzero(passed3 & (denominator3 == 1))),
+            "three_prime_pass_zeros": int(np.count_nonzero(passed3 & (numerator3 == 0))),
+            "retained_two_prime_passes": int(np.count_nonzero(retained2)),
+            "lost_two_prime_passes": int(np.count_nonzero(lost2)),
+            "new_stable_beyond_two_prime": int(np.count_nonzero(new_stable)),
+            "four_prime_candidates": int(np.count_nonzero(candidate4)),
+            "four_prime_no_candidate": int(np.count_nonzero(~candidate4)),
+            "four_prime_integers": int(np.count_nonzero(candidate4 & (denominator4 == 1))),
+            "four_prime_zeros": int(np.count_nonzero(candidate4 & (numerator4 == 0))),
+            "four_prime_same_as_passed_three_prime": int(np.count_nonzero(same34)),
+            "four_prime_changed_from_three_prime_candidate": int(np.count_nonzero(changed34)),
+            "four_prime_new_where_three_prime_absent": int(np.count_nonzero(new4)),
+        }
+        per_degree.append(row)
+        for key in totals:
+            if key in row:
+                totals[key] += row[key]
+        packed_three_candidate.append(np.packbits(candidate3, bitorder="little"))
+        packed_three_pass.append(np.packbits(passed3, bitorder="little"))
+        packed_four_candidate.append(np.packbits(candidate4, bitorder="little"))
+        for value in (
+            np.where(passed3, numerator3, 0).astype("<i8", copy=False),
+            np.where(passed3, denominator3, 0).astype("<i8", copy=False),
+            np.where(candidate4, numerator4, 0).astype("<i8", copy=False),
+            np.where(candidate4, denominator4, 0).astype("<i8", copy=False),
+        ):
+            digest.update(value.tobytes(order="C"))
+        samples["three_prime_pass"].extend(sample_rows(passed3, degree, numerator3, denominator3, values))
+        samples["three_prime_alias"].extend(sample_rows(alias3, degree, numerator3, denominator3, values))
+        samples["new_stable_beyond_two_prime"].extend(sample_rows(new_stable, degree, numerator3, denominator3, values))
+        samples["four_prime_new"].extend(sample_rows(new4, degree, numerator4, denominator4, values))
+
+    require(totals["entries"] == 46032168, "entry total")
+    require(totals["three_prime_candidates"] == packets["G3DL"]["totals"]["three_prime_candidates"], "G3DL candidate total")
+    require(totals["three_prime_candidates"] == totals["three_prime_holdout_passes"] + totals["three_prime_holdout_failures"], "three-prime partition")
+    require(totals["entries"] == totals["four_prime_candidates"] + totals["four_prime_no_candidate"], "four-prime coverage")
+    mask_path = EVIDENCE / "H02.Q_kernel.reconstruction_masks.packbits.npz"
+    np.savez_compressed(
+        mask_path,
+        three_prime_candidate=np.stack(packed_three_candidate),
+        three_prime_holdout_pass=np.stack(packed_three_pass),
+        four_prime_candidate=np.stack(packed_four_candidate),
+        entries_per_degree=np.asarray([6022 * 1274], dtype=np.int64),
+    )
+    samples_path = EVIDENCE / "H02.Q_kernel.reconstruction_samples.json"
+    samples_path.write_text(json.dumps(samples, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+    checks = {
+        "G3DI_through_G3DM_are_hash_bound_and_passing": True,
+        "all46032168_coefficients_are_replayed": totals["entries"] == 46032168,
+        "the_G3DL_three_prime_candidate_mask_is_reproduced_exactly": True,
+        "prime38113_is_consulted_only_after_three_prime_candidates_are_constructed": True,
+        "three_prime_candidates_are_partitioned_into_holdout_passes_and_aliases": totals["three_prime_candidates"] == totals["three_prime_holdout_passes"] + totals["three_prime_holdout_failures"],
+        "four_prime_candidates_are_reserved_for_a_later_holdout": True,
+        "no_finite_prime_agreement_is_promoted_to_Q_gamma": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DN checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dn-h02-three-prime-reconstruction-holdout.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DN",
+        "status": "CLOSED_EXACT_THREE_PRIME_RECONSTRUCTION_WITH_INDEPENDENT_FOURTH_PRIME_HOLDOUT",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {label: record(path) for label, path in (("G3DI", G3DI), ("G3DJ", G3DJ), ("G3DK", G3DK), ("G3DL", G3DL), ("G3DM", G3DM))},
+        "reconstruction_contract": {
+            "construction_primes": [P1, P2, P3],
+            "reserved_holdout_prime": P4,
+            "three_prime_modulus": M3,
+            "three_prime_uniqueness_bound": B3,
+            "four_prime_modulus": M4,
+            "four_prime_modulus_bits": M4.bit_length(),
+            "four_prime_uniqueness_bound": B4,
+            "algorithm": "extended-Euclidean uniqueness-range rational reconstruction",
+            "holdout_test": "n congruent to residue*d modulo 38113",
+        },
+        "totals": totals,
+        "fractions": {
+            "three_prime_candidate_fraction": totals["three_prime_candidates"] / totals["entries"],
+            "three_prime_holdout_pass_fraction_of_all": totals["three_prime_holdout_passes"] / totals["entries"],
+            "three_prime_holdout_pass_fraction_of_candidates": totals["three_prime_holdout_passes"] / totals["three_prime_candidates"],
+            "three_prime_alias_fraction_of_candidates": totals["three_prime_holdout_failures"] / totals["three_prime_candidates"],
+            "new_stable_fraction_of_all": totals["new_stable_beyond_two_prime"] / totals["entries"],
+            "four_prime_candidate_fraction": totals["four_prime_candidates"] / totals["entries"],
+        },
+        "per_degree": per_degree,
+        "evidence": {
+            "masks": record(mask_path),
+            "samples": record(samples_path),
+            "canonical_candidate_stream_sha256": digest.hexdigest(),
+            "canonical_candidate_stream_order": "for each degree: passed-three-prime n,d then four-prime-candidate n,d; int64 little-endian; zero outside masks",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_a_holdout_pass_is_an_exact_rational_coefficient": False,
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dnH02ThreePrimeReconstructionHoldout",
+            "tier": "CLOSED_EXACT_MULTIPRIME_RECONSTRUCTION_AUDIT",
+            "statement": "Every G3DL three-prime H02 kernel candidate is tested against the independently reserved prime 38113 before that prime is admitted into a four-prime CRT. Passing, alias and previously absent masks are exact and persisted. Four-prime candidates remain candidates for a later holdout, not characteristic-zero identities.",
+        },
+        "frontier_delta": {
+            "before": "Three-prime candidates had no out-of-sample verdict.",
+            "after": "Every three-prime candidate has an exact fourth-prime verdict, stable coefficients beyond the two-prime range are isolated, and a four-prime candidate mask is ready for a fifth-prime holdout.",
+        },
+        "next_required_object": "Execute a fifth split prime as holdout for the four-prime candidates, then either complete bounded reconstruction and direct exact polynomial verification or continue the construction/holdout ladder without promoting finite agreement.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DN H02 three-prime reconstruction holdout: PASS")
+    print(
+        f"three_candidates={totals['three_prime_candidates']} "
+        f"holdout_pass={totals['three_prime_holdout_passes']} "
+        f"aliases={totals['three_prime_holdout_failures']} "
+        f"new_stable={totals['new_stable_beyond_two_prime']} "
+        f"four_candidates={totals['four_prime_candidates']}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

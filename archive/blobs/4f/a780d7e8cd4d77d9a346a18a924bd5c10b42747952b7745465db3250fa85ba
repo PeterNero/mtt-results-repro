@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""Construct the mixed-degree Macaulay inverse source of component 20."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as g3fe
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fp_component20_canonical_d2_source as g3fp
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3fr"
+ARRAYS = EVIDENCE / "H02.component20.inverse_system_source.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.inverse_system_source.json"
+G3FO = ROOT / "evidence/ust_g3fo/H02.component20.artinian_resolution.json"
+G3FQ = ROOT / "evidence/ust_g3fq/H02.component20.canonical_d3_source.json"
+
+EXPECTED_DUAL_DIMENSIONS = {15: 36, 16: 11, 17: 6, 18: 3, 19: 1, 20: 0}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def ideal_basis(
+    generators: dict[int, np.ndarray], degree: int, prime: int
+) -> np.ndarray:
+    blocks = [
+        graded.multiply_space(generators[source], source, degree, prime)
+        for source in (11, 14, 15)
+        if degree >= source
+    ]
+    ambient = len(graded.homogeneous_exponents(degree))
+    if not blocks:
+        return np.zeros((ambient, 0), dtype=np.int64)
+    matrix = np.concatenate(blocks, axis=1)
+    _, pivots, _ = graded.rref(matrix, prime)
+    return matrix[:, pivots] % prime
+
+
+def orthogonal_space(ideal: np.ndarray, prime: int) -> np.ndarray:
+    _, _, nullspace = graded.rref(ideal.T, prime, emit_nullspace=True)
+    require(nullspace is not None, "orthogonal-space nullspace")
+    return nullspace % prime
+
+
+def canonical_column_space(
+    vectors: np.ndarray, prime: int
+) -> tuple[np.ndarray, tuple[int, ...]]:
+    rank, columns, _ = graded.rref(vectors, prime)
+    basis = vectors[:, columns] % prime
+    if rank == 0:
+        return basis, ()
+    pivot_rank, pivot_rows, _ = graded.rref(basis.T, prime)
+    require(pivot_rank == rank, "column-space pivot rows")
+    pivots = np.asarray(pivot_rows, dtype=np.int64)
+    basis = basis @ g3fp.inverse_mod(basis[pivots, :], prime) % prime
+    require(
+        np.array_equal(basis[pivots, :], np.eye(rank, dtype=np.int64)),
+        "canonical column-space chart",
+    )
+    return basis, tuple(int(value) for value in pivot_rows)
+
+
+def divided_power_derivatives(
+    vectors: np.ndarray, degree: int, prime: int
+) -> np.ndarray:
+    source = graded.homogeneous_exponents(degree)
+    target = graded.homogeneous_exponents(degree - 1)
+    lookup = {exponent: row for row, exponent in enumerate(target)}
+    result = np.zeros((len(target), vectors.shape[1] * 3), dtype=np.int64)
+    for column in range(vectors.shape[1]):
+        for variable in range(3):
+            output = column * 3 + variable
+            for row, exponent in enumerate(source):
+                if exponent[variable] == 0:
+                    continue
+                contracted = list(exponent)
+                contracted[variable] -= 1
+                result[lookup[tuple(contracted)], output] = vectors[row, column]
+    return result % prime
+
+
+def fiber_source(
+    generators: dict[int, np.ndarray], prime: int
+) -> tuple[dict[int, np.ndarray], tuple[object, ...]]:
+    ideals = {degree: ideal_basis(generators, degree, prime) for degree in range(15, 21)}
+    duals = {
+        degree: orthogonal_space(ideals[degree], prime)
+        for degree in range(15, 21)
+    }
+    require(
+        {degree: duals[degree].shape[1] for degree in duals}
+        == EXPECTED_DUAL_DIMENSIONS,
+        "inverse-system Hilbert dimensions",
+    )
+
+    primitive19, chart19 = canonical_column_space(duals[19], prime)
+    derivatives18, chart18 = canonical_column_space(
+        divided_power_derivatives(primitive19, 19, prime), prime
+    )
+    derivatives17, chart17 = canonical_column_space(
+        divided_power_derivatives(derivatives18, 18, prime), prime
+    )
+    derivatives16, chart16 = canonical_column_space(
+        divided_power_derivatives(derivatives17, 17, prime), prime
+    )
+    require(
+        (primitive19.shape[1], derivatives18.shape[1], derivatives17.shape[1], derivatives16.shape[1])
+        == (1, 3, 6, 10),
+        "top primitive derivative ranks",
+    )
+    for degree, generated in ((18, derivatives18), (17, derivatives17)):
+        require(
+            graded.rref(np.concatenate((generated, duals[degree]), axis=1), prime)[0]
+            == duals[degree].shape[1],
+            f"top primitive spans degree{degree}",
+        )
+
+    primitive16, inherited_rows16, quotient_rows16 = g3fp.canonical_quotient_basis(
+        duals[16], derivatives16, prime
+    )
+    require(primitive16.shape == (153, 1), "one degree16 primitive")
+    derivatives15_top, chart15_top = canonical_column_space(
+        divided_power_derivatives(derivatives16, 16, prime), prime
+    )
+    derivatives15_mid, chart15_mid = canonical_column_space(
+        divided_power_derivatives(primitive16, 16, prime), prime
+    )
+    inherited15 = np.concatenate((derivatives15_top, derivatives15_mid), axis=1)
+    require(
+        derivatives15_top.shape[1] == 15
+        and derivatives15_mid.shape[1] == 3
+        and graded.rref(inherited15, prime)[0] == 18,
+        "15 plus3 inherited degree15 duals",
+    )
+    primitive15, inherited_rows15, quotient_rows15 = g3fp.canonical_quotient_basis(
+        duals[15], inherited15, prime
+    )
+    require(primitive15.shape == (136, 18), "18 degree15 primitives")
+
+    complete15 = np.concatenate((derivatives15_top, derivatives15_mid, primitive15), axis=1)
+    require(graded.rref(complete15, prime)[0] == 36, "degree15 inverse source rank36")
+    require(
+        np.count_nonzero(ideals[15].T @ complete15 % prime) == 0,
+        "degree15 apolar annihilation",
+    )
+    require(
+        ideals[15].shape[1] == 100 and ideals[15].shape[1] + complete15.shape[1] == 136,
+        "100 plus36 dual decomposition",
+    )
+
+    primitives = {15: primitive15, 16: primitive16, 19: primitive19}
+    profile = (
+        chart19,
+        chart18,
+        chart17,
+        chart16,
+        inherited_rows16,
+        quotient_rows16,
+        chart15_top,
+        chart15_mid,
+        inherited_rows15,
+        quotient_rows15,
+    )
+    return primitives, profile
+
+
+def main() -> None:
+    split_packets = [conic.load(path) for path in conic.SPLIT_PACKETS]
+    primes = tuple(int(packet["field"]["prime"]) for packet in split_packets)
+    require(primes == conic.EXPECTED_PRIMES, "prime order")
+
+    values = {
+        15: np.zeros((8, 6, 136, 18), dtype=np.uint32),
+        16: np.zeros((8, 6, 153, 1), dtype=np.uint32),
+        19: np.zeros((8, 6, 210, 1), dtype=np.uint32),
+    }
+    residue_rows: list[np.ndarray] = []
+    normalization_profiles: list[tuple[object, ...]] = []
+    campaign_rows: list[dict[str, object]] = []
+
+    for prime_index, (packet_path, packet, prime) in enumerate(
+        zip(conic.SPLIT_PACKETS, split_packets, primes, strict=True)
+    ):
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        local = {degree: [] for degree in values}
+        local_profiles: list[tuple[object, ...]] = []
+        for root_index, root in enumerate(roots):
+            generators, _, _ = g3fe.extract_fiber(
+                ROOT / rows[root]["kernel"]["path"], prime
+            )
+            primitives, profile = fiber_source(generators, prime)
+            for degree in values:
+                values[degree][prime_index, root_index] = primitives[degree].astype(np.uint32)
+                local[degree].append(primitives[degree])
+            local_profiles.append(profile)
+            normalization_profiles.append(profile)
+            print(
+                f"G3FR p={prime} gamma={root}: primitives=18@15+1@16+1@19 "
+                "degree15=18+3+15=36",
+                flush=True,
+            )
+        require(len(set(local_profiles)) == 1, f"common root chart p={prime}")
+        coefficients = [
+            g3fe.interpolate(np.stack(local[degree]), roots, prime).ravel()
+            for degree in values
+        ]
+        residues = np.concatenate(coefficients).astype(np.uint32)
+        residue_rows.append(residues)
+        campaign_rows.append(
+            {
+                "prime": prime,
+                "roots": list(roots),
+                "power_basis_slots": int(residues.size),
+                "normalization_profile_sha256": hashlib.sha256(
+                    repr(local_profiles[0]).encode("ascii")
+                ).hexdigest(),
+                "source_packet": record(packet_path),
+            }
+        )
+
+    require(len(set(normalization_profiles)) == 1, "common chart across48 fibers")
+    residue_matrix = np.stack(residue_rows)
+    require(residue_matrix.shape == (8, 16866), "primitive residue shape")
+    reconstruction = g3fe.reconstruction_audit(residue_matrix, primes)
+    valid_mask = reconstruction.pop("valid_mask")
+    pass_mask = reconstruction.pop("pass_mask")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        ARRAYS,
+        primes=np.asarray(primes, dtype=np.uint32),
+        roots=np.asarray([packet["field"]["roots"] for packet in split_packets], dtype=np.uint32),
+        degree15_primitives=values[15],
+        degree16_primitive=values[16],
+        degree19_primitive=values[19],
+        power_basis_residues=residue_matrix,
+        reconstruction_valid=np.packbits(valid_mask),
+        reconstruction_pass=np.packbits(pass_mask),
+    )
+
+    packet = {
+        "schema": "ust.g3fr.h02.component20.inverse-system-source.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FR",
+        "status": "CLOSED_EXACT_48_FIBER_MIXED_DEGREE_INVERSE_SOURCE_QGAMMA_SELECTION_OPEN",
+        "inputs": {
+            "G3FO": record(G3FO),
+            "G3FQ": record(G3FQ),
+            "split_prime_packets": [record(path) for path in conic.SPLIT_PACKETS],
+        },
+        "inverse_system": {
+            "ring": "R=k[x,y,z] with its divided-power apolar dual",
+            "dual_dimensions_degrees15_through20": {
+                str(key): value for key, value in EXPECTED_DUAL_DIMENSIONS.items()
+            },
+            "minimal_primitive_generators": {
+                "degree15": 18,
+                "degree16": 1,
+                "degree19": 1,
+                "total": 20,
+            },
+            "top_degree19_derivative_dimensions_in_degrees19_to15": [1, 3, 6, 10, 15],
+            "degree16_first_derivative_dimension": 3,
+            "degree15_direct_sum": "18 primitive + 3 from degree16 + 15 from degree19 = 36",
+            "degree15_annihilator": "the exact100-dimensional component-20 kernel ideal piece",
+            "interpretation": (
+                "The correct apolar source is a single mixed-degree inverse-system "
+                "module of type20, not one scalar catalecticant. Its derivative "
+                "closure explains the finite100/36 split."
+            ),
+        },
+        "campaign": {
+            "fibers": 48,
+            "common_normalization_chart": True,
+            "rows": campaign_rows,
+            "artifact": record(ARRAYS),
+        },
+        "numeric_promotion_audit": reconstruction,
+        "checks": {
+            "all48_fibers_have_the_same_mixed_degree_inverse_source_chart": True,
+            "the_inverse_system_dimensions_are36_11_6_3_1_0": True,
+            "the_minimal_primitives_are18_at15_plus1_at16_plus1_at19": True,
+            "the_degree19_derivative_tower_has_dimensions1_3_6_10_15": True,
+            "the_degree15_dual_decomposes_directly_as18_plus3_plus15": True,
+            "the_degree15_apolar_annihilator_is_exactly_the100_plane": True,
+        },
+        "guardrails": {
+            "claims_the_inverse_primitives_are_lifted_to_Qgamma": False,
+            "claims_the_inverse_source_is_derived_from_G3FK": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_continuum_intertwiner": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3frComponent20MixedDegreeInverseSystemSource",
+            "tier": "CLOSED_EXACT_48_FIBER_MIXED_DEGREE_APOLAR_SOURCE",
+            "statement": (
+                "At all48 archived split fibers, the component-20 ideal is the "
+                "apolar annihilator in degree15 of one type20 mixed-degree inverse "
+                "system with18 primitives in degree15 and one each in degrees16 "
+                "and19. The degree15 dual decomposes directly as18+3+15=36."
+            ),
+        },
+        "next_required_object": (
+            "Derive the degree19 and degree16 primitives and the18-dimensional "
+            "degree15 primitive lane from the G3FK four-normal Cayley/Koszul source "
+            "over Q(gamma). Their divided-power derivative closure must reproduce "
+            "the G3FR degree15 dual space and hence its100-dimensional annihilator."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FR: PASS fibers=48 primitives=20 degree15=18+3+15=36",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

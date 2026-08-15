@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Compile the selected H02 rank-6022 update into exact Woodbury data."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import connected_components
+
+
+ROOT = Path(__file__).resolve().parent
+G3BZ = ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3de"
+OUT = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+PRIME = 21817
+AMBIENT_DIMENSION = 42458
+UPDATE_RANK = 6022
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def evaluate(matrices: list[sparse.csr_matrix], root: int) -> sparse.csr_matrix:
+    result = sparse.csr_matrix(matrices[0].shape, dtype=np.int64)
+    power = 1
+    for matrix in matrices:
+        result = result + matrix.astype(np.int64) * power
+        power = power * root % PRIME
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result
+
+
+def solve_mod(left: np.ndarray, right: np.ndarray, prime: int) -> np.ndarray:
+    a = np.asarray(left, dtype=np.int64).copy() % prime
+    b = np.asarray(right, dtype=np.int64).copy() % prime
+    require(a.shape[0] == a.shape[1] == b.shape[0], "square modular solve")
+    for column in range(a.shape[0]):
+        choices = np.flatnonzero(a[column:, column])
+        require(choices.size > 0, "modular pivot")
+        selected = column + int(choices[0])
+        if selected != column:
+            a[[column, selected]] = a[[selected, column]]
+            b[[column, selected]] = b[[selected, column]]
+        inverse = pow(int(a[column, column]), -1, prime)
+        a[column] = a[column] * inverse % prime
+        b[column] = b[column] * inverse % prime
+        active = np.flatnonzero(a[:, column])
+        active = active[active != column]
+        if active.size:
+            factors = a[active, column].copy()
+            a[active] = (a[active] - factors[:, None] * a[column]) % prime
+            b[active] = (b[active] - factors[:, None] * b[column]) % prime
+    require(np.array_equal(a, np.eye(a.shape[0], dtype=np.int64)), "reduced identity")
+    return b
+
+
+def replay_factorization(
+    delta: sparse.csr_matrix,
+    selected_rows: np.ndarray,
+    selected_columns: np.ndarray,
+) -> tuple[int, list[dict[str, int]]]:
+    """Replay Delta=U S^-1 W one connected block at a certified split place."""
+
+    coo = delta.tocoo()
+    dimension = delta.shape[0]
+    graph = sparse.csr_matrix(
+        (
+            np.ones(2 * coo.nnz, dtype=np.uint8),
+            (
+                np.concatenate((coo.row, dimension + coo.col)),
+                np.concatenate((dimension + coo.col, coo.row)),
+            ),
+        ),
+        shape=(2 * dimension, 2 * dimension),
+    )
+    _, labels = connected_components(graph, directed=False, return_labels=True)
+    mismatches = 0
+    summaries: list[dict[str, int]] = []
+    for component in np.unique(labels[coo.row]).tolist():
+        rows = np.flatnonzero(labels[:dimension] == component)
+        columns = np.flatnonzero(labels[dimension:] == component)
+        pivot_rows = np.intersect1d(rows, selected_rows, assume_unique=True)
+        pivot_columns = np.intersect1d(columns, selected_columns, assume_unique=True)
+        require(pivot_rows.size == pivot_columns.size, "component pivot balance")
+        rank = int(pivot_rows.size)
+        if rank == 0:
+            require(delta[rows, :][:, columns].nnz == 0, "zero-rank component")
+            continue
+        u = delta[rows, :][:, pivot_columns].toarray()
+        s = delta[pivot_rows, :][:, pivot_columns].toarray()
+        w = delta[pivot_rows, :][:, columns].toarray()
+        coordinates = solve_mod(s, w, PRIME)
+        recovered = u.astype(np.int64) @ coordinates.astype(np.int64) % PRIME
+        target = delta[rows, :][:, columns].toarray().astype(np.int64) % PRIME
+        component_mismatches = int(np.count_nonzero(recovered != target))
+        mismatches += component_mismatches
+        summaries.append(
+            {
+                "rows": int(rows.size),
+                "columns": int(columns.size),
+                "rank": rank,
+                "factorization_mismatches": component_mismatches,
+            }
+        )
+    return mismatches, summaries
+
+
+def main() -> None:
+    g3bz = load(G3BZ)
+    require(all(g3bz["checks"].values()), "G3BZ checks")
+    update = g3bz["affine_path_update"]
+    require(int(update["exact_rank_over_Q_gamma"]) == UPDATE_RANK, "G3BZ exact rank")
+    require(tuple(update["shape"]) == (AMBIENT_DIMENSION, AMBIENT_DIMENSION), "H02 shape")
+
+    coefficient_matrices: list[sparse.csr_matrix] = []
+    for value in update["exact_gamma_coefficient_matrices"]:
+        path = ROOT / value["path"]
+        require(sha256(path) == value["sha256"], f"coefficient hash {path.name}")
+        matrix = sparse.load_npz(path).tocsr().astype(np.int64)
+        require(matrix.shape == (AMBIENT_DIMENSION, AMBIENT_DIMENSION), "coefficient shape")
+        coefficient_matrices.append(matrix)
+    require(len(coefficient_matrices) == 6, "sextic coefficient count")
+
+    arrays_path = ROOT / update["construction_arrays"]["path"]
+    require(sha256(arrays_path) == update["construction_arrays"]["sha256"], "selection arrays hash")
+    arrays = np.load(arrays_path, allow_pickle=False)
+    selected_rows = arrays["matched_rows"].astype(np.int32)
+    selected_columns = arrays["matched_columns"].astype(np.int32)
+    require(selected_rows.size == selected_columns.size == UPDATE_RANK, "selected minor size")
+    require(np.unique(selected_rows).size == UPDATE_RANK, "unique selected rows")
+    require(np.unique(selected_columns).size == UPDATE_RANK, "unique selected columns")
+
+    u_matrices = [matrix[:, selected_columns].tocsr() for matrix in coefficient_matrices]
+    w_matrices = [matrix[selected_rows, :].tocsr() for matrix in coefficient_matrices]
+    s_matrices = [
+        matrix[selected_rows, :][:, selected_columns].tocsr()
+        for matrix in coefficient_matrices
+    ]
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    selection_path = EVIDENCE / "H02.path_woodbury_selection.npz"
+    np.savez_compressed(
+        selection_path,
+        selected_rows=selected_rows,
+        selected_columns=selected_columns,
+    )
+    emitted: dict[str, list[dict[str, Any]]] = {"U": [], "W": [], "S": []}
+    for name, matrices in (("U", u_matrices), ("W", w_matrices), ("S", s_matrices)):
+        for degree, matrix in enumerate(matrices):
+            path = EVIDENCE / f"H02.path_woodbury_{name}.gamma_degree{degree}.npz"
+            sparse.save_npz(path, matrix, compressed=True)
+            emitted[name].append(
+                {
+                    **record(path),
+                    "shape": list(matrix.shape),
+                    "nonzero_entries": int(matrix.nnz),
+                }
+            )
+
+    selected_root = int(update["selected_rank_place"]["gamma_root"])
+    delta_at_root = evaluate(coefficient_matrices, selected_root)
+    mismatches, component_replay = replay_factorization(
+        delta_at_root, selected_rows, selected_columns
+    )
+    require(mismatches == 0, "selected-place factorization replay")
+    require(sum(item["rank"] for item in component_replay) == UPDATE_RANK, "rank sum")
+    require(
+        int(update["selected_minor_determinant_mod21817"]) != 0,
+        "bound nonzero minor",
+    )
+
+    checks = {
+        "G3BZ_is_hash_bound_and_passing": True,
+        "the6022_selected_rows_and_columns_are_distinct": True,
+        "U_W_and_S_are_exact_polynomial_submatrices_of_Delta_H02": True,
+        "S_is_the_G3BZ_nonzero6022_square_number_field_minor": True,
+        "the_selected_split_place_replays_Delta_equals_U_S_inverse_W_componentwise": mismatches == 0,
+        "G3BZ_rank_and_invertible_S_prove_the_identity_over_Q_gamma": True,
+        "the_fraction_free_representation_uses_no_fitted_or_observed_values": True,
+        "no_base_inverse_source_action_integration_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3DE checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3de-h02-fraction-free-path-woodbury.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DE",
+        "status": "CLOSED_EXACT_SELECTED_H02_FRACTION_FREE_PATH_WOODBURY_FACTORIZATION",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {"G3BZ": record(G3BZ)},
+        "factorization": {
+            "field": "Q(gamma)",
+            "update": "Delta_H02,C(gamma)",
+            "identity": "Delta=U*S^-1*W",
+            "fraction_free_identity": "Delta*det(S)=U*adj(S)*W",
+            "ambient_shape": [AMBIENT_DIMENSION, AMBIENT_DIMENSION],
+            "rank": UPDATE_RANK,
+            "U_shape": [AMBIENT_DIMENSION, UPDATE_RANK],
+            "W_shape": [UPDATE_RANK, AMBIENT_DIMENSION],
+            "S_shape": [UPDATE_RANK, UPDATE_RANK],
+            "selection": record(selection_path),
+            "U_gamma_coefficients": emitted["U"],
+            "W_gamma_coefficients": emitted["W"],
+            "S_gamma_coefficients": emitted["S"],
+            "selected_place": {"prime": PRIME, "gamma_root": selected_root},
+            "selected_place_factorization_mismatches": mismatches,
+            "component_replay": component_replay,
+        },
+        "reduced_inverse_equation": {
+            "full_equation": "(A0+a*U*S^-1*W)x=b",
+            "base_actions": "P=A0^-1*U and x0=A0^-1*b",
+            "reduced_equation": "(S+a*W*P)z=a*W*x0",
+            "recovery": "x=x0-P*z",
+            "reduced_dimension": UPDATE_RANK,
+            "remaining_data": [
+                "the exact or Arb-certified H02 B89 action P=A0^-1*U",
+                "the exact or Arb-certified selected evolving-source action x0=A0^-1*b",
+            ],
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_S_inverse_is_materialized_over_Q_gamma": False,
+            "claims_A0_inverse_U_is_emitted": False,
+            "claims_the_characteristic_zero_H02_path_action_is_complete": False,
+            "claims_integral_transport_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3deSelectedH02FractionFreePathWoodbury",
+            "tier": "CLOSED_EXACT_SELECTED_H02_FRACTION_FREE_FACTORIZATION",
+            "statement": "The G3BZ rank-revealing rows and columns define exact polynomial matrices U, S and W over Z[gamma], with S a nonzero 6022-square minor and Delta_H02,C=U S^-1 W over Q(gamma). The identity replays componentwise at the selected split place with zero mismatch. Therefore the 42458-dimensional selected H02 family inverse reduces exactly to the displayed 6022-dimensional Woodbury equation once its two B89 base actions are supplied.",
+        },
+        "frontier_delta": {
+            "before": "G3BZ proved the exact H02 path-update rank 6022 but did not emit an executable rank factorization.",
+            "after": "The exact H02 U/S/W polynomial data and reduced 6022-dimensional inverse equation are emitted. The H02 path action now has two explicit base-action inputs instead of an unspecified low-rank update.",
+        },
+        "next_required_object": "Contract the selected G3CA/G3CC evolving H02 source into the emitted W rows, evaluate the B89 actions P=A_H02,B89^-1 U and x0=A_H02,B89^-1 b with exact or directed-rounding arithmetic, and solve S+a W P along G3BJ. This remains separate from the pairing-one rank-1509 initial marking.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DE selected H02 fraction-free path Woodbury: PASS")
+    print(
+        f"rank={UPDATE_RANK} U={u_matrices[0].shape} W={w_matrices[0].shape} "
+        f"S={s_matrices[0].shape} components={len(component_replay)} split_mismatches={mismatches}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

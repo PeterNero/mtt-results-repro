@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Certify the full-support G3AO uvs chart after exact quadratic elimination.
+
+On the selected double cover K=w^2-F6=0, every residual equation has a
+unique remainder p(y,z)+w*q(y,z).  Its norm and the pairwise compatibility
+minors eliminate w exactly on the full torus.  This turns each three-variable
+critical-locus calculation into a two-variable calculation without changing
+the selected finite-field member.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "uvs_quadratic"
+LABEL = "B_xyzw__T_t0t1t2__I_uvs"
+ITEM = (direct.BASE, direct.ELLIPTIC, ("u", "v", "s"))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _projected_equations(prefix: str, names: tuple[str, ...]) -> str:
+    lines: list[str] = []
+    for index, name in enumerate(names):
+        lines.extend(
+            [
+                f"poly {prefix}r{index}=reduce(qMap({name}),kBasis);",
+                f"poly {prefix}p{index}=subst({prefix}r{index},w,0);",
+                f"poly {prefix}q{index}=subst(diff({prefix}r{index},w),w,0);",
+                f"poly {prefix}n{index}={prefix}p{index}^2-F*{prefix}q{index}^2;",
+            ]
+        )
+    generators = [f"{prefix}n{i}" for i in range(len(names))]
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            minor = f"{prefix}m{i}{j}"
+            lines.append(
+                f"poly {minor}={prefix}p{i}*{prefix}q{j}-{prefix}p{j}*{prefix}q{i};"
+            )
+            generators.append(minor)
+    lines.append(f"ideal {prefix}Projected=" + ",".join(generators) + ";")
+    return "\n".join(lines)
+
+
+def make_script(polynomials: dict[str, str], algorithm: str) -> str:
+    smooth_projection = _projected_equations(
+        "sm", ("dualSextic", "baseMinorYZ", "baseMinorYW", "baseMinorZW")
+    )
+    singular_projection = _projected_equations(
+        "sg", ("dualSextic", "contact0", "contact1", "contact2")
+    )
+    return f'''// UST.G3AO full-support uvs exact quadratic-elimination certificate.
+// Remainders modulo w^2-F6 are p+wq; norms and compatibility minors eliminate w.
+ring source=(101,g),(x,y,z,w),dp;
+minpoly={polynomials["minpoly"]};
+poly F6={polynomials["F6"]};
+poly K=w^2-F6;
+poly A0={polynomials["A0"]};
+poly A1={polynomials["A1"]};
+poly A2={polynomials["A2"]};
+poly Ap0=A0;
+poly Ap1=A0+A1+3*A2;
+poly Ap2=A0+7*A1+7*A2;
+poly dual0=-14*Ap0;
+poly dual1=-4*Ap0+7*Ap1-3*Ap2;
+poly dual2=6*Ap0-7*Ap1+Ap2;
+poly dualSextic=dual0^6+dual1^6+dual2^6
+  -2*(dual0^3*dual1^3+dual0^3*dual2^3+dual1^3*dual2^3);
+poly q0=dual0^2*(dual0^3-dual1^3-dual2^3);
+poly q1=dual1^2*(dual1^3-dual0^3-dual2^3);
+poly q2=dual2^2*(dual2^3-dual0^3-dual1^3);
+poly contact0=-14*q0-4*q1+6*q2;
+poly contact1=7*q1-7*q2;
+poly contact2=-3*q1+q2;
+poly baseResponseY=contact0*diff(Ap0,y)+contact1*diff(Ap1,y)+contact2*diff(Ap2,y);
+poly baseResponseZ=contact0*diff(Ap0,z)+contact1*diff(Ap1,z)+contact2*diff(Ap2,z);
+poly baseResponseW=contact0*diff(Ap0,w)+contact1*diff(Ap1,w)+contact2*diff(Ap2,w);
+poly baseMinorYZ=diff(K,y)*baseResponseZ-diff(K,z)*baseResponseY;
+poly baseMinorYW=diff(K,y)*baseResponseW-diff(K,w)*baseResponseY;
+poly baseMinorZW=diff(K,z)*baseResponseW-diff(K,w)*baseResponseZ;
+ring quadratic=(101,g),(w,y,z),lp;
+minpoly={polynomials["minpoly"]};
+map qMap=source,1,y,z,w;
+poly F=qMap(F6);
+poly K=w^2-F;
+ideal kBasis=std(K);
+{smooth_projection}
+{singular_projection}
+ring base=(101,g),(y,z,orbitInv),dp;
+minpoly={polynomials["minpoly"]};
+map baseMap=quadratic,0,y,z;
+poly Fbase=baseMap(F);
+ideal smoothRestricted=baseMap(smProjected),orbitInv*(y*z*Fbase)-1;
+ideal smoothBasis={algorithm}(smoothRestricted);
+int smoothEmpty=(size(smoothBasis)==1 && smoothBasis[1]==1);
+print("G3AO_UVS_QUADRATIC_SMOOTH_EMPTY="+string(smoothEmpty));
+ideal singularRestricted=baseMap(sgProjected),orbitInv*(y*z*Fbase)-1;
+ideal singularBasis={algorithm}(singularRestricted);
+int singularEmpty=(size(singularBasis)==1 && singularBasis[1]==1);
+print("G3AO_UVS_QUADRATIC_SINGULAR_EMPTY="+string(singularEmpty));
+if (smoothEmpty==1 && singularEmpty==1)
+{{ print("G3AO_UVS_QUADRATIC_ELIMINATION_PASS {LABEL}"); }}
+else
+{{ print("G3AO_UVS_QUADRATIC_ELIMINATION_INCONCLUSIVE {LABEL}"); }}
+quit;
+'''
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=3600)
+    parser.add_argument("--algorithm", choices=("std", "slimgb"), default="std")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    require(direct.label(*ITEM) == LABEL, "selected full-support label")
+    polynomials = direct.selected_polynomials()
+    source_hash = sha256(direct.SOURCE)
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    script = CAMPAIGN / f"{LABEL}.{args.algorithm}.sing"
+    output = CAMPAIGN / f"{LABEL}.{args.algorithm}.singular.out"
+    packet_path = CAMPAIGN / f"{LABEL}.{args.algorithm}.packet.json"
+    script.write_text(make_script(polynomials, args.algorithm), encoding="ascii")
+    started = time.time()
+    timed_out = False
+    try:
+        completed = subprocess.run(
+            singular_command(ROOT, script),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        raw = completed.stdout
+        returncode = completed.returncode
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        captured = error.stdout or b""
+        raw = (
+            captured.decode("utf-8", errors="replace")
+            if isinstance(captured, bytes)
+            else captured
+        )
+        returncode = 124
+    output.write_text(raw, encoding="utf-8")
+    elapsed = time.time() - started
+    passed = (
+        not timed_out
+        and returncode == 0
+        and f"G3AO_UVS_QUADRATIC_ELIMINATION_PASS {LABEL}" in raw
+    )
+    packet = {
+        "schema": "mtt.unified-source.g3ao-selected-cayley-toric-orbit-uvs-quadratic.v1",
+        "label": LABEL,
+        "source_sha256": source_hash,
+        "field": "F_101[g]/(g^6+24g^5+89g^4+44g^3+33g^2+16g+64)",
+        "supports": {
+            "base": list(direct.BASE),
+            "elliptic": list(direct.ELLIPTIC),
+            "Cayley_fiber": ["u", "v", "s"],
+        },
+        "script": {
+            "path": str(script.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(script),
+        },
+        "output": {
+            "path": str(output.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(output),
+        },
+        "algorithm": f"uvs_quadratic_{args.algorithm}",
+        "certificate_method": "uvs_quadratic_norm_and_compatibility_elimination",
+        "proof_scope": {
+            "the_selected_double_cover_equation_is_retained_exactly": True,
+            "each_residual_equation_is_reduced_uniquely_to_p_plus_wq_modulo_K": True,
+            "norm_equations_are_necessary_for_a_common_double_cover_root": True,
+            "pairwise_pq_minors_enforce_one_common_double_cover_root": True,
+            "saturation_by_y_z_F6_is_exactly_the_full_base_torus_with_w_nonzero": True,
+            "smooth_and_singular_dual_loci_are_both_tested": True,
+            "unit_projected_ideals_prove_the_original_uvs_orbit_locus_empty": passed,
+            "a_nonunit_projected_ideal_would_be_inconclusive": True,
+        },
+        "elapsed_seconds": elapsed,
+        "returncode": returncode,
+        "timed_out": timed_out,
+        "passed": passed,
+    }
+    packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(f"{LABEL}: {'PASS' if passed else 'INCONCLUSIVE'} ({elapsed:.1f}s)")
+    if not passed:
+        raise SystemExit(returncode or 1)
+
+
+if __name__ == "__main__":
+    main()

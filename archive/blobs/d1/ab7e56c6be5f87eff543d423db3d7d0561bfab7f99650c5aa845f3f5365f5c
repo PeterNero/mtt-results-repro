@@ -1,0 +1,47 @@
+# UST.G3GE: H02 Component-20 Height Audit (Superseded Record)
+
+## Status
+
+`SUPERSEDED_MIXED_MODULUS_HEIGHT_AUDIT_REBUILD_REQUIRED`
+
+## Correction
+
+UST.G3GM proves that the fresh-prime inputs used by the original G3GE audit
+were not specializations of one integral H02 family.  The endpoint was
+evaluated at each requested prime, while imported `Delta`, `U`, `W` and
+sparse-normalization routines remained hardcoded modulo `33863`.
+
+The former eleven-prime CRT, rational-reconstruction and five-holdout
+conclusions are therefore not current mathematical evidence.  They are
+retained in the archived packet only to make the provenance failure auditable.
+
+## Exact diagnosis
+
+At `(p,gamma)=(21817,5)`, the former fresh-prime compiler disagrees with the
+archived G3DH border in 306,769 entries.  The prime-parameterized replacement
+reproduces that border entry by entry.  At the independent corrected anchor
+`(79903,12863)`, it gives the archived global profile `4748/1274`, not the
+former mixed-modulus profile `4752/1270`.
+
+## What survives
+
+The corrected anchor retains the component-20 second-jet profile
+`(15,5,0,33,17,1)`.  It also satisfies the G3GG fixed-minor source formula.
+Thus G3FZ's local finite source construction survives; the coefficient-height
+audit does not.
+
+## Rebuild contract
+
+G3GA--G3GE must be rerun with `prime_parameterized_v2` arithmetic.  Every
+cache must record that schema and must be rejected otherwise.  Only a new CRT
+assembled entirely from those corrected fibers may support a height claim.
+
+## Reproduction
+
+```powershell
+python build_ust_g3gm_prime_arithmetic_compatibility_correction.py
+python verify_ust_g3gm_prime_arithmetic_compatibility_correction.py
+```
+
+The corrected G3GE rebuild is pending and must not reuse the archived
+mixed-modulus caches.

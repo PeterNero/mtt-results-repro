@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Verify UST.G3AJ from its locked local theorem packets."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3aj_residue_ball_smooth_graph_prym.packet.json"
+SOURCES = {
+    "ust_g3ac_eta9_graph_prym_orbit.packet.json": "944004bddaeabf126adb6ae314ff7bf4180244f72c4734de2d7c846781a810c7",
+    "ust_g3ah_formal_coefficient_kernel.packet.json": "96e419f17cfa548e8313e0ae8bc4b515f2d1a7484be87c0215b03657c2aaeb65",
+    "ust_g3ai_second_h_marked_map_all_orders.packet.json": "650f37b7ff1ee8d6df1a0fcb0f23e68080ea54fb9e9a513e9594365ec188ae17",
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def normalized_sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(packet["schema"] == "mtt.unified-source.g3aj-residue-ball-smooth-graph-prym.v1", "schema")
+    require(packet["theorem_id"] == "UST.G3AJ", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    for source in packet["inputs"].values():
+        name = Path(source["source_path"]).name
+        require(source["sha256"] == SOURCES[name], f"recorded source hash {name}")
+        require(normalized_sha(ROOT / "state" / name) == SOURCES[name], f"live source hash {name}")
+
+    g3ac = load(ROOT / "state" / "ust_g3ac_eta9_graph_prym_orbit.packet.json")
+    g3ah = load(ROOT / "state" / "ust_g3ah_formal_coefficient_kernel.packet.json")
+    g3ai = load(ROOT / "state" / "ust_g3ai_second_h_marked_map_all_orders.packet.json")
+    family = g3ac["graph_preserving_family"]
+    rank_open = g3ac["coefficient_rank_open"]
+    ranks = g3ah["geometric_rank_calculation"]
+
+    require(ranks["three_coefficient_source_rank"] - ranks["disjoint_graph_target_rank"] == 123, "kernel arithmetic")
+    require(ranks["formal_kernel_rank"] == 123, "formal kernel rank")
+    require(g3ai["G3AH_consequence"]["second_H_formal_map_condition"] == "DISCHARGED", "formal maps")
+    require(family["parameter_space_irreducible"], "irreducible family")
+    require(family["smooth_finite_flat_intersection_nonempty"], "smooth finite-flat open")
+    require(rank_open["intersection_with_smooth_finite_flat_open_nonempty"], "rank-three joint open")
+
+    formal = packet["formal_affine_space"]
+    require(formal["coefficient_source_rank"] == 249, "source rank")
+    require(formal["incidence_target_rank"] == 126, "target rank")
+    require(formal["translation_kernel_rank"] == formal["fixed_residue_ball_dimension"] == 123, "ball dimension")
+    require(packet["open_conditions"]["joint_open_nonempty_by_G3AC"], "joint open")
+    require(packet["consequence"]["smooth_member_in_selected_residue_branch"] == "CLOSED_EXISTENTIAL", "smooth consequence")
+    require(packet["consequence"]["beta_C_on_this_member"] == "OPEN", "beta boundary")
+    require(packet["guardrails"]["claims_an_explicit_smooth_coefficient_vector_is_emitted"] is False, "explicit-member guardrail")
+    require(packet["guardrails"]["claims_beta_C_has_a_zero"] is False, "beta-zero guardrail")
+    require(packet["parameter_ledger"]["new_continuous_fit_parameters"] == 0, "parameter ledger")
+    print("UST.G3AJ independent verifier: PASS")
+    print("fixed-residue graph-coefficient ball dimension: 123")
+    print("smooth finite-flat rank-three graph-Prym member: EXISTS")
+    print("explicit selection and beta_C: OPEN")
+
+
+if __name__ == "__main__":
+    main()

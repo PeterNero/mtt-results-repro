@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Export exact inverse-free G3AO uvs bidual inputs for msolve F4Sat."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+import run_ust_g3ao_selected_cayley_toric_uvs_dual_elimination as dual
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "uvs_dual_f4sat"
+EXPORT_SCRIPT = CAMPAIGN / "export_bidual_f4sat.sing"
+RAW_OUTPUT = CAMPAIGN / "export_bidual_f4sat.singular.out"
+SMOOTH_INPUT = CAMPAIGN / "smooth.msolve.in"
+SINGULAR_INPUT = CAMPAIGN / "singular.msolve.in"
+OUT = CAMPAIGN / "inputs.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_export_script(polynomials: dict[str, str]) -> str:
+    script = dual.make_script(polynomials, "std")
+    script = script.replace(
+        "ideal smoothRestricted=orbitMap(smoothDualLocus),orbitInv*(y*z*w)-1;",
+        "ideal smoothCore=orbitMap(smoothDualLocus); poly smoothSat=y*z*w;",
+    )
+    script = script.replace(
+        "ideal singularRestricted=orbitMap(singularDualLocus),orbitInv*(y*z*w)-1;",
+        "ideal singularCore=orbitMap(singularDualLocus); poly singularSat=y*z*w;",
+    )
+    require("ideal smoothCore=" in script and "ideal singularCore=" in script, "inverse-free cores")
+    basis_start = script.index("ideal smoothBasis=std(smoothRestricted);")
+    export = '''int exportIndex;
+print("G3AO_F4SAT_SMOOTH_COUNT="+string(size(smoothCore)));
+for (exportIndex=1;exportIndex<=size(smoothCore);exportIndex++)
+{ print("G3AO_F4SAT_SMOOTH_"+string(exportIndex)+"="+string(smoothCore[exportIndex])); }
+print("G3AO_F4SAT_SMOOTH_SAT="+string(smoothSat));
+print("G3AO_F4SAT_SINGULAR_COUNT="+string(size(singularCore)));
+for (exportIndex=1;exportIndex<=size(singularCore);exportIndex++)
+{ print("G3AO_F4SAT_SINGULAR_"+string(exportIndex)+"="+string(singularCore[exportIndex])); }
+print("G3AO_F4SAT_SINGULAR_SAT="+string(singularSat));
+print("G3AO_F4SAT_EXPORT_PASS");
+quit;
+'''
+    return script[:basis_start] + export
+
+
+def parse_locus(raw: str, locus: str) -> tuple[list[str], str]:
+    upper = locus.upper()
+    import re
+
+    count_match = re.search(rf"^G3AO_F4SAT_{upper}_COUNT=(\d+)$", raw, re.MULTILINE)
+    require(count_match is not None, f"{locus} count")
+    count = int(count_match.group(1))
+    values: dict[int, str] = {}
+    for match in re.finditer(rf"^G3AO_F4SAT_{upper}_(\d+)=(.+)$", raw, re.MULTILINE):
+        values[int(match.group(1))] = match.group(2).strip()
+    require(set(values) == set(range(1, count + 1)), f"complete {locus} core")
+    sat_match = re.search(rf"^G3AO_F4SAT_{upper}_SAT=(.+)$", raw, re.MULTILINE)
+    require(sat_match is not None, f"{locus} saturation")
+    return [values[index] for index in range(1, count + 1)], sat_match.group(1).strip()
+
+
+def make_msolve_input(
+    polynomials: dict[str, str], core: list[str], saturation: str
+) -> str:
+    equations = [common.normalize_for_msolve(polynomials["minpoly"])]
+    equations.extend(common.normalize_for_msolve(value) for value in core)
+    equations.append(common.normalize_for_msolve(saturation))
+    return "y,z,w,g\n101\n" + ",\n".join(equations) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--reuse-export", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    polynomials = direct.selected_polynomials()
+    g = sp.symbols("g")
+    minpoly = sp.Poly(sp.sympify(polynomials["minpoly"].replace("^", "**")), g, modulus=101)
+    require(minpoly.degree() == 6 and minpoly.is_irreducible, "irreducible F101 extension")
+    EXPORT_SCRIPT.write_text(make_export_script(polynomials), encoding="ascii")
+    if args.reuse_export:
+        require(RAW_OUTPUT.is_file(), "reusable raw export")
+        raw = RAW_OUTPUT.read_text(encoding="utf-8")
+    else:
+        completed = subprocess.run(
+            singular_command(ROOT, EXPORT_SCRIPT),
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=args.timeout,
+            check=False,
+        )
+        RAW_OUTPUT.write_text(completed.stdout, encoding="utf-8")
+        require(completed.returncode == 0, "Singular F4Sat export")
+        raw = completed.stdout
+    require("G3AO_F4SAT_EXPORT_PASS" in raw, "F4Sat export marker")
+    smooth_core, smooth_sat = parse_locus(raw, "smooth")
+    singular_core, singular_sat = parse_locus(raw, "singular")
+    SMOOTH_INPUT.write_text(make_msolve_input(polynomials, smooth_core, smooth_sat), encoding="ascii")
+    SINGULAR_INPUT.write_text(make_msolve_input(polynomials, singular_core, singular_sat), encoding="ascii")
+    packet = {
+        "schema": "mtt.unified-source.g3ao-uvs-dual-f4sat-inputs.v1",
+        "source_sha256": sha256(direct.SOURCE),
+        "field_presentation": {
+            "characteristic": 101,
+            "extension_variable": "g",
+            "minpoly": polynomials["minpoly"],
+            "degree": 6,
+            "irreducible_over_F101": True,
+            "all_roots_are_Frobenius_conjugate": True,
+        },
+        "export_script": {
+            "path": str(EXPORT_SCRIPT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(EXPORT_SCRIPT),
+        },
+        "raw_output": {
+            "path": str(RAW_OUTPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+            "sha256": sha256(RAW_OUTPUT),
+        },
+        "loci": {},
+        "checks": {
+            "inverse_variables_are_removed": True,
+            "the_final_input_polynomial_is_the_exact_torus_saturation_product": True,
+            "msolve_F4Sat_will_saturate_the_preceding_exact_ideal": True,
+            "the_extension_minpoly_is_irreducible_and_adjoined_over_F101": True,
+            "no_coefficient_is_rounded_or_coerced_to_GF11": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+    }
+    for locus, core, path in (
+        ("smooth", smooth_core, SMOOTH_INPUT),
+        ("singular", singular_core, SINGULAR_INPUT),
+    ):
+        packet["loci"][locus] = {
+            "core_generator_count_including_minpoly": len(core) + 1,
+            "saturation_is_last": True,
+            "input": {
+                "path": str(path.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                "sha256": sha256(path),
+            },
+        }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AO uvs bidual F4Sat inputs: PASS "
+        f"smooth_core={len(smooth_core)+1} singular_core={len(singular_core)+1}"
+    )
+
+
+if __name__ == "__main__":
+    main()

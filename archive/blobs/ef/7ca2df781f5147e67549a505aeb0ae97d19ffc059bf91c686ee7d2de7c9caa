@@ -1,0 +1,67 @@
+# UST.G3AU Adjoint Normal-First Obstruction Theorem
+
+## Purpose
+
+The strict G3AR promotion contract correctly asks for the complete
+248-coordinate `beta_C` vector. A candidate that is already obstructed need
+not pay that full cost. G3AU pulls the 126 normal covectors backward through
+the frame and period maps, so a nonzero branch can be rejected before the full
+payload is materialized.
+
+## Exact factorization
+
+Write the same-source maps as
+
+```text
+S : Z^1509   -> B103^248       selected period/source map,
+F : B103^248 -> G3AL^248      exact frame transform,
+N : G3AL^248 -> K^126         selected normal operator.
+```
+
+For a bound integral source `z`, associativity gives
+
+```text
+beta_B103 = S z,
+beta_G3AL = F beta_B103,
+r = N beta_G3AL = (N F) beta_B103 = (N F S) z.
+```
+
+Thus each row of `N` can be pulled back first. The computation may evaluate
+the 126 normal rows adaptively and stop at the first exact nonzero or
+interval-separated coordinate. That coordinate is already a complete
+obstruction.
+
+## Branch logic
+
+The two outcomes are deliberately asymmetric:
+
+- `r_j != 0` for any row: rigorous no-go for that bound source;
+- all 126 rows vanish: the source survives the normal test, but the full
+  248-row `beta_C`, exact frame binding and G3AR characteristic-zero zero
+  certificate are still required for promotion.
+
+For the finite G3AS operator, a nonzero reduced coordinate is also a rigorous
+characteristic-zero no-go for an integrally normalized source. A modular zero
+retains exactly its old status: necessary congruence only.
+
+## Computational consequence
+
+The early branch evaluates at most 126 scalar output rows rather than first
+materializing 248 beta rows. A nonzero obstruction may require only one row.
+This is an output/evaluation-order reduction, not a claim that every row has
+equal internal cost. A surviving candidate intentionally pays the complete
+G3AR cost so the proof standard is unchanged.
+
+## Proof boundary
+
+G3AU does not emit `S`, `F`, `beta_C`, or a normal residual. It does not alter
+the G3AR promotion contract and does not promote modular zero. Its result is
+an exact execution order that makes the likely no-go branch cheaper and keeps
+the zero branch fully rigorous.
+
+## Reproduction
+
+```powershell
+python build_ust_g3au_adjoint_normal_first_obstruction.py
+python verify_ust_g3au_adjoint_normal_first_obstruction.py
+```

@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Decide the selected H02 base-resolvent coupling rank at one split place."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+from scipy.sparse.csgraph import maximum_bipartite_matching
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import build_ust_g3de_h02_fraction_free_path_woodbury as woodbury
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3BR = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+G3BW = ROOT / "state" / "ust_g3bw_g3bi_h02_dm_woodbury_reduction.packet.json"
+G3DE = ROOT / "state" / "ust_g3de_h02_fraction_free_path_woodbury.packet.json"
+G3DF = ROOT / "state" / "ust_g3df_h02_dm_source_observation_corridor.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dg"
+OUT = ROOT / "state" / "ust_g3dg_h02_split_place_full_coupling_rank.packet.json"
+RANK_SOURCE = ROOT / "ust_split_prime_sparse_rank.cpp"
+RANK_EXECUTABLE = ROOT / "state" / "ust_split_prime_sparse_rank"
+PRIME = 21817
+GAMMA_ROOT = 5
+QUOTIENT = 248
+COMPLEMENT = 42458
+CORE_DIMENSION = 24767
+UPDATE_RANK = 6022
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    result = matrix.tocsc().astype(np.int64)
+    result.sum_duplicates()
+    result.data %= PRIME
+    result.eliminate_zeros()
+    return result.astype(np.uint32)
+
+
+def as_scipy(payload: dict[str, Any]) -> sparse.csc_matrix:
+    return sparse.csc_matrix(
+        (
+            np.asarray(payload["data"], dtype=np.uint32),
+            np.asarray(payload["indices"], dtype=np.int32),
+            np.asarray(payload["indptr"], dtype=np.int64),
+        ),
+        shape=(int(payload["rows"]), int(payload["columns"])),
+        dtype=np.uint32,
+    )
+
+
+def run_determinant(
+    solver: Path,
+    exporter: Any,
+    mld: Path,
+    matrix: sparse.csc_matrix,
+    stem: str,
+    evidence: Path = EVIDENCE,
+) -> tuple[int, Path, Path, str]:
+    chart_path = evidence / f"{stem}.chart.bin"
+    rhs_path = evidence / f"{stem}.unit.rhs.bin"
+    log_path = evidence / f"{stem}.determinant.log"
+    exporter.write_chart(
+        chart_path,
+        PRIME,
+        matrix.shape[0],
+        0,
+        matrix.shape[0],
+        matrix.indptr.astype(np.uint64).tolist(),
+        matrix.indices.astype(np.uint32).tolist(),
+        matrix.data.astype(np.uint32).tolist(),
+    )
+    exporter.write_rhs(rhs_path, PRIME, matrix.shape[0], [0, 1], [0], [1])
+    prior = initializer.parse_log(log_path) if log_path.is_file() else {}
+    reusable = (
+        prior.get("STATUS") == "SUCCESS"
+        and prior.get("PRIME") == str(PRIME)
+        and prior.get("ROWS") == str(matrix.shape[0])
+    )
+    if reusable:
+        stdout = "reused existing exact determinant transcript"
+    else:
+        completed = subprocess.run(
+            [
+                "wsl",
+                runtime.wsl_path(solver),
+                "--chart",
+                runtime.wsl_path(chart_path),
+                "--rhs",
+                runtime.wsl_path(rhs_path),
+                "--log",
+                runtime.wsl_path(log_path),
+                "--determinant-only",
+            ],
+            cwd=mld,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        stdout = completed.stdout.strip()
+    fields = initializer.parse_log(log_path)
+    require(fields.get("STATUS") == "SUCCESS", f"determinant status {stem}")
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(0 < determinant < PRIME, f"nonzero determinant {stem}")
+    rhs_path.unlink()
+    return determinant, chart_path, log_path, stdout
+
+
+def compile_rank_tool() -> str:
+    require(RANK_SOURCE.is_file(), "rank-tool source")
+    completed = subprocess.run(
+        [
+            "wsl",
+            "g++",
+            "-O3",
+            "-std=c++17",
+            runtime.wsl_path(RANK_SOURCE),
+            "-o",
+            runtime.wsl_path(RANK_EXECUTABLE),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    require(RANK_EXECUTABLE.is_file(), "rank-tool executable")
+    return completed.stdout.strip() or "compiled exact sparse rank tool"
+
+
+def run_rank(chart_path: Path, log_path: Path) -> tuple[dict[str, str], str]:
+    completed = subprocess.run(
+        [
+            "wsl",
+            runtime.wsl_path(RANK_EXECUTABLE),
+            "--chart",
+            runtime.wsl_path(chart_path),
+            "--log",
+            runtime.wsl_path(log_path),
+            "--progress-seconds",
+            "20",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields = initializer.parse_log(log_path)
+    require(fields.get("STATUS") == "SUCCESS", "rank-tool status")
+    return fields, completed.stdout.strip()
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3br = load(G3BR)
+    g3bw = load(G3BW)
+    g3de = load(G3DE)
+    g3df = load(G3DF)
+    for packet, label in ((g3br, "G3BR"), (g3bw, "G3BW"), (g3de, "G3DE"), (g3df, "G3DF")):
+        require(all(packet["checks"].values()), f"{label} checks")
+
+    endpoint_path = ROOT / g3br["endpoint_chart"]["binary"]["path"]
+    update_path = ROOT / g3br["endpoint_update"]["matrix"]["path"]
+    require(sha256(endpoint_path) == g3br["endpoint_chart"]["binary"]["sha256"], "endpoint hash")
+    require(sha256(update_path) == g3br["endpoint_update"]["matrix"]["sha256"], "update hash")
+    endpoint = as_scipy(arithmetic.read_csc(endpoint_path, b"MTTSPC1\0", 6)).astype(np.int64)
+    endpoint_update = sparse.load_npz(update_path).tocsc().astype(np.int64)
+    require(endpoint.shape == (QUOTIENT + COMPLEMENT,) * 2, "endpoint shape")
+    require(endpoint_update.shape == (QUOTIENT + COMPLEMENT, COMPLEMENT), "update shape")
+    base = endpoint.copy()
+    base[:, QUOTIENT:] = (base[:, QUOTIENT:] - endpoint_update).tocsc()
+    base = normalize(base)
+    require(int(base.nnz) == int(g3br["base_chart"]["nonzero_entries"]), "reconstructed B89 base nnz")
+
+    dm_path = ROOT / g3bw["DM_reduction"]["arrays"]["path"]
+    corridor_path = ROOT / g3df["exact_component_DAG"]["arrays"]["path"]
+    require(sha256(dm_path) == g3bw["DM_reduction"]["arrays"]["sha256"], "DM hash")
+    require(sha256(corridor_path) == g3df["exact_component_DAG"]["arrays"]["sha256"], "corridor hash")
+    dm = np.load(dm_path, allow_pickle=False)
+    corridor = np.load(corridor_path, allow_pickle=False)
+    core_component = int(corridor["corridor_components"][0])
+    require(corridor["corridor_components"].size == 1, "one corridor core")
+    core_rows = np.flatnonzero(dm["component_by_row"] == core_component).astype(np.int32)
+    core_columns = np.flatnonzero(dm["component_by_column"] == core_component).astype(np.int32)
+    require(core_rows.size == core_columns.size == CORE_DIMENSION, "core dimensions")
+    ambient_core_rows = dm["complement_rows"][core_rows].astype(np.int32)
+    a_core = normalize(base[ambient_core_rows, :][:, QUOTIENT + core_columns])
+
+    factor = g3de["factorization"]
+    u_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factor["U_gamma_coefficients"]
+    ]
+    w_coefficients = [
+        sparse.load_npz(ROOT / item["path"]).tocsr().astype(np.int64)
+        for item in factor["W_gamma_coefficients"]
+    ]
+    u = woodbury.evaluate(u_coefficients, GAMMA_ROOT)
+    w = woodbury.evaluate(w_coefficients, GAMMA_ROOT)
+    require(u.shape == (COMPLEMENT, UPDATE_RANK), "U shape")
+    require(w.shape == (UPDATE_RANK, COMPLEMENT), "W shape")
+    outside_core_rows = np.ones(COMPLEMENT, dtype=bool)
+    outside_core_rows[core_rows] = False
+    require(u[outside_core_rows, :].nnz == 0, "U enters only the selected core")
+    solution_components = set(int(value) for value in corridor["solution_components"])
+    recovery_columns = np.flatnonzero(
+        np.isin(dm["component_by_column"], list(solution_components))
+    ).astype(np.int32)
+    singleton_recovery_columns = np.setdiff1d(recovery_columns, core_columns)
+    require(singleton_recovery_columns.size == 94, "94 singleton recovery columns")
+    require(w[:, singleton_recovery_columns].nnz == 0, "W ignores recovery singletons")
+    u_core = normalize(u[core_rows, :])
+    w_core = normalize(w[:, core_columns])
+
+    component_count = int(dm["component_sizes"].size)
+    require(np.count_nonzero(dm["component_sizes"] == 1) == 17691, "all noncore components are singleton")
+    row_by_component = np.full(component_count, -1, dtype=np.int32)
+    column_by_component = np.full(component_count, -1, dtype=np.int32)
+    row_by_component[dm["component_by_row"]] = np.arange(COMPLEMENT, dtype=np.int32)
+    column_by_component[dm["component_by_column"]] = np.arange(COMPLEMENT, dtype=np.int32)
+    singleton_units = 0
+    for component in np.flatnonzero(dm["component_sizes"] == 1):
+        row = int(row_by_component[component])
+        column = int(column_by_component[component])
+        require(row >= 0 and column >= 0, "singleton row and column")
+        value = int(base[int(dm["complement_rows"][row]), QUOTIENT + column])
+        require(value != 0, "singleton diagonal unit at selected place")
+        singleton_units += 1
+    require(singleton_units == 17691, "all singleton diagonal units")
+
+    border = normalize(
+        sparse.bmat(
+            [
+                [a_core, u_core],
+                [w_core, sparse.csc_matrix((UPDATE_RANK, UPDATE_RANK), dtype=np.uint32)],
+            ],
+            format="csc",
+        )
+    )
+    require(border.shape == (CORE_DIMENSION + UPDATE_RANK,) * 2, "border shape")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    require(solver.is_file(), "split-prime solver")
+    det_a, a_path, a_log, a_stdout = run_determinant(
+        solver, exporter, mld, a_core, f"H02.B89.core.p{PRIME}.g{GAMMA_ROOT}"
+    )
+    print(f"A_CORE determinant={det_a}", flush=True)
+    border_path = EVIDENCE / f"H02.B89.bordered_Q.p{PRIME}.g{GAMMA_ROOT}.chart.bin"
+    exporter.write_chart(
+        border_path,
+        PRIME,
+        border.shape[0],
+        0,
+        border.shape[0],
+        border.indptr.astype(np.uint64).tolist(),
+        border.indices.astype(np.uint32).tolist(),
+        border.data.astype(np.uint32).tolist(),
+    )
+    compile_stdout = compile_rank_tool()
+    border_log = EVIDENCE / f"H02.B89.bordered_Q.p{PRIME}.g{GAMMA_ROOT}.rank.log"
+    rank_fields, border_stdout = run_rank(border_path, border_log)
+    border_rank = int(rank_fields["RANK"])
+    finite_q_rank = border_rank - CORE_DIMENSION
+    require((border_rank, finite_q_rank) == (29515, 4748), "selected-place bordered rank")
+
+    structural_matching = maximum_bipartite_matching(
+        border.astype(bool).tocsr(), perm_type="column"
+    )
+    structural_rank = int(np.count_nonzero(structural_matching >= 0))
+    structural_q_upper = structural_rank - CORE_DIMENSION
+    require((structural_rank, structural_q_upper) == (29990, 5223), "bordered structural rank")
+    require(finite_q_rank <= structural_q_upper < UPDATE_RANK, "strict Q rank interval")
+
+    checks = {
+        "G3BR_G3BW_G3DE_and_G3DF_are_hash_bound_and_passing": True,
+        "the_B89_base_chart_is_reconstructed_exactly_as_endpoint_minus_update": True,
+        "all17691_noncore_DM_diagonal_entries_are_units_at_the_selected_place": singleton_units == 17691,
+        "the24767_square_core_is_invertible_at_the_selected_place": det_a != 0,
+        "U_enters_only_the_core_and_W_ignores_all94_recovery_singletons": True,
+        "the30789_square_bordered_core_is_eliminated_exactly_over_F21817": border_rank == 29515,
+        "Schur_elimination_gives_selected_place_Q_rank4748": finite_q_rank == 4748,
+        "maximum_matching_gives_characteristic_zero_Q_rank_upper_bound5223": structural_q_upper == 5223,
+        "the_exact_current_Q_gamma_rank_interval_is4748_through5223": True,
+        "no_Archimedean_value_path_solution_observed_value_or_fit_is_inferred": True,
+    }
+    require(all(checks.values()), "G3DG checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dg-h02-split-place-full-coupling-rank.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DG",
+        "status": "CLOSED_EXACT_H02_BASE_RESOLVENT_COUPLING_RANK_INTERVAL_4748_5223",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BR": record(G3BR),
+            "G3BW": record(G3BW),
+            "G3DE": record(G3DE),
+            "G3DF": record(G3DF),
+            "split_prime_solver": external_record(solver, mld),
+            "rank_tool_source": record(RANK_SOURCE),
+            "rank_tool_executable": record(RANK_EXECUTABLE),
+        },
+        "field": {"prime": PRIME, "gamma_root": GAMMA_ROOT},
+        "core": {
+            "component": core_component,
+            "dimension": CORE_DIMENSION,
+            "nonzero_entries": int(a_core.nnz),
+            "determinant_mod21817": det_a,
+            "chart": record(a_path),
+            "determinant_log": record(a_log),
+            "solver_stdout": a_stdout,
+        },
+        "bordered_coupling": {
+            "matrix": "[[A_core,U_core],[W_core,0]]",
+            "shape": list(border.shape),
+            "nonzero_entries": int(border.nnz),
+            "chart": record(border_path),
+            "rank_log": record(border_log),
+            "rank_tool_compile_stdout": compile_stdout,
+            "rank_tool_stdout": border_stdout,
+            "Schur_rank_identity": "rank(border)=24767+rank(Q)",
+            "Q": "W*A_H02,B89^-1*U",
+            "Q_shape": [UPDATE_RANK, UPDATE_RANK],
+            "border_rank_over_F21817": border_rank,
+            "border_nullity_over_F21817": border.shape[1] - border_rank,
+            "Q_rank_over_F21817": finite_q_rank,
+            "border_structural_rank": structural_rank,
+            "Q_structural_rank_upper_bound": structural_q_upper,
+            "Q_rank_over_Q_gamma_lower_bound": finite_q_rank,
+            "Q_rank_over_Q_gamma_upper_bound": structural_q_upper,
+        },
+        "support": {
+            "U_core_nonzero_entries": int(u_core.nnz),
+            "W_core_nonzero_entries": int(w_core.nnz),
+            "W_entries_outside_core": int(w.nnz - w_core.nnz),
+            "W_entries_on_the94_recovery_singletons": int(w[:, singleton_recovery_columns].nnz),
+            "noncore_singleton_units": singleton_units,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_exact_Q_gamma_rank_is_decided": False,
+            "claims_Q_values_are_materialized": False,
+            "claims_an_Archimedean_or_whole_path_kernel": False,
+            "claims_source_contraction_path_integration_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dgH02BaseResolventFullCouplingRank",
+            "tier": "CLOSED_EXACT_GOOD_REDUCTION_LOWER_AND_STRUCTURAL_UPPER_RANK_BOUNDS",
+            "statement": "At the hash-bound split place (21817,5), the selected B89 H02 core has nonzero determinant and the exact 30789-square U/W border has rank 29515. Schur elimination gives rank_F21817(Q)=4748 for Q=W*A0^-1*U. Exact maximum matching gives bordered structural rank 29990 and hence rank_Q(gamma)(Q)<=5223. Specialization supplies the lower bound 4748. Therefore 4748<=rank_Q(gamma)(Q)<=5223, proving a genuine second reduction below 6022 while leaving a sharp 475-rank promotion gap.",
+        },
+        "frontier_delta": {
+            "before": "G3DF proved all 6022 rows and columns structurally active but left coefficient rank open.",
+            "after": "The selected split-place coefficient rank is 4748 and exact support bounds the characteristic-zero rank by 5223. A genuine second H02 reduction exists; its exact Q(gamma) dimension lies in the 475-wide interval 4748..5223.",
+        },
+        "next_required_object": "Close the 475-rank gap by repeating the exact bordered elimination at the other five split roots and constructing a characteristic-zero upper certificate for any persistent coefficient defect. Then emit the corresponding second Woodbury factorization and contract the selected evolving H02 source before coupled path execution.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DG H02 split-place full coupling rank: PASS")
+    print(
+        f"core_det={det_a} border_rank={border_rank} finite_Q_rank={finite_q_rank} "
+        f"structural_Q_upper={structural_q_upper} border_nnz={border.nnz}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

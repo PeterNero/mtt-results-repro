@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""Construct a split-prime initializer for the selected G3BI H02 endpoint chart."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3br"
+OUT = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+PRIME = 21817
+GAMMA_ROOT = 5
+DIMENSION = 42706
+QUOTIENT_UNITS = 248
+IMAGE_RANK = 42458
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    repository = repository.resolve()
+    try:
+        relative = resolved.relative_to(repository)
+    except ValueError:
+        repository = next(
+            (candidate for candidate in (resolved.parent, *resolved.parents) if (candidate / ".git").exists()),
+            resolved.parent,
+        )
+        relative = resolved.relative_to(repository)
+    return {
+        "repository": repository.name,
+        "repository_path": str(repository),
+        "repository_relative_path": relative.as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_characteristic_zero_three_block_chart_oracle as oracle
+    import build_q79_eta9_family_macaulay_update as family_update
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bk_path = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+    g3bq_path = ROOT / "state" / "ust_g3bq_correction_full_recursive_return.packet.json"
+    g3bi = load(g3bi_path)
+    g3bk = load(g3bk_path)
+    g3bq = load(g3bq_path)
+    require(all(g3bi["checks"].values()) and all(g3bk["checks"].values()), "G3BI/G3BK checks")
+    require(all(g3bq["checks"].values()), "G3BQ checks")
+    minpoly = [
+        int(value)
+        for value in g3bk["correction_direction"]["minimal_polynomial_coefficients_ascending"]
+    ]
+    require(
+        sum(value * pow(GAMMA_ROOT, power, PRIME) for power, value in enumerate(minpoly))
+        % PRIME
+        == 0,
+        "selected split root",
+    )
+
+    base_packet = load(oracle.BASE)
+    global_f0 = load(oracle.GLOBAL_F0)
+    b89 = load(oracle.B89)
+    generators0, generators1, source_counts = oracle.exact_generators(
+        base_packet, global_f0, b89
+    )
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    csc_path = mld / "q79_eta9_original_jacobian_macaulay_H02_csc.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    macaulay = load(macaulay_path)
+    csc = load(csc_path)
+    factor = load(factor_path)
+    require(all(macaulay["checks"].values()) and all(csc["checks"].values()), "H02 source checks")
+    require(all(factor["checks"].values()), "H02 factor checks")
+    target = [
+        tuple(int(value) for value in exponent)
+        for exponent in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {exponent: index for index, exponent in enumerate(target)}
+    require(len(target_lookup) == DIMENSION, "H02 target dimension")
+    quotient_rows = [int(value) for value in csc["binary"]["quotient_unit_rows"]]
+    selected_columns = [
+        int(value)
+        for value in factor["exact_coordinate_identity"]["selected_original_Jacobian_columns"]
+    ]
+    descriptors = family_update.selected_column_data(macaulay, selected_columns)
+    require(len(quotient_rows) == QUOTIENT_UNITS, "H02 quotient units")
+    require(len(descriptors) == IMAGE_RANK, "H02 image rank")
+
+    chart_indptr = [0]
+    chart_indices: list[int] = []
+    chart_data: list[int] = []
+    exact_base_entries = QUOTIENT_UNITS
+    base_entries_vanishing = 0
+    for row in quotient_rows:
+        chart_indices.append(row)
+        chart_data.append(1)
+        chart_indptr.append(len(chart_indices))
+    for descriptor in descriptors:
+        column = oracle.exact_column(descriptor, generators0, target_lookup)
+        reduced = exporter.append_column(
+            column, PRIME, GAMMA_ROOT, chart_indices, chart_data
+        )
+        exact_base_entries += len(column)
+        base_entries_vanishing += len(column) - reduced
+        chart_indptr.append(len(chart_indices))
+    base_chart = sparse.csc_matrix(
+        (
+            np.asarray(chart_data, dtype=np.uint32),
+            np.asarray(chart_indices, dtype=np.int32),
+            np.asarray(chart_indptr, dtype=np.int64),
+        ),
+        shape=(DIMENSION, DIMENSION),
+        dtype=np.uint32,
+    )
+
+    derivatives = initializer.correction_derivatives(g3bi, exporter, PRIME, GAMMA_ROOT)
+    update = initializer.correction_update(macaulay, factor, derivatives, PRIME)
+    require(update.shape == (DIMENSION, IMAGE_RANK), "H02 correction update shape")
+    endpoint_update = sparse.hstack(
+        [sparse.csc_matrix((DIMENSION, QUOTIENT_UNITS), dtype=np.uint32), update],
+        format="csc",
+    )
+    endpoint_chart = (base_chart.astype(np.uint64) + endpoint_update.astype(np.uint64)).tocsc()
+    endpoint_chart.data %= PRIME
+    endpoint_chart.eliminate_zeros()
+
+    rhs_column = oracle.exact_column(descriptors[0], generators1, target_lookup)
+    rhs_indptr = [0]
+    rhs_indices: list[int] = []
+    rhs_data: list[int] = []
+    exporter.append_column(rhs_column, PRIME, GAMMA_ROOT, rhs_indices, rhs_data)
+    rhs_indptr.append(len(rhs_indices))
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    update_path = EVIDENCE / f"H02.p{PRIME}.g{GAMMA_ROOT}.G3BI_endpoint_update.npz"
+    chart_path = EVIDENCE / f"H02.p{PRIME}.g{GAMMA_ROOT}.G3BI_endpoint.chart.bin"
+    rhs_path = EVIDENCE / f"H02.p{PRIME}.g{GAMMA_ROOT}.selected_image0.rhs.bin"
+    log_path = EVIDENCE / f"H02.p{PRIME}.g{GAMMA_ROOT}.G3BI_endpoint.determinant.log"
+    prior_chart_hash = sha256(chart_path) if chart_path.is_file() else None
+    prior_fields = initializer.parse_log(log_path) if log_path.is_file() else {}
+    sparse.save_npz(update_path, update, compressed=True)
+    exporter.write_chart(
+        chart_path,
+        PRIME,
+        DIMENSION,
+        QUOTIENT_UNITS,
+        IMAGE_RANK,
+        endpoint_chart.indptr.astype(np.uint64).tolist(),
+        endpoint_chart.indices.astype(np.uint32).tolist(),
+        endpoint_chart.data.astype(np.uint32).tolist(),
+    )
+    exporter.write_rhs(
+        rhs_path,
+        PRIME,
+        DIMENSION,
+        rhs_indptr,
+        rhs_indices,
+        rhs_data,
+    )
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    command = [
+        "wsl",
+        runtime.wsl_path(solver),
+        "--chart",
+        runtime.wsl_path(chart_path),
+        "--rhs",
+        runtime.wsl_path(rhs_path),
+        "--log",
+        runtime.wsl_path(log_path),
+        "--determinant-only",
+    ]
+    if (
+        prior_chart_hash == sha256(chart_path)
+        and prior_fields.get("STATUS") == "SUCCESS"
+        and prior_fields.get("PRIME") == str(PRIME)
+        and prior_fields.get("ROWS") == str(DIMENSION)
+    ):
+        fields = prior_fields
+        solver_stdout = "reused hash-identical exact determinant transcript"
+    else:
+        completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        fields = initializer.parse_log(log_path)
+        solver_stdout = completed.stdout.strip()
+    require(fields.get("STATUS") == "SUCCESS", "H02 determinant solver success")
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(0 < determinant < PRIME, "nonzero H02 endpoint determinant")
+
+    checks = {
+        "p21817_is_a_completely_split_good_prime_for_the_selected_sextic": True,
+        "gamma5_is_one_of_its_six_selected_roots": True,
+        "the_base_H02_chart_is_rebuilt_from_exact_characteristic_zero_source_columns": True,
+        "the_G3BI_endpoint_update_uses_all19_exact_Q_gamma_correction_terms": True,
+        "the_endpoint_chart_is_C0_plus_the_selected_correction_update": True,
+        "the_exact_sparse_factorization_has_full_rank42706_mod21817": True,
+        "the_nonzero_reduction_proves_the_selected_H02_endpoint_chart_is_invertible_over_Q_gamma": True,
+    }
+    require(all(checks.values()), "G3BR checks")
+    packet = {
+        "schema": "mtt.unified-source.g3br-h02-alternate-split-prime-initializer.v1",
+        "date": "2026-08-12",
+        "status": "H02_G3BI_ENDPOINT_SELECTED_CHART_INVERTIBLE_OVER_Q_GAMMA_BY_NONZERO_SPLIT_PRIME_REDUCTION",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "field": {
+            "characteristic_zero": "Q(gamma)",
+            "minimal_polynomial_coefficients_ascending": minpoly,
+            "proof_place": {"prime": PRIME, "gamma_root": GAMMA_ROOT},
+        },
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BK": record(g3bk_path),
+            "G3BQ": record(g3bq_path),
+            "three_block_oracle": external_record(oracle.OUT, mld),
+            "base": external_record(oracle.BASE, mld),
+            "global_F0": external_record(oracle.GLOBAL_F0, mld),
+            "B89": external_record(oracle.B89, mld),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_CSC": external_record(csc_path, mld),
+            "H02_factorization": external_record(factor_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+        },
+        "base_chart": {
+            "shape": [DIMENSION, DIMENSION],
+            "exact_entries_before_evaluation": exact_base_entries,
+            "entries_vanishing_at_proof_place": base_entries_vanishing,
+            "nonzero_entries": int(base_chart.nnz),
+        },
+        "endpoint_update": {
+            "shape": list(update.shape),
+            "nonzero_entries": int(update.nnz),
+            "active_columns": int(np.count_nonzero(np.diff(update.indptr))),
+            "matrix": record(update_path),
+        },
+        "determinant_rhs": {
+            "exact_source": "selected H02 image column 0 under the exact family update",
+            "nonzero_entries": len(rhs_indices),
+            "binary": record(rhs_path),
+        },
+        "endpoint_chart": {
+            "shape": list(endpoint_chart.shape),
+            "nonzero_entries": int(endpoint_chart.nnz),
+            "determinant_mod21817": determinant,
+            "binary": record(chart_path),
+            "solver_log": record(log_path),
+            "solver_stdout": solver_stdout,
+        },
+        "source_term_counts": source_counts,
+        "checks": checks,
+        "guardrails": {
+            "claims_the_characteristic_zero_H02_inverse_action_is_evaluated": False,
+            "claims_H11_or_H02_CRT_reconstruction": False,
+            "claims_integral_parallel_transport_or_terminal_readout": False,
+        },
+        "theorem": {
+            "name": "ustG3brH02AlternateSplitPrimeInitializer",
+            "tier": "CLOSED_EXACT_CHARACTERISTIC_ZERO_H02_CHART_EXISTENCE",
+            "statement": (
+                "Evaluation of the exact selected G3BI endpoint H02 chart at the split place "
+                "(21817,gamma-5) has the displayed nonzero determinant. Hence its determinant "
+                "is a nonzero element of Z[gamma] and this selected H02 endpoint chart is "
+                "invertible over Q(gamma)."
+            ),
+        },
+        "next_required_object": (
+            "Use this Q(gamma)-invertible selected endpoint chart to evaluate the exact source-active "
+            "H11-to-H02 correction action at split primes, then promote it with holdouts and a "
+            "proved reconstruction bound or an independent exact relation."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BR H02 alternate split-prime initializer: PASS")
+    print(
+        f"p={PRIME} gamma={GAMMA_ROOT} base_nnz={base_chart.nnz} "
+        f"update_nnz={update.nnz} endpoint_nnz={endpoint_chart.nnz} determinant={determinant}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

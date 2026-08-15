@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Adopt a certified H-major/L-truncated squeeze as canonical G3AP."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import certify_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_candidate as certifier
+import run_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_std_hedge as runner
+import run_ust_g3ap_selected_cayley_fiber2_weighted_permuted_boxtrunc_hilbert_hedge as permuted
+
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "state" / "ust_g3ap_selected_cayley_ordinary_top_dimension.packet.json"
+FIBER_NAMES = ("u^2", "u*v", "u*s", "v^2", "v*s", "s^2")
+BASE_NAMES = ("x", "y", "z", "w", "t0", "t1", "t2")
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def monomial(exponent: list[int], component: int) -> str:
+    factors: list[str] = []
+    for name, power in zip(BASE_NAMES, exponent):
+        if power == 1:
+            factors.append(name)
+        elif power > 1:
+            factors.append(f"{name}^{power}")
+    factors.append(FIBER_NAMES[component - 1])
+    return "*".join(factors)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--permutation", choices=tuple(permuted.PERMUTATIONS), required=True)
+    parser.add_argument(
+        "--candidate-engine", choices=certifier.CANDIDATE_ENGINES, default="std"
+    )
+    args = parser.parse_args()
+    label = args.permutation
+    candidate_engine = args.candidate_engine
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "verify_ust_g3ap_selected_cayley_fiber2_hmajor_ltrunc_certified.py"),
+            "--permutation",
+            label,
+            "--candidate-engine",
+            candidate_engine,
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    source_path = certifier.certified_paths(label, candidate_engine)["packet"]
+    source = json.loads(source_path.read_text(encoding="ascii"))
+    require(all(source["checks"].values()) and not any(source["guardrails"].values()), "source scope")
+    top_source = source["ordinary_top_piece"]
+    component = int(top_source["standard_old_component"])
+    exponent = [int(value) for value in top_source["standard_exponent"]]
+    basis = monomial(exponent, component)
+    top = {
+        "Cox_degree": [18, 2, 2],
+        "H_plus_L_scalar_degree": 44,
+        "weighted_scalar_degree": runner.TARGET_SCALAR_DEGREE,
+        "enumerated_monomials": fiber2.EXPECTED_TOTAL,
+        "dimension": 1,
+        "basis": [basis],
+        "basis_component": fiber2.COMPONENTS[component - 1][1],
+        "basis_old_component": component,
+        "basis_new_component": top_source["standard_new_component"],
+        "basis_base_exponent": exponent,
+        "canonical_predecessor_socle_diagnostic": {
+            "monomial": "w^12*t2^4*s^2",
+            "normal_form": top_source["canonical_socle_normal_form"],
+            "normal_form_is_nonzero": top_source[
+                "canonical_socle_normal_form_is_nonzero"
+            ],
+        },
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-ordinary-top-dimension.v1",
+        "date": "2026-08-10",
+        "theorem_id": "UST.G3AP",
+        "status": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_CAYLEY_TOP_SOCLE_DIMENSION_ONE",
+        "inputs": {
+            "fiber2_hmajor_ltrunc_leading_squeeze_certified_top": {
+                "path": str(source_path.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(source_path),
+            }
+        },
+        "leading_ideal": {
+            "method": "selected_source_Hmajor_Ltrunc_permuted_qring_leading_submodule_upper_bound_squeezed_by_selected_R1_lower_bound_at_degree_328",
+            "candidate_engine": candidate_engine,
+            "Cox_functional": "9H+L",
+            "permutation": source["permutation"],
+            "base_basis_size": source["execution"]["base_basis_size"],
+            "module_generator_count": 21,
+            "explicit_truncation_generator_count": 165,
+            "target_reduction_set_size": source["execution"][
+                "certified_reduction_set_size"
+            ],
+            "target_effective_reducer_count": source["execution"][
+                "target_effective_reducer_count"
+            ],
+            "weighted_scalar_degree_bound": runner.TARGET_SCALAR_DEGREE,
+            "certified_base_cache": source["execution"]["certified_base_cache"],
+            "certified_module_cache": source["execution"]["certified_module_cache"],
+            "full_standard_basis_claimed": False,
+        },
+        "ordinary_top_piece": top,
+        "checks": {
+            "selected_base_ideal_is_independently_reconstructed": True,
+            "component_permutation_is_an_exact_degree_preserving_module_isomorphism": True,
+            "the_9H_plus_L_bound_and_165_L_boundaries_preserve_the_target_box": True,
+            "all_target_effective_candidate_elements_have_exact_selected_module_provenance": True,
+            "all_21_permuted_selected_generators_reduce_to_the_candidate_reduction_set": True,
+            "candidate_leading_submodule_gives_the_upper_bound_one": True,
+            "selected_R1_residue_theorem_gives_the_lower_bound_one": True,
+            "positive_Cox_regrading_preserves_the_target_quotient_dimension": True,
+            "all_174865_Cox_degree_18_2_2_monomials_are_enumerated": True,
+            "selected_ordinary_top_piece_has_dimension_one": True,
+            "recorded_selected_standard_is_a_basis_of_the_unique_line": True,
+            "no_predecessor_Hilbert_data_or_observed_value_is_used": True,
+        },
+        "guardrails": {
+            "claims_target_reduction_set_is_a_full_standard_basis": False,
+            "claims_predecessor_socle_is_the_selected_generator_without_diagnostic_support": False,
+            "claims_characteristic_zero_rank_promotion": False,
+            "claims_beta_C_is_computed": False,
+        },
+        "theorem": {
+            "name": "selectedCayleyOrdinaryTopDimensionByHmajorLtruncatedLeadingSqueezeTheorem",
+            "tier": "CLOSED_EXACT_SELECTED_F1016_ORDINARY_TOP_DIMENSION_ONE",
+            "statement": (
+                "For the selected F_101^6 Cayley member, the positive Cox "
+                "functional 9H+L and 165 componentwise L-boundary generators "
+                "preserve the complete target divisor box and give a selected-"
+                "module upper bound of one. The independent toric R1 lower "
+                "bound is one, so the ordinary target is exactly the recorded "
+                "one-dimensional line."
+            ),
+        },
+        "next_required_object": "Execute G3AM/G3AN in the certified permuted module and normalize on the recorded selected line.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        f"UST.G3AP H-major result ({label}, {candidate_engine}) adopted: "
+        f"dimension=1 basis={basis}"
+    )
+
+
+if __name__ == "__main__":
+    main()

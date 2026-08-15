@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""Evaluate the full H11-to-H02 correction action at the G3BR proof root."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3bn_h11_alternate_split_prime_initializer as initializer
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence" / "ust_g3bs"
+OUT = ROOT / "state" / "ust_g3bs_h02_endpoint_action_root5.packet.json"
+PRIME = 21817
+GAMMA_ROOT = 5
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def external_record(path: Path, repository: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    return {
+        "repository": repository.name,
+        "repository_relative_path": resolved.relative_to(repository.resolve()).as_posix(),
+        "sha256": sha256(resolved),
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def exact_source_matrix(
+    g3bi: dict[str, Any],
+    b103: dict[str, Any],
+    macaulay: dict[str, Any],
+    exporter: Any,
+    gamma_root: int = GAMMA_ROOT,
+    prime: int = PRIME,
+) -> tuple[sparse.csc_matrix, str]:
+    source_block = next(block for block in b103["basis_blocks"] if block["name"] == "H11")
+    source_vectors = [
+        tuple(int(value) for value in row) for row in source_block["basis_exponent_vectors"]
+    ]
+    target_vectors = [
+        tuple(int(value) for value in row)
+        for row in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    target_lookup = {row: index for index, row in enumerate(target_vectors)}
+    require(len(source_vectors) == 1013 and len(target_vectors) == 42706, "source dimensions")
+    terms = []
+    for row in g3bi["exact_construction"]["right_inverse_rows"]:
+        exponent = tuple(int(value) for value in row["source_monomial"]) + (
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+        )
+        coefficients = tuple(-4 * int(value) for value in row["correction_gamma_coordinates"])
+        terms.append((exponent, coefficients))
+    require(len(terms) == 19, "19 exact source terms")
+    digest = hashlib.sha256()
+    rows: list[int] = []
+    columns: list[int] = []
+    data: list[int] = []
+    for column, source in enumerate(source_vectors):
+        seen = set()
+        for exponent, coefficients in terms:
+            product = tuple(a + b for a, b in zip(source, exponent, strict=True))
+            target = target_lookup.get(product)
+            require(target is not None and target not in seen, "canonical H02 source coordinate")
+            seen.add(target)
+            digest.update(f"{column}:{target}:".encode("ascii"))
+            digest.update(",".join(str(value) for value in coefficients).encode("ascii"))
+            digest.update(b"\n")
+            value = exporter.evaluate(coefficients, prime, gamma_root)
+            if value:
+                rows.append(target)
+                columns.append(column)
+                data.append(value)
+    matrix = sparse.csc_matrix(
+        (
+            np.asarray(data, dtype=np.uint32),
+            (np.asarray(rows, dtype=np.int32), np.asarray(columns, dtype=np.int32)),
+        ),
+        shape=(42706, 1013),
+        dtype=np.uint32,
+    )
+    matrix.sum_duplicates()
+    matrix.data %= prime
+    matrix.eliminate_zeros()
+    return matrix, digest.hexdigest()
+
+
+def main() -> None:
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    g3bi_path = ROOT / "state" / "ust_g3bi_explicit_root_start.packet.json"
+    g3bk_path = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+    g3br_path = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+    g3bi = load(g3bi_path)
+    g3bk = load(g3bk_path)
+    g3br = load(g3br_path)
+    require(all(g3bi["checks"].values()) and all(g3bk["checks"].values()), "G3BI/G3BK checks")
+    require(all(g3br["checks"].values()), "G3BR checks")
+    b103_path = mld / "q79_eta9_full_vanishing_residue_basis.packet.json"
+    macaulay_path = mld / "q79_eta9_original_jacobian_macaulay_H02.packet.json"
+    factor_path = mld / "q79_eta9_original_jacobian_coordinate_factorization_H02.packet.json"
+    b103 = load(b103_path)
+    macaulay = load(macaulay_path)
+    factor = load(factor_path)
+    require(all(b103["checks"].values()) and all(macaulay["checks"].values()), "B103/H02 checks")
+    require(all(factor["checks"].values()), "H02 factor checks")
+    expected_digest = g3bk["characteristic_zero_derivative_sources"]["H11_to_H02"][
+        "canonical_exact_source_sha256"
+    ]
+    rhs, source_digest = exact_source_matrix(g3bi, b103, macaulay, exporter)
+    require(source_digest == expected_digest, "canonical exact H11-to-H02 source digest")
+    require(rhs.nnz == 1013 * 19, "all exact terms survive at proof root")
+
+    chart_path = ROOT / g3br["endpoint_chart"]["binary"]["path"]
+    require(chart_path.is_file() and sha256(chart_path) == g3br["endpoint_chart"]["binary"]["sha256"], "G3BR chart")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    rhs_path = EVIDENCE / "H02.p21817.g5.G3BI_endpoint_correction.c0-1012.rhs.bin"
+    solution_path = EVIDENCE / "H02.p21817.g5.G3BI_endpoint_correction.c0-1012.solution.bin"
+    log_path = EVIDENCE / "H02.p21817.g5.G3BI_endpoint_correction.c0-1012.solve.log"
+    exporter.write_rhs(
+        rhs_path,
+        PRIME,
+        42706,
+        rhs.indptr.astype(np.uint64).tolist(),
+        rhs.indices.astype(np.uint32).tolist(),
+        rhs.data.astype(np.uint32).tolist(),
+    )
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    reusable = (
+        solution_path.is_file()
+        and log_path.is_file()
+        and initializer.parse_log(log_path).get("STATUS") == "SUCCESS"
+    )
+    if reusable:
+        solver_stdout = "reused existing exact split-prime solution checkpoint"
+    else:
+        command = [
+            "wsl",
+            runtime.wsl_path(solver),
+            "--chart",
+            runtime.wsl_path(chart_path),
+            "--rhs",
+            runtime.wsl_path(rhs_path),
+            "--output",
+            runtime.wsl_path(solution_path),
+            "--log",
+            runtime.wsl_path(log_path),
+        ]
+        completed = subprocess.run(command, cwd=mld, capture_output=True, text=True, check=False)
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        solver_stdout = completed.stdout.strip()
+
+    chart_binary = arithmetic.read_csc(chart_path, b"MTTSPC1\0", 6)
+    rhs_binary = arithmetic.read_csc(rhs_path, b"MTTSRH1\0", 4)
+    solution_binary = arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+    chart = split_io.as_scipy(chart_binary)
+    stored_rhs = split_io.as_scipy(rhs_binary)
+    solution = split_io.as_scipy(solution_binary)
+    require((stored_rhs != rhs).nnz == 0, "stored exact RHS")
+    residual = split_io.residual_nonzeros(chart, solution, stored_rhs, PRIME)
+    require(residual == 0, "H02 endpoint action residual")
+    fields = initializer.parse_log(log_path)
+    determinant = int(fields["CHART_DETERMINANT"])
+    require(determinant == int(g3br["endpoint_chart"]["determinant_mod21817"]) == 419, "G3BR determinant identity")
+    quotient = solution[:248, :].tocsc()
+    preimage = solution[248:, :].tocsc()
+    checks = {
+        "the_endpoint_chart_is_exactly_the_G3BR_selected_H02_chart": True,
+        "all1013_RHS_columns_are_the_exact_G3BK_minus4_P_sC_sources": True,
+        "the_canonical_characteristic_zero_source_digest_matches_G3BK": True,
+        "all19247_exact_source_terms_survive_at_the_selected_split_root": True,
+        "the_42706_by1013_inverse_action_has_zero_residual": True,
+        "the_complete248_quotient_and42458_preimage_coordinates_are_retained": True,
+    }
+    require(all(checks.values()), "G3BS checks")
+    packet = {
+        "schema": "mtt.unified-source.g3bs-h02-endpoint-action-root5.v1",
+        "date": "2026-08-12",
+        "status": "EXACT_H02_G3BI_ENDPOINT_CORRECTION_ACTION_AT_ONE_SPLIT_ROOT",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BI": record(g3bi_path),
+            "G3BK": record(g3bk_path),
+            "G3BR": record(g3br_path),
+            "B103": external_record(b103_path, mld),
+            "H02_Macaulay": external_record(macaulay_path, mld),
+            "H02_factorization": external_record(factor_path, mld),
+            "split_prime_solver": external_record(solver, mld),
+        },
+        "field": {"prime": PRIME, "gamma_root": GAMMA_ROOT},
+        "operator_action": {
+            "formula": "A_G3BI^-1 (-4 P sC) for all 1013 H11 residue sources P",
+            "shape": [42706, 1013],
+            "quotient_rows": 248,
+            "original_Jacobian_preimage_rows": 42458,
+            "source_nonzero_entries": int(rhs.nnz),
+            "solution_nonzero_entries": int(solution.nnz),
+            "quotient_nonzero_entries": int(quotient.nnz),
+            "preimage_nonzero_entries": int(preimage.nnz),
+            "RHS": record(rhs_path),
+            "solution": record(solution_path),
+            "solver_log": record(log_path),
+            "solver_stdout": solver_stdout,
+            "residual_nonzeros": residual,
+            "endpoint_determinant_mod21817": determinant,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_six_root_power_basis_interpolation": False,
+            "claims_exact_Q_gamma_reconstruction": False,
+            "claims_recursive_return_of_the_H02_preimages": False,
+            "claims_integral_parallel_transport_or_terminal_readout": False,
+        },
+        "theorem": {
+            "name": "ustG3bsH02EndpointActionRoot5",
+            "tier": "CLOSED_EXACT_ONE_SPLIT_ROOT_OPERATOR_ACTION",
+            "statement": (
+                "At (21817,gamma-5), the selected G3BR H02 endpoint chart acts invertibly on all "
+                "1013 exact G3BK H11-to-H02 correction sources. The complete 42706-coordinate "
+                "solutions have exact zero residual and retain both quotient and Jacobian preimage rows."
+            ),
+        },
+        "next_required_object": (
+            "Repeat this action at the other five roots of p=21817 to emit one complete power-basis "
+            "residue, then add independent split primes and certified reconstruction bounds."
+        ),
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3BS H02 endpoint action root5: PASS")
+    print(
+        f"shape={solution.shape} rhs_nnz={rhs.nnz} solution_nnz={solution.nnz} "
+        f"quotient_nnz={quotient.nnz} preimage_nnz={preimage.nnz} residual={residual}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

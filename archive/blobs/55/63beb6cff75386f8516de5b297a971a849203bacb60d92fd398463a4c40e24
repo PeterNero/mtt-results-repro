@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""Separate the G3FT chart from the selected G3FR apolar plane."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_runtime
+import build_ust_g3fd_component20_graded_kernel_generators as graded
+import build_ust_g3fe_component20_eight_prime_graded_promotion_audit as finite
+import build_ust_g3ff_component20_conic_fourth_normal_source as conic
+import build_ust_g3fn_component20_hilbert_burch_source as hilbert_burch
+import build_ust_g3ft_component20_full_relation_height_campaign as height
+
+
+ROOT = Path(__file__).resolve().parent
+EVIDENCE = ROOT / "evidence/ust_g3fw"
+CERTIFICATE = EVIDENCE / "H02.component20.apolar_selection_separation.json"
+G3EX_INDICES = ROOT / "evidence/ust_g3ex/H02.component20.cohomological.indices.npz"
+G3FT = ROOT / "evidence/ust_g3ft/H02.component20.full_relation_height_campaign.json"
+G3FV = ROOT / "evidence/ust_g3fv/selected_cox_hilbert_burch_source.json"
+PDELTA = ROOT.parent / "12 Quantum Gravity/q79_splitting_conic_delta_residue_polynomial.packet.json"
+
+COMPONENT_START = 4327
+COMPONENT_PAST = 4463
+DEPENDENT_START = 4363
+DEPENDENT_PAST = 4463
+TARGET_PROFILE = (0,) * 11 + (4, 11, 20, 46, 100)
+CANONICAL_PROFILE = (0, 0, 0, 0, 0, 1, 3, 6, 10, 15, 21, 28, 37, 51, 71, 100)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path, *, repository: Path = ROOT) -> dict[str, object]:
+    return {
+        "path": path.relative_to(repository).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def evaluate(coefficients: np.ndarray, root: int, prime: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.int64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % prime
+    return value
+
+
+def component_kernel(row: dict[str, object], prime: int) -> np.ndarray:
+    payload = kernel_runtime.read_kernel(ROOT / row["kernel"]["path"])
+    require(payload["prime"] == prime, "target kernel prime")
+    dependent = payload["dependent"]
+    relations = np.flatnonzero(
+        (dependent >= DEPENDENT_START) & (dependent < DEPENDENT_PAST)
+    )
+    require(relations.size == 100, "target relation count")
+    return (
+        payload["matrix"][COMPONENT_START:COMPONENT_PAST, :][:, relations]
+        .toarray()
+        .astype(np.int64)
+        % prime
+    )
+
+
+def ideal_profile(kernel: np.ndarray, prime: int) -> tuple[int, ...]:
+    rank, _, annihilator_columns = graded.rref(
+        kernel.T, prime, emit_nullspace=True
+    )
+    require(rank == 100 and annihilator_columns is not None, "component rank")
+    annihilator = annihilator_columns.T
+    return tuple(
+        graded.ideal_piece(annihilator, degree, prime)[0].shape[1]
+        for degree in range(16)
+    )
+
+
+def q_times_pdelta_vector(prime: int) -> np.ndarray:
+    packet = load(PDELTA)
+    x, y, z = sp.symbols("x y z")
+    expression = (x * z - y**2) * sp.sympify(
+        packet["residue_polynomial"]["expanded"],
+        locals={"x": x, "y": y, "z": z},
+    )
+    polynomial = sp.Poly(sp.expand(expression), x, y, z)
+    result = np.zeros(45, dtype=np.int64)
+    for row, exponent in enumerate(graded.homogeneous_exponents(8)):
+        coefficient = polynomial.coeff_monomial(
+            x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+        )
+        result[row] = (
+            int(coefficient.p) % prime
+            * pow(int(coefficient.q) % prime, -1, prime)
+        ) % prime
+    return result
+
+
+def raw_fourth_normal_space(
+    d7_coefficients: np.ndarray, root: int, prime: int
+) -> np.ndarray:
+    d7 = evaluate(d7_coefficients.T.reshape(6, 36), root, prime)
+    basis7 = graded.homogeneous_exponents(7)
+    basis8 = graded.homogeneous_exponents(8)
+    lookup8 = {exponent: row for row, exponent in enumerate(basis8)}
+    result = np.zeros((45, 4), dtype=np.int64)
+    for column, shift in enumerate(((1, 0, 0), (0, 1, 0), (0, 0, 1))):
+        for row, exponent in enumerate(basis7):
+            target = tuple(exponent[index] + shift[index] for index in range(3))
+            result[lookup8[target], column] = d7[row]
+    result[:, 3] = q_times_pdelta_vector(prime)
+    return result % prime
+
+
+def main() -> None:
+    g3ft = load(G3FT)
+    g3fv = load(G3FV)
+    require(all(g3ft["checks"].values()), "G3FT checks")
+    require(all(g3fv["checks"].values()), "G3FV checks")
+
+    indices = np.load(G3EX_INDICES, allow_pickle=False)
+    support = indices["source_support"].astype(np.int32)
+    local_component = np.flatnonzero(
+        (support >= COMPONENT_START) & (support < COMPONENT_PAST)
+    )
+    require(
+        np.array_equal(local_component, np.arange(2387, 2523)),
+        "component source-coordinate slice",
+    )
+
+    normal = np.load(conic.NORMAL_SOURCE, allow_pickle=False)
+    d7_coefficients = normal["D7_gamma_coordinates"].astype(np.int64)
+    split_packets = [load(path) for path in conic.SPLIT_PACKETS]
+    split_by_prime = {
+        int(packet["field"]["prime"]): (path, packet)
+        for path, packet in zip(conic.SPLIT_PACKETS, split_packets, strict=True)
+    }
+
+    separation_rows: list[dict[str, object]] = []
+    raw_rows: list[dict[str, object]] = []
+    anchor_profiles: dict[str, list[int]] | None = None
+    for prime in conic.EXPECTED_PRIMES:
+        _, packet = split_by_prime[prime]
+        roots = tuple(int(value) for value in packet["field"]["roots"])
+        target_rows = {int(row["gamma_root"]): row for row in packet["root_kernels"]}
+        residues = np.load(height.cache_paths(prime)[0], allow_pickle=False)[
+            "normalized_relation_power_basis_residues"
+        ].astype(np.int64)
+        q_pdelta = q_times_pdelta_vector(prime)
+        require(q_pdelta.shape == (45,), "qPdelta vector")
+        for root in roots:
+            normalized = evaluate(residues, root, prime)
+            canonical = normalized[local_component, :] % prime
+            target = component_kernel(target_rows[root], prime)
+            identity = np.eye(100, dtype=np.int64)
+            require(
+                np.array_equal(canonical[36:, :], identity)
+                and np.array_equal(target[36:, :], identity),
+                "common dependent identity",
+            )
+            mismatches = int(np.count_nonzero(canonical[:36, :] != target[:36, :]))
+            require(mismatches > 0, "planes separated")
+            separation_rows.append(
+                {
+                    "prime": prime,
+                    "gamma_root": root,
+                    "independent_block_slots": 3600,
+                    "mismatches": mismatches,
+                }
+            )
+
+            generators, syzygy_block, _ = finite.extract_fiber(
+                ROOT / target_rows[root]["kernel"]["path"], prime
+            )
+            degree8, _, _, _ = hilbert_burch.canonical_degree8_syzygy(
+                generators[11], syzygy_block[:12], syzygy_block[12:], prime
+            )
+            finite_space = degree8.reshape(4, 45).T.astype(np.int64) % prime
+            raw_space = raw_fourth_normal_space(d7_coefficients, root, prime)
+            finite_rank = graded.rref(finite_space, prime)[0]
+            raw_rank = graded.rref(raw_space, prime)[0]
+            joint_rank = graded.rref(
+                np.concatenate((finite_space, raw_space), axis=1), prime
+            )[0]
+            require((finite_rank, raw_rank, joint_rank) == (4, 4, 8), "raw source separation")
+            raw_rows.append(
+                {
+                    "prime": prime,
+                    "gamma_root": root,
+                    "finite_O8_rank": finite_rank,
+                    "raw_xD7_yD7_zD7_qPdelta_rank": raw_rank,
+                    "combined_rank": joint_rank,
+                }
+            )
+
+            if anchor_profiles is None:
+                anchor_profiles = {
+                    "G3FT_canonical_plane": list(ideal_profile(canonical, prime)),
+                    "G3FR_selected_plane": list(ideal_profile(target, prime)),
+                }
+
+    require(len(separation_rows) == len(raw_rows) == 48, "48-fiber campaign")
+    require(anchor_profiles is not None, "anchor profiles")
+    require(tuple(anchor_profiles["G3FT_canonical_plane"]) == CANONICAL_PROFILE, "canonical profile")
+    require(tuple(anchor_profiles["G3FR_selected_plane"]) == TARGET_PROFILE, "selected profile")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    packet = {
+        "schema": "ust.g3fw.h02.component20.apolar-selection-separation.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FW",
+        "status": "CLOSED_EXACT_APOLAR_SELECTION_SEPARATION_FUNCTOR_REQUIRED",
+        "inputs": {
+            "G3FT": record(G3FT),
+            "G3FV": record(G3FV),
+            "G3EX_indices": record(G3EX_INDICES),
+            "G3FF_normal_source": record(conic.NORMAL_SOURCE),
+            "q79_Pdelta": {
+                "repository": PDELTA.parent.parent.name,
+                **record(PDELTA, repository=PDELTA.parent.parent),
+            },
+        },
+        "source_coordinate_identification": {
+            "global_component_interval": [COMPONENT_START, COMPONENT_PAST],
+            "G3EX_source_local_interval": [2387, 2523],
+            "dependent_local_interval": [2423, 2523],
+            "both_planes_have_the_same_dependent_identity": True,
+        },
+        "plane_separation": {
+            "fibers": 48,
+            "minimum_independent_block_mismatches": min(row["mismatches"] for row in separation_rows),
+            "maximum_independent_block_mismatches": max(row["mismatches"] for row in separation_rows),
+            "rows": separation_rows,
+            "interpretation": (
+                "The G3FT normalized plane is a valid canonical 100-plane in the "
+                "reduced 386-kernel, but it is not the inherited G3FR component plane."
+            ),
+        },
+        "anchor_ideal_profiles_degrees0_through15": anchor_profiles,
+        "raw_fourth_normal_test": {
+            "candidate": "span{x*D7,y*D7,z*D7,q*Pdelta} subset Sym^8",
+            "fibers": 48,
+            "common_rank_profile": [4, 4, 8],
+            "rows": raw_rows,
+            "verdict": (
+                "The raw characteristic-zero fourth-normal forms and the finite O8 "
+                "Hilbert-Burch column are disjoint four-planes at every archived "
+                "fiber. A nontrivial Cox-residue/apolar functor is necessary."
+            ),
+        },
+        "checks": {
+            "the_component_slice_is_identified_exactly_in_G3EX_source_coordinates": True,
+            "both_planes_have_the_same100x100_dependent_identity_at_all48_fibers": True,
+            "the_independent36x100_graph_blocks_differ_at_all48_fibers": True,
+            "the_G3FT_plane_has_the_degree5_first-generator_profile": True,
+            "the_selected_G3FR_plane_has_the_degree11_first-generator_profile": True,
+            "the_raw_D7_Pdelta_candidate_is_disjoint_from_O8_at_all48_fibers": True,
+        },
+        "guardrails": {
+            "claims_G3FT_is_an_invalid_reduced_kernel_campaign": False,
+            "claims_the_G3FT_plane_is_the_selected_G3FR_plane": False,
+            "claims_raw_multiplication_is_the_Cox_to_apolar_functor": False,
+            "claims_the_G3FV_and_G3FN_complexes_are_already_identified": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fwComponent20ApolarSelectionSeparation",
+            "tier": "CLOSED_EXACT_48_FIBER_SELECTION_SEPARATION",
+            "statement": (
+                "At all48 archived fibers, the canonical G3FT relation plane and "
+                "the inherited G3FR component plane share the same dependent100 "
+                "identity but have different independent36x100 graph blocks. Their "
+                "graded ideal profiles already differ at degrees5 and11. Moreover "
+                "the raw D7/Pdelta four-plane is disjoint from the finite O8 column. "
+                "Thus the selected resolution and a nontrivial Cox-to-apolar functor "
+                "are indispensable; normalization or raw multiplication cannot "
+                "supply the missing source promotion."
+            ),
+        },
+        "next_required_object": (
+            "Construct the Cox/H02 residue followed by divided-power duality on the "
+            "exact G3FV complex. It must select the degree11-first-generator plane, "
+            "not the generic degree5 G3FT plane, and replay G3FN/G3FR."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FW apolar selection separation: PASS "
+        "fibers=48 planes=distinct profiles=degree5_vs_degree11 raw_joint_rank=8"
+    )
+
+
+if __name__ == "__main__":
+    main()

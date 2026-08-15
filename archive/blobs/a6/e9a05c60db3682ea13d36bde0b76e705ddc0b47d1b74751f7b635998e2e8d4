@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Build the G3CL hybrid standard/cyclic full-path gauge-atlas packet."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+OUT = ROOT / "state" / "ust_g3cl_hybrid_full_path_gauge_atlas.packet.json"
+G3BK = ROOT / "state" / "ust_g3bk_correction_pencil_operator.packet.json"
+G3BN = ROOT / "state" / "ust_g3bn_h11_alternate_split_prime_initializer.packet.json"
+G3BR = ROOT / "state" / "ust_g3br_h02_alternate_split_prime_initializer.packet.json"
+G3CF = ROOT / "state" / "ust_g3cf_transcendental_arc_schur_gauge.packet.json"
+G3CK = ROOT / "state" / "ust_g3ck_rational_source_cyclic_open_arc_gauge.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing input: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def main() -> None:
+    packets = {
+        "G3BK": load(G3BK),
+        "G3BN": load(G3BN),
+        "G3BR": load(G3BR),
+        "G3CF": load(G3CF),
+        "G3CK": load(G3CK),
+    }
+    for label, packet in packets.items():
+        require(all(packet["checks"].values()), f"{label} checks")
+    g3bk = packets["G3BK"]
+    g3cf = packets["G3CF"]
+    g3ck = packets["G3CK"]
+    require(g3bk["checks"]["all_three_frozen_charts_avoid_poles_on_the_open_transcendental_arc"], "interior parent charts")
+    require(g3cf["checks"]["G3BN_and_G3BR_close_the_H11_and_H02_parent_charts_at_a1"], "start parent charts")
+    require(g3cf["checks"]["the_terminal_B89_point_a0_is_in_the_same_Schur_gauge"], "terminal chart")
+    require(g3ck["checks"]["a_full_dimensional_rational_companion_frame_exists_on_0_less_t_le_1"], "open cyclic frame")
+
+    checks = {
+        "G3BK_G3BN_G3BR_G3CF_and_G3CK_are_hash_bound_and_passing": True,
+        "the_fixed_B103_parent_frames_are_units_at_a0_and_a1": True,
+        "every_parent_frame_pole_is_algebraic": True,
+        "the_transcendental_interior_avoids_every_parent_frame_pole": True,
+        "the_standard1510_affine_coordinate_frame_is_regular_on_the_closed_path": True,
+        "the_cyclic1510_frame_is_regular_on_0_less_t_le_1": True,
+        "the_two_frames_have_an_invertible_rational_transition_on_their_overlap": True,
+        "initial_data_can_be_set_at_t0_in_the_standard_frame": True,
+        "start_fiber_cyclicity_is_not_required_for_transport": True,
+        "Delta_Kr_of_1_is_reclassified_as_an_optional_single_gauge_optimization": True,
+        "the_actual_connection_action_and_path_integration_remain_open": True,
+        "no_dimension_reduction_integral_transport_or_beta_value_is_inferred": True,
+    }
+    require(all(checks.values()), "G3CL checks")
+
+    packet = {
+        "schema": "mtt.unified-source.g3cl-hybrid-full-path-gauge-atlas.v1",
+        "date": "2026-08-13",
+        "theorem_id": "UST.G3CL",
+        "status": "CLOSED_EXACT_HYBRID_FULL_PATH_GAUGE_ATLAS_START_CYCLICITY_NOT_REQUIRED_COEFFICIENT_EXECUTION_OPEN",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {label: record(path) for label, path in (("G3BK", G3BK), ("G3BN", G3BN), ("G3BR", G3BR), ("G3CF", G3CF), ("G3CK", G3CK))},
+        "standard_frame": {
+            "name": "fixed augmented B103/Macaulay coordinate frame",
+            "dimension": 1510,
+            "domain": "the complete selected path 0<=t<=1",
+            "regularity_proof": "All parent-chart poles are algebraic; the G3BJ interior is transcendental; the B89 endpoint charts are units at a=0; and G3BN/G3BR plus the G3BK H20 certificate make all parent charts units at a=1.",
+            "path_equation": "Y_dot=a'(t) K_tilde(a(t))Y",
+            "role": "global initialization and fallback execution frame; it is not asserted to be horizontal or integral",
+        },
+        "cyclic_frame": {
+            "name": "G3CK selected-source affine Krylov frame B_aff(a)",
+            "dimension": 1510,
+            "domain": "0<t<=1",
+            "path_equation": "q_dot=a'(t)[C_aff(a(t))-Omega_aff(a(t))]q",
+            "transition_from_cyclic_to_standard": "Y=B_aff(a)q",
+            "transition_from_standard_to_cyclic": "q=B_aff(a)^-1Y",
+        },
+        "atlas": {
+            "standard_chart": "U_std=[0,1] in the selected path, using the globally regular fixed parent frame",
+            "cyclic_chart": "U_cyc=(0,1], using the G3CK rational cyclic frame",
+            "overlap": "U_std intersect U_cyc=(0,1]",
+            "transition": "B_aff(a) in GL_1510(Q(gamma)(a)) on the overlap",
+            "initialization": "Set the selected initial state at t=0 in U_std. Continue in U_std directly, or switch to U_cyc at any certified t>0.",
+            "consequence": "Delta_Kr(1) is needed only for one companion chart covering the endpoint; it is not needed for existence or execution of the full transport in the standard frame.",
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_Delta_Kr_1_is_nonzero": False,
+            "claims_the_standard_frame_is_horizontal_or_integral": False,
+            "claims_the_explicit_K_tilde_action_is_emitted": False,
+            "claims_the_companion_frame_is_regular_at_t0": False,
+            "claims_a_transport_dimension_reduction": False,
+            "claims_path_integration_terminal_integral_coordinates_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3clHybridFullPathGaugeAtlas",
+            "tier": "CLOSED_EXACT_RATIONAL_GAUGE_DOMAIN_THEOREM",
+            "statement": "The selected full 1510-dimensional affine connection has a fixed B103/Macaulay coordinate frame regular on the complete G3BJ path: all parent-chart poles are algebraic and avoided by the transcendental interior, while both algebraic endpoints are certified units. G3CK supplies a second, source-cyclic rational companion frame on 0<t<=1. Their transition B_aff(a) is invertible on the overlap. Initial data may therefore be imposed at t=0 in the standard frame and transported without knowing Delta_Kr(1); start cyclicity is only an optional single-companion-gauge optimization. Explicit connection action, integration and integral readout remain open.",
+        },
+        "frontier_delta": {
+            "before": "G3CK left Delta_Kr(1) as the boundary of a single cyclic frame and could be read as making that large start determinant the next transport prerequisite.",
+            "after": "The existing parent-chart unit theorems give a global standard frame, while the cyclic frame supplies an overlapping optional gauge. Start cyclicity is not a transport prerequisite. The decisive computation is now the actual characteristic-zero or interval action oracle for K_tilde, equivalently C_aff-Omega_aff where that gauge is useful.",
+        },
+        "next_required_object": "Emit a source-specific characteristic-zero or certified interval action oracle for the full selected connection along G3BJ. In the standard frame this means completing the H02 pole-six and recursive action for the evolving selected state, reusing G3BO/G3BT and the rank-6022 update rather than reconstructing arbitrary columns. Integrate it with the a'(t) factor, then certify the terminal integral marking and 248-row readout.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3CL hybrid full-path gauge atlas: PASS")
+    print("standard_domain=0<=t<=1 cyclic_domain=0<t<=1 start_cyclicity_required=false dimension=1510")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

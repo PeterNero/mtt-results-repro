@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Emit the eighth persisted split-prime H02 kernel as final holdout."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import build_ust_g3dk_h02_third_prime_kernel_relations as exact_campaign
+
+
+ROOT = Path(__file__).resolve().parent
+G3DT = ROOT / "state" / "ust_g3dt_h02_six_prime_reconstruction_holdout.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3du"
+OUT = ROOT / "state" / "ust_g3du_h02_eighth_prime_holdout_kernel.packet.json"
+PRIME = 73673
+ROOTS = (5867, 13234, 32589, 48159, 51434, 69712)
+EIGHT_PRIME_MODULUS = 21817 * 33863 * 37493 * 38113 * 68213 * 69011 * 72271 * PRIME
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    g3dt = load(G3DT)
+    require(all(g3dt["checks"].values()), "G3DT checks")
+    exact_campaign.PRIME = PRIME
+    exact_campaign.ROOTS = ROOTS
+    exact_campaign.EVIDENCE = EVIDENCE
+    exact_campaign.OUT = OUT
+    exact_campaign.THREE_PRIME_MODULUS = 21817 * 33863 * PRIME
+    exact_campaign.main()
+    raw = load(OUT)
+    require(int(raw["field"]["prime"]) == PRIME, "eighth-prime campaign")
+    require(tuple(raw["field"]["roots"]) == ROOTS, "eighth-prime roots")
+    kernel = raw.pop("third_split_algebra_kernel")
+    checks = {
+        "G3DT_is_hash_bound_and_closed_before_the_eighth_prime_holdout": True,
+        "all_six_roots_of_reserved_prime73673_are_executed": True,
+        "all_six_eighth_prime_couplings_have_rank4748_and1274_verified_relations": all(
+            int(row["kernel_nonzero_entries"]) > 0 for row in raw["root_kernels"]
+        ),
+        "the_coordinate_partition_is_identical_across_all_eight_primes": bool(
+            kernel["same_selection_as_G3DI_and_G3DJ"]
+        ),
+        "six_root_interpolation_emits_the_complete_eighth_split_algebra_kernel": int(
+            kernel["interpolation_evaluation_mismatches"]
+        )
+        == 0,
+        "prime73673_coefficients_are_stored_as_uint32": kernel[
+            "coefficient_storage_dtype"
+        ]
+        == "uint32",
+        "prime73673_was_not_used_in_G3DT_six_prime_construction_or_seventh_holdout": PRIME
+        not in g3dt["reconstruction_contract"]["construction_primes"]
+        + [g3dt["reconstruction_contract"]["reserved_holdout_prime"]],
+        "no_characteristic_zero_promotion_is_inferred_from_eight_prime_agreement": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DU checks")
+    packet = {
+        "schema": "mtt.unified-source.g3du-h02-eighth-prime-holdout-kernel.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DU",
+        "status": "CLOSED_EXACT_H02_RESERVED_EIGHTH_SPLIT_PRIME_KERNEL",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {**raw["inputs"], "G3DT": exact_campaign.campaign.record(G3DT)},
+        "field": raw["field"],
+        "root_kernels": raw["root_kernels"],
+        "eighth_split_algebra_kernel": {**kernel, "same_selection_as_all_prior_campaigns": True},
+        "multiprime_promotion": {
+            "primes": [21817, 33863, 37493, 38113, 68213, 69011, 72271, PRIME],
+            "CRT_modulus": EIGHT_PRIME_MODULUS,
+            "CRT_modulus_bits": EIGHT_PRIME_MODULUS.bit_length(),
+            "eighth_prime_role": "held_out_from_seven_prime_candidate_construction",
+            "height_bound_available": False,
+            "exact_Q_gamma_promotion": False,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3duH02EighthPrimeHoldoutKernel",
+            "tier": "CLOSED_EXACT_RESERVED_EIGHTH_SPLIT_ALGEBRA_KERNEL",
+            "statement": "At all six roots of the final persisted split prime 73673, the H02 coupling again has rank4748 and 1274 normalized zero-residual relations with the common coordinate partition. The complete eighth split-algebra kernel is reserved as the final current holdout.",
+        },
+        "frontier_delta": {
+            "before": "Six-prime candidates had seventh-prime verdicts, while the final persisted split prime remained unused.",
+            "after": "All eight persisted G3BU primes now have complete exact kernel archives, with prime73673 reserved for the seven-prime candidate audit.",
+        },
+        "next_required_object": "Construct candidates from the first seven primes, test them against prime73673, then stop blind prime extension and select a compact exact componentwise rank-upper certificate.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DU H02 reserved eighth-prime kernel: PASS")
+    print(f"six_ranks=4748 kernel=6022x1274 CRT8_bits={EIGHT_PRIME_MODULUS.bit_length()}")
+    print(f"packet_sha256={exact_campaign.campaign.sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

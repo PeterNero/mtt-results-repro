@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Run an untrusted Hilbert-guided selected fiber-two module hedge."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+HINT = STATE / "ust_g3ap_selected_cayley_fiber2_predecessor_hilbert.packet.json"
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_hilbert_guided.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_hilbert_guided.singular.out"
+CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_hilbert_guided_degree44.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_hilbert_guided.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_hint() -> tuple[dict, list[int]]:
+    packet = json.loads(HINT.read_text(encoding="ascii"))
+    require(
+        packet["schema"] == "mtt.unified-source.g3ap-fiber2-predecessor-hilbert-hint.v1",
+        "hint schema",
+    )
+    require(packet["status"] == "ACCELERATION_HINT_ONLY_NOT_SELECTED_SOURCE_EVIDENCE", "hint status")
+    require(not any(packet["guardrails"].values()), "hint guardrails")
+    for label in ("script", "output"):
+        record = packet["execution"][label]
+        path = ROOT / record["path"]
+        require(path.is_file() and sha256(path) == record["sha256"], f"hint {label}")
+    values = packet["fiber_degree_two"]["hilbert_numerator"]
+    require(isinstance(values, list) and values and all(isinstance(value, int) for value in values), "hint vector")
+    return packet, values
+
+
+def guided_script(source: str, hilbert: list[int]) -> str:
+    generators = ",\n  ".join(fiber2.module_generators())
+    hint = ",".join(str(value) for value in hilbert)
+    cache_relative = str(CACHE.relative_to(ROOT)).replace("\\", "/")
+    return fiber2.selected_base_prefix(source) + f'''module M=
+  {generators};
+intvec componentShifts=12,15,8,18,11,4;
+attrib(M,"isHomog",componentShifts);
+option(noredTail);
+bigintvec predecessorHilbert={hint};
+intvec selectedWeights=1,1,1,3,1,1,1;
+degBound=44;
+module G=std(M,predecessorHilbert,selectedWeights);
+int i;
+print("G3AP_F2_HGUIDE_BOUND="+string(degBound));
+print("G3AP_F2_HGUIDE_MODULE_GENERATORS="+string(size(M)));
+print("G3AP_F2_HGUIDE_MODULE_GB_SIZE="+string(size(G)));
+for (i=1;i<=size(G);i++)
+{{
+  print("G3AP_F2_HGUIDE_MODULE_LEADER_"+string(i)+"_COMP="+string(ustLeadComponent(G[i])));
+  print("G3AP_F2_HGUIDE_MODULE_LEADER_"+string(i)+"_EXP="+string(leadexp(G[i])));
+}}
+attrib(G,"isSB",0);
+write("ssi:w {cache_relative}",G);
+print("G3AP_F2_HGUIDE_LEADER_EXPORT_PASS");
+quit;
+'''
+
+
+def parse_leaders(raw: str) -> list[tuple[int, tuple[int, ...]]]:
+    normalized = raw.replace("G3AP_F2_HGUIDE_", "G3AP_F2_MODULE_")
+    return fiber2.parse_leaders(normalized)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    hint_packet, hilbert = load_hint()
+    source = SOURCE.read_text(encoding="ascii")
+    SCRIPT.write_text(guided_script(source, hilbert), encoding="ascii")
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)}")
+        return
+    CACHE.unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "Hilbert-guided execution")
+    require("G3AP_F2_HGUIDE_LEADER_EXPORT_PASS" in completed.stdout, "guided pass")
+    require(CACHE.is_file() and CACHE.stat().st_size > 0, "guided cache")
+    leaders = parse_leaders(completed.stdout)
+    standards, sectors = fiber2.enumerate_target(leaders)
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(standards == [fiber2.EXPECTED_STANDARD], "candidate unique top standard")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-hilbert-guided-candidate.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_REQUIRES_INDEPENDENT_SELECTED_SOURCE_CERTIFICATION",
+        "inputs": {
+            "selected_source": {"path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SOURCE)},
+            "predecessor_hint": {"path": str(HINT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(HINT)},
+        },
+        "execution": {
+            "script": {"path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(SCRIPT)},
+            "output": {"path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"), "sha256": sha256(OUTPUT)},
+            "returncode": completed.returncode,
+            "elapsed_seconds": time.time() - started,
+            "module_generator_count": 39,
+            "candidate_basis_size_through_bound": len(leaders),
+            "scalar_degree_bound": 44,
+            "cache": {
+                "path": str(CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(CACHE),
+                "bytes": CACHE.stat().st_size,
+                "valid_through_total_scalar_degree": 44,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "candidate_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "enumerated_monomials": total,
+            "dimension_if_candidate_is_certified": 1,
+            "basis_if_candidate_is_certified": ["w^12*t2^4*s^2"],
+            "sectors": sectors,
+        },
+        "checks": {
+            "selected_source_is_hash_bound": True,
+            "predecessor_is_used_only_as_a_Hilbert_acceleration_hint": True,
+            "all_39_selected_source_module_generators_are_supplied_to_std": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "candidate_leading_module_leaves_one_target_standard": True,
+        },
+        "guardrails": {
+            "claims_the_predecessor_hint_proves_selected_flatness": False,
+            "claims_the_candidate_is_independently_certified": False,
+            "claims_G3AP_is_closed": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+        },
+        "next_required_object": "Recompute std on the untrusted candidate and prove equality with all 39 selected-source generators.",
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP fiber2 Hilbert-guided candidate: PASS "
+        f"leaders={len(leaders)} monomials={total} certification=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

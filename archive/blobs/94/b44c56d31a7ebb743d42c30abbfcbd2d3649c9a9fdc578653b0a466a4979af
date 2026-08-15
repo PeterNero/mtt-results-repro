@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Independently verify the guarded UST.G3EG component-12 cutset."""
+
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state/ust_g3eg_h02_component12_adaptive_exactness_cutset.packet.json"
+PRIME = 21817
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checked(record: dict[str, Any]) -> Path:
+    path = ROOT / str(record["path"])
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def load_checked(record: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(checked(record).read_text(encoding="utf-8"))
+
+
+def load_gzip_checked(record: dict[str, Any]) -> dict[str, Any]:
+    path = checked(record)
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def read_log(path: Path) -> str:
+    data = path.read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8")
+
+
+def evaluate(coefficients: list[int]) -> int:
+    result = 0
+    for coefficient in reversed(coefficients):
+        result = (result * 5 + coefficient) % PRIME
+    return result
+
+
+def matrix_rank_at_good_reduction(path: Path) -> tuple[int, int, int, int]:
+    with path.open("r", encoding="ascii") as handle:
+        rows_count, columns_count, degree, declared = map(int, handle.readline().split())
+        minimal = tuple(map(int, handle.readline().split()))
+        require(degree == 6 and minimal == (64, 16, 33, 44, 89, 24, 1), "matrix field")
+        rows: list[dict[int, int]] = [dict() for _ in range(rows_count)]
+        count = 0
+        for line in handle:
+            values = list(map(int, line.split()))
+            scalar = evaluate(values[2:])
+            if scalar:
+                rows[values[0] - 1][values[1] - 1] = scalar
+            count += 1
+    require(count == declared, "declared matrix entries")
+    pivots: dict[int, dict[int, int]] = {}
+    for source in rows:
+        row = dict(source)
+        while row:
+            column = min(row)
+            coefficient = row[column]
+            pivot = pivots.get(column)
+            if pivot is None:
+                inverse = pow(coefficient, -1, PRIME)
+                pivots[column] = {
+                    key: value * inverse % PRIME for key, value in row.items()
+                }
+                break
+            for key, value in pivot.items():
+                reduced = (row.get(key, 0) - coefficient * value) % PRIME
+                if reduced:
+                    row[key] = reduced
+                else:
+                    row.pop(key, None)
+    return rows_count, columns_count, declared, len(pivots)
+
+
+def reconstruction_map(payload: dict[str, Any]) -> dict[int, tuple[int, int]]:
+    return {
+        int(index): (int(numerator), int(denominator))
+        for index, numerator, denominator in payload["coefficients"]
+    }
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(
+        packet["schema"]
+        == "mtt.unified-source.g3eg-h02-component12-adaptive-exactness-cutset.v1",
+        "schema",
+    )
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    g3ea = load_checked(packet["inputs"]["G3EA"])
+    g3eb = load_checked(packet["inputs"]["G3EB"])
+    require(g3ea["rank_promotion"]["promoted_global_Q_rank_interval"] == [4748, 5112], "G3EA interval")
+    require(
+        g3eb["rank_frontier"]["current_global_Q_gamma_interval"] == [4748, 5112],
+        "G3EB interval",
+    )
+
+    reductions = packet["exact_kernel_preserving_reductions"]
+    g3ec = load_checked(reductions["G3EC_certificate"])
+    g3ed = load_checked(reductions["G3ED_certificate"])
+    checked(reductions["G3EC_matrix"])
+    g3ed_matrix = checked(reductions["G3ED_matrix"])
+    require(g3ec["output"]["shape"] == [1324, 956], "G3EC shape")
+    require(g3ed["output"]["shape"] == [1239, 871], "G3ED shape")
+    require(
+        227 + 254 + 676 + len(g3ed["exact_unit_pivots"]) == 1242,
+        "exact reduction count",
+    )
+    rows, columns, nonzeros, rank = matrix_rank_at_good_reduction(g3ed_matrix)
+    require((rows, columns, nonzeros, rank) == (1239, 871, 115780, 861), "independent G3ED rank replay")
+
+    padic = load_gzip_checked(packet["high_precision_split_algebra"]["residue"])
+    padic_log = read_log(checked(packet["high_precision_split_algebra"]["log"]))
+    require(padic["shape"] == [6, 956, 10], "p-adic residue shape")
+    require(padic["modulus_bits"] == 1384, "p-adic bits")
+    require(len(re.findall(r"rank=946 .* residual=0", padic_log)) == 6, "six p-adic replays")
+
+    reconstruction = packet["normalized_basis_reconstruction_nogo"]
+    left = reconstruction_map(load_gzip_checked(reconstruction["exponent64"]))
+    right = reconstruction_map(load_gzip_checked(reconstruction["exponent96"]))
+    stable = {index for index in set(left) & set(right) if left[index] == right[index]}
+    require(len(stable) == 600, "stable coefficient count")
+    require(sum(left[index][0] == 0 for index in stable) == 590, "stable zeros")
+    require(sum(left[index][0] != 0 for index in stable) == 10, "stable units")
+
+    lattice = load_gzip_checked(packet["adaptive_six_embedding_lattice"]["audit"])
+    residuals = [int(row["exact_replay_nonzero_slots"]) for row in lattice["rounds"]]
+    large = [int(row["coefficients_over_threshold"]) for row in lattice["rounds"]]
+    require(residuals == [10795, 9378, 7507, 3279], "adaptive residual trend")
+    require(large == [29465, 21344, 13619, 1843], "adaptive coefficient trend")
+    require(not lattice["exact_kernel_closed"], "promotion remains open")
+    require(packet["rank_frontier"]["proven_global_Q_rank_interval"] == [4748, 5112], "guarded global interval")
+    require(packet["rank_frontier"]["conditional_interval_after_exact10_promotion"] == [4748, 5102], "conditional interval")
+
+    fraction_free = packet["bounded_fraction_free_route"]
+    log = read_log(checked(fraction_free["log"]))
+    require("step=490" in log and "bits=104650" in log, "bounded fraction-free checkpoint")
+    print("UST.G3EG component12 adaptive exactness cutset verifier: PASS")
+    print("exact_reductions=1242 finite_rank=861 finite_nullity=10")
+    print("adaptive_exact_residual=10795->3279 promotion_open=true global_interval=4748..5112")
+
+
+if __name__ == "__main__":
+    main()

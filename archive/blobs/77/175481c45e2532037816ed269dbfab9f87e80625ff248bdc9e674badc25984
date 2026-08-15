@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Build the hash-bound finite B103 Gram executor and its input contract."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import ust_cayley_fiber2_reduction as fiber2
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = (
+    ROOT
+    / "evidence"
+    / "ust_g3az"
+    / "q79_eta9_full_vanishing_residue_basis.packet.json.blob"
+)
+SOURCE_LOCK = STATE / "ust_g3av_b103_source_lock.json"
+G3AT = STATE / "ust_g3at_polarized_primal_transport.packet.json"
+G3AW = STATE / "ust_g3aw_three_line_gram_meridian_reduction.packet.json"
+G3AY = STATE / "ust_g3ay_relative_gram_jet_unit_screening.packet.json"
+COORDINATES = STATE / "ust_g3az_b103_coordinate_map.json"
+TEMPLATE = STATE / "ust_g3az_finite_transport_input.template.json"
+SMOKE = STATE / "ust_g3az_synthetic_transport_input.test-only.json"
+OUT = STATE / "ust_g3az_finite_b103_gram_executor.packet.json"
+
+EXPECTED_SOURCE_SHA256 = (
+    "1e78f9ca9a75977278f01560c0a97d190929eaa6098f7686a38378946b64c406"
+)
+RANK = 1509
+BLOCKS = (
+    ("H20", 0, 248, 0),
+    ("H11", 248, 1261, 1),
+    ("H02", 1261, 1509, 2),
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    return {
+        "path": str(path.relative_to(ROOT)).replace("\\", "/"),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def extract_coordinates(source: dict) -> list[list[int]]:
+    require(
+        source["schema"] == "MTTQ79Eta9FullVanishingResidueBasis.v1",
+        "B103 basis schema",
+    )
+    require(all(source["checks"].values()), "B103 basis checks")
+    require(source["variables"] == ["x", "y", "z", "w", "t0", "t1", "t2", "u", "v", "s"], "B103 variables")
+    require(source["full_basis"]["rank"] == RANK, "B103 rank")
+    vectors = source["full_basis"]["exponent_vectors"]
+    require(len(vectors) == RANK, "B103 vector count")
+    concatenated: list[list[int]] = []
+    for block, (name, first, past_last, fiber_degree) in zip(
+        source["basis_blocks"], BLOCKS
+    ):
+        require(
+            block["name"] == name
+            and block["first_index"] == first
+            and block["past_last_index"] == past_last
+            and block["dimension"] == past_last - first,
+            f"B103 {name} block",
+        )
+        block_vectors = block["basis_exponent_vectors"]
+        require(len(block_vectors) == past_last - first, f"B103 {name} vectors")
+        require(
+            all(
+                len(vector) == 10
+                and all(isinstance(value, int) and value >= 0 for value in vector)
+                and sum(vector[7:]) == fiber_degree
+                for vector in block_vectors
+            ),
+            f"B103 {name} exponent grading",
+        )
+        concatenated.extend(block_vectors)
+    require(vectors == concatenated, "B103 full and block coordinate orders")
+    return vectors
+
+
+def source_lock_check(source_lock: dict) -> None:
+    require(
+        source_lock["schema"] == "mtt.unified-source.g3av-b103-source-lock.v1",
+        "B103 source lock schema",
+    )
+    indexed = {item["path"]: item for item in source_lock["sources"]}
+    item = indexed["q79_eta9_full_vanishing_residue_basis.packet.json"]
+    require(item["sha256"] == EXPECTED_SOURCE_SHA256, "B103 source lock hash")
+
+
+def main() -> None:
+    require(sha256(EVIDENCE) == EXPECTED_SOURCE_SHA256, "vendored B103 evidence hash")
+    source = load(EVIDENCE)
+    source_lock = load(SOURCE_LOCK)
+    g3at = load(G3AT)
+    g3aw = load(G3AW)
+    g3ay = load(G3AY)
+    source_lock_check(source_lock)
+    require(
+        g3at["status"]
+        == "CLOSED_EXACT_POLARIZED_PRIMAL_ONLY_TRANSPORT_REDUCTION_THREE_ODES",
+        "G3AT input",
+    )
+    require(
+        g3aw["status"]
+        == "CLOSED_EXACT_THREE_LINE_GRAM_MERIDIAN_REDUCTION_SIX_TOP_REDUCTIONS_INPUTS_OPEN",
+        "G3AW input",
+    )
+    require(
+        g3ay["status"]
+        == "CLOSED_EXACT_RELATIVE_GRAM_JET_COMPILER_AND_UNIT_SCREEN_INPUTS_OPEN",
+        "G3AY input",
+    )
+    vectors = extract_coordinates(source)
+
+    reduction = fiber2.selected_fiber2_reduction()
+    fiber2.require_response_target_coverage(reduction)
+    require(
+        reduction["kind"]
+        == "fiber2_exact_target_quotient_functional_over_B_mod_K_E_C_at_Cox_18_2_2",
+        "exact target-functional reduction",
+    )
+
+    coordinate_packet = {
+        "schema": "mtt.unified-source.g3az-b103-coordinate-map.v1",
+        "status": "CLOSED_EXACT_HASH_BOUND_B103_COORDINATE_MAP",
+        "source": record(EVIDENCE),
+        "variables": source["variables"],
+        "basis_order": source["basis_order"],
+        "rank": RANK,
+        "blocks": [
+            {
+                "name": name,
+                "first_index": first,
+                "past_last_index": past_last,
+                "fiber_degree": fiber_degree,
+            }
+            for name, first, past_last, fiber_degree in BLOCKS
+        ],
+        "exponent_vectors": vectors,
+    }
+    COORDINATES.write_text(
+        json.dumps(coordinate_packet, indent=2, ensure_ascii=True) + "\n",
+        encoding="ascii",
+    )
+
+    template = {
+        "schema": "mtt.unified-source.g3az-finite-transport-input.v1",
+        "status": "TEMPLATE_NOT_AN_EXECUTED_TRANSPORT",
+        "inputs": {
+            "G3AT": record(G3AT),
+            "B103_coordinate_map": record(COORDINATES),
+        },
+        "source_domain": {
+            "kind": "REPLACE_WITH_exact_DVR_common_frame_OR_exact_finite_common_frame",
+            "admissible_kinds": [
+                "exact_DVR_common_frame",
+                "exact_finite_common_frame",
+            ],
+            "forbidden_shortcuts": [
+                "reducing floating-point or interval-complex coordinates modulo 101",
+                "rounding de Rham coordinates without an exact integral comparison theorem",
+                "reducing Betti coordinates before an exact Betti-to-B103 comparison map",
+            ],
+            "certificate": {
+                "path": "REQUIRED_REPOSITORY_RELATIVE_PATH",
+                "sha256": "REQUIRED_SHA256",
+            },
+        },
+        "basis_binding": {
+            "rank": RANK,
+            "order": source["basis_order"],
+            "residue_field": "F_(101^6)",
+        },
+        "paths": [
+            {
+                "path_index": index,
+                "label": f"selected_A1_path_{index}",
+                "coefficients_F1016_packed": [],
+            }
+            for index in range(3)
+        ],
+        "reflection_word_zero_based": [],
+    }
+    TEMPLATE.write_text(
+        json.dumps(template, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+
+    smoke_vectors = [[0] * RANK for _ in range(3)]
+    for path_index, vector in enumerate(smoke_vectors):
+        for step in range(12):
+            vector[(37 * path_index + 19 * step) % 248] = 1 + (path_index + step) % 7
+            vector[248 + (53 * path_index + 97 * step) % 1013] = 1 + (2 * path_index + step) % 11
+            vector[1261 + (71 * path_index + 23 * step) % 248] = 1 + (3 * path_index + step) % 13
+    smoke = {
+        "schema": "mtt.unified-source.g3az-finite-transport-input.v1",
+        "status": "TEST_ONLY_SYNTHETIC_FINITE_INPUT",
+        "inputs": {
+            "G3AT": record(G3AT),
+            "B103_coordinate_map": record(COORDINATES),
+        },
+        "source_domain": {
+            "kind": "test_only_sparse_F1016",
+            "warning": "This fixture tests the executor only and is not selected MTT transport data.",
+        },
+        "basis_binding": template["basis_binding"],
+        "paths": [
+            {
+                "path_index": index,
+                "label": f"synthetic_path_{index}",
+                "coefficients_F1016_packed": vector,
+            }
+            for index, vector in enumerate(smoke_vectors)
+        ],
+        "reflection_word_zero_based": [0, 1, 2, 0],
+    }
+    SMOKE.write_text(
+        json.dumps(smoke, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+
+    checks = {
+        "the_vendored_B103_packet_matches_the_locked_source_hash": True,
+        "the_1509_coordinates_replay_as_blocks248_1013_248": True,
+        "all_B103_exponents_have_the_declared_fiber_degree": True,
+        "the_exact_39726_coordinate_G3AP_target_functional_is_selected": True,
+        "the_executor_contract_accepts_exact_DVR_or_exact_finite_common_frame_data": True,
+        "ordinary_complex_numerics_are_not_reducible_mod101_without_a_comparison_theorem": True,
+        "the_six_G3AW_products_are_executable_in_one_hash_bound_quotient_ring": True,
+        "no_observed_value_or_fit_parameter_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3az-finite-b103-gram-executor.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3AZ",
+        "status": "CLOSED_EXACT_FINITE_B103_GRAM_EXECUTOR_READY_ADMISSIBLE_TRANSPORT_SOURCE_OPEN",
+        "inputs": {
+            "B103_source_lock": record(SOURCE_LOCK),
+            "vendored_B103_basis": record(EVIDENCE),
+            "G3AT": record(G3AT),
+            "G3AW": record(G3AW),
+            "G3AY": record(G3AY),
+            "G3AP_certificate": reduction["certificate"],
+            "G3AP_source_certificate": reduction["source_certificate"],
+            "G3AP_base_cache": reduction["base_cache_record"],
+            "G3AP_quotient_functional": reduction["quotient_functional_record"],
+        },
+        "artifacts": {
+            "B103_coordinate_map": record(COORDINATES),
+            "finite_transport_input_template": record(TEMPLATE),
+            "synthetic_test_only_input": record(SMOKE),
+            "executor": record(ROOT / "run_ust_g3az_finite_b103_gram_screen.py"),
+        },
+        "input_admissibility": {
+            "accepted_route_1": "an exact integral/DVR common-base B103 transport whose coefficient reduction is replayed modulo the maximal ideal",
+            "accepted_route_2": "an independently certified exact finite common-base transport in the identical frozen B103 frame",
+            "rejected_route": "componentwise reduction of numerical complex transport output",
+            "reason": "there is no ring homomorphism from floating or interval complex coordinates to F_(101^6); a same-source comparison map is a proof premise",
+        },
+        "execution": {
+            "unordered_pairs": [[0, 0], [0, 1], [0, 2], [1, 1], [1, 2], [2, 2]],
+            "combined_product": "3*(e_i20*e_j02+e_i02*e_j20)+4*e_i11*e_j11",
+            "quotient_products": 6,
+            "top_coordinates": 39726,
+            "outputs_when_admissible_vectors_arrive": [
+                "six finite Gram entries",
+                "three diagonal-unit decisions",
+                "the finite Gram determinant",
+                "three 3x3 reflection matrices when defined",
+                "an optional finite reflection-word decision",
+            ],
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "FiniteB103GramExecutorAndInputAdmissibilityTheorem",
+            "tier": "CLOSED_EXACT_EXECUTOR_AND_SOURCE_CONTRACT",
+            "statement": "The frozen B103 coordinates, exact G3AP quotient functional and G3AW 3:4:3 product combine into a machine-independent six-product finite Gram executor. Its modular conclusions are rigorous only for exact DVR-reduced or independently exact finite common-frame vectors; numerical complex transport coordinates have no automatic reduction modulo 101.",
+        },
+        "parameter_ledger": {
+            "observed_values_used": 0,
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+        },
+        "guardrails": {
+            "claims_an_admissible_finite_common_frame_transport_is_emitted": False,
+            "claims_complex_numerical_transport_can_be_reduced_mod101": False,
+            "claims_the_six_selected_Gram_values_are_emitted": False,
+            "claims_Gram_nondegeneracy_or_a_meridian": False,
+            "claims_beta_C_or_an_endpoint": False,
+        },
+        "next_required_object": "Complete the three path certificates, then either construct an exact DVR/finite common-frame transport comparison into the frozen B103 residue basis or evaluate the six characteristic-zero pairings directly. Feed only an admissible exact finite packet to the executor; never reduce floating complex coordinates componentwise.",
+    }
+    require(all(checks.values()), "G3AZ checks")
+    require(not any(packet["guardrails"].values()), "G3AZ guardrails")
+    OUT.write_text(
+        json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii"
+    )
+    print("UST.G3AZ finite B103 Gram executor: PASS machinery ready, exact finite transport source open")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,507 @@
+#!/usr/bin/env python3
+"""Independently replay the selected F_101^6 principal-response certificate."""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+import build_ust_g3al_selected_carrier_response_schur as g3al
+import build_ust_g3al_selected_cayley_response_chunk as legacy
+import build_ust_g3am_selected_cayley_fiber2_response_chunk as chunk_builder
+import ust_cayley_fiber2_reduction as fiber2
+import verify_ust_g3ak_full_graph_incidence_normal_decomposition as arithmetic
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3am_selected_cayley_principal_response.packet.json"
+G3AP_VERIFIER = ROOT / "verify_ust_g3ap_selected_cayley_ordinary_top_dimension.py"
+P = 101
+DEGREE = 6
+Element = tuple[int, ...]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_hash(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def constant(value: int) -> Element:
+    return (value % P,) + (0,) * (DEGREE - 1)
+
+
+def field_value(text: str, relation: tuple[int, ...]) -> Element:
+    expression = text.strip().replace("^", "**")
+    expression = re.sub(r"g(\d+)", r"g**\1", expression)
+    expression = re.sub(r"(?<=\d)g", "*g", expression)
+    node = ast.parse(expression, mode="eval").body
+    gamma = (0, 1) + (0,) * (DEGREE - 2)
+
+    def integer(current: ast.AST) -> int:
+        if isinstance(current, ast.Constant) and isinstance(current.value, int):
+            return int(current.value)
+        if isinstance(current, ast.UnaryOp) and isinstance(current.op, ast.USub):
+            return -integer(current.operand)
+        raise ValueError(f"noninteger exponent in {text!r}")
+
+    def visit(current: ast.AST) -> Element:
+        if isinstance(current, ast.Constant) and isinstance(current.value, int):
+            return constant(int(current.value))
+        if isinstance(current, ast.Name) and current.id == "g":
+            return gamma
+        if isinstance(current, ast.UnaryOp):
+            value = visit(current.operand)
+            if isinstance(current.op, ast.USub):
+                return arithmetic.neg(value)
+            if isinstance(current.op, ast.UAdd):
+                return value
+        if isinstance(current, ast.BinOp):
+            if isinstance(current.op, ast.Add):
+                return arithmetic.add(visit(current.left), visit(current.right))
+            if isinstance(current.op, ast.Sub):
+                return arithmetic.sub(visit(current.left), visit(current.right))
+            if isinstance(current.op, ast.Mult):
+                return arithmetic.mul(visit(current.left), visit(current.right), relation)
+            if isinstance(current.op, ast.Div):
+                denominator = arithmetic.inverse(visit(current.right), relation, DEGREE)
+                return arithmetic.mul(visit(current.left), denominator, relation)
+            if isinstance(current.op, ast.Pow):
+                exponent = integer(current.right)
+                require(exponent >= 0, "nonnegative field exponent")
+                return arithmetic.arithmetic.qpow(
+                    visit(current.left), exponent, relation, P
+                )
+        raise ValueError(f"unsupported Singular number syntax {text!r}: {ast.dump(current)}")
+
+    return visit(node)
+
+
+def transpose(matrix: list[list[Element]]) -> list[list[Element]]:
+    return [list(row) for row in zip(*matrix)]
+
+
+def dot(left: list[Element], right: list[Element], relation: tuple[int, ...]) -> Element:
+    value = arithmetic.arithmetic.qzero(DEGREE)
+    for a, b in zip(left, right):
+        value = arithmetic.add(value, arithmetic.mul(a, b, relation))
+    return value
+
+
+def multiply(
+    left: list[list[Element]],
+    right: list[list[Element]],
+    relation: tuple[int, ...],
+) -> list[list[Element]]:
+    require(left and right and len(left[0]) == len(right), "matrix product dimensions")
+    columns = transpose(right)
+    return [[dot(row, column, relation) for column in columns] for row in left]
+
+
+def decode_layout(raw: bytes, record: dict, label: str) -> list[list[Element]]:
+    rows, columns, degree = [int(value) for value in record["shape"]]
+    require(degree == DEGREE, f"{label} degree")
+    start = int(record["byte_offset"])
+    length = int(record["byte_length"])
+    require(length == rows * columns * degree, f"{label} byte length")
+    data = raw[start : start + length]
+    matrix = []
+    offset = 0
+    for _ in range(rows):
+        row = []
+        for _ in range(columns):
+            row.append(tuple(data[offset : offset + degree]))
+            offset += degree
+        matrix.append(row)
+    require(
+        canonical_hash([[list(value) for value in row] for row in matrix])
+        == record["canonical_sha256"],
+        f"{label} canonical hash",
+    )
+    return matrix
+
+
+def determinant(matrix: list[list[Element]], relation: tuple[int, ...]) -> Element:
+    size = len(matrix)
+    require(size > 0 and all(len(row) == size for row in matrix), "square minor")
+    zero = arithmetic.arithmetic.qzero(DEGREE)
+    one = arithmetic.arithmetic.qone(DEGREE)
+    work = [list(row) for row in matrix]
+    result = one
+    for column in range(size):
+        pivot = next(
+            (row for row in range(column, size) if work[row][column] != zero),
+            None,
+        )
+        require(pivot is not None, "nonsingular minor")
+        if pivot != column:
+            work[column], work[pivot] = work[pivot], work[column]
+            result = arithmetic.neg(result)
+        pivot_value = work[column][column]
+        result = arithmetic.mul(result, pivot_value, relation)
+        inverse = arithmetic.inverse(pivot_value, relation, DEGREE)
+        for row in range(column + 1, size):
+            if work[row][column] == zero:
+                continue
+            factor = arithmetic.mul(work[row][column], inverse, relation)
+            work[row] = [
+                arithmetic.sub(
+                    value,
+                    arithmetic.mul(factor, pivot_entry, relation),
+                )
+                for value, pivot_entry in zip(work[row], work[column])
+            ]
+    return result
+
+
+def carrier_row_weight(row: dict[str, object]) -> int:
+    """Return the selected scalar weight after adjoining the target t-coordinate."""
+    weight = sum(int(power) for power in row["powers_xyz"])
+    if row["basis_kind"] == "K3_sheet_times_degree6":
+        weight += 3
+    return weight + 1
+
+
+def polynomial_weights(text: str) -> set[int]:
+    """Return weighted degrees of nonzero x,y,z,w monomials in a source row."""
+    normalized = text.replace("**", "^").strip()
+    if normalized.startswith("-"):
+        normalized = normalized[1:]
+    terms = re.split(r"\s+[+-]\s+", normalized)
+    result = set()
+    for term in terms:
+        degree = 0
+        for variable, power in re.findall(r"([xyzw])(?:\^(\d+))?", term):
+            degree += (3 if variable == "w" else 1) * int(power or "1")
+        result.add(degree)
+    return result
+
+
+def main() -> None:
+    subprocess.run(
+        [sys.executable, str(G3AP_VERIFIER)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "mtt.unified-source.g3am-selected-cayley-principal-response.v1",
+        "packet schema",
+    )
+    require(packet["theorem_id"] == "UST.G3AM", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails remain false")
+    reduction = fiber2.selected_fiber2_reduction()
+    reduction_scope = fiber2.response_reduction_basis(reduction)
+    require(
+        packet["inputs"]["selected_G3AP_certificate"] == reduction["certificate"]
+        and packet["inputs"]["selected_G3AP_source_certificate"]
+        == reduction["source_certificate"],
+        "canonical G3AP reduction",
+    )
+    require(
+        packet["reduction_basis"] == reduction_scope,
+        "principal packet reduction scope",
+    )
+    for name, record in packet["inputs"].items():
+        path = ROOT / record["path"]
+        require(path.is_file() and sha256(path) == record["sha256"], f"input {name}")
+
+    field = packet["residue_field"]
+    relation = tuple(int(value) for value in field["gamma_relation_coefficients_ascending"])
+    require(
+        field["prime"] == P and field["extension_degree"] == DEGREE and len(relation) == 7,
+        "selected residue field",
+    )
+    frames = g3al.selected_frames()
+    carrier_basis = frames["basis"]
+    require(
+        all(carrier_row_weight(row) == 10 for row in carrier_basis),
+        "every selected carrier section has scalar weight ten",
+    )
+    pivot = int(frames["projective_pivot"])
+    primitive_rows = [
+        legacy.section(row)
+        for index, row in enumerate(carrier_basis)
+        if index != pivot
+    ]
+    tangent_columns = frames["principal"] + frames["extra"]
+    g3al_packet = load(ROOT / packet["inputs"]["G3AL"]["path"])
+    cycle = g3al_packet["K3_cycle_source"]
+    require(polynomial_weights(cycle["Q2"]) == {2}, "Q2 scalar degree two")
+    require(polynomial_weights(cycle["G3"]) == {3}, "G3 scalar degree three")
+    require(polynomial_weights(cycle["H4"]) == {4}, "H4 scalar degree four")
+    # The four Jacobian rows have degrees 2,4,3,3; differentiating once
+    # in x,y,z,w removes total weight 1+1+1+3. Thus Pdelta has weight 6,
+    # fixedGerbe has weight 6+9+6+1+1+1=24, and every response product
+    # has weight 24+10+10=44.
+    block = packet["principal_response"]
+    artifact = block["binary_artifact"]
+    binary_path = ROOT / artifact["path"]
+    raw = binary_path.read_bytes()
+    require(sha256(binary_path) == artifact["sha256"], "binary hash")
+    require(len(raw) == artifact["bytes"] == 248 * 33 * DEGREE, "binary size")
+    matrix: list[list[Element]] = []
+    offset = 0
+    for _ in range(248):
+        row = []
+        for _ in range(33):
+            row.append(tuple(raw[offset : offset + DEGREE]))
+            offset += DEGREE
+        matrix.append(row)
+    require(offset == len(raw), "binary fully consumed")
+    serialized = [[list(value) for value in row] for row in matrix]
+    require(canonical_hash(serialized) == block["canonical_matrix_sha256"], "matrix hash")
+
+    replay_cells: dict[tuple[int, int], Element] = {}
+    chunk_count = 0
+    for name, record in packet["inputs"].items():
+        if not name.startswith("chunk_"):
+            continue
+        path = ROOT / record["path"]
+        chunk = load(path)
+        require(
+            chunk["schema"]
+            == "mtt.unified-source.g3am-selected-cayley-fiber2-response-chunk.v1"
+            and chunk["status"]
+            == "CLOSED_EXACT_SELECTED_CARRIER_FIBER2_RESIDUE_RECTANGLE",
+            f"{name} schema and status",
+        )
+        require(all(chunk["checks"].values()), f"{name} checks")
+        dependencies = ["G3AL", "G3AP", "G3AP_source"]
+        dependencies.append(
+            "quotient_functional"
+            if reduction["module_cache_record"] is None
+            else "module_cache"
+        )
+        for dependency in dependencies:
+            dependency_record = chunk["inputs"][dependency]
+            dependency_path = ROOT / dependency_record["path"]
+            require(
+                dependency_path.is_file()
+                and sha256(dependency_path) == dependency_record["sha256"],
+                f"{name} dependency {dependency}",
+            )
+        if chunk["inputs"]["base_cache"] is not None:
+            dependency_record = chunk["inputs"]["base_cache"]
+            dependency_path = ROOT / dependency_record["path"]
+            require(
+                dependency_path.is_file()
+                and sha256(dependency_path) == dependency_record["sha256"],
+                f"{name} dependency base_cache",
+            )
+        require(
+            chunk["inputs"]["G3AP"] == reduction["certificate"]
+            and chunk["inputs"]["G3AP_source"] == reduction["source_certificate"],
+            f"{name} canonical G3AP inputs",
+        )
+        if reduction["module_cache_record"] is None:
+            require(
+                chunk["inputs"]["module_cache"] is None
+                and chunk["inputs"]["quotient_functional"]["sha256"]
+                == reduction["quotient_functional_record"]["sha256"],
+                f"{name} canonical quotient functional",
+            )
+        require(
+            all(
+                chunk["reduction_basis"].get(key) == value
+                for key, value in reduction_scope.items()
+            )
+            and chunk["reduction_basis"]["initial_fiber_component"]
+            == reduction["fiber_coordinates"]["initial_physical_component"]
+            and chunk["reduction_basis"]["normalization_basis_component"]
+            == reduction["fiber_coordinates"]["normalization_physical_component"],
+            f"{name} certified reduction scope",
+        )
+        rectangle = chunk["rectangle"]
+        require(
+            int(rectangle["column_start_zero_based"]) == 0
+            and int(rectangle["column_count"]) == 33,
+            f"{name} principal rectangle",
+        )
+        output_path = ROOT / chunk["output"]["path"]
+        script_path = ROOT / chunk["script"]["path"]
+        require(output_path.is_file() and sha256(output_path) == chunk["output"]["sha256"], f"{name} output")
+        require(script_path.is_file() and sha256(script_path) == chunk["script"]["sha256"], f"{name} script")
+        script = script_path.read_text(encoding="ascii")
+        require("ring r=(101,g)" in script and "ring r=11" not in script, f"{name} field")
+        row_start = int(rectangle["row_start_zero_based"])
+        row_count = int(rectangle["row_count"])
+        column_start = int(rectangle["column_start_zero_based"])
+        column_count = int(rectangle["column_count"])
+        functional_route = reduction["module_cache_record"] is None
+        script_builder = (
+            chunk_builder.make_functional_script
+            if functional_route
+            else chunk_builder.make_script
+        )
+        expected_script = script_builder(
+            primitive_rows[row_start : row_start + row_count],
+            [
+                legacy.tangent_polynomial(vector, carrier_basis)
+                for vector in tangent_columns[
+                    column_start : column_start + column_count
+                ]
+            ],
+            row_start,
+            column_start,
+            g3al_packet,
+            reduction,
+        )
+        require(script == expected_script, f"{name} exact selected-script reconstruction")
+        coordinates = reduction["fiber_coordinates"]
+        if functional_route:
+            require(
+                "poly fixedBase=Pdelta*t0*t1*t2;" in script
+                and f"*gen({coordinates['initial_module_position']})" in script
+                and "module preparedRows=fixedBase*primitiveRows;" in script
+                and "entryVector=preparedRows[ri]*tangentColumns[gi];" in script
+                and "G3AM_F2_FUNCTIONAL_TERM=" in script,
+                f"{name} functional response product",
+            )
+            packed_rows, replayed_terms = chunk_builder.replay_functional_output(
+                output_path, row_count, column_count, reduction
+            )
+            require(
+                packed_rows == rectangle["entries_F1016_packed"]
+                and replayed_terms == rectangle["exported_base_quotient_terms"],
+                f"{name} functional transcript",
+            )
+        else:
+            require(
+                "poly fixedBase=Pdelta*t0*t1*t2;" in script
+                and f"*gen({coordinates['initial_module_position']})" in script
+                and (
+                    f"({coordinates['normalization_scalar_monomial']})*"
+                    f"gen({coordinates['normalization_module_position']})"
+                ) in script
+                and "module preparedRows=reduce(fixedBase*primitiveRows,G);" in script
+                and "rowProducts[gi]=preparedRows[ri]*tangentColumns[gi];" in script
+                and "rowNormals=reduce(rowProducts,G);" in script
+                and "entryNormal=rowNormals[gi];" in script,
+                f"{name} degree-24 plus degree-10 plus degree-10 response product",
+            )
+            output = output_path.read_text(encoding="utf-8")
+            require("G3AM_F2_RESPONSE_CHUNK_PASS" in output, f"{name} pass marker")
+        rows = rectangle["entries_F1016_singular"]
+        require(len(rows) == int(rectangle["row_count"]), f"{name} height")
+        for local_row, row in enumerate(rows):
+            require(len(row) == 33, f"{name} width")
+            if functional_route:
+                require(
+                    [chunk_builder.packed_to_singular(value) for value in packed_rows[local_row]]
+                    == row,
+                    f"{name} packed functional row",
+                )
+            else:
+                match = re.search(
+                    rf"^G3AM_F2_RESPONSE_ROW_{row_start + local_row}=([^\r\n]*)$",
+                    output,
+                    flags=re.MULTILINE,
+                )
+                require(match is not None and match.group(1).split(",") == row, f"{name} raw row")
+            for column, value in enumerate(row):
+                cell = (row_start + local_row, column)
+                require(cell not in replay_cells, f"duplicate cell {cell}")
+                replay_cells[cell] = field_value(value, relation)
+        chunk_count += 1
+
+    require(
+        set(replay_cells) == {(row, column) for row in range(248) for column in range(33)},
+        "full chunk coverage",
+    )
+    replay_matrix = [
+        [replay_cells[(row, column)] for column in range(33)]
+        for row in range(248)
+    ]
+    require(replay_matrix == matrix, "raw chunks equal binary matrix")
+    _, column_pivots = arithmetic.rref(matrix, relation, DEGREE)
+    _, row_pivots = arithmetic.rref(transpose(matrix), relation, DEGREE)
+    rank = len(column_pivots)
+    require(rank == len(row_pivots) == block["rank"], "exact rank")
+    require(block["left_nullity"] == 248 - rank, "left nullity")
+    require(
+        block["nonzero_entries"]
+        == sum(value != arithmetic.arithmetic.qzero(DEGREE) for row in matrix for value in row),
+        "nonzero entry count",
+    )
+    if rank == 33:
+        minor_rows = row_pivots[:33]
+        minor = determinant([matrix[row] for row in minor_rows], relation)
+        require(minor != arithmetic.arithmetic.qzero(DEGREE), "nonzero rank minor")
+        require(minor_rows == block["independent_row_indices_zero_based"], "minor rows")
+        require(
+            list(minor) == block["rank_minor_determinant_gamma_coefficients_ascending"],
+            "minor determinant",
+        )
+        quotient_rows = [
+            int(value) for value in block["principal_quotient_row_indices_zero_based"]
+        ]
+        require(len(quotient_rows) == 215, "quotient rows")
+        require(sorted(minor_rows + quotient_rows) == list(range(248)), "row partition")
+        quotient_artifact = block["quotient_artifact"]
+        require(quotient_artifact is not None, "quotient artifact")
+        quotient_path = ROOT / quotient_artifact["path"]
+        quotient_raw = quotient_path.read_bytes()
+        require(sha256(quotient_path) == quotient_artifact["sha256"], "quotient hash")
+        require(len(quotient_raw) == quotient_artifact["bytes"], "quotient bytes")
+        n0 = decode_layout(quotient_raw, quotient_artifact["layout"]["N0"], "N0")
+        r0_inverse = decode_layout(
+            quotient_raw, quotient_artifact["layout"]["R0_inverse"], "R0 inverse"
+        )
+        zero = arithmetic.arithmetic.qzero(DEGREE)
+        one = arithmetic.arithmetic.qone(DEGREE)
+        require((len(n0), len(n0[0])) == (215, 248), "N0 shape")
+        require((len(r0_inverse), len(r0_inverse[0])) == (33, 33), "R0 inverse shape")
+        require(
+            multiply(r0_inverse, [matrix[row] for row in minor_rows], relation)
+            == [[one if row == column else zero for column in range(33)] for row in range(33)],
+            "R0 inverse",
+        )
+        require(multiply(n0, matrix, relation) == [[zero] * 33 for _ in range(215)], "N0D0")
+        require(
+            all(
+                n0[row][column] == (one if row == index else zero)
+                for row in range(215)
+                for index, column in enumerate(quotient_rows)
+            ),
+            "N0 identity minor",
+        )
+    else:
+        require(block["independent_row_indices_zero_based"] == [], "no full-rank minor rows")
+        require(
+            block["rank_minor_determinant_gamma_coefficients_ascending"] is None,
+            "no full-rank determinant",
+        )
+        require(block["quotient_artifact"] is None, "no false quotient artifact")
+    require(block["products_reduced"] == 8184, "all products reduced")
+    print(
+        f"UST.G3AM selected Cayley principal response: PASS rank={rank} "
+        f"left_nullity={248-rank} chunks={chunk_count}"
+    )
+    print("characteristic-zero promotion, D1/E, beta_C, and the HS endpoint remain open")
+
+
+if __name__ == "__main__":
+    main()

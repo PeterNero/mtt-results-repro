@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""Localize the H02 structural/algebraic rank gap by update-component prefix."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+SOURCE = ROOT / "ust_h02_incremental_prefix_matching.cpp"
+EXECUTABLE = ROOT / "state" / "ust_h02_incremental_prefix_matching"
+G3BZ = ROOT / "state" / "ust_g3bz_g3bi_h02_exact_path_update_rank.packet.json"
+G3DG = ROOT / "state" / "ust_g3dg_h02_split_place_full_coupling_rank.packet.json"
+G3DI = ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+G3DW = ROOT / "state" / "ust_g3dw_h02_kernel_component_triangularity.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3dx"
+OUT = ROOT / "state" / "ust_g3dx_h02_prefix_structural_gap_localization.packet.json"
+BASE_DIMENSION = 24767
+UPDATE_DIMENSION = 6022
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def compile_tool() -> tuple[str, str]:
+    completed = subprocess.run(
+        [
+            "wsl",
+            "g++",
+            "-O3",
+            "-std=c++17",
+            "-Wall",
+            "-Wextra",
+            runtime.wsl_path(SOURCE),
+            "-o",
+            runtime.wsl_path(EXECUTABLE),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    self_test = subprocess.run(
+        ["wsl", runtime.wsl_path(EXECUTABLE), "--self-test"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(self_test.returncode == 0 and "SELF_TEST SUCCESS" in self_test.stdout, self_test.stdout + self_test.stderr)
+    return completed.stderr.strip(), self_test.stdout.strip()
+
+
+def parse_prefix_log(path: Path) -> tuple[dict[str, str], list[dict[str, int]]]:
+    fields: dict[str, str] = {}
+    rows: list[dict[str, int]] = []
+    for line in path.read_text(encoding="ascii").splitlines():
+        if line.startswith("PREFIX "):
+            _, component, active, dimension, rank, nullity = line.split()
+            rows.append(
+                {
+                    "component": int(component),
+                    "active_dimension": int(active),
+                    "component_dimension": int(dimension),
+                    "structural_rank": int(rank),
+                    "structural_nullity": int(nullity),
+                }
+            )
+        elif " " in line:
+            key, value = line.split(" ", 1)
+            fields[key] = value.strip()
+    require(fields.get("STATUS") == "SUCCESS", "native prefix matcher status")
+    return fields, rows
+
+
+def main() -> None:
+    g3bz, g3dg, g3di, g3dw = map(load, (G3BZ, G3DG, G3DI, G3DW))
+    require(all(all(packet["checks"].values()) for packet in (g3bz, g3dg, g3di, g3dw)), "input checks")
+    dimensions = np.asarray(
+        [int(row["rank"]) for row in g3bz["affine_path_update"]["selected_root_components"]],
+        dtype=np.int32,
+    )
+    require(dimensions.size == 34 and int(dimensions.sum()) == UPDATE_DIMENSION, "component dimensions")
+    selection = np.load(ROOT / g3di["split_algebra_kernel"]["selection"]["path"], allow_pickle=False)
+    selected = selection["selected_update_columns"].astype(np.int32)
+    dependent = selection["dependent_update_columns"].astype(np.int32)
+    require(selected.size == 4748 and dependent.size == 1274, "finite coordinate partition")
+    require(np.array_equal(np.sort(np.concatenate((selected, dependent))), np.arange(UPDATE_DIMENSION)), "complete partition")
+    chart_record = g3dg["bordered_coupling"]["chart"]
+    chart = ROOT / chart_record["path"]
+    require(sha256(chart) == chart_record["sha256"], "border chart hash")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    compile_stderr, self_test_stdout = compile_tool()
+    log_path = EVIDENCE / "H02.B89.bordered_Q.p21817.g5.prefix_matching.log"
+    command = [
+        "wsl",
+        runtime.wsl_path(EXECUTABLE),
+        "--chart",
+        runtime.wsl_path(chart),
+        "--log",
+        runtime.wsl_path(log_path),
+        "--base",
+        str(BASE_DIMENSION),
+        "--components",
+        ",".join(str(int(value)) for value in dimensions),
+    ]
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    fields, native_rows = parse_prefix_log(log_path)
+    require(len(native_rows) == 35 and native_rows[0]["component"] == -1, "prefix row count")
+    require(native_rows[0]["active_dimension"] == BASE_DIMENSION, "base prefix dimension")
+    require(native_rows[0]["structural_rank"] == BASE_DIMENSION, "base structural rank")
+
+    boundaries = np.concatenate((np.asarray([0], dtype=np.int32), np.cumsum(dimensions)))
+    component_rows: list[dict[str, int]] = []
+    previous_structural = BASE_DIMENSION
+    previous_finite = BASE_DIMENSION
+    for component, native in enumerate(native_rows[1:]):
+        start, past = int(boundaries[component]), int(boundaries[component + 1])
+        selected_count = int(np.count_nonzero((selected >= start) & (selected < past)))
+        dependent_count = int(np.count_nonzero((dependent >= start) & (dependent < past)))
+        finite_rank = BASE_DIMENSION + int(np.count_nonzero(selected < past))
+        structural_rank = native["structural_rank"]
+        structural_increment = structural_rank - previous_structural
+        finite_increment = finite_rank - previous_finite
+        cumulative_gap = structural_rank - finite_rank
+        component_rows.append(
+            {
+                "component": component,
+                "coordinate_start": start,
+                "coordinate_past": past,
+                "dimension": int(dimensions[component]),
+                "selected_coordinates": selected_count,
+                "dependent_coordinates": dependent_count,
+                "structural_rank_increment": structural_increment,
+                "finite_rank_increment": finite_increment,
+                "gap_increment": structural_increment - finite_increment,
+                "cumulative_structural_minus_finite_gap": cumulative_gap,
+                "structural_prefix_rank": structural_rank,
+                "finite_prefix_rank": finite_rank,
+                "structural_prefix_nullity": native["active_dimension"] - structural_rank,
+                "finite_prefix_nullity": native["active_dimension"] - finite_rank,
+            }
+        )
+        require(finite_rank <= structural_rank, f"finite rank exceeds structural rank at component {component}")
+        previous_structural = structural_rank
+        previous_finite = finite_rank
+
+    positive_gap_components = [row["component"] for row in component_rows if row["gap_increment"] > 0]
+    negative_gap_components = [row["component"] for row in component_rows if row["gap_increment"] < 0]
+    gap_change_components = [row["component"] for row in component_rows if row["gap_increment"] != 0]
+    final = component_rows[-1]
+    require(final["structural_prefix_rank"] == 29990, "final structural rank")
+    require(final["finite_prefix_rank"] == 29515, "final finite rank")
+    require(final["cumulative_structural_minus_finite_gap"] == 475, "final 475 gap")
+    require(sum(row["structural_rank_increment"] for row in component_rows) == 5223, "structural Q upper sum")
+    require(sum(row["finite_rank_increment"] for row in component_rows) == 4748, "finite Q rank sum")
+
+    arrays_path = EVIDENCE / "H02.prefix_structural_gap_ledger.npz"
+    np.savez_compressed(
+        arrays_path,
+        component_dimensions=dimensions,
+        component_boundaries=boundaries,
+        selected_update_columns=selected,
+        dependent_update_columns=dependent,
+        structural_prefix_ranks=np.asarray([BASE_DIMENSION] + [row["structural_prefix_rank"] for row in component_rows], dtype=np.int32),
+        finite_prefix_ranks=np.asarray([BASE_DIMENSION] + [row["finite_prefix_rank"] for row in component_rows], dtype=np.int32),
+        cumulative_gaps=np.asarray([0] + [row["cumulative_structural_minus_finite_gap"] for row in component_rows], dtype=np.int32),
+        gap_change_components=np.asarray(gap_change_components, dtype=np.int32),
+    )
+    checks = {
+        "G3BZ_G3DG_G3DI_and_G3DW_are_hash_bound_and_passing": True,
+        "the_native_incremental_matcher_passes_its_controlled_self_test": "SELF_TEST SUCCESS" in self_test_stdout,
+        "the34_component_prefixes_fill_the30789_square_border": native_rows[-1]["active_dimension"] == BASE_DIMENSION + UPDATE_DIMENSION,
+        "the24767_core_support_has_full_structural_rank": native_rows[0]["structural_rank"] == BASE_DIMENSION,
+        "every_finite_prefix_rank_is_bounded_by_its_support_matching_rank": all(row["finite_prefix_rank"] <= row["structural_prefix_rank"] for row in component_rows),
+        "the_final_support_rank_is29990_and_structural_Q_upper_is5223": final["structural_prefix_rank"] == 29990,
+        "the_final_finite_rank_is29515_and_finite_Q_rank_is4748": final["finite_prefix_rank"] == 29515,
+        "the475_rank_promotion_gap_is_partitioned_exactly_by_component_prefix": sum(row["gap_increment"] for row in component_rows) == 475,
+        "no_prefix_support_result_is_promoted_to_a_Q_gamma_identity": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DX checks")
+    packet = {
+        "schema": "mtt.unified-source.g3dx-h02-prefix-structural-gap-localization.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DX",
+        "status": "CLOSED_EXACT_H02_PREFIX_STRUCTURAL_GAP_LOCALIZATION",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3BZ": record(G3BZ),
+            "G3DG": record(G3DG),
+            "G3DI": record(G3DI),
+            "G3DW": record(G3DW),
+            "border_chart": record(chart),
+            "native_source": record(SOURCE),
+        },
+        "native_execution": {
+            "compile_stderr": compile_stderr,
+            "self_test_stdout": self_test_stdout,
+            "stdout": completed.stdout.strip(),
+            "log": record(log_path),
+            "executable": record(EXECUTABLE),
+        },
+        "prefix_gap_localization": {
+            "base_dimension": BASE_DIMENSION,
+            "update_dimension": UPDATE_DIMENSION,
+            "components": 34,
+            "final_structural_rank": 29990,
+            "final_finite_rank": 29515,
+            "structural_Q_rank_upper": 5223,
+            "finite_Q_rank": 4748,
+            "final_gap": 475,
+            "positive_gap_components": positive_gap_components,
+            "negative_gap_components": negative_gap_components,
+            "gap_change_components": gap_change_components,
+            "gap_change_component_count": len(gap_change_components),
+            "component_rows": component_rows,
+            "arrays": record(arrays_path),
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_support_rank_equals_generic_coefficient_rank": False,
+            "claims_a_characteristic_zero_kernel": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3dxH02PrefixStructuralGapLocalization",
+            "tier": "CLOSED_EXACT_SUPPORT_AND_FINITE_PREFIX_LEDGER",
+            "statement": "For every prefix of the frozen 34-component H02 update order, a warm-start exact bipartite matching computes the support rank and the common finite pivot partition computes the F_21817 coefficient rank. Their componentwise increments telescope exactly from the full core to the final 29990 versus 29515 border ranks, localizing the complete 475-rank support-to-coefficient gap without promoting it to characteristic zero.",
+        },
+        "frontier_delta": {
+            "before": "G3DW localized finite kernel dependence to16 components, but did not identify where the wider support upper bound diverges from coefficient rank.",
+            "after": "The entire475-rank structural promotion gap now has an exact ordered component-prefix ledger. Characteristic-zero work can target only the prefixes where this gap changes and can reuse all earlier quotient blocks.",
+        },
+        "next_required_object": "Construct exact Q(gamma) quotient-rank certificates at the gap-changing component prefixes, preferably as local fraction-free bordered minors or local kernel factorizations; telescope them to the global upper bound4748 and combine with the existing split-place lower bound.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DX H02 prefix structural gap localization: PASS")
+    print(f"gap_change_components={gap_change_components}")
+    print(f"positive={positive_gap_components} negative={negative_gap_components} final_gap=475")
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

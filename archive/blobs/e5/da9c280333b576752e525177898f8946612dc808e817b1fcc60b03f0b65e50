@@ -1,0 +1,194 @@
+# UST.G3AK: Full Graph-Incidence Tangent and Normal Decomposition Theorem
+
+## Status
+
+`CLOSED_EXACT_FULL_GRAPH_INCIDENCE_TANGENT122_TRUE_NORMAL126_SELECTED_RESIDUE_DECOMPOSITION`
+
+The earlier eta9 Deligne cutset used the convenient 33-dimensional principal
+family
+
+```text
+F -> F + s_union H,
+H in H0(O_K3(3H) box O_E(3[0])).
+```
+
+That family is valid, but it is not the complete space of eta9 coefficient
+deformations preserving the three selected graphs. `UST.G3AH` proves that the
+full affine incidence kernel has rank 123. This theorem computes the resulting
+projective tangent/normal decomposition exactly on the selected residue
+carrier.
+
+## 1. Corrected Coordinate Ledger
+
+The G3AG restriction compiler has three blocks:
+
+```text
+first H graph       32 coordinate rows, rank 26
+second H graph      32 coordinate rows, rank 26
+4H graph           104 coordinate rows, rank 74
+------------------------------------------------
+total              168 coordinate rows, rank 126
+```
+
+The previous metadata said `136` rows because the sum
+`32+32+(58+46)` was recorded incorrectly. The executable matrix always had
+all 168 rows, and the rank-126 solve and all restriction substitutions used
+that actual matrix. Thus the correction changes neither the emitted
+coefficient lift nor the rank/nullity theorem. It changes the redundant
+coordinate-row count from 10 to 42.
+
+## 2. Full Incidence Sequence
+
+Let `k=F_101[gamma]/(M)` and let `V=k^249` be the eta9 coefficient space. The
+three-graph restriction map is
+
+```text
+I : V -> R,
+rank(V)=249,
+rank(R)=126.
+```
+
+The verifier reconstructs the complete `168 x 249` matrix, checks its hash
+against G3AG, and row-reduces it exactly over `k`. It obtains
+
+```text
+rank(I)=126,
+K=ker(I),
+rank(K)=123.
+```
+
+This is the selected-residue realization of the formal exact sequence already
+promoted by G3AH:
+
+```text
+0 -> K_123 -> V_249 -> R_126 -> 0.
+```
+
+## 3. The Principal 33-Slice Inside the Full Kernel
+
+The verifier reconstructs the degree-six base equation
+
+```text
+s_union = s_H1 s_H2 s_4H
+```
+
+from the two selected line equations and the selected quartic. Multiplication
+by each of the ten degree-three base monomials in each Fermat coordinate gives
+30 directions. Multiplication by the K3 sheet coordinate in each Fermat
+coordinate gives three more. These are exactly the 33 principal directions.
+
+Every one of these columns is annihilated by the full incidence matrix. The
+selected residue coefficient vector `F` is also in the kernel and is
+independent of the principal slice. Hence
+
+```text
+rank span(F,L_33)=34.
+```
+
+## 4. The Missing 89 Tangent Directions
+
+Exact row reduction gives a canonical rank-123 kernel basis. Extending
+`(F,L_33)` inside that basis requires precisely 89 further vectors:
+
+```text
+K = span(F) direct-sum L_33 direct-sum E_89.
+```
+
+After quotienting by the radial coefficient direction `F`, the full
+projective graph-preserving tangent space is therefore
+
+```text
+T_graph = K/span(F),
+rank(T_graph)=122=33+89.
+```
+
+The 123 and 89 are deformation-module ranks. They are not physical fit
+parameters.
+
+## 5. True Normal Quotient
+
+At `[F]`, the tangent space to the full eta9 projective coefficient space has
+rank 248. The exact projective sequence is
+
+```text
+0 -> K/span(F) -> V/span(F) -> R -> 0,
+     rank 122       rank 248    rank 126.
+```
+
+Thus the true graph-incidence normal quotient has rank 126, not 215. The old
+33-slice quotient has the exact filtration
+
+```text
+0 -> (K/span(F))/L_33 -> (V/span(F))/L_33 -> R -> 0,
+             rank 89             rank 215       rank 126.
+```
+
+Equivalently,
+
+```text
+215 = 89 omitted tangent directions + 126 true normal directions.
+```
+
+The former 215-row cutset was therefore a correct quotient by the small
+principal slice, but it was too strong as a count of structural normal
+compatibility conditions. Eighty-nine of those directions are available
+graph-preserving deformations.
+
+## 6. Consequence for the Deligne Calculation
+
+The next carrier-specific computation must use the complete rank-122
+projective tangent frame. It should:
+
+1. evaluate the primitive Gauss-Manin/Deligne response on all 122 directions;
+2. test the resulting rank-126 conormal component;
+3. only after that test, solve the residual rank-122 tangent equation.
+
+The fixed-carrier `GF(11)` matrices `D`, `N`, and `S` cannot simply be copied
+to this selected `101`-adic carrier. Their 33-column calculation remains a
+valid principal-slice result on its declared carrier, but 89 additional
+selected graph-preserving columns and the carrier-specific transport are now
+the precise missing data.
+
+## 7. Theorem
+
+**Full Graph-Incidence Tangent and Normal Decomposition Theorem.** On the
+selected eta9 residue carrier, the three-graph incidence map has rank 126 and
+kernel rank 123. The selected member and the 33 principal directions span a
+rank-34 subspace of that kernel. A canonical exact extension supplies 89
+additional graph-preserving directions, so the projective graph-preserving
+tangent has rank 122 and the true incidence-normal quotient has rank 126. The
+old rank-215 quotient by the principal slice is an extension of the rank-126
+normal quotient by the omitted rank-89 tangent sector.
+
+**Proof.** The packet reconstructs the hash-locked G3AG matrix over the
+selected degree-six residue field and computes its rank and canonical kernel.
+It independently rebuilds `s_union`, embeds all 33 principal columns in the
+249-coordinate basis, and verifies that the matrix kills them and the selected
+member. Exact row reduction extends these 34 vectors by 89 canonical kernel
+vectors to a basis of `K`. Adding the 126 pivot-coordinate complement vectors
+then gives a full rank-249 frame. The displayed exact sequences and dimensions
+follow. QED.
+
+## 8. Boundary
+
+This theorem does not:
+
+- transfer the fixed number-field `D/N/S` entries to the selected carrier;
+- compute the full primitive Deligne derivative;
+- emit or prove the vanishing of `beta_C`;
+- select one deformation direction physically;
+- construct the visible `V3`, a common HYM chamber, or the Hull-Strominger
+  endpoint;
+- close `B.ETA9.01`, `B.ETA9.02`, or `B.HS.01`.
+
+## 9. Reproduction
+
+```text
+python build_ust_g3ak_full_graph_incidence_normal_decomposition.py
+python verify_ust_g3ak_full_graph_incidence_normal_decomposition.py
+python verify.py
+```
+
+The finite matrix artifact is
+`state/ust_g3ak_incidence_matrix.f101e6.u8`; its layout and SHA-256 are bound
+inside the theorem packet.

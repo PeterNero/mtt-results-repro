@@ -1,0 +1,84 @@
+# UST.G3AN Selected Cayley Full Response Rank-122 Theorem
+
+## Result
+
+On the hash-selected `F_(101^6)` Cayley carrier, the complete projective
+response matrix
+
+```text
+D = [D0 D1] : F_(101^6)^122 -> F_(101^6)^248
+```
+
+has exact rank `122` and left nullity `126`.
+
+This is the full response calculation. `D0` contains the 33 principal tangent
+directions and `D1` contains all 89 complementary directions. No uncomputed
+column or benchmark matrix entry remains in this finite selected response.
+
+## Schur proof
+
+G3AM supplied `rank(D0)=33`, 33 pivot rows, and the exact quotient operator
+
+```text
+N0 : F_(101^6)^248 -> F_(101^6)^215,
+N0 D0 = 0.
+```
+
+The G3AN campaign computed every one of the `248*89=22,072` selected products
+forming `D1`. The assembler then formed
+
+```text
+E = N0 D1
+```
+
+and exact extension-field elimination gave
+
+```text
+rank(E) = 89.
+```
+
+Therefore block Gaussian elimination gives
+
+```text
+rank(D) = rank(D0) + rank(E) = 33 + 89 = 122.
+```
+
+The same elimination emits an `89 x 89` inverse-certified pivot block and a
+rank-126 operator
+
+```text
+L : F_(101^6)^215 -> F_(101^6)^126,
+L E = 0.
+```
+
+Consequently `L*N0` is a factored left normal for the complete response.
+
+## Independent certificate
+
+The verifier does not trust only the assembled rank field. It:
+
+1. checks the selected G3AP quotient and all input hashes;
+2. reconstructs every chunk script and replays all 22,072 output entries;
+3. rebuilds `D1`, `N0` and `E`;
+4. verifies the inverse certificates for both pivot blocks;
+5. verifies the identity submatrices proving `rank(N0)=215` and
+   `rank(L)=126`; and
+6. verifies `N0 D0=0`, `E=N0D1`, `LE=0`, and the exact Schur rank identity.
+
+These inverse and quotient-identity witnesses are deterministic rank proofs;
+they avoid repeating a slower full-matrix elimination in every canonical run.
+
+## Claim boundary
+
+This theorem is exact for the selected finite residue carrier. It uses no
+GF(11) response entry, observed physics value, or fitted parameter. It does
+not by itself print a characteristic-zero response matrix, emit `beta_C`,
+prove `N_full beta_C=0`, or close a Hull-Strominger endpoint. G3AQ supplies
+the separate characteristic-zero rank promotion; G3AR retains the same-source
+Deligne-value decision.
+
+## Reproduction
+
+```powershell
+python verify_ust_g3an_selected_cayley_full_response_schur.py
+```

@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Independently replay the G3DJ second-prime H02 kernel certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3di_h02_split_algebra_kernel_relations as kernel_io
+import build_ust_g3dj_h02_second_prime_kernel_relations as second_prime
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3dj_h02_second_prime_kernel_relations.packet.json"
+PRIME = 33863
+ROOT_VALUE = 24259
+CORE = 17597
+CORE_DIMENSION = 24767
+UPDATE_DIMENSION = 6022
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def checked_path(record: dict[str, Any]) -> Path:
+    path = ROOT / record["path"]
+    require(path.is_file(), f"missing {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"size {path.name}")
+    require(sha256(path) == record["sha256"], f"hash {path.name}")
+    return path
+
+
+def normalize(matrix: sparse.spmatrix) -> sparse.csc_matrix:
+    value = matrix.tocsc().astype(np.int64)
+    value.sum_duplicates()
+    value.data %= PRIME
+    value.eliminate_zeros()
+    return value.astype(np.uint32)
+
+
+def evaluate_records(records: list[dict[str, Any]], root: int) -> sparse.csr_matrix:
+    matrices = [sparse.load_npz(checked_path(row)).tocsr().astype(np.int64) for row in records]
+    value = sparse.csr_matrix(matrices[0].shape, dtype=np.int64)
+    power = 1
+    for matrix in matrices:
+        value = value + matrix * power
+        power = power * root % PRIME
+    value.data %= PRIME
+    value.eliminate_zeros()
+    return value
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="ascii"))
+    require(all(packet["checks"].values()), "packet checks")
+    require(packet["field"]["prime"] == PRIME, "second prime")
+    require(packet["multiprime_promotion"]["CRT_modulus"] == 738789071, "CRT modulus")
+
+    g3di_path = checked_path(packet["inputs"]["G3DI"])
+    g3bw_path = checked_path(packet["inputs"]["G3BW"])
+    g3bz_path = checked_path(packet["inputs"]["G3BZ"])
+    g3de_path = checked_path(packet["inputs"]["G3DE"])
+    g3di = json.loads(g3di_path.read_text(encoding="ascii"))
+    g3bw = json.loads(g3bw_path.read_text(encoding="ascii"))
+    g3bz = json.loads(g3bz_path.read_text(encoding="ascii"))
+    g3de = json.loads(g3de_path.read_text(encoding="ascii"))
+    require(all(all(value["checks"].values()) for value in (g3di, g3bw, g3bz, g3de)), "input checks")
+
+    selection = np.load(
+        checked_path(g3di["split_algebra_kernel"]["selection"]), allow_pickle=False
+    )
+    selected = selection["selected_update_columns"].astype(np.int32)
+    dependent = selection["dependent_update_columns"].astype(np.int32)
+    require(selected.size == 4748 and dependent.size == 1274, "selection dimensions")
+    require(np.array_equal(np.sort(np.concatenate((selected, dependent))), np.arange(6022)), "selection partition")
+
+    power_path = checked_path(packet["second_split_algebra_kernel"]["power_basis_coefficients"])
+    coefficients = np.load(power_path, allow_pickle=False)["coefficients"]
+    require(coefficients.shape == (6, 6022, 1274), "power-basis shape")
+    roots = tuple(int(value) for value in packet["field"]["roots"])
+    require(roots == second_prime.ROOTS, "root order")
+    kernels: dict[int, sparse.csc_matrix] = {}
+    mismatches = 0
+    for index, row in enumerate(packet["root_kernels"]):
+        root = int(row["gamma_root"])
+        require(root == roots[index], "root payload order")
+        checked_path(row["endpoint_chart"])
+        checked_path(row["border_chart"])
+        kernel_path = checked_path(row["kernel"])
+        checked_path(row["kernel_log"])
+        payload = kernel_io.read_kernel(kernel_path)
+        require(payload["prime"] == PRIME, "kernel prime")
+        require(payload["ambient_rows"] == 30789 and payload["ambient_rank"] == 29515, "ambient rank")
+        require(payload["update_start"] == CORE_DIMENSION, "update start")
+        require(np.array_equal(payload["selected"], selected), "selected coordinates")
+        require(np.array_equal(payload["dependent"], dependent), "dependent coordinates")
+        matrix = payload["matrix"]
+        require(matrix.shape == (UPDATE_DIMENSION, 1274), "kernel shape")
+        mismatches += int(
+            np.count_nonzero(second_prime.evaluate_dense(coefficients, root) != matrix.toarray())
+        )
+        for column, coordinate in enumerate(dependent):
+            first, past = matrix.indptr[column : column + 2]
+            require(past > first, "nonempty relation")
+            require(matrix.indices[past - 1] == coordinate, "triangular dependent coordinate")
+            require(matrix.data[past - 1] == 1, "normalized dependent coefficient")
+        kernels[root] = matrix
+    require(mismatches == 0, "six-root interpolation replay")
+
+    mld = runtime.resolve_mld()
+    sys.path.insert(0, str(mld))
+    import build_q79_eta9_H11_physical_split_prime_residue as split_io
+    import build_q79_eta9_H20_split_prime_reconstruction as arithmetic
+    import export_q79_eta9_split_prime_selected_chart as exporter
+
+    held = next(row for row in packet["root_kernels"] if int(row["gamma_root"]) == ROOT_VALUE)
+    endpoint = split_io.as_scipy(
+        arithmetic.read_csc(checked_path(held["endpoint_chart"]), b"MTTSPC1\0", 6)
+    ).tocsc().astype(np.int64)
+    persisted_border = split_io.as_scipy(
+        arithmetic.read_csc(checked_path(held["border_chart"]), b"MTTSPC1\0", 6)
+    ).tocsc().astype(np.int64)
+    dm = np.load(ROOT / g3bw["DM_reduction"]["arrays"]["path"], allow_pickle=False)
+    core_rows = np.flatnonzero(dm["component_by_row"] == CORE).astype(np.int32)
+    core_columns = np.flatnonzero(dm["component_by_column"] == CORE).astype(np.int32)
+    require(core_rows.size == core_columns.size == CORE_DIMENSION, "core dimensions")
+    delta = evaluate_records(g3bz["affine_path_update"]["exact_gamma_coefficient_matrices"], ROOT_VALUE)
+    u = evaluate_records(g3de["factorization"]["U_gamma_coefficients"], ROOT_VALUE)
+    w = evaluate_records(g3de["factorization"]["W_gamma_coefficients"], ROOT_VALUE)
+    base = normalize(endpoint[dm["complement_rows"], :][:, 248:] - delta)
+    a_core = normalize(base[core_rows, :][:, core_columns])
+    u_core = normalize(u[core_rows, :])
+    w_core = normalize(w[:, core_columns])
+    outside = np.ones(u.shape[0], dtype=bool)
+    outside[core_rows] = False
+    require(u[outside, :].nnz == 0, "U core support")
+    reconstructed_border = normalize(
+        sparse.bmat(
+            [[a_core, u_core], [w_core, sparse.csc_matrix((UPDATE_DIMENSION, UPDATE_DIMENSION), dtype=np.uint32)]],
+            format="csc",
+        )
+    )
+    require((reconstructed_border.astype(np.int64) - persisted_border).nnz == 0, "held-root border reconstruction")
+
+    samples = np.asarray([0, 1, 2, 7, 31, 63, 127, 255, 383, 511, 767, 1023, 1200, 1250, 1272, 1273], dtype=np.int32)
+    sample_kernel = kernels[ROOT_VALUE][:, samples]
+    rhs = normalize(u_core.astype(np.int64) @ sample_kernel.astype(np.int64))
+    solver = mld / "solve_q79_eta9_split_prime_selected_chart"
+    require(solver.is_file(), "independent split solver")
+    with tempfile.TemporaryDirectory(prefix="ust_g3dj_verify_") as temporary_name:
+        temporary = Path(temporary_name)
+        core_path = temporary / "core.chart.bin"
+        rhs_path = temporary / "rhs.bin"
+        solution_path = temporary / "solution.bin"
+        log_path = temporary / "solve.log"
+        exporter.write_chart(
+            core_path,
+            PRIME,
+            CORE_DIMENSION,
+            0,
+            CORE_DIMENSION,
+            a_core.indptr.astype(np.uint64).tolist(),
+            a_core.indices.astype(np.uint32).tolist(),
+            a_core.data.astype(np.uint32).tolist(),
+        )
+        exporter.write_rhs(
+            rhs_path,
+            PRIME,
+            CORE_DIMENSION,
+            rhs.indptr.astype(np.uint64).tolist(),
+            rhs.indices.astype(np.uint32).tolist(),
+            rhs.data.astype(np.uint32).tolist(),
+        )
+        completed = subprocess.run(
+            [
+                "wsl",
+                runtime.wsl_path(solver),
+                "--chart",
+                runtime.wsl_path(core_path),
+                "--rhs",
+                runtime.wsl_path(rhs_path),
+                "--output",
+                runtime.wsl_path(solution_path),
+                "--log",
+                runtime.wsl_path(log_path),
+            ],
+            cwd=mld,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        solution = split_io.as_scipy(
+            arithmetic.read_csc(solution_path, b"MTTSCO1\0", 6)
+        )
+        require(solution.shape == (CORE_DIMENSION, samples.size), "sample inverse shape")
+        observation = (w_core.astype(np.int64) @ solution.astype(np.int64)).toarray() % PRIME
+        require(np.count_nonzero(observation) == 0, "independent QN sample residual")
+
+    require(packet["guardrails"]["claims_the_relations_lift_to_Q_gamma"] is False, "lift guardrail")
+    require(packet["multiprime_promotion"]["height_bound_available"] is False, "height-bound guardrail")
+    print(
+        "UST.G3DJ independent verification: PASS "
+        "second_split_kernel=6022x1274 interpolation_mismatches=0 "
+        "held_border_mismatch=0 sampled_QN_residual=0"
+    )
+
+
+if __name__ == "__main__":
+    main()

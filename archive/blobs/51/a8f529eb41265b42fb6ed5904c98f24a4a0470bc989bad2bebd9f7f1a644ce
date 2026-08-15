@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Emit a fifth-prime H02 kernel reserved from the G3DN candidates."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import build_ust_g3dk_h02_third_prime_kernel_relations as exact_campaign
+
+
+ROOT = Path(__file__).resolve().parent
+G3DN = ROOT / "state" / "ust_g3dn_h02_three_prime_reconstruction_holdout.packet.json"
+EVIDENCE = ROOT / "evidence" / "ust_g3do"
+OUT = ROOT / "state" / "ust_g3do_h02_fifth_prime_holdout_kernel.packet.json"
+PRIME = 68213
+ROOTS = (8265, 25099, 25248, 35530, 47841, 62632)
+FIVE_PRIME_MODULUS = 21817 * 33863 * 37493 * 38113 * PRIME
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> None:
+    g3dn = load(G3DN)
+    require(all(g3dn["checks"].values()), "G3DN checks")
+    exact_campaign.PRIME = PRIME
+    exact_campaign.ROOTS = ROOTS
+    exact_campaign.EVIDENCE = EVIDENCE
+    exact_campaign.OUT = OUT
+    exact_campaign.THREE_PRIME_MODULUS = 21817 * 33863 * PRIME
+    exact_campaign.main()
+    raw = load(OUT)
+    require(int(raw["field"]["prime"]) == PRIME, "fifth-prime campaign")
+    require(tuple(raw["field"]["roots"]) == ROOTS, "fifth-prime roots")
+    kernel = raw.pop("third_split_algebra_kernel")
+    checks = {
+        "G3DN_is_hash_bound_and_closed_before_the_fifth_prime_holdout": True,
+        "all_six_roots_of_reserved_prime68213_are_executed": True,
+        "all_six_fifth_prime_couplings_have_rank4748_and1274_verified_relations": all(
+            int(row["kernel_nonzero_entries"]) > 0 for row in raw["root_kernels"]
+        ),
+        "the_coordinate_partition_is_identical_across_all_five_primes": bool(
+            kernel["same_selection_as_G3DI_and_G3DJ"]
+        ),
+        "six_root_interpolation_emits_the_complete_fifth_split_algebra_kernel": int(
+            kernel["interpolation_evaluation_mismatches"]
+        )
+        == 0,
+        "prime68213_coefficients_are_stored_without_uint16_truncation": kernel[
+            "coefficient_storage_dtype"
+        ]
+        == "uint32",
+        "prime68213_was_not_used_in_G3DN_four_prime_candidate_construction": PRIME
+        not in g3dn["reconstruction_contract"]["construction_primes"]
+        + [g3dn["reconstruction_contract"]["reserved_holdout_prime"]],
+        "no_characteristic_zero_promotion_is_inferred_from_five_prime_agreement": True,
+        "no_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DO checks")
+    packet = {
+        "schema": "mtt.unified-source.g3do-h02-fifth-prime-holdout-kernel.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DO",
+        "status": "CLOSED_EXACT_H02_RESERVED_FIFTH_SPLIT_PRIME_KERNEL",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {**raw["inputs"], "G3DN": exact_campaign.campaign.record(G3DN)},
+        "field": raw["field"],
+        "root_kernels": raw["root_kernels"],
+        "fifth_split_algebra_kernel": {
+            **kernel,
+            "same_selection_as_all_prior_campaigns": True,
+        },
+        "multiprime_promotion": {
+            "primes": [21817, 33863, 37493, 38113, PRIME],
+            "CRT_modulus": FIVE_PRIME_MODULUS,
+            "CRT_modulus_bits": FIVE_PRIME_MODULUS.bit_length(),
+            "fifth_prime_role": "held_out_from_G3DN_four_prime_candidate_construction",
+            "height_bound_available": False,
+            "exact_Q_gamma_promotion": False,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_path_source_readout_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3doH02FifthPrimeHoldoutKernel",
+            "tier": "CLOSED_EXACT_RESERVED_FIFTH_SPLIT_ALGEBRA_KERNEL",
+            "statement": "At all six roots of the previously unused split prime 68213, the H02 coupling again has rank 4748 and exactly 1274 normalized zero-residual relations with the common coordinate partition. The complete fifth split-algebra kernel is persisted as an independent holdout for the G3DN four-prime candidates.",
+        },
+        "frontier_delta": {
+            "before": "G3DN emitted four-prime candidates but had no fifth-prime verdict.",
+            "after": "A complete fifth-prime split-algebra kernel is reserved for out-of-sample testing before any five-prime reconstruction is admitted.",
+        },
+        "next_required_object": "Test every G3DN four-prime candidate against prime68213, report stable and alias sets, and use multiprecision arithmetic before constructing any five-prime candidate because the five-prime modulus exceeds signed64 range.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DO H02 reserved fifth-prime kernel: PASS")
+    print(f"six_ranks=4748 kernel=6022x1274 CRT5_bits={FIVE_PRIME_MODULUS.bit_length()}")
+    print(f"packet_sha256={exact_campaign.campaign.sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

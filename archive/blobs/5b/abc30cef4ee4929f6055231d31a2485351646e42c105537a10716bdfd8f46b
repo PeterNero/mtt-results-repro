@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""Export the reciprocal G3AO vs ideals for exact prime-field msolve/F4."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+import sympy as sp
+
+import build_ust_g3ao_selected_cayley_toric_uvs_msolve_inputs as common
+import run_ust_g3ao_selected_cayley_toric_regularity as direct
+import run_ust_g3ao_selected_cayley_toric_vs_reciprocal_elimination as reciprocal
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+CAMPAIGN = direct.CAMPAIGN / "vs_reciprocal_msolve"
+SMOOTH_EXPORT_SCRIPT = CAMPAIGN / "export_smooth.sing"
+CUSP_EXPORT_SCRIPT = CAMPAIGN / "export_cusp.sing"
+SMOOTH_RAW = CAMPAIGN / "export_smooth.singular.out"
+CUSP_RAW = CAMPAIGN / "export_cusp.singular.out"
+SMOOTH_INPUT = CAMPAIGN / "smooth.msolve.in"
+CUSP_INPUT = CAMPAIGN / "cusp.msolve.in"
+OUT = CAMPAIGN / "inputs.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_export_script(polynomials: dict[str, str], locus: str) -> str:
+    script = reciprocal.make_script(polynomials, "std")
+    if locus == "smooth":
+        basis_start = script.index("ideal smoothBasis=std(smoothRestricted);")
+        export = '''int exportIndex;
+print("G3AO_MSOLVE_SMOOTH_COUNT="+string(size(smoothRestricted)));
+for (exportIndex=1;exportIndex<=size(smoothRestricted);exportIndex++)
+{ print("G3AO_MSOLVE_SMOOTH_"+string(exportIndex)+"="+string(smoothRestricted[exportIndex])); }
+print("G3AO_MSOLVE_EXPORT_PASS");
+quit;
+'''
+        return script[:basis_start] + export
+    require(locus == "cusp", "known reciprocal locus")
+    smooth_ring = script.index("ring smoothOrbit=")
+    return_to_source = script.index("setring source;", smooth_ring)
+    cusp_only = script[:smooth_ring] + script[return_to_source:]
+    basis_start = cusp_only.index("ideal cuspBasis=std(cuspRestricted);")
+    export = '''int exportIndex;
+print("G3AO_MSOLVE_CUSP_COUNT="+string(size(cuspRestricted)));
+for (exportIndex=1;exportIndex<=size(cuspRestricted);exportIndex++)
+{ print("G3AO_MSOLVE_CUSP_"+string(exportIndex)+"="+string(cuspRestricted[exportIndex])); }
+print("G3AO_MSOLVE_EXPORT_PASS");
+quit;
+'''
+    return cusp_only[:basis_start] + export
+
+
+def parse_cusp(raw: str) -> list[str]:
+    return common.parse_locus(raw.replace("G3AO_MSOLVE_CUSP", "G3AO_MSOLVE_SINGULAR"), "singular")
+
+
+def make_msolve_input(
+    polynomials: dict[str, str], generators: list[str], locus: str
+) -> str:
+    variables = (
+        "y,z,w,r,orbitInv,g"
+        if locus == "smooth"
+        else "y,z,w,t1,t2,r,orbitInv,g"
+    )
+    equations = [common.normalize_for_msolve(polynomials["minpoly"])]
+    equations.extend(common.normalize_for_msolve(value) for value in generators)
+    return variables + "\n101\n" + ",\n".join(equations) + "\n"
+
+
+def run_export(script: Path, raw_path: Path, text: str, timeout: int, reuse: bool) -> str:
+    script.write_text(text, encoding="ascii")
+    if reuse:
+        require(raw_path.is_file(), f"reusable {raw_path.name}")
+        return raw_path.read_text(encoding="utf-8")
+    completed = subprocess.run(
+        singular_command(ROOT, script),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    raw_path.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, f"Singular export {script.name}")
+    return completed.stdout
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument("--reuse-export", action="store_true")
+    args = parser.parse_args()
+    require(args.timeout > 0, "positive timeout")
+    CAMPAIGN.mkdir(parents=True, exist_ok=True)
+    polynomials = direct.selected_polynomials()
+    g = sp.symbols("g")
+    minpoly = sp.Poly(
+        sp.sympify(polynomials["minpoly"].replace("^", "**")),
+        g,
+        modulus=101,
+    )
+    require(minpoly.degree() == 6 and minpoly.is_irreducible, "irreducible F101 extension")
+    smooth_raw = run_export(
+        SMOOTH_EXPORT_SCRIPT,
+        SMOOTH_RAW,
+        make_export_script(polynomials, "smooth"),
+        args.timeout,
+        args.reuse_export,
+    )
+    cusp_raw = run_export(
+        CUSP_EXPORT_SCRIPT,
+        CUSP_RAW,
+        make_export_script(polynomials, "cusp"),
+        args.timeout,
+        args.reuse_export,
+    )
+    require("G3AO_MSOLVE_EXPORT_PASS" in smooth_raw, "smooth export marker")
+    require("G3AO_MSOLVE_EXPORT_PASS" in cusp_raw, "cusp export marker")
+    smooth = common.parse_locus(smooth_raw, "smooth")
+    cusp = parse_cusp(cusp_raw)
+    SMOOTH_INPUT.write_text(make_msolve_input(polynomials, smooth, "smooth"), encoding="ascii")
+    CUSP_INPUT.write_text(make_msolve_input(polynomials, cusp, "cusp"), encoding="ascii")
+    packet = {
+        "schema": "mtt.unified-source.g3ao-vs-reciprocal-msolve-inputs.v1",
+        "source_sha256": sha256(direct.SOURCE),
+        "field_presentation": {
+            "characteristic": 101,
+            "extension_variable": "g",
+            "minpoly": polynomials["minpoly"],
+            "degree": 6,
+            "irreducible_over_F101": True,
+            "all_roots_are_Frobenius_conjugate": True,
+            "emptiness_is_invariant_under_that_conjugation": True,
+        },
+        "loci": {
+            "smooth": {
+                "generator_count": len(smooth) + 1,
+                "export_script": {
+                    "path": str(SMOOTH_EXPORT_SCRIPT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(SMOOTH_EXPORT_SCRIPT),
+                },
+                "raw_output": {
+                    "path": str(SMOOTH_RAW.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(SMOOTH_RAW),
+                },
+                "input": {
+                    "path": str(SMOOTH_INPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(SMOOTH_INPUT),
+                },
+            },
+            "cusp": {
+                "generator_count": len(cusp) + 1,
+                "export_script": {
+                    "path": str(CUSP_EXPORT_SCRIPT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(CUSP_EXPORT_SCRIPT),
+                },
+                "raw_output": {
+                    "path": str(CUSP_RAW.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(CUSP_RAW),
+                },
+                "input": {
+                    "path": str(CUSP_INPUT.relative_to(direct.CAMPAIGN)).replace("\\", "/"),
+                    "sha256": sha256(CUSP_INPUT),
+                },
+            },
+        },
+        "checks": {
+            "the_exact_reciprocal_rK_one_presentation_is_used": True,
+            "the_tangent_rule_dr_equals_minus_r_squared_dK_is_retained": True,
+            "the_extension_minpoly_is_irreducible_and_adjoined_over_F101": True,
+            "smooth_and_cusp_loci_are_exported_separately": True,
+            "no_coefficient_is_rounded_or_coerced_to_GF11": True,
+            "no_observed_value_or_fit_parameter_is_used": True,
+        },
+    }
+    OUT.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "UST.G3AO vs reciprocal msolve inputs: PASS "
+        f"smooth={len(smooth)+1} cusp={len(cusp)+1}"
+    )
+
+
+if __name__ == "__main__":
+    main()

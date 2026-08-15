@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Independently verify the B69-to-B103 H20 frame intertwiner."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3cb_b69_b103_h20_frame_intertwiner.packet.json"
+PRIME = 11
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_record(record: dict[str, Any], default_repository: Path = ROOT) -> Path:
+    relative = record.get("path", record.get("repository_relative_path"))
+    require(isinstance(relative, str), "record path")
+    repository = Path(record.get("repository_path", default_repository))
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else repository / candidate
+    require(path.is_file(), f"record exists: {path}")
+    require(path.stat().st_size == int(record["bytes"]), f"record size: {path}")
+    require(sha256(path) == record["sha256"], f"record hash: {path}")
+    return path
+
+
+def load_verified(record: dict[str, Any], repository: Path = ROOT) -> dict[str, Any]:
+    return json.loads(verify_record(record, repository).read_text(encoding="utf-8"))
+
+
+def parse_monomial(monomial: str, variables: list[str]) -> tuple[int, ...]:
+    result = {variable: 0 for variable in variables}
+    for factor in monomial.split("*"):
+        match = re.fullmatch(r"([A-Za-z][A-Za-z0-9]*)(?:\^(\d+))?", factor)
+        require(match is not None and match.group(1) in result, "monomial parser")
+        result[match.group(1)] += int(match.group(2) or 1)
+    return tuple(result[variable] for variable in variables)
+
+
+def rank_and_determinant(matrix: np.ndarray) -> tuple[int, int]:
+    work = np.asarray(matrix, dtype=np.int64) % PRIME
+    rows, columns = work.shape
+    require(rows == columns, "square matrix")
+    rank = 0
+    determinant = 1
+    sign = 1
+    for column in range(columns):
+        candidates = np.flatnonzero(work[rank:, column])
+        if candidates.size == 0:
+            continue
+        pivot = rank + int(candidates[0])
+        if pivot != rank:
+            work[[rank, pivot]] = work[[pivot, rank]]
+            sign = -sign
+        pivot_value = int(work[rank, column])
+        determinant = determinant * pivot_value % PRIME
+        work[rank] = work[rank] * pow(pivot_value, -1, PRIME) % PRIME
+        if rank + 1 < rows:
+            factors = work[rank + 1 :, column].copy()
+            active = np.flatnonzero(factors)
+            if active.size:
+                target = rank + 1 + active
+                work[target] = (work[target] - factors[active, None] * work[rank]) % PRIME
+        rank += 1
+        if rank == rows:
+            break
+    return rank, determinant * sign % PRIME if rank == rows else 0
+
+
+def reduced_nonzeros(matrix: sparse.spmatrix) -> int:
+    value = matrix.tocsc()
+    value.data %= PRIME
+    value.eliminate_zeros()
+    return int(value.nnz)
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3CB", "theorem id")
+    require(all(packet["checks"].values()), "packet checks")
+    inputs = packet["inputs"]
+    b69 = load_verified(inputs["B69"])
+    load_verified(inputs["B72"])
+    b103 = load_verified(inputs["B103"])
+    macaulay = load_verified(inputs["H20_Macaulay"])
+    csc = load_verified(inputs["H20_CSC"])
+    factorization = load_verified(inputs["H20_factorization"])
+    verify_record(inputs["solver"])
+    verify_record(inputs["H20_CSC_binary"])
+    verify_record(inputs["H20_factorization_binary"])
+
+    variables = [str(value) for value in b103["variables"]]
+    primitive_monomials = [str(value) for value in b69["primitive_and_graph_bases"]["primitive_rows"]]
+    primitive = [parse_monomial(value, variables) for value in primitive_monomials]
+    h20 = next(block for block in b103["basis_blocks"] if block["name"] == "H20")
+    target = [tuple(int(value) for value in row) for row in h20["basis_exponent_vectors"]]
+    require(len(primitive) == len(set(primitive)) == 248, "primitive size")
+    require(len(target) == len(set(target)) == 248, "target size")
+    require((len(set(primitive) & set(target)), len(set(primitive) - set(target)), len(set(target) - set(primitive))) == (215, 33, 33), "frame overlap")
+
+    ambient = [
+        tuple(int(value) for value in row)
+        for row in macaulay["target_monomial_basis"]["exponent_vectors"]
+    ]
+    lookup = {row: index for index, row in enumerate(ambient)}
+    primitive_rows = [lookup[row] for row in primitive]
+    target_rows = [lookup[row] for row in target]
+    require(target_rows == [int(value) for value in csc["binary"]["quotient_unit_rows"]], "quotient rows")
+    rhs = sparse.csc_matrix(
+        (
+            np.ones(248, dtype=np.uint8),
+            (np.asarray(primitive_rows, dtype=np.int32), np.arange(248, dtype=np.int32)),
+        ),
+        shape=(282, 248),
+    )
+
+    rhs_path = verify_record(packet["frame_intertwiner"]["ambient_RHS"])
+    raw = rhs_path.read_bytes()
+    require(raw[:8] == b"MTTRHS1\0", "RHS magic")
+    # Rewriting the independently reconstructed matrix must reproduce the exact artifact.
+    replay_path = ROOT / "evidence" / "ust_g3cb" / ".verify_frame_rhs.tmp"
+    runtime.write_rhs(replay_path, rhs)
+    try:
+        require(replay_path.read_bytes() == raw, "RHS replay")
+    finally:
+        replay_path.unlink(missing_ok=True)
+
+    coordinate_path = verify_record(packet["frame_intertwiner"]["full_coordinate_solution"])
+    coordinates, quotient_units, image_rank = runtime.read_coordinates(coordinate_path)
+    require(coordinates.shape == (282, 248), "coordinate shape")
+    require((quotient_units, image_rank) == (248, 34), "coordinate dimensions")
+
+    source_matrix_path = verify_record(csc["inputs"]["Macaulay_matrix"])
+    source_matrix = sparse.load_npz(source_matrix_path).tocsc()
+    quotient_matrix = sparse.csc_matrix(
+        (
+            np.ones(248, dtype=np.uint8),
+            (np.asarray(target_rows, dtype=np.int32), np.arange(248, dtype=np.int32)),
+        ),
+        shape=(282, 248),
+    )
+    selected = [int(value) for value in factorization["exact_coordinate_identity"]["selected_original_Jacobian_columns"]]
+    chart = sparse.hstack([quotient_matrix, source_matrix[:, selected]], format="csc")
+    difference = chart.astype(np.int64) @ coordinates.astype(np.int64) - rhs.astype(np.int64)
+    require(reduced_nonzeros(difference) == 0, "ambient reconstruction")
+
+    frame = coordinates[:248, :].toarray().astype(np.uint8) % PRIME
+    stored_frame = np.load(verify_record(packet["frame_intertwiner"]["frame_matrix"]), allow_pickle=False)
+    inverse = np.load(verify_record(packet["frame_intertwiner"]["inverse_matrix"]), allow_pickle=False)
+    require(np.array_equal(frame, stored_frame), "stored frame")
+    rank, determinant = rank_and_determinant(frame)
+    require((rank, determinant) == (248, 5), "rank and determinant")
+    identity = np.eye(248, dtype=np.uint8)
+    require(np.array_equal((frame.astype(np.int64) @ inverse.astype(np.int64) % PRIME).astype(np.uint8), identity), "right inverse")
+    require(np.array_equal((inverse.astype(np.int64) @ frame.astype(np.int64) % PRIME).astype(np.uint8), identity), "left inverse")
+
+    target_index = {row: index for index, row in enumerate(target)}
+    identity_columns = 0
+    for column, exponent in enumerate(primitive):
+        if exponent in target_index:
+            expected = np.zeros(248, dtype=np.uint8)
+            expected[target_index[exponent]] = 1
+            require(np.array_equal(frame[:, column], expected), "shared identity column")
+            identity_columns += 1
+    require(identity_columns == 215, "identity-column count")
+    difference_payload = json.loads(verify_record(packet["frame_intertwiner"]["monomial_difference"]).read_text(encoding="utf-8"))
+    require(difference_payload["shared_monomials"] == 215, "difference shared count")
+    require(len(difference_payload["B69_only"]) == len(difference_payload["B103_only"]) == 33, "difference counts")
+    verify_record(packet["frame_intertwiner"]["solver_log"])
+
+    print("UST.G3CB B69/B103 H20 frame verifier: PASS")
+    print(
+        f"overlap=215 replacements=33 rank={rank} det_mod11={determinant} "
+        f"nnz={np.count_nonzero(frame)} residual=0"
+    )
+
+
+if __name__ == "__main__":
+    main()

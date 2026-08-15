@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Prepare the compact, checkout-independent G3GI calculation input."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path.insert(0, str(ROOT))
+
+import build_ust_g3fy_pdelta_socle_kernel_source as socle
+import probe_ust_g3fy_selected_degree21_source_span as runtime
+
+
+INPUT = HERE / "input" / "g3gi_full_catalecticant_input.npz"
+MANIFEST = HERE / "input" / "g3gi_full_catalecticant_input.json"
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def atomic_json(path: Path, payload: dict[str, object]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def main() -> None:
+    (
+        _base,
+        _pdelta_packet,
+        _g3bi,
+        sextic,
+        _g3_polynomial,
+        _h4_polynomial,
+        pdelta_polynomial,
+    ) = socle.selected_polynomials()
+    source = np.load(runtime.G3FR, allow_pickle=False)
+    primes = source["primes"].astype(np.uint32)
+    roots = source["roots"].astype(np.uint32)
+    targets = source["degree15_primitives"].astype(np.uint32)
+    kernels = []
+    for prime in primes:
+        kernel, profile = runtime.pdelta_kernel(
+            sextic, pdelta_polynomial, int(prime)
+        )
+        if profile["kernel_dimension"] != 18:
+            raise AssertionError(f"Pdelta kernel dimension at p={prime}")
+        kernels.append(kernel.astype(np.uint32))
+
+    HERE.joinpath("input").mkdir(parents=True, exist_ok=True)
+    temporary = INPUT.with_suffix(".tmp.npz")
+    np.savez_compressed(
+        temporary,
+        primes=primes,
+        roots=roots,
+        pdelta_kernels=np.stack(kernels),
+        degree15_targets=targets,
+    )
+    temporary.replace(INPUT)
+    git_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    atomic_json(
+        MANIFEST,
+        {
+            "schema": "ust.g3gi.full-catalecticant-input.v1",
+            "git_head": git_head,
+            "input": {
+                "path": INPUT.relative_to(HERE).as_posix(),
+                "sha256": sha256(INPUT),
+                "bytes": INPUT.stat().st_size,
+            },
+            "source_G3FR": {
+                "path": runtime.G3FR.relative_to(ROOT).as_posix(),
+                "sha256": sha256(runtime.G3FR),
+                "bytes": runtime.G3FR.stat().st_size,
+            },
+            "shape": {
+                "primes": list(primes.shape),
+                "roots": list(roots.shape),
+                "pdelta_kernels": list(np.stack(kernels).shape),
+                "degree15_targets": list(targets.shape),
+            },
+        },
+    )
+    print(
+        f"G3GI input prepared: primes={len(primes)} fibers={roots.size} "
+        f"bytes={INPUT.stat().st_size} sha256={sha256(INPUT)}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

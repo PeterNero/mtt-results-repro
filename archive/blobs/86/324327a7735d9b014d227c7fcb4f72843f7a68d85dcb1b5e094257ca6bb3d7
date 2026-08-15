@@ -1,0 +1,160 @@
+# UST.G3FE: H02 Component-20 Eight-Prime Graded Promotion Audit Theorem
+
+## Status
+
+`CLOSED_EXACT_EIGHT_PRIME_GRADED_PROFILE_NUMERIC_PROMOTION_REJECTED_COLON_MODULE_OPEN`
+
+This theorem is exact over eight complete split algebras, comprising 48
+canonical fibers. It does not promote the result to `Q(gamma)`.
+
+## Setup
+
+For every archived split prime, UST.G3DI--UST.G3DU provide the canonical
+ordered component-20 kernel
+
+```text
+K_15 subset Sym^15(k^3),  dim(K_15) = 100.
+```
+
+Define the largest graded ideal pieces visible at degree 15 by
+
+```text
+I_d = {f in Sym^d(k^3) : f Sym^(15-d)(k^3) subset K_15}.
+```
+
+UST.G3FD established the resulting graded presentation at the six roots over
+the first split prime. UST.G3FE repeats the construction over all eight
+archived split primes and performs a seven-prime construction followed by an
+independent eighth-prime holdout.
+
+## Theorem
+
+All 48 split fibers have one common normalized generator profile:
+
+```text
+4  minimal generators in degree 11,
+15 minimal generators in degree 14,
+11 minimal generators in degree 15.
+```
+
+Through degree 15, the first syzygies contain exactly
+
+```text
+1 linear syzygy in degree 12,
+1 new quadratic syzygy in degree 13 modulo the three linear multiples.
+```
+
+Consequently, the truncated presentation is
+
+```text
+R(-12) + R(-13)
+    -> R(-11)^4 + R(-14)^15 + R(-15)^11
+    -> I through degree 15,
+```
+
+and it gives the exact finite-field Hilbert identities
+
+```text
+dim I_11 = 4,
+dim I_12 = 4*3 - 1 = 11,
+dim I_13 = 4*6 - 3 - 1 = 20,
+dim I_14 = 4*10 - 6 - 3 + 15 = 46,
+dim I_15 = 4*15 - 10 - 6 + 15*3 + 11 = 100.
+```
+
+The same normalization chart is valid on all 48 fibers.
+
+## Numerical-Promotion Decision
+
+The compressed generator payload contains 21,648 power-basis residues per
+prime; the compact syzygy payload contains 216. The first seven primes give
+the CRT modulus
+
+```text
+359164433419006164411572822811067
+```
+
+with rational-reconstruction uniqueness bound
+
+```text
+13400828956057273.
+```
+
+Literal replay at the eighth prime gives:
+
+```text
+generator payload:
+  17,511 valid candidates,
+  10,980 holdout passes,
+  10,950 structural zeros,
+  30 normalization units,
+  0 passing nontrivial coefficients;
+
+syzygy payload:
+  157 valid candidates,
+  60 holdout passes,
+  56 structural zeros,
+  4 normalization units,
+  0 passing nontrivial coefficients.
+```
+
+Thus the only promoted values are coefficients forced by normalization or
+support. No genuinely nontrivial normalized coefficient survives the
+independent holdout.
+
+## Proof Certificate
+
+The builder extracts every canonical 136-by-100 component kernel, computes
+the normalized graded generators and syzygies, interpolates each six-root
+split algebra, and performs the seven-prime reconstruction/eighth-prime
+holdout.
+
+The independent verifier then:
+
+1. hash-binds all eight source packets and all 48 canonical kernel archives;
+2. evaluates every stored power-basis generator at every split root;
+3. checks the graded ranks `4,11,20,31,46,89,100` and equality with each
+   canonical kernel;
+4. verifies the linear and genuinely new quadratic syzygies;
+5. independently recomputes the CRT, rational reconstruction, holdout masks,
+   and all reported counts.
+
+Artifacts:
+
+```text
+build_ust_g3fe_component20_eight_prime_graded_promotion_audit.py
+verify_ust_g3fe_component20_eight_prime_graded_promotion_audit.py
+evidence/ust_g3fe/H02.component20.eight_prime_graded_promotion_audit.json
+evidence/ust_g3fe/H02.component20.graded_generator_eight_prime_residues.npz
+evidence/ust_g3fe/H02.component20.graded_generator_reconstruction_audit.npz
+```
+
+## Consequence
+
+The component-20 kernel is not an unstructured 5,411-coordinate numerical
+object. Across all tested split fibers it is the degree-15 part of a compact
+graded module with 30 minimal generators and two visible first-syzygy types.
+This is a substantial structural reduction.
+
+At the same time, the holdout proves that simply adding more split primes is
+not a credible promotion route. The normalized coefficients vary in a way
+that is not captured by bounded rational reconstruction in the chosen chart.
+
+## Claim Boundary and Next Object
+
+UST.G3FE does not prove finite-flatness over the characteristic-zero base,
+does not reconstruct the generators over `Q(gamma)`, does not prove the
+component-20 rank contribution 36 over `Q(gamma)`, and does not close the
+global H02 rank.
+
+The next proof object is an exact selected colon module over `Q(gamma)`:
+
+```text
+I_d = {f : f Sym^(15-d)
+             lies in the ordered prior-source plus Jacobian image}.
+```
+
+It must be constructed directly from the G3EX cohomological/Macaulay
+presentation and supplied with a degree-through-15 free-resolution proof.
+That upstream construction, rather than further blind prime extension, is the
+remaining characteristic-zero route.

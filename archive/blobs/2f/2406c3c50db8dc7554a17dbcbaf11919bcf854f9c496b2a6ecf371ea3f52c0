@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Run an untrusted degree-44 Hilbert-prefix G3AP quotient hedge.
+
+This route deliberately supplies only Hilbert numerator coefficients through
+the largest degree consumed by G3AP. The final entry is Singular's minimum
+module-generator weight metadata, not a Hilbert coefficient. The output is a
+candidate only and must be reconstructed without a Hilbert hint before use.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_qring_top_dimension as qring
+import run_ust_g3ap_selected_cayley_fiber2_hilbert_hedge as guided
+import run_ust_g3ap_selected_cayley_fiber2_qring_hilbert_hedge as qguided
+from ust_singular_runtime import singular_command
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+SOURCE = fiber2.SOURCE
+HINT = guided.HINT
+BASE_CACHE = qring.BASE_CACHE
+SCRIPT = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert44_guided.sing"
+OUTPUT = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert44_guided.singular.out"
+MODULE_CACHE = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert44_guided_degree44.ssi"
+PACKET = STATE / "ust_g3ap_selected_cayley_fiber2_qring_hilbert44_guided.packet.json"
+MAXIMUM_HINT_DEGREE = 44
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def prefix_hint(hilbert: list[int]) -> list[int]:
+    require(len(hilbert) > MAXIMUM_HINT_DEGREE + 2, "full predecessor Hilbert vector")
+    minimum_generator_weight = hilbert[-1]
+    require(minimum_generator_weight == 4, "minimum module-generator weight")
+    return hilbert[: MAXIMUM_HINT_DEGREE + 1] + [minimum_generator_weight]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeout", type=int, default=43200)
+    parser.add_argument("--emit-only", action="store_true")
+    args = parser.parse_args()
+    require(BASE_CACHE.is_file() and BASE_CACHE.stat().st_size > 0, "base cache")
+    hint_packet, full_hilbert = guided.load_hint()
+    hilbert = prefix_hint(full_hilbert)
+    source = SOURCE.read_text(encoding="ascii")
+    SCRIPT.write_text(
+        qguided.guided_qring_script(source, hilbert, MODULE_CACHE),
+        encoding="ascii",
+    )
+    if args.emit_only:
+        print(f"emitted {SCRIPT.relative_to(ROOT)}")
+        return
+    MODULE_CACHE.unlink(missing_ok=True)
+    started = time.time()
+    completed = subprocess.run(
+        singular_command(ROOT, SCRIPT),
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.timeout,
+        check=False,
+    )
+    OUTPUT.write_text(completed.stdout, encoding="utf-8")
+    require(completed.returncode == 0, "degree-44 Hilbert-prefix execution")
+    require("G3AP_F2_QHGUIDE_LEADER_EXPORT_PASS" in completed.stdout, "guided pass")
+    require(MODULE_CACHE.is_file() and MODULE_CACHE.stat().st_size > 0, "candidate cache")
+    base, module = qguided.parse_leaders(completed.stdout)
+    standards, sectors = fiber2.enumerate_target(qring.combined_leaders(base, module))
+    total = sum(sector["enumerated_monomials"] for sector in sectors.values())
+    require(total == fiber2.EXPECTED_TOTAL, "complete target enumeration")
+    require(standards == [fiber2.EXPECTED_STANDARD], "candidate unique top standard")
+    packet = {
+        "schema": "mtt.unified-source.g3ap-selected-cayley-fiber2-qring-hilbert44-guided-candidate.v1",
+        "date": "2026-08-10",
+        "status": "CANDIDATE_REQUIRES_ORDINARY_NO_HINT_RECONSTRUCTION",
+        "inputs": {
+            "selected_source": {
+                "path": str(SOURCE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SOURCE),
+            },
+            "predecessor_hint": {
+                "path": str(HINT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(HINT),
+            },
+            "untrusted_base_cache": {
+                "path": str(BASE_CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(BASE_CACHE),
+                "bytes": BASE_CACHE.stat().st_size,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "execution": {
+            "script": {
+                "path": str(SCRIPT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(SCRIPT),
+            },
+            "output": {
+                "path": str(OUTPUT.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(OUTPUT),
+            },
+            "returncode": completed.returncode,
+            "elapsed_seconds": time.time() - started,
+            "base_basis_size": len(base),
+            "module_generator_count": 21,
+            "candidate_basis_size_through_bound": len(module),
+            "scalar_degree_bound": 44,
+            "candidate_module_cache": {
+                "path": str(MODULE_CACHE.relative_to(ROOT)).replace("\\", "/"),
+                "sha256": sha256(MODULE_CACHE),
+                "bytes": MODULE_CACHE.stat().st_size,
+                "valid_through_base_scalar_degree": 44,
+                "isSB_trust_attribute_stored": False,
+            },
+        },
+        "Hilbert_acceleration": {
+            "maximum_retained_coefficient_degree": MAXIMUM_HINT_DEGREE,
+            "retained_coefficient_count": MAXIMUM_HINT_DEGREE + 1,
+            "minimum_module_generator_weight_metadata": hilbert[-1],
+            "full_vector_sha256": hashlib.sha256(
+                json.dumps(full_hilbert).encode("ascii")
+            ).hexdigest(),
+            "prefix_vector_sha256": hashlib.sha256(
+                json.dumps(hilbert).encode("ascii")
+            ).hexdigest(),
+        },
+        "fiber_degree_two_module": {
+            "base_quotient": "B/(K,E,C)",
+            "components": [name for _, name, _, _ in fiber2.COMPONENTS],
+            "component_scalar_shifts": [shift for _, _, _, shift in fiber2.COMPONENTS],
+            "sectors": sectors,
+        },
+        "candidate_top_piece": {
+            "Cox_degree": [18, 2, 2],
+            "scalar_weight": 44,
+            "enumerated_monomials": total,
+            "dimension_if_candidate_is_certified": 1,
+            "basis_if_candidate_is_certified": ["w^12*t2^4*s^2"],
+        },
+        "checks": {
+            "selected_source_is_hash_bound": True,
+            "Hilbert_prefix_stops_at_the_exact_G3AP_degree": True,
+            "Singular_minimum_generator_weight_metadata_is_preserved": True,
+            "all_21_selected_generators_are_supplied_to_std": True,
+            "all_174865_target_monomials_are_enumerated": True,
+            "candidate_leading_module_leaves_one_target_standard": True,
+        },
+        "guardrails": {
+            "claims_the_Hilbert_prefix_is_a_complete_Hilbert_series": False,
+            "claims_the_candidate_module_is_independently_certified": False,
+            "claims_G3AP_is_closed": False,
+            "claims_response_rank_or_beta_C_is_computed": False,
+        },
+        "next_required_object": (
+            "Reconstruct B/(K,E,C), recompute ordinary std on this untrusted "
+            "candidate without any Hilbert hint, and reduce all 21 generators."
+        ),
+        "acceleration_hint_sha256": hashlib.sha256(
+            json.dumps(hint_packet["fiber_degree_two"]["hilbert_numerator"]).encode(
+                "ascii"
+            )
+        ).hexdigest(),
+    }
+    PACKET.write_text(json.dumps(packet, indent=2) + "\n", encoding="ascii")
+    print(
+        "G3AP fiber2 qring degree-44 Hilbert-prefix candidate: PASS "
+        f"base={len(base)} module={len(module)} monomials={total} certification=OPEN"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Certify the ambient two-normal decomposition of the component-20 source."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import numpy as np
+import sympy as sp
+
+import build_ust_g3ff_component20_conic_fourth_normal_source as g3ff_runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3BI = ROOT / "state/ust_g3bi_explicit_root_start.packet.json"
+G3FF = ROOT / "evidence/ust_g3ff/H02.component20.conic_fourth_normal_source.json"
+EVIDENCE = ROOT / "evidence/ust_g3fi"
+NORMAL_PAIR = EVIDENCE / "H02.component20.root_ideal_normal_pair.npz"
+CERTIFICATE = EVIDENCE / "H02.component20.root_ideal_normal_pair.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"input exists: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, object]:
+    require(path.is_file(), f"artifact exists: {path}")
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def source_polynomial(
+    coefficients: list[list[int]], theta: int, coordinate: int
+) -> sp.Poly:
+    x, y, z, w = sp.symbols("x y z w")
+    offset = 83 * theta
+    expression = sum(
+        int(coefficients[offset + local][coordinate])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(g3ff_runtime.source_monomials(9))
+    )
+    expression += w * sum(
+        int(coefficients[offset + 55 + local][coordinate])
+        * x ** exponent[0]
+        * y ** exponent[1]
+        * z ** exponent[2]
+        for local, exponent in enumerate(g3ff_runtime.source_monomials(6))
+    )
+    return sp.Poly(expression, x, y, z, w, domain=sp.ZZ)
+
+
+def homogeneous_exponents(degree: int) -> list[tuple[int, int, int]]:
+    """Use the ascending order already frozen by the G3FF normal artifact."""
+    return [
+        (a, b, degree - a - b)
+        for a in range(degree + 1)
+        for b in range(degree - a + 1)
+    ]
+
+
+def coefficient_rows(polynomials: list[sp.Poly], degree: int) -> np.ndarray:
+    x, y, z = sp.symbols("x y z")
+    return np.asarray(
+        [
+            [
+                int(
+                    polynomial.coeff_monomial(
+                        x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+                    )
+                )
+                for polynomial in polynomials
+            ]
+            for exponent in homogeneous_exponents(degree)
+        ],
+        dtype=np.int64,
+    )
+
+
+def primitive_gcd(polynomials: list[sp.Poly]) -> sp.Poly:
+    result = polynomials[0]
+    for polynomial in polynomials[1:]:
+        result = sp.gcd(result, polynomial)
+    return result
+
+
+def main() -> None:
+    g3bi = load(G3BI)
+    g3ff = load(G3FF)
+    require(all(g3bi["checks"].values()), "G3BI checks")
+    require(all(g3ff["checks"].values()), "G3FF checks")
+    coefficients = g3bi["selected_source"]["coefficient_vectors"]
+    require(len(coefficients) == 249, "three selected source rows")
+
+    x, y, z, w = sp.symbols("x y z w")
+    q = sp.Poly(x * z - y**2, x, y, z, domain=sp.ZZ)
+    g3 = sp.Poly(
+        sum(
+            coefficient * x ** exponent[0] * y ** exponent[1] * z ** exponent[2]
+            for exponent, coefficient in g3ff_runtime.G3_TERMS.items()
+        ),
+        x,
+        y,
+        z,
+        domain=sp.ZZ,
+    )
+    r = w + g3.as_expr()
+
+    deltas: list[sp.Poly] = []
+    b6_polynomials: list[sp.Poly] = []
+    d7_polynomials: list[sp.Poly] = []
+    for coordinate in range(6):
+        delta = source_polynomial(coefficients, 0, coordinate) - source_polynomial(
+            coefficients, 1, coordinate
+        )
+        b6 = sp.Poly(
+            sp.Poly(delta.as_expr(), w).coeff_monomial(w),
+            x,
+            y,
+            z,
+            domain=sp.ZZ,
+        )
+        restricted = sp.Poly(
+            delta.as_expr().subs(w, -g3.as_expr()), x, y, z, domain=sp.ZZ
+        )
+        d7, remainder = sp.div(restricted, q)
+        require(remainder.is_zero, f"q divisibility coordinate {coordinate}")
+        require(b6.total_degree() == 6, f"B6 degree coordinate {coordinate}")
+        require(d7.total_degree() == 7, f"D7 degree coordinate {coordinate}")
+        replay = sp.Poly(
+            q.as_expr() * d7.as_expr() + r * b6.as_expr(),
+            x,
+            y,
+            z,
+            w,
+            domain=sp.ZZ,
+        )
+        require(replay == delta, f"ambient normal-pair replay coordinate {coordinate}")
+        deltas.append(delta)
+        b6_polynomials.append(b6)
+        d7_polynomials.append(d7)
+
+    b6 = coefficient_rows(b6_polynomials, 6)
+    d7 = coefficient_rows(d7_polynomials, 7)
+    require(b6.shape == (28, 6), "B6 coefficient shape")
+    require(d7.shape == (36, 6), "D7 coefficient shape")
+
+    g3ff_artifact = ROOT / g3ff["exact_characteristic_zero_source"][
+        "normal_source_artifact"
+    ]["path"]
+    require(
+        sha256(g3ff_artifact)
+        == g3ff["exact_characteristic_zero_source"]["normal_source_artifact"][
+            "sha256"
+        ],
+        "G3FF source hash",
+    )
+    stored_d7 = np.load(g3ff_artifact, allow_pickle=False)[
+        "D7_gamma_coordinates"
+    ].astype(np.int64)
+    require(np.array_equal(d7, stored_d7), "ambient quotient reproduces G3FF D7")
+
+    q_factorization = sp.factor_list(q.as_expr(), x, y, z)
+    require(len(q_factorization[1]) == 1, "q has one irreducible factor")
+    require(q_factorization[1][0][1] == 1, "q is square-free")
+    require(sp.Poly(r, w).LC() == 1, "r is monic in w")
+    require(primitive_gcd(b6_polynomials).as_expr() == 1, "B6 coordinate gcd")
+    require(primitive_gcd(d7_polynomials).as_expr() == 1, "D7 coordinate gcd")
+
+    layer_dimensions = tuple(2 * degree + 1 for degree in (15, 13, 11, 9))
+    require(layer_dimensions == (31, 27, 23, 19), "conic quotient layers")
+    require(sum(layer_dimensions) == 100, "four absorbable layers")
+    require((7 + 2) * (7 + 1) // 2 == 36, "fourth-normal dimension")
+    require(100 + 36 == (15 + 2) * (15 + 1) // 2, "Sym15 split")
+
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        NORMAL_PAIR,
+        B6_gamma_coordinates=b6,
+        D7_gamma_coordinates=d7,
+        degree6_exponents=np.asarray(homogeneous_exponents(6), dtype=np.int16),
+        degree7_exponents=np.asarray(homogeneous_exponents(7), dtype=np.int16),
+    )
+
+    packet = {
+        "schema": "ust.g3fi.h02.component20.root-ideal-normal-pair.v1",
+        "date": "2026-08-15",
+        "theorem_id": "UST.G3FI",
+        "status": "CLOSED_EXACT_AMBIENT_ROOT_IDEAL_NORMAL_PAIR_NORMAL_JET_HOMOTOPY_OPEN",
+        "inputs": {"G3BI": record(G3BI), "G3FF": record(G3FF)},
+        "root_complete_intersection": {
+            "ambient_ring": "Q(gamma)[x,y,z,w], wt(x,y,z,w)=(1,1,1,3)",
+            "q": "xz-y^2",
+            "r": "w+G3(x,y,z)",
+            "root_graph_ideal": "I_R=(q,r)",
+            "regular_sequence_certificate": (
+                "q is irreducible over Q and r is monic of degree one in w "
+                "over Q[x,y,z]/(q); hence (q,r) is a regular sequence"
+            ),
+            "Koszul_syzygy": "r*(-q)+q*r=0; coefficient pairs are defined modulo (r*H4,-q*H4)",
+        },
+        "exact_ambient_normal_pair": {
+            "identity": "A0_selected-A1=(w+G3)*B6+(xz-y^2)*D7",
+            "coordinate_field": "Q(gamma) with the frozen six-coordinate power basis",
+            "B6_space": "Sym^6(x,y,z) tensor Q(gamma)",
+            "B6_shape": list(b6.shape),
+            "B6_nonzero_rows": int(np.count_nonzero(np.any(b6 != 0, axis=1))),
+            "B6_maximum_absolute_coordinate": int(np.max(np.abs(b6))),
+            "D7_space": "Sym^7(x,y,z) tensor Q(gamma)",
+            "D7_shape": list(d7.shape),
+            "D7_nonzero_rows": int(np.count_nonzero(np.any(d7 != 0, axis=1))),
+            "D7_maximum_absolute_coordinate": int(np.max(np.abs(d7))),
+            "normal_pair_artifact": record(NORMAL_PAIR),
+            "canonical_normal_form": (
+                "B6 is the w coefficient of A0_selected-A1 and D7 is the "
+                "q quotient after w=-G3; requiring both quotients to be w-free "
+                "makes this representative unique"
+            ),
+        },
+        "restricted_identity": {
+            "formula": "(A0_selected-A1)|_(w=-G3)=q*D7",
+            "relation_to_G3FF": "This is exactly the G3FF identity, now identified as the r=0 restriction.",
+        },
+        "normal_filtration_dimension_certificate": {
+            "Sym15_dimension": 136,
+            "q4_Sym7_dimension": 36,
+            "quotient_dimension": 100,
+            "successive_conic_quotient_degrees": [15, 13, 11, 9],
+            "successive_conic_quotient_dimensions": list(layer_dimensions),
+            "identity": "Sym15/q^4*Sym7 has dimensions 31+27+23+19=100",
+        },
+        "checks": {
+            "all_six_ambient_coordinate_identities_replay_over_Z": True,
+            "the_stored_G3FF_D7_is_reproduced_exactly": True,
+            "q_and_r_form_a_weighted_complete_intersection": True,
+            "B6_and_D7_are_primitive_across_the_six_coordinates": True,
+            "the_four_conic_layers_have_total_dimension100": True,
+            "the_fourth_normal_carrier_has_dimension36": True,
+        },
+        "guardrails": {
+            "claims_the_normal_pair_alone_constructs_the_normal_jet_homotopy": False,
+            "claims_component20_rank36_over_Qgamma": False,
+            "claims_the_finite100_dimensional_kernel_is_promoted": False,
+            "claims_global_H02_rank_equality": False,
+            "claims_a_physical_endpoint": False,
+        },
+        "theorem": {
+            "name": "ustG3fiComponent20AmbientRootIdealNormalPair",
+            "tier": "CLOSED_EXACT_AMBIENT_COMPLETE_INTERSECTION_NORMAL_PAIR",
+            "statement": (
+                "For the selected G3BI endpoint, the full ambient difference "
+                "A0_selected-A1 has the exact and canonically normalized decomposition "
+                "(w+G3)B6+(xz-y^2)D7 over Q(gamma). The root graph is the regular "
+                "complete intersection (xz-y^2,w+G3). The G3FF qD7 identity is its "
+                "restriction to w=-G3. This supplies both normal coefficients needed "
+                "by a Koszul normal-jet homotopy but does not itself construct that homotopy."
+            ),
+        },
+        "next_required_object": (
+            "Construct the selected Koszul contraction for the regular sequence "
+            "(q,r), apply it recursively to the four conic layers of Sym15/q^4Sym7, "
+            "and literally replay the resulting100 characteristic-zero relations "
+            "against the exact G3EX presentation. The residual q4Sym7 map must then "
+            "have an independently certified nonzero36x36 minor."
+        ),
+    }
+    require(all(packet["checks"].values()), "checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    CERTIFICATE.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    print(
+        "UST.G3FI ambient root-ideal normal pair: PASS "
+        f"B6={b6.shape[0]}x6 D7={d7.shape[0]}x6 layers={layer_dimensions}"
+    )
+
+
+if __name__ == "__main__":
+    main()

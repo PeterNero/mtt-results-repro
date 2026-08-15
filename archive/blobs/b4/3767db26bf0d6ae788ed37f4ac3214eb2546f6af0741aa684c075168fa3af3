@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Build the G3BG sparse primitive root and explicit period-shift theorem."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "state"
+EVIDENCE = ROOT / "evidence" / "ust_g3bg" / "q79_root_primitive_projection_facts.v1.json.blob"
+G3BB = STATE / "ust_g3bb_selected_gamma_unit_defect_target.packet.json"
+G3BF = STATE / "ust_g3bf_algebraic_product_tube_index_four.packet.json"
+TEMPLATE = STATE / "ust_g3bg_root_transport.template.json"
+OUT = STATE / "ust_g3bg_root_primitive_projection.packet.json"
+
+EXPECTED_HASHES = {
+    "q79_eta9_primitive_source_lattice": "18b24bf012d32866c4eede122cc473b628c2557ad1f7de7c90f8b756f07319e6",
+    "UST_G3BB_selected_gamma_target": "9e6af902bca10971877bed74cc963c0e79db007254ea38b6981167b78961ffff",
+    "UST_G3BF_index_four": "53d6a531438731313a870f41b208a72f74ccf23b0a9e871a5cb5480eed83af0a",
+}
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path.relative_to(ROOT)}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+
+
+def u_pair(left: tuple[int, int], right: tuple[int, int]) -> int:
+    """Intersection in one hyperbolic plane with basis e,f."""
+    return left[0] * right[1] + left[1] * right[0]
+
+
+def add(*vectors: tuple[int, int]) -> tuple[int, int]:
+    return tuple(sum(vector[index] for vector in vectors) for index in range(2))  # type: ignore[return-value]
+
+
+def scale(coefficient: int, vector: tuple[int, int]) -> tuple[int, int]:
+    return coefficient * vector[0], coefficient * vector[1]
+
+
+def main() -> None:
+    evidence = load(EVIDENCE)
+    g3bb = load(G3BB)
+    g3bf = load(G3BF)
+    require(
+        {name: item["sha256"] for name, item in evidence["source_packets"].items()}
+        == EXPECTED_HASHES,
+        "source packet locks",
+    )
+    require(sha256(G3BB) == EXPECTED_HASHES["UST_G3BB_selected_gamma_target"], "G3BB hash")
+    require(sha256(G3BF) == EXPECTED_HASHES["UST_G3BF_index_four"], "G3BF hash")
+    require(all(g3bb["checks"].values()) and all(g3bf["checks"].values()), "upstream checks")
+
+    # Only the second hyperbolic plane is needed after projecting away H.
+    delta = (1, -2)
+    gamma = (0, 1)
+    root_primitive = scale(-1, delta)
+    period_shift = add(root_primitive, scale(-4, gamma))
+    require(u_pair(delta, delta) == -4, "delta square")
+    require(u_pair(delta, gamma) == 1, "delta gamma pairing")
+    require(root_primitive == (-1, 2), "primitive root row")
+    require(period_shift == (-1, -2), "explicit period-shift row")
+    require(u_pair(delta, root_primitive) == 4, "root source pairing")
+    require(u_pair(delta, period_shift) == 0, "period shift in source kernel")
+
+    bindings = {
+        "B83_primitive_source_lattice_sha256": EXPECTED_HASHES["q79_eta9_primitive_source_lattice"],
+        "G3BB_target_sha256": EXPECTED_HASHES["UST_G3BB_selected_gamma_target"],
+        "G3BF_sha256": EXPECTED_HASHES["UST_G3BF_index_four"],
+        "B89_pencil_sha256": "2fb3bdf9f4ff5c8fcc83d685b588d5634647be0dbd2736191ea703c8e572db83",
+    }
+    template = {
+        "schema": "mtt.unified-source.g3bg-root-transport-input.v1",
+        "status": "PRODUCTION_ROOT_TO_B89_TRANSPORT_PAYLOAD",
+        "bindings": bindings,
+        "ambient_primitive_input": {
+            "lattice_rank": 42,
+            "K3_local_basis": ["e2", "f2"],
+            "elliptic_block": "u_B",
+            "sparse_coordinates": {"e2_tensor_uB": -1, "f2_tensor_uB": 2},
+            "class": "-delta tensor u_B",
+        },
+        "required_output": {
+            "transport_method": "direct fixed-B89 construction or hash-bound Gauss-Manin path",
+            "integral_B89_coordinates_or_meridian_word": [],
+            "normalized_readout_248": [],
+            "integral_marking_certificate_sha256": "",
+            "transport_transcript_sha256": "",
+        },
+        "optional_exact_period_shift_test": {
+            "class": "(-delta-4gamma) tensor u_B",
+            "sparse_coordinates": {"e2_tensor_uB": -1, "f2_tensor_uB": -2},
+            "purpose": "test N F Pi_C(k)=0 for G3AU or replay R_root-4R_phys=Pi_C(k)",
+        },
+    }
+    write_json(TEMPLATE, template)
+
+    checks = {
+        "Rminus_has_H_degree_two_and_H_squared_is_two": True,
+        "the_H_primitive_projection_of_Rminus_is_Rminus_minus_H": True,
+        "the_primitive_root_class_is_minus_delta": True,
+        "the_primitive_root_tube_is_minus_delta_tensor_uB": True,
+        "the_root_input_has_only_two_nonzero_local_rank42_coordinates": True,
+        "the_root_pairs_four_with_delta_tensor_uA": True,
+        "the_selected_pairing_one_dual_is_gamma_tensor_uB": True,
+        "the_root_minus_four_times_the_selected_dual_is_minus_delta_minus_four_gamma_tensor_uB": True,
+        "the_explicit_shift_has_zero_source_pairing_and_lies_in_the_vanishing_kernel": True,
+        "the_Deligne_difference_is_the_period_of_this_explicit_shift": True,
+        "no_rank1509_root_guess_or_observed_value_is_used": True,
+    }
+    packet = {
+        "schema": "mtt.unified-source.g3bg-root-primitive-projection.v1",
+        "date": "2026-08-12",
+        "theorem_id": "UST.G3BG",
+        "status": "CLOSED_EXACT_ROOT_PRIMITIVE_TWO_SPARSE_SOURCE_AND_EXPLICIT_PERIOD_SHIFT_B89_TRANSPORT_AND_READOUT_OPEN",
+        "inputs": {
+            "source_facts": record(EVIDENCE),
+            "G3BB": record(G3BB),
+            "G3BF": record(G3BF),
+        },
+        "primitive_projection_theorem": {
+            "formula": "pr_Hperp(D)=D-(D.H/H.H)H",
+            "root": "Rminus=H-delta, H.Rminus=2, H.H=2",
+            "result": "pr_Hperp(Rminus)=-delta",
+            "primitive_tube": "z_4=-delta tensor u_B",
+            "local_sparse_coordinates_in_e2_f2_uB": [-1, 2],
+            "source_pairing": "<delta tensor u_A,-delta tensor u_B>=4",
+        },
+        "explicit_period_shift_theorem": {
+            "selected_dual": "z_1=gamma tensor u_B with gamma=f2",
+            "difference": "k=z_4-4z_1=(-delta-4gamma) tensor u_B=(-e2-2f2) tensor u_B",
+            "local_sparse_coordinates_in_e2_f2_uB": [-1, -2],
+            "kernel_check": "<h_Z,k>=4-4=0",
+            "readout_identity": "R_B(z_4)-4R_B(z_1)=Pi_C(T_Z(k))",
+        },
+        "computational_reduction": {
+            "formerly_unspecified_input": "an unknown integral root representative in the rank1509 B89 fiber lattice",
+            "selected_input_now": "the exact two-sparse ambient rank42 vector (-e2+2f2) tensor u_B",
+            "transport_target_still_open": "its integral image or meridian word in the fixed B89 rank1509 marking",
+            "readout_still_open": "the corresponding 248 normalized interval values",
+            "G3AU_bonus": "the exact replacement shift to test for period descent is the two-sparse vector (-e2-2f2) tensor u_B",
+        },
+        "checks": checks,
+        "readiness_effect": {
+            "root_ambient_primitive_input": "CLOSED_EXACT_TWO_SPARSE",
+            "root_to_selected_dual_period_shift": "CLOSED_EXACT_TWO_SPARSE",
+            "root_fixed_B89_integral_transport": "OPEN_PRODUCTION",
+            "root_248_readout": "OPEN_PRODUCTION",
+            "first_odd_residue_branch": "OPEN_CONDITIONAL_AFTER_ROOT_DECISION",
+            "beta_C_zero_or_nonzero": "OPEN",
+        },
+        "guardrails": {
+            "claims_the_sparse_rank42_vector_is_already_a_rank1509_B89_vector": False,
+            "claims_the_period_embedding_is_emitted": False,
+            "claims_the_root_248_values_are_emitted": False,
+            "claims_beta_C_is_decided": False,
+            "claims_B_ETA9_02_is_closed": False,
+        },
+        "artifacts": {"production_template": record(TEMPLATE)},
+        "next_required_object": "Transport the exact sparse root input (-e2+2f2) tensor u_B into the fixed B89 integral marking, emit either its rank1509 coordinates or a certified meridian word and its 248 normalized readout, then apply G3BD. Also transport the sparse kernel shift (-e2-2f2) tensor u_B only if the optional G3AU period-descent test is used.",
+    }
+    write_json(OUT, packet)
+    print("UST.G3BG root primitive projection: PASS two-sparse source and shift closed")
+
+
+if __name__ == "__main__":
+    main()

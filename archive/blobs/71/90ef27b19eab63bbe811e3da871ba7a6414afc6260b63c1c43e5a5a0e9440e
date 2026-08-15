@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Verify the bounded positive-Cox grading optimization used by the G3AP hedge."""
+
+from __future__ import annotations
+
+import math
+
+import build_ust_g3ap_selected_cayley_fiber2_module_top_dimension as fiber2
+import build_ust_g3ap_selected_cayley_fiber2_weighted_hilbert_hint as weighted
+import run_ust_g3ap_selected_cayley_fiber2_weighted_boxtrunc_hilbert_hedge as boxtrunc
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def h_monomials(degree: int) -> int:
+    return sum(
+        math.comb(degree - 3 * w_power + 2, 2)
+        for w_power in range(degree // 3 + 1)
+    )
+
+
+def preceding_cone_count(
+    h_weight: int, l_weight: int, h_target: int, l_target: int
+) -> int:
+    scalar_target = h_weight * h_target + l_weight * l_target
+    total = 0
+    for h_degree in range(scalar_target // h_weight + 1):
+        l_maximum = (scalar_target - h_weight * h_degree) // l_weight
+        total += h_monomials(h_degree) * math.comb(l_maximum + 3, 3)
+    return total
+
+
+def grading_record(h_weight: int, l_weight: int) -> tuple[int, int, int, int, int]:
+    cayley_weight = max(6 * h_weight, 3 * l_weight, 9 * h_weight + l_weight) + 1
+    target_degree = 18 * h_weight + 2 * l_weight + 2 * cayley_weight
+    counts = [
+        preceding_cone_count(h_weight, l_weight, h_degree, l_degree)
+        for _, _, (h_degree, l_degree), _ in fiber2.COMPONENTS
+    ]
+    return sum(counts), target_degree, h_weight, l_weight, cayley_weight
+
+
+def l_truncated_cone_count(h_weight: int, l_weight: int) -> int:
+    total = 0
+    for _, _, (h_target, l_target), _ in fiber2.COMPONENTS:
+        scalar_target = h_weight * h_target + l_weight * l_target
+        for l_degree in range(l_target + 1):
+            h_maximum = (scalar_target - l_weight * l_degree) // h_weight
+            total += (
+                sum(h_monomials(h_degree) for h_degree in range(h_maximum + 1))
+                * math.comb(l_degree + 2, 2)
+            )
+    return total
+
+
+def cox_box_cone_count() -> int:
+    return sum(
+        sum(h_monomials(h_degree) for h_degree in range(h_target + 1))
+        * math.comb(l_target + 3, 3)
+        for _, _, (h_target, l_target), _ in fiber2.COMPONENTS
+    )
+
+
+def parse_truncator(value: str) -> tuple[int, tuple[int, ...]]:
+    monomial, component_text = value.rsplit("*gen(", 1)
+    component = int(component_text[:-1])
+    names = ("x", "y", "z", "w", "t0", "t1", "t2")
+    exponents = {name: 0 for name in names}
+    for factor in monomial.split("*"):
+        name, separator, power = factor.partition("^")
+        require(name in exponents, "truncator variable")
+        exponents[name] = int(power) if separator else 1
+    return component, tuple(exponents[name] for name in names)
+
+
+def verify_emitted_box_truncators() -> None:
+    generators = boxtrunc.truncation_generators()
+    parsed = [parse_truncator(value) for value in generators]
+    require(len(parsed) == len(set(parsed)) == 12159, "emitted Cox-box truncators")
+    by_component: dict[int, list[tuple[int, ...]]] = {}
+    for component, exponent in parsed:
+        by_component.setdefault(component, []).append(exponent)
+    require(set(by_component) == set(range(1, 7)), "all truncator components")
+    for component, _, (h_target, l_target), _ in fiber2.COMPONENTS:
+        points = by_component[component]
+        expected_count = (
+            h_monomials(h_target + 1)
+            + int((h_target + 1) % 3 != 0)
+            + math.comb(l_target + 3, 2)
+        )
+        require(len(points) == expected_count, "component truncator count")
+        for exponent in points:
+            h_degree = sum(exponent[:3]) + 3 * exponent[3]
+            l_degree = sum(exponent[4:])
+            require(
+                (h_degree > h_target) != (l_degree > l_target),
+                "one Cox boundary per truncator",
+            )
+            for index, power in enumerate(exponent):
+                if power == 0:
+                    continue
+                predecessor = list(exponent)
+                predecessor[index] -= 1
+                predecessor_h = sum(predecessor[:3]) + 3 * predecessor[3]
+                predecessor_l = sum(predecessor[4:])
+                require(
+                    predecessor_h <= h_target and predecessor_l <= l_target,
+                    "minimal Cox-box boundary",
+                )
+
+
+def main() -> None:
+    weighted.validate_grading()
+    ordinary = grading_record(1, 1)
+    selected = grading_record(weighted.H_WEIGHT, weighted.L_WEIGHT)
+    require(ordinary == (55769401, 42, 1, 1, 11), "ordinary grading count")
+    require(selected == (11483294, 254, 5, 18, 64), "selected grading count")
+    feasible = []
+    for h_weight in range(1, weighted.TARGET_SCALAR_DEGREE + 1):
+        for l_weight in range(1, weighted.TARGET_SCALAR_DEGREE + 1):
+            if math.gcd(h_weight, l_weight) != 1:
+                continue
+            cayley_weight = max(
+                6 * h_weight, 3 * l_weight, 9 * h_weight + l_weight
+            ) + 1
+            target_degree = 18 * h_weight + 2 * l_weight + 2 * cayley_weight
+            if target_degree <= weighted.TARGET_SCALAR_DEGREE:
+                feasible.append(grading_record(h_weight, l_weight))
+    require(feasible, "nonempty bounded grading search")
+    require(min(feasible) == selected, "unique minimum under target-degree cap")
+    require(
+        sum(record[0] == selected[0] for record in feasible) == 1,
+        "unique cone-count minimizer",
+    )
+    require(selected[0] * 4 < ordinary[0], "more than fourfold cone reduction")
+    truncation_generators = sum(
+        math.comb(l_degree + 3, 2)
+        for _, _, (_, l_degree), _ in fiber2.COMPONENTS
+    )
+    truncated_cone = l_truncated_cone_count(weighted.H_WEIGHT, weighted.L_WEIGHT)
+    require(truncation_generators == 165, "L-truncation generator count")
+    require(truncated_cone == 7669082, "L-truncated predecessor cone")
+    require(
+        selected[0] - truncated_cone == 3814212,
+        "exact L-truncation cone reduction",
+    )
+    require(truncated_cone * 100 < selected[0] * 67, "more than 33 percent cone reduction")
+    h_boundary_generators = sum(
+        h_monomials(h_target + 1) + int((h_target + 1) % 3 != 0)
+        for _, _, (h_target, _), _ in fiber2.COMPONENTS
+    )
+    box_generators = truncation_generators + h_boundary_generators
+    box_cone = cox_box_cone_count()
+    verify_emitted_box_truncators()
+    require(h_boundary_generators == 11994, "H-boundary generator count")
+    require(box_generators == 12159, "Cox-box generator count")
+    require(box_cone == 3769310, "Cox-box predecessor cone")
+    require(truncated_cone - box_cone == 3899772, "exact H-boundary cone reduction")
+    print(
+        "UST.G3AP positive Cox regrading: PASS "
+        f"H+L_cone={ordinary[0]} 5H+18L_cone={selected[0]} "
+        f"L_truncated_cone={truncated_cone} truncators={truncation_generators} "
+        f"Cox_box_cone={box_cone} box_truncators={box_generators} "
+        f"bounded_candidates={len(feasible)} target_degree=254"
+    )
+
+
+if __name__ == "__main__":
+    main()

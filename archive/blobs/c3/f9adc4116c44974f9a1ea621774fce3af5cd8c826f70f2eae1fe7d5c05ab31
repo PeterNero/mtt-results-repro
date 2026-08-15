@@ -1,0 +1,93 @@
+# UST.G3BL H11 Proof-Prime Initializer No-Go Theorem
+
+## Result
+
+The good-reduction place `(11,gamma-3)` used to certify G3BI smoothness and
+compile the G3BK correction is not an admissible H11 transport initializer at
+the root-containing endpoint `a=1`. This is an exact statement about the
+finite Macaulay/de Rham presentation. It is not a singularity statement about
+the characteristic-zero endpoint or its geometry.
+
+## Determinant-Lemma Core
+
+Let `A` be the frozen square B89 H11 coordinate chart. Its columns consist of
+the quotient units and the selected original-Jacobian columns, and its
+invertibility over `GF(11)` is already certified. Let `U V^T` be the endpoint
+correction restricted to the 1,186 active selected columns. The exact
+coordinate solver computes `A^-1 U`, so the matrix determinant lemma reduces
+the endpoint chart to
+
+```text
+L = I_1186 + V^T A^-1 U.
+```
+
+Exact Gaussian elimination gives
+
+```text
+rank_GF(11)(L) = 1185,
+det_GF(11)(L)  = 0.
+```
+
+Thus the selected `5439 x 5439` endpoint chart has rank `5438`, with one
+missing direction.
+
+## Exhausting The Available Columns
+
+The selected chart omits 1,071 original-Jacobian columns from the complete
+H11 Macaulay presentation. G3BL reconstructs their endpoint values using the
+same G3BI correction, solves all 1,071 columns in the certified B89 chart, and
+evaluates them against the exact left-null functional of `L`.
+
+The result is
+
+```text
+unused columns tested:                  1071
+nonzero left-null evaluations:             0
+rank of full 5439 x 6510 presentation: 5438
+```
+
+Therefore no column swap inside this complete presentation repairs the
+endpoint chart at this proof place. The obstruction is not an artifact of one
+unlucky selected minor: the entire available H11 augmented presentation has
+corank one over `GF(11)`.
+
+## Interpretation
+
+This separates two facts that must not be conflated:
+
+1. G3BI proves that the selected characteristic-zero eta9 member is smooth by
+   proper smooth good reduction at `(11,gamma-3)`.
+2. G3BL proves that the auxiliary H11 Macaulay/de Rham presentation loses one
+   rank at the same special-fiber endpoint.
+
+Smoothness of the variety does not force every chosen cohomology presentation
+to remain a basis after reduction. The correct consequence is therefore an
+initializer change, not rejection of G3BI or of the G3BJ path.
+
+The G3BK transcendental-interior argument is unaffected. Every interior
+parameter is transcendental, whereas every frozen-chart pole is algebraic.
+Only the endpoint initializer must be supplied at an alternate split good
+prime or directly in characteristic zero.
+
+## Claim Boundary
+
+G3BL does not prove:
+
+- singularity of the H11 characteristic-zero endpoint;
+- singularity of the G3BI geometric member;
+- failure of H11 transport at every good prime;
+- the corresponding H02 endpoint status;
+- a characteristic-zero H11 inverse action; or
+- integral transport and the terminal 248-row readout.
+
+## Reproduction
+
+```powershell
+python probe_ust_g3bl_endpoint_chart_unit.py --target H11
+python build_ust_g3bl_h11_proof_prime_initializer_nogo.py
+python verify_ust_g3bl_h11_proof_prime_initializer_nogo.py
+```
+
+The probe invokes the already certified exact coordinate solver. The builder
+and verifier replay the determinant-lemma core, reconstruct the complete set
+of unused endpoint columns, and hash-bind every finite artifact.

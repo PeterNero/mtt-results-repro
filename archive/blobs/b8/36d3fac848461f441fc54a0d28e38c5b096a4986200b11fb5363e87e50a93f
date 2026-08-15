@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Emit the exact H02 coupling-kernel relations over the complete split algebra."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import struct
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from scipy import sparse
+
+import build_ust_g3dg_h02_split_place_full_coupling_rank as rank_runtime
+import probe_ust_g3bl_endpoint_chart_unit as runtime
+
+
+ROOT = Path(__file__).resolve().parent
+G3DH = ROOT / "state" / "ust_g3dh_h02_all_split_roots_coupling_rank.packet.json"
+SOURCE = ROOT / "ust_split_prime_sparse_kernel.cpp"
+EXECUTABLE = ROOT / "state" / "ust_split_prime_sparse_kernel"
+EVIDENCE = ROOT / "evidence" / "ust_g3di"
+OUT = ROOT / "state" / "ust_g3di_h02_split_algebra_kernel_relations.packet.json"
+PRIME = 21817
+ROOTS = (5, 1971, 6912, 10062, 10605, 14055)
+UPDATE_START = 24767
+UPDATE_DIMENSION = 6022
+KERNEL_DIMENSION = 1274
+COUPLING_RANK = 4748
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"missing {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def record(path: Path) -> dict[str, Any]:
+    return {
+        "path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+    }
+
+
+def compile_tool() -> str:
+    require(SOURCE.is_file(), "kernel-tool source")
+    completed = subprocess.run(
+        [
+            "wsl",
+            "g++",
+            "-O3",
+            "-std=c++17",
+            runtime.wsl_path(SOURCE),
+            "-o",
+            runtime.wsl_path(EXECUTABLE),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    require(completed.returncode == 0, completed.stdout + completed.stderr)
+    require(EXECUTABLE.is_file(), "kernel-tool executable")
+    return completed.stdout.strip() or "compiled exact split-prime kernel tool"
+
+
+def read_kernel(path: Path) -> dict[str, Any]:
+    raw = path.read_bytes()
+    require(raw[:8] == b"MTTKER1\0", "kernel magic")
+    (
+        prime,
+        rows,
+        columns,
+        nonzeros,
+        ambient_rows,
+        ambient_rank,
+        update_start,
+        selected_count,
+    ) = struct.unpack_from("<8Q", raw, 8)
+    offset = 8 + 8 * 8
+    indptr = np.frombuffer(raw, dtype="<u8", count=columns + 1, offset=offset).copy()
+    offset += (columns + 1) * 8
+    indices = np.frombuffer(raw, dtype="<u4", count=nonzeros, offset=offset).copy()
+    offset += nonzeros * 4
+    data = np.frombuffer(raw, dtype="<u4", count=nonzeros, offset=offset).copy()
+    offset += nonzeros * 4
+    dependent = np.frombuffer(raw, dtype="<u4", count=columns, offset=offset).copy()
+    offset += columns * 4
+    selected = np.frombuffer(raw, dtype="<u4", count=selected_count, offset=offset).copy()
+    offset += selected_count * 4
+    require(offset == len(raw), "kernel binary length")
+    matrix = sparse.csc_matrix((data, indices, indptr), shape=(rows, columns))
+    require(matrix.has_canonical_format, "canonical kernel CSC")
+    return {
+        "prime": int(prime),
+        "ambient_rows": int(ambient_rows),
+        "ambient_rank": int(ambient_rank),
+        "update_start": int(update_start),
+        "selected": selected.astype(np.int32),
+        "dependent": dependent.astype(np.int32),
+        "matrix": matrix,
+    }
+
+
+def interpolate(values: np.ndarray) -> np.ndarray:
+    require(values.shape[0] == 6, "six root values")
+    vandermonde = np.asarray(
+        [[pow(root, degree, PRIME) for degree in range(6)] for root in ROOTS],
+        dtype=np.int64,
+    )
+    augmented = np.concatenate(
+        (vandermonde, np.eye(6, dtype=np.int64)), axis=1
+    )
+    for column in range(6):
+        choices = np.flatnonzero(augmented[column:, column] % PRIME)
+        require(choices.size > 0, "Vandermonde pivot")
+        selected = column + int(choices[0])
+        if selected != column:
+            augmented[[column, selected]] = augmented[[selected, column]]
+        augmented[column] = augmented[column] * pow(int(augmented[column, column] % PRIME), -1, PRIME) % PRIME
+        for row in range(6):
+            if row == column:
+                continue
+            factor = int(augmented[row, column] % PRIME)
+            if factor:
+                augmented[row] = (augmented[row] - factor * augmented[column]) % PRIME
+    inverse = augmented[:, 6:].astype(np.uint64)
+    coefficients = np.empty(values.shape, dtype=np.uint16)
+    for degree in range(6):
+        accumulator = np.zeros(values.shape[1:], dtype=np.uint64)
+        for root_index in range(6):
+            accumulator += values[root_index].astype(np.uint64) * inverse[degree, root_index]
+            accumulator %= PRIME
+        coefficients[degree] = accumulator.astype(np.uint16)
+    return coefficients
+
+
+def evaluate(coefficients: np.ndarray, root: int) -> np.ndarray:
+    value = coefficients[-1].astype(np.uint64)
+    for degree in reversed(range(coefficients.shape[0] - 1)):
+        value = (value * root + coefficients[degree]) % PRIME
+    return value.astype(np.uint16)
+
+
+def main() -> None:
+    g3dh = load(G3DH)
+    require(all(g3dh["checks"].values()), "G3DH checks")
+    require(tuple(g3dh["field"]["roots"]) == ROOTS, "G3DH roots")
+    campaign = {int(row["gamma_root"]): row for row in g3dh["campaign"]}
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    compile_stdout = compile_tool()
+
+    root_payloads: list[dict[str, Any]] = []
+    matrices: list[sparse.csc_matrix] = []
+    for index, root in enumerate(ROOTS, start=1):
+        border = ROOT / campaign[root]["border_chart"]["path"]
+        require(sha256(border) == campaign[root]["border_chart"]["sha256"], "border hash")
+        kernel_path = EVIDENCE / f"H02.Q_kernel.p{PRIME}.g{root}.bin"
+        log_path = EVIDENCE / f"H02.Q_kernel.p{PRIME}.g{root}.log"
+        print(f"G3DI root {index}/6 gamma={root}: compiling kernel relations", flush=True)
+        completed = subprocess.run(
+            [
+                "wsl",
+                runtime.wsl_path(EXECUTABLE),
+                "--chart",
+                runtime.wsl_path(border),
+                "--kernel",
+                runtime.wsl_path(kernel_path),
+                "--log",
+                runtime.wsl_path(log_path),
+                "--update-start",
+                str(UPDATE_START),
+                "--progress-seconds",
+                "20",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        require(completed.returncode == 0, completed.stdout + completed.stderr)
+        fields = rank_runtime.initializer.parse_log(log_path)
+        require(fields.get("STATUS") == "SUCCESS", "kernel-tool status")
+        require(int(fields["RANK"]) == UPDATE_START + COUPLING_RANK, "border rank")
+        require(int(fields["VERIFIED_RELATIONS"]) == KERNEL_DIMENSION, "verified relations")
+        payload = read_kernel(kernel_path)
+        matrix = payload["matrix"]
+        require(
+            payload["prime"] == PRIME
+            and payload["ambient_rows"] == UPDATE_START + UPDATE_DIMENSION
+            and payload["ambient_rank"] == UPDATE_START + COUPLING_RANK
+            and payload["update_start"] == UPDATE_START,
+            "kernel header",
+        )
+        require(matrix.shape == (UPDATE_DIMENSION, KERNEL_DIMENSION), "kernel shape")
+        for column, dependent in enumerate(payload["dependent"]):
+            first, past = matrix.indptr[column : column + 2]
+            indices = matrix.indices[first:past]
+            data = matrix.data[first:past]
+            require(indices[-1] == dependent and data[-1] == 1, "unit dependent coordinate")
+            require(np.all(indices[:-1] < dependent), "triangular relation")
+        matrices.append(matrix)
+        root_payloads.append(
+            {
+                "gamma_root": root,
+                "border_chart": record(border),
+                "kernel": record(kernel_path),
+                "kernel_log": record(log_path),
+                "kernel_nonzero_entries": int(matrix.nnz),
+                "selected_update_columns": int(payload["selected"].size),
+                "dependent_update_columns": int(payload["dependent"].size),
+                "solver_stdout": completed.stdout.strip(),
+            }
+        )
+        print(f"G3DI gamma={root}: kernel_nnz={matrix.nnz} verified=1274", flush=True)
+
+    reference_selected = read_kernel(ROOT / root_payloads[0]["kernel"]["path"])["selected"]
+    reference_dependent = read_kernel(ROOT / root_payloads[0]["kernel"]["path"])["dependent"]
+    require(reference_selected.size == COUPLING_RANK, "selected count")
+    require(reference_dependent.size == KERNEL_DIMENSION, "dependent count")
+    for row in root_payloads[1:]:
+        payload = read_kernel(ROOT / row["kernel"]["path"])
+        require(np.array_equal(payload["selected"], reference_selected), "common selected columns")
+        require(np.array_equal(payload["dependent"], reference_dependent), "common dependent columns")
+
+    values = np.stack(
+        [matrix.toarray().astype(np.uint16, copy=False) for matrix in matrices], axis=0
+    )
+    coefficients = interpolate(values)
+    mismatches = sum(
+        int(np.count_nonzero(evaluate(coefficients, root) != values[index]))
+        for index, root in enumerate(ROOTS)
+    )
+    require(mismatches == 0, "kernel interpolation replay")
+    power_basis_path = EVIDENCE / "H02.Q_kernel.p21817.power_basis.u16.npz"
+    selection_path = EVIDENCE / "H02.Q_kernel.selection.npz"
+    np.savez_compressed(power_basis_path, coefficients=coefficients)
+    np.savez_compressed(
+        selection_path,
+        selected_update_columns=reference_selected,
+        dependent_update_columns=reference_dependent,
+    )
+    del values, coefficients
+
+    checks = {
+        "G3DH_is_hash_bound_and_passing": True,
+        "all_six_exact_border_relations_are_compiled_and_verified_entrywise": True,
+        "every_kernel_has_shape6022_by1274_and_full_column_rank_by_unit_triangularity": True,
+        "the_same4748_selected_and1274_dependent_columns_are_used_at_all_six_roots": True,
+        "six_root_interpolation_emits_the_complete_split_algebra_kernel": mismatches == 0,
+        "the_complete_split_algebra_coupling_rank_is6022_minus1274_equals4748": True,
+        "no_characteristic_zero_upper_bound_is_inferred_from_one_rational_prime": True,
+        "no_Archimedean_value_source_path_observed_value_or_fit_is_used": True,
+    }
+    require(all(checks.values()), "G3DI checks")
+    packet = {
+        "schema": "mtt.unified-source.g3di-h02-split-algebra-kernel-relations.v1",
+        "date": "2026-08-14",
+        "theorem_id": "UST.G3DI",
+        "status": "CLOSED_EXACT_H02_SPLIT_ALGEBRA_1274_KERNEL_RELATIONS",
+        "controlling_blockers": ["B.ETA9.01", "B.ETA9.02"],
+        "inputs": {
+            "G3DH": record(G3DH),
+            "kernel_tool_source": record(SOURCE),
+            "kernel_tool_executable": record(EXECUTABLE),
+        },
+        "field": {
+            "prime": PRIME,
+            "roots": list(ROOTS),
+            "algebra": "F_21817[gamma]/(m_gamma) is the product over the six roots",
+        },
+        "compile_stdout": compile_stdout,
+        "root_kernels": root_payloads,
+        "split_algebra_kernel": {
+            "Q": "W*A_H02,B89^-1*U",
+            "kernel_shape": [UPDATE_DIMENSION, KERNEL_DIMENSION],
+            "kernel_rank": KERNEL_DIMENSION,
+            "coupling_rank": COUPLING_RANK,
+            "relation_normalization": "each dependent coordinate has coefficient one and only earlier selected coordinates occur",
+            "selection": record(selection_path),
+            "power_basis_coefficients": record(power_basis_path),
+            "power_basis_shape": [6, UPDATE_DIMENSION, KERNEL_DIMENSION],
+            "interpolation_evaluation_mismatches": mismatches,
+        },
+        "checks": checks,
+        "guardrails": {
+            "claims_the_relations_lift_to_Q_gamma": False,
+            "claims_rank_Q_gamma_Q_equals4748": False,
+            "claims_Archimedean_values_source_contraction_path_integration_or_beta_C": False,
+        },
+        "theorem": {
+            "name": "ustG3diH02SplitAlgebraKernelRelations",
+            "tier": "CLOSED_EXACT_COMPLETE_SPLIT_ALGEBRA_KERNEL",
+            "statement": "The exact bordered eliminations at all six roots emit one common triangular family of 1274 independent relations among the 6022 H02 coupling coordinates. Each relation is internally reconstructed with zero residual. Six-root interpolation emits their unique degree-less-than-six representation over the complete split algebra F_21817[gamma]/(m_gamma). Thus the split-algebra coupling factors through 4748 selected columns. Lifting these relations to Q(gamma) remains an explicit, separate promotion theorem.",
+        },
+        "frontier_delta": {
+            "before": "G3DH supplied six equal ranks and common pivot/dependent column sets but no relation coefficients.",
+            "after": "All 1274 normalized kernel relations are materialized, internally zero-residual verified and interpolated over the complete split algebra. The remaining promotion wall is now the lift of this explicit finite kernel to Q(gamma), not discovery of its dimension or support.",
+        },
+        "next_required_object": "Evaluate the same normalized relation family at one or more independent completely split primes, rationally reconstruct candidate Q(gamma) coefficients with a proved bound or exact verification, and certify the polynomial border identity. A successful lift closes rank_Q(gamma)(Q)=4748 and emits the second fraction-free H02 reduction.",
+    }
+    OUT.write_text(json.dumps(packet, indent=2, ensure_ascii=True) + "\n", encoding="ascii")
+    print("UST.G3DI H02 split-algebra kernel relations: PASS")
+    print(
+        f"kernel=6022x1274 rank={KERNEL_DIMENSION} coupling_rank={COUPLING_RANK} "
+        f"interpolation_mismatches={mismatches}"
+    )
+    print(f"packet_sha256={sha256(OUT)}")
+
+
+if __name__ == "__main__":
+    main()

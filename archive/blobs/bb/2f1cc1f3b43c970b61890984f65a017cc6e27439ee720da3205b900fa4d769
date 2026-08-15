@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Profile denominators in the held-out G3FT relation coefficients."""
+
+from __future__ import annotations
+
+import json
+import math
+from collections import Counter, defaultdict
+from pathlib import Path
+
+import numpy as np
+
+import build_ust_g3ft_component20_full_relation_height_campaign as g3ft
+
+
+ROOT = Path(__file__).resolve().parent
+OUTPUT = ROOT / "evidence/ust_g3fu/H02.component20.denominator_ladder_probe.json"
+DELTA = 46909
+
+
+def valuation(value: int, prime: int) -> tuple[int, int]:
+    exponent = 0
+    while value % prime == 0:
+        value //= prime
+        exponent += 1
+    return exponent, value
+
+
+def main() -> None:
+    primes = tuple(g3ft.FIBERS)
+    arrays = []
+    for prime in primes:
+        path, _ = g3ft.cache_paths(prime)
+        payload = np.load(path, allow_pickle=False)
+        arrays.append(payload["normalized_relation_power_basis_residues"].reshape(-1))
+    slots = arrays[0].size
+    construction_primes = primes[:15]
+    holdout_prime = primes[15]
+    modulus = math.prod(construction_primes)
+    bound = math.isqrt((modulus - 1) // 2)
+    denominator_counts: Counter[int] = Counter()
+    ladder_counts: Counter[tuple[int, int, int]] = Counter()
+    off_ladder_counts: Counter[int] = Counter()
+    by_power: dict[int, Counter[tuple[int, int, int]]] = defaultdict(Counter)
+    passing = nontrivial = 0
+    chunk_size = 8192
+
+    for first in range(0, slots, chunk_size):
+        past = min(first + chunk_size, slots)
+        combined = [int(value) for value in arrays[0][first:past]]
+        current_modulus = primes[0]
+        for prime, row in zip(primes[1:15], arrays[1:15], strict=True):
+            inverse = pow(current_modulus % prime, -1, prime)
+            combined = [
+                value
+                + current_modulus
+                * (((int(target) - value % prime) * inverse) % prime)
+                for value, target in zip(combined, row[first:past], strict=True)
+            ]
+            current_modulus *= prime
+        g3ft.require(current_modulus == modulus, "CRT modulus")
+        for local, (value, target) in enumerate(
+            zip(combined, arrays[15][first:past], strict=True)
+        ):
+            numerator, denominator, valid = g3ft.rational_reconstruct(value, modulus, bound)
+            if not valid or (numerator - int(target) * denominator) % holdout_prime:
+                continue
+            passing += 1
+            if numerator == 0 or (abs(numerator) == 1 and denominator == 1):
+                continue
+            nontrivial += 1
+            denominator_counts[denominator] += 1
+            power, _, _ = np.unravel_index(first + local, (6, 5411, 100))
+            three_power, remainder = valuation(denominator, 3)
+            delta_power, remainder = valuation(remainder, DELTA)
+            key = (three_power, delta_power, remainder)
+            ladder_counts[key] += 1
+            by_power[int(power)][key] += 1
+            if remainder != 1:
+                off_ladder_counts[remainder] += 1
+
+    payload = {
+        "schema": "ust.g3fu.h02.component20.denominator-ladder-probe.v1",
+        "status": "PROBE_NOT_A_PROMOTION_THEOREM",
+        "inputs": {
+            "primes": list(primes),
+            "construction_primes": list(construction_primes),
+            "holdout_prime": holdout_prime,
+            "coefficient_slots": slots,
+        },
+        "passing_coefficients": passing,
+        "passing_nontrivial_coefficients": nontrivial,
+        "candidate_denominator_base": DELTA,
+        "candidate_denominator_base_factorization": {"61": 1, "769": 1},
+        "distinct_denominators": len(denominator_counts),
+        "top_denominators": [
+            {"denominator": str(value), "count": count}
+            for value, count in denominator_counts.most_common(40)
+        ],
+        "ladder_profile": [
+            {
+                "power_of_3": key[0],
+                "power_of_46909": key[1],
+                "remaining_factor": str(key[2]),
+                "count": count,
+            }
+            for key, count in sorted(ladder_counts.items())
+        ],
+        "off_ladder_remaining_factors": [
+            {"factor": str(value), "count": count}
+            for value, count in off_ladder_counts.most_common(40)
+        ],
+        "ladder_profile_by_power_basis_degree": {
+            str(power): [
+                {
+                    "power_of_3": key[0],
+                    "power_of_46909": key[1],
+                    "remaining_factor": str(key[2]),
+                    "count": count,
+                }
+                for key, count in sorted(counter.items())
+            ]
+            for power, counter in sorted(by_power.items())
+        },
+        "guardrails": {
+            "claims_the_denominator_base_is_derived_from_G3FK": False,
+            "claims_unreconstructed_coefficients_follow_the_same_ladder": False,
+            "claims_component20_rank36_over_Qgamma": False,
+        },
+    }
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(
+        "G3FU denominator probe: "
+        f"passing={passing} nontrivial={nontrivial} "
+        f"denominators={len(denominator_counts)} off_ladder={sum(off_ladder_counts.values())}",
+        flush=True,
+    )
+
+
+if __name__ == "__main__":
+    main()

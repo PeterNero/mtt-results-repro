@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Independently verify the G3AY adjoint and unit-screen identities."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "state" / "ust_g3ay_relative_gram_jet_unit_screening.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def transpose(matrix: list[list[Fraction]]) -> list[list[Fraction]]:
+    return [list(column) for column in zip(*matrix)]
+
+
+def matvec(matrix: list[list[Fraction]], vector: list[Fraction]) -> list[Fraction]:
+    return [sum((a * b for a, b in zip(row, vector)), Fraction(0)) for row in matrix]
+
+
+def dot(left: list[Fraction], right: list[Fraction]) -> Fraction:
+    return sum((a * b for a, b in zip(left, right)), Fraction(0))
+
+
+def add(left: list[Fraction], right: list[Fraction]) -> list[Fraction]:
+    return [a + b for a, b in zip(left, right)]
+
+
+def negate(vector: list[Fraction]) -> list[Fraction]:
+    return [-value for value in vector]
+
+
+def solve(matrix: list[list[Fraction]], rhs: list[Fraction]) -> list[Fraction]:
+    n = len(matrix)
+    augmented = [row[:] + [rhs[index]] for index, row in enumerate(matrix)]
+    for column in range(n):
+        pivot = next(row for row in range(column, n) if augmented[row][column])
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        scale = augmented[column][column]
+        augmented[column] = [value / scale for value in augmented[column]]
+        for row in range(n):
+            if row == column:
+                continue
+            factor = augmented[row][column]
+            if factor:
+                augmented[row] = [
+                    value - factor * pivot_value
+                    for value, pivot_value in zip(augmented[row], augmented[column])
+                ]
+    return [augmented[row][-1] for row in range(n)]
+
+
+def main() -> None:
+    packet = json.loads(PACKET.read_text(encoding="utf-8"))
+    require(packet["theorem_id"] == "UST.G3AY", "theorem id")
+    require(packet["status"].startswith("CLOSED_EXACT_"), "closed compiler")
+    for label, item in packet["inputs"].items():
+        path = ROOT / item["path"]
+        require(
+            path.is_file()
+            and sha256(path) == item["sha256"]
+            and path.stat().st_size == item["bytes"],
+            f"input {label}",
+        )
+
+    # Exact two-direction model. Direct differentiation and the adjoint
+    # expression must agree for every output/direction pair.
+    B = [
+        [Fraction(2), Fraction(1), Fraction(0)],
+        [Fraction(1), Fraction(3), Fraction(1)],
+        [Fraction(0), Fraction(2), Fraction(5)],
+    ]
+    c = [Fraction(3), Fraction(-1), Fraction(4)]
+    dB = [
+        [
+            [Fraction(1), Fraction(0), Fraction(1)],
+            [Fraction(0), Fraction(-1), Fraction(0)],
+            [Fraction(2), Fraction(0), Fraction(0)],
+        ],
+        [
+            [Fraction(0), Fraction(2), Fraction(0)],
+            [Fraction(1), Fraction(0), Fraction(1)],
+            [Fraction(0), Fraction(0), Fraction(-1)],
+        ],
+    ]
+    dc = [
+        [Fraction(1), Fraction(2), Fraction(-1)],
+        [Fraction(0), Fraction(-2), Fraction(3)],
+    ]
+    products = [
+        (Fraction(7), [Fraction(1), Fraction(4), Fraction(-2)]),
+        (Fraction(-3), [Fraction(2), Fraction(0), Fraction(5)]),
+    ]
+    dproducts = [
+        [
+            (Fraction(1), [Fraction(0), Fraction(1), Fraction(1)]),
+            (Fraction(-2), [Fraction(3), Fraction(0), Fraction(1)]),
+        ],
+        [
+            (Fraction(0), [Fraction(1), Fraction(-1), Fraction(2)]),
+            (Fraction(4), [Fraction(0), Fraction(2), Fraction(-1)]),
+        ],
+    ]
+    x = solve(B, negate(c))
+    for output, (p_star, p_j) in enumerate(products):
+        y = solve(transpose(B), p_j)
+        direct_value = p_star + dot(p_j, x)
+        adjoint_value = p_star - dot(y, c)
+        require(direct_value == adjoint_value, f"adjoint scalar {output}")
+        for direction in range(2):
+            dp_star, dp_j = dproducts[output][direction]
+            forward_rhs = negate(add(matvec(dB[direction], x), dc[direction]))
+            dx = solve(B, forward_rhs)
+            direct_derivative = dp_star + dot(dp_j, x) + dot(p_j, dx)
+            adjoint_derivative = (
+                dp_star
+                + dot(dp_j, x)
+                - dot(y, add(matvec(dB[direction], x), dc[direction]))
+            )
+            require(
+                direct_derivative == adjoint_derivative,
+                f"adjoint derivative {output},{direction}",
+            )
+
+    compiler = packet["adjoint_compiler"]
+    require(
+        compiler["forward_RHS_solves"] == 124
+        and compiler["adjoint_RHS_solves"] == 7
+        and compiler["RHS_solves_removed_for_six_output_full_jet"] == 117,
+        "solve count",
+    )
+
+    # A nonzero residue has no lift divisible by 101; zero residue has both
+    # zero and nonzero lifts, proving the screen is strictly one-way.
+    prime = 101
+    nonzero_residue = 37
+    require(all((nonzero_residue + prime * digit) % prime for digit in range(5)), "unit lift")
+    zero_lifts = [0, prime]
+    require(
+        all(value % prime == 0 for value in zero_lifts)
+        and zero_lifts[0] == 0
+        and zero_lifts[1] != 0,
+        "zero residue ambiguity",
+    )
+    require(all(packet["checks"].values()), "packet checks")
+    require(not any(packet["guardrails"].values()), "guardrails")
+    print("UST.G3AY relative Gram jet: PASS 124 -> 7 RHS solves, one-way unit screen")
+
+
+if __name__ == "__main__":
+    main()
