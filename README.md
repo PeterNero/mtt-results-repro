@@ -55,7 +55,7 @@ mirrored artifact and every hash-only index row. See `STATUS.md` for the scienti
 - 61,647 detected numerical objects;
 - all 99 configured authority entries indexed;
 - 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
-- 28 baseline short-path results plus 93 current promoted results;
+- 28 baseline short-path results plus 100 current promoted results;
 - a lock to 139 canonical papers and all 138 latest Zenodo records;
 - zero commercial-book artifacts in the public result archive.
 

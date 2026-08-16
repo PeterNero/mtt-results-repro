@@ -1,0 +1,191 @@
+# Bath-Active Projective Readout Result
+
+## Question
+
+Can a closed-system pulse that implements a selected FMO root observable retain
+that readout when the frozen 300 K HEOM bath is active during the pulse?
+
+The exact scalar source equation is
+
+\[
+R_0 G_u(T,0)^* I_0(D_a)=O_a,
+\]
+
+where `D_a` contains the signed terminal population weights. Linearity makes one
+weighted adjoint solve exactly equivalent to seven separate population pullbacks.
+The theorem and typing details are in
+`BATH_ACTIVE_WEIGHTED_READOUT_EQUATION.md`.
+
+## Settled Results
+
+The exact frozen `K_ij=0` `su(29)` Lie-algebra result closes finite piecewise
+reachability for all four root observables. That is an existence theorem; it does
+not supply a short bounded pulse or guarantee robustness to an active bath.
+
+The closed-system numerical searches give two distinct waveform families:
+
+- one canonical basis-change pulse passes the strict target-0 closed-system tier;
+- none of the four weighted-observable searches passes the stricter quotient tier,
+  although all replay and remain optimizer-limited.
+
+Both target-0 waveforms were propagated through the same source-locked HEOM ladder
+with depths `D1,D2,D3`, bath expansions `K0,K1`, and fixed adjacent-rung tolerance
+`0.005`.
+
+| Waveform | Accepted relative operator residual | Largest declared rung difference | Finite-ladder result |
+|---|---:|---:|---|
+| Canonical basis change | `1.0055244468710323` | `0.005788351865760824` | `OPEN_FINITE_LADDER` |
+| Weighted observable | `1.0050343499063823` | `0.003866132415143552` | `REJECTED_CONVERGENCE_CONTROLLED` |
+
+For the canonical pulse, all integrity and replay checks pass, but two differences
+in the original ladder narrowly exceed the locked tolerance. The separately
+predeclared `D3,K1` follow-up now passes: its distances to `D2,K1` and `D3,K0`
+are `0.002126196119977629` and `0.0011951108834921207`. The target residual is
+`1.0056512091257714`, so the higher-corner stabilization result rejects this
+canonical waveform. It does not rewrite the failed original ladder as a pass.
+
+For the weighted pulse, every declared rung difference passes and every rung
+rejects the candidate error budget. The tested waveform is therefore rejected at
+the declared finite-ladder tier.
+
+## What This Does Not Say
+
+The negative waveform result does not contradict or reopen exact `su(29)`
+reachability. It is not a no-go theorem for bath-aware control, a physical FMO
+bath, or laboratory readout. The model still freezes `K_ij=0`, uses relative
+dipoles, and omits absolute field calibration, disorder, orientational averaging,
+covariance, and detector response.
+
+## Direct Bath-Aware Search
+
+The next optimization must use the bath-active map in its objective. It should
+select the pulse from the residual
+
+\[
+\left\|R_0 G_u(T,0)^* I_0(D_a)-O_a\right\|
+\]
+
+while enforcing a predeclared HEOM depth/bath-expansion ladder and amplitude/time
+budget. Only after such a pulse survives finite-ladder replay should the program
+add physical `K_ij`, absolute calibration, disorder, orientation, and detector
+response.
+
+That construction is source-locked in
+`bath_aware_control_source_lock.json`. The exact discrete adjoint derivative is
+proved in `BATH_AWARE_DISCRETE_ADJOINT_GRADIENT_THEOREM.md`; sparse reference and
+finite-difference tests pass. Canonical-seed and weighted-seed `D1,K0` jobs ran
+under Kernel IDs `ffb08100-f4a8-4de0-b038-4d7f1578e6ce` and
+`01aa0a37-100c-410b-b28a-220dca6354ef`. Both results independently replay:
+
+| Seed | Initial squared loss | Final squared loss | Relative operator residual | `0.1` tier |
+|---|---:|---:|---:|:---:|
+| Canonical | `1.0007928921873404` | `0.9995350969762008` | `1.0076767515190748` | fail |
+| Weighted | `1.000590213917764` | `0.9998787029110076` | `1.0033746850043992` | fail |
+
+The two searches each reduce their seed objective, but only slightly, and both
+terminate at the frozen 20-iteration limit. They do not trigger a convergence
+ladder. This is a completed negative result for two declared local executions,
+not a global optimum or a bath-aware controllability no-go.
+
+## Bounded Readout-Weight And Terminal-Sector Tests
+
+The ideal eigenvalue weights need not remain optimal after the bath deforms the
+seven population effects. This possible source of failure was isolated by a
+bounded convex variable-projection solve. For the certified 300 fs target-0
+pulse, optimized single-exciton weights reduce the relative operator residual
+only to `0.9282005056807507` and require `15.466608141391703` times the ideal
+coefficient norm. Both locked gates fail.
+
+The test was enlarged through four nested terminal-population families:
+
+| Terminal family | Relative operator residual | Coefficient amplification |
+|---|---:|---:|
+| Seven single-exciton populations | `0.9282005056807507` | `15.466608141391703` |
+| Ground plus seven single populations | `0.9178697130416876` | `17.82601713774511` |
+| Ground, seven single, aggregate double | `0.9221034951951511` | `17.34327557758852` |
+| All 29 resolved populations | `0.8506376230786722` | `32.06740893297959` |
+
+All convex solves replay, but none crosses the `0.1` operator gate or the
+`10`-fold coefficient-amplification gate. Even the uncalibrated pair-resolved
+diagnostic therefore fails for this fixed pulse. This rules out a simple
+detector-weight or terminal-sector repair of the 300 fs waveform, not another
+pulse or detector family.
+
+Ground, single, and double terminal populations are not third-order GSB, SE,
+and ESA Liouville pathways. Those require ordered dipole interactions,
+coherences, phase matching, and heterodyne detection. The terminal-sector result
+must not be promoted as a finite-pulse spectroscopy theorem.
+
+## Finite-Probe Heterodyne Result
+
+A separate calculation now supplies the correctly typed endpoint spectroscopy
+map. It propagates a finite probe from the HEOM population block to the retained
+optical-coherence block, integrates a heterodyne detector row, and pulls that
+functional back to a Hermitian `7 x 7` root effect by a backward adjoint solve.
+SE and signed ESA are retained separately. GSB is not present because this
+calculation deliberately restricts its input to the single-exciton root.
+
+The locked molecular-frame `D1,K0` family contains 162 effects: three carrier
+frequencies, three probe axes, three detector axes, and two heterodyne
+quadratures. The independent gate verifies:
+
+- full rank 49 on the real Hermitian root algebra;
+- all four canonical targets in the unconstrained numerical span, with residual
+  below `6.4e-14`;
+- SE-plus-signed-ESA partition residual `1.734723475976807e-18`;
+- direct-forward/backward-adjoint relative replay error
+  `3.015373936610652e-08`.
+
+The same certificate identifies the obstruction. The normalized effect matrix
+has condition number `4011.379711876829`; the four minimum-norm exact
+combinations require `L2` norms `97.18`, `79.76`, `147.84`, and `156.97`.
+Under the locked `L2 <= 10` budget, the optimal target residuals are `0.7279`,
+`0.5937`, `0.7332`, and `0.7958`. Thus the molecular-frame root-effect family is
+algebraically complete at this rung, but a bounded calibrated readout from this
+specific family is rejected.
+
+The predeclared all-seven-carrier extension is also complete. It retains full
+rank and improves the condition number from about `4011` to `936`. With the same
+`L2 <= 10` and residual-at-most-`0.1` contract, targets 0, 1, and 2 now pass at
+`0.0731581`, `0.0821238`, and `0.0867161`; target 3 remains open at
+`0.3830062`. This is the certified three-of-four baseline from which the
+predeclared temporal screen starts. Since both quadratures are retained, adding
+phase-rotated copies cannot add a new real span.
+
+The temporal screen has now executed. Two independently valid profiles pass
+target 3 without cross-profile pooling. The selected `broad_probe_100fs` profile
+has rank 49, condition number `410.33559810771516`, and passes all four bounded
+targets with coefficient norms `6.2903`, `5.7355`, `7.2849`, and `8.4974` and
+residuals near `1e-14`. The delayed-detector profile also passes target 3 at
+`0.04378195`. The early profile is explicitly rejected because its adjoint-
+forward replay error `5.2077e-8` exceeds the locked `5e-8` integrity threshold;
+its smaller unchecked residual is not selected. Thus bounded four-target
+readout is closed at the exploratory molecular-frame `D1,K0` tier.
+
+## Next Constructive Exit
+
+The predeclared normalized 300 fs direct-control screen returned relative operator
+residual `0.997588` and is rejected at its locked `0.1` gate. Its exit clause
+forbids the 24-segment and depth refinements for that control family, without
+claiming a controllability no-go. The finite-probe route has crossed the bounded
+gate and its selected broad profile is now executing at `D2,K0` and `D1,K1` under
+the predeclared finite-convergence theorem. Only a stable result should advance
+to GSB input completion and isotropic contraction. Physical `K_ij`, absolute
+fields, disorder, orientation, covariance, and detector calibration remain later
+gates.
+
+## Certificates
+
+- `results/su29_root_readout_reachability_certificate.json`
+- `results/bounded_projective_pulse_aggregate_certificate.json`
+- `results/weighted_observable_pulse_aggregate_certificate.json`
+- `results/bath_active_projective_readout_certificate.json`
+- `results/bath_active_weighted_readout_certificate.json`
+- `results/bath_active_followup_certificate.json`
+- `results/bath_aware_control_replay_certificate.json`
+- `results/bath_aware_terminal_sector_certificate.json`
+- `results/bath_aware_finite_probe_certificate.json`
+- `results/bath_aware_full_carrier_finite_probe_certificate.json`
+- `results/bath_aware_target3_temporal_profile_screen_certificate.json`
+- `results/bath_aware_target3_broad_probe_100fs_certificate.json`
+- `results/bath_aware_300fs_control_certificate.json`
