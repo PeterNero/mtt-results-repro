@@ -1,6 +1,6 @@
 # Current Scientific Status
 
-Snapshot date: 2026-08-15
+Snapshot date: 2026-08-16
 
 ## Headline
 
@@ -87,6 +87,11 @@ the declared scope of the SM baseline or silently close physical endpoints.
   primitive color coefficient, nonlinear quality criterion, and multiaxion
   hidden-blind condition are derived at their stated tiers. The selected
   same-source non-QCD lifting payload remains open.
+- The BEQ/FMO readout program closes its predeclared `D3,K1` higher-corner
+  stabilization follow-up and rejects the tested canonical waveform on the
+  frozen 300 K `K_ij=0` fixture. Two direct source-identical `D1,K0` bath-aware
+  controls also replay exactly but fail the `0.1` operator tier. These are
+  candidate-specific negative results, not a bath-aware controllability no-go.
 
 ## Open Or Conditional
 
@@ -137,7 +142,7 @@ count is claimed. See `release/parameter_ledger.json` for the values and roles.
 
 The 62-entry A01-A62 authority chain is the frozen July baseline, not the whole
 current state. A63-A99 form a 37-entry authority extension, and the August
-short-path layer contains 74 promoted result entries.
+short-path layer contains 93 promoted result entries.
 Older packet statuses and unpromoted exploratory artifacts are raw evidence
 only. Adjacent source repositories remain in the archive at their configured
 scope, including open, no-go, superseded, and retired routes; they affect current

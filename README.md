@@ -1,6 +1,6 @@
 # MTT Results Reproduction
 
-Current snapshot: 2026-08-15
+Current snapshot: 2026-08-16
 
 This repository is a self-contained numerical-results capsule for Modal Triplet
 Theory (MTT). It collects the matrices, spectra, scalar values, covariance
@@ -18,7 +18,7 @@ The repository has three deliberately separate layers:
    Original source paths remain in the inventory and blob map. Open, no-go,
    superseded, and retired routes remain discoverable at their declared tier.
 3. `release/` is curated and versioned. It preserves the 2026-07-12 A01-A62
-   Standard-Model baseline and adds a 2026-08-15 promoted-results layer, with
+   Standard-Model baseline and adds a 2026-08-16 promoted-results layer, with
    explicit claim tiers, stable short paths, provenance hashes, and paper-corpus
    identity data.
 
@@ -49,13 +49,13 @@ mirrored artifact and every hash-only index row. See `STATUS.md` for the scienti
 
 ## Snapshot Contents
 
-- 22 configured source trees/documents;
-- 28,833 SHA-256-indexed artifacts;
-- 21,717 byte-mirrored artifacts and 7,116 hash-only bulk diagnostics;
-- 57,704 detected numerical objects;
+- 23 configured source trees/documents;
+- 29,060 SHA-256-indexed artifacts;
+- 21,924 byte-mirrored artifacts and 7,136 hash-only bulk diagnostics;
+- 61,647 detected numerical objects;
 - all 99 configured authority entries indexed;
 - 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
-- 28 baseline short-path results plus 74 current promoted results;
+- 28 baseline short-path results plus 93 current promoted results;
 - a lock to 139 canonical papers and all 138 latest Zenodo records;
 - zero commercial-book artifacts in the public result archive.
 
@@ -108,3 +108,9 @@ The public paper corpus is pinned by `release/paper_corpus_lock.json` to the
 `mtt-papers` commit whose 138 released PDFs exactly match the latest Zenodo
 records. The commercial book *The Universe Has a Bad Memory* is intentionally
 excluded from both public repositories.
+
+The BEQ/FMO layer now also includes the predeclared canonical `D3,K1`
+higher-corner stabilization certificate and the independently replayed two-seed
+direct bath-aware control result. The tested canonical waveform and both local
+direct-control candidates are rejected at their declared tiers; bath-aware
+controllability and calibrated apparatus realization remain open.
