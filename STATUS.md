@@ -95,9 +95,13 @@ the declared scope of the SM baseline or silently close physical endpoints.
   probe family passes all four bounded rows at exploratory `D1,K0` and passes
   the `D1,K1` bath-expansion comparison, but fails depth convergence at `D2`
   and remains hierarchy-depth unstable through `D3`, where zero of four
-  bounded rows survive. These are scoped finite-model results, not infinite-
-  HEOM convergence, calibrated laboratory readout, physiological evidence, or
-  a bath-aware controllability no-go.
+  bounded rows survive. A locked D1/D2/D3 tail diagnostic finds contraction in
+  all 882 matched effect increments and costs one `D4,K0` rung at 330 ADOs and
+  about 2.37 hours, so that single classification rung is warranted. Its
+  one-step forecast is not a convergence bound, no `D4` result is integrated,
+  and no `D5` rung is authorized. These are scoped finite-model results, not
+  infinite-HEOM convergence, calibrated laboratory readout, physiological
+  evidence, or a bath-aware controllability no-go.
 
 ## Open Or Conditional
 

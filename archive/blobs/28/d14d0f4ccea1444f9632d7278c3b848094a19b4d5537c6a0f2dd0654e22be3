@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Classify the locked D3/K0 to D4/K0 finite-probe comparison."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import bath_aware_finite_probe_rung_gate as rung_gate
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REPO = ROOT.parents[1]
+DEFAULT_MASTER_LOCK = (
+    ROOT / "bath_aware_target3_broad_probe_D4_classification_lock.json"
+)
+DEFAULT_RUNG_LOCK = ROOT / "bath_aware_target3_broad_probe_D4_K0_source_lock.json"
+DEFAULT_RESULT = (
+    ROOT / "results" / "bath_aware_target3_broad_probe_root_effect_D4_K0.json"
+)
+DEFAULT_RECEIPT = (
+    ROOT / "worker_results" / "broad_probe_D4_K0" / "receipt.json"
+)
+DEFAULT_CERTIFICATE = (
+    ROOT / "results" / "bath_aware_target3_broad_probe_D4_K0_certificate.json"
+)
+
+
+class D4ClassificationGateError(ValueError):
+    """Raised when the D3/K0 to D4/K0 contract is not the locked contract."""
+
+
+def classify(
+    evidence_integrity_passes: bool,
+    axis_checks: dict[str, bool],
+) -> dict[str, Any]:
+    effect_check_names = (
+        "independent_rung_replay_passes",
+        "real_Hermitian_rank_is_retained",
+        "maximum_per_effect_operator_difference_passes",
+        "stacked_effect_relative_Frobenius_difference_passes",
+    )
+    effect_stabilization = bool(
+        evidence_integrity_passes
+        and all(bool(axis_checks.get(name)) for name in effect_check_names)
+    )
+    bounded_readout = bool(
+        evidence_integrity_passes
+        and axis_checks.get("all_four_locked_bounded_targets_pass")
+    )
+    finite_readout_stabilization = effect_stabilization and bounded_readout
+
+    if not evidence_integrity_passes:
+        decision = "INVALID_RETURNED_D4_K0_EVIDENCE"
+        promotion = "NONE_EVIDENCE_REPLAY_FAILED"
+        next_action = "repair_or_rerun_the_locked_D4_evidence"
+    elif finite_readout_stabilization:
+        decision = "POSITIVE_STABILIZED_BOUNDED_READOUT_AT_D4"
+        promotion = "SUPPORTED_AT_D4_K0_PENDING_K1_CROSS_CORNER"
+        next_action = "execute_the_predeclared_K1_cross_corner"
+    elif effect_stabilization:
+        decision = "STABLE_NEGATIVE_BOUNDED_READOUT_AT_D4"
+        promotion = "REJECTED_FOR_THIS_PROFILE_AT_STABILIZED_D4_K0_TIER"
+        next_action = "change_the_probe_or_physical_model"
+    else:
+        decision = "D4_HIERARCHY_DEPTH_REMAINS_UNSTABLE"
+        promotion = "OPEN_BUT_BLIND_DEPTH_ESCALATION_TERMINATED"
+        next_action = "test_a_declared_hierarchy_closure_or_stable_mode_projection"
+
+    return {
+        "effect_stabilization_passes": effect_stabilization,
+        "bounded_four_target_readout_at_D4_K0_passes": bounded_readout,
+        "finite_readout_stabilization_passes": finite_readout_stabilization,
+        "decision": decision,
+        "promotion": promotion,
+        "next_action": next_action,
+    }
+
+
+def run(
+    master_lock_path: Path,
+    rung_lock_path: Path,
+    result_path: Path,
+    receipt_path: Path,
+    certificate_path: Path,
+) -> dict[str, Any]:
+    master_lock_path = master_lock_path.resolve()
+    rung_lock_path = rung_lock_path.resolve()
+    result_path = result_path.resolve()
+    receipt_path = receipt_path.resolve()
+    certificate_path = certificate_path.resolve()
+
+    master = json.loads(master_lock_path.read_text(encoding="utf-8"))
+    if master.get("schema") != "BEQ.FMOBathAwareFiniteProbeConvergenceLock.v1":
+        raise D4ClassificationGateError("unsupported D4 classification lock")
+    if any(bool(value) for value in master["selection_guards"].values()):
+        raise D4ClassificationGateError("the D4 classification lock overclaims")
+    if len(master.get("comparison_rungs", [])) != 1:
+        raise D4ClassificationGateError("exactly one D4/K0 comparison is required")
+    comparison = master["comparison_rungs"][0]
+    if comparison.get("id") != "D4_K0":
+        raise D4ClassificationGateError("the comparison rung is not D4/K0")
+    baseline_lock_path = rung_gate.convergence.verify_reference(
+        master["baseline"]["lock"]
+    )
+    baseline_lock = json.loads(baseline_lock_path.read_text(encoding="utf-8"))
+    if baseline_lock.get("exploratory_rung", {}).get("id") != "D3_K0":
+        raise D4ClassificationGateError("the locked baseline is not D3/K0")
+
+    with tempfile.TemporaryDirectory(prefix="beq-d4-classification-") as temporary:
+        base_certificate = rung_gate.run(
+            master_lock_path,
+            rung_lock_path,
+            result_path,
+            receipt_path,
+            Path(temporary) / "rung-certificate.json",
+        )
+
+    classification = classify(
+        bool(base_certificate["all_checks_pass"]),
+        base_certificate["axis_checks"],
+    )
+    comparison_payload = base_certificate.pop("comparison_with_selected_D1_K0")
+    base_certificate.pop("axis_convergence_passes")
+    base_certificate["schema"] = (
+        "BEQ.FMOBathAwareFiniteProbeD4ClassificationCertificate.v1"
+    )
+    base_certificate["axis"] = "hierarchy_depth_classification"
+    base_certificate["effect_stabilization_passes"] = classification[
+        "effect_stabilization_passes"
+    ]
+    base_certificate["bounded_four_target_readout_at_D4_K0_passes"] = (
+        classification["bounded_four_target_readout_at_D4_K0_passes"]
+    )
+    base_certificate["finite_readout_stabilization_passes"] = classification[
+        "finite_readout_stabilization_passes"
+    ]
+    base_certificate["comparison_with_locked_baseline"] = {
+        "baseline_rung": "D3_K0",
+        "comparison_rung": "D4_K0",
+        **comparison_payload,
+    }
+    base_certificate["decision"] = classification["decision"]
+    base_certificate["next_action"] = classification["next_action"]
+    base_certificate["promotion"] = {
+        "selected_broad_100fs_finite_depth_readout": classification["promotion"],
+        "blind_depth_escalation_beyond_D4": "NOT_AUTHORIZED",
+        "infinite_HEOM_convergence": "OPEN",
+        "complete_GSB_SE_ESA_response": "OPEN",
+        "isotropic_laboratory_response": "OPEN",
+        "physical_Kij_and_absolute_calibration": "OPEN",
+        "physiological_or_biological_validation": "OPEN",
+    }
+    base_certificate["scope_warning"] = (
+        "This certificate decides only the locked D3/K0 to D4/K0 finite-depth "
+        "classification. Even a stable D4 difference is not an infinite-HEOM "
+        "error bound. The result does not establish a complete laboratory "
+        "response, calibration, physiology, biological quantum necessity, or "
+        "validation of MTT."
+    )
+
+    certificate_path.parent.mkdir(parents=True, exist_ok=True)
+    certificate_path.write_text(
+        json.dumps(base_certificate, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {
+                "certificate": str(certificate_path),
+                "all_checks_pass": base_certificate["all_checks_pass"],
+                "effect_stabilization_passes": base_certificate[
+                    "effect_stabilization_passes"
+                ],
+                "bounded_four_target_readout_at_D4_K0_passes": base_certificate[
+                    "bounded_four_target_readout_at_D4_K0_passes"
+                ],
+                "decision": base_certificate["decision"],
+                "next_action": base_certificate["next_action"],
+            }
+        ),
+        flush=True,
+    )
+    return base_certificate
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--master-lock", type=Path, default=DEFAULT_MASTER_LOCK)
+    parser.add_argument("--rung-lock", type=Path, default=DEFAULT_RUNG_LOCK)
+    parser.add_argument("--result", type=Path, default=DEFAULT_RESULT)
+    parser.add_argument("--receipt", type=Path, default=DEFAULT_RECEIPT)
+    parser.add_argument("--certificate", type=Path, default=DEFAULT_CERTIFICATE)
+    args = parser.parse_args()
+    certificate = run(
+        args.master_lock,
+        args.rung_lock,
+        args.result,
+        args.receipt,
+        args.certificate,
+    )
+    return 0 if certificate["all_checks_pass"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

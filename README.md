@@ -113,4 +113,8 @@ The BEQ/FMO layer now also includes the predeclared canonical `D3,K1`
 higher-corner stabilization certificate and the independently replayed two-seed
 direct bath-aware control result. The tested canonical waveform and both local
 direct-control candidates are rejected at their declared tiers; bath-aware
-controllability and calibrated apparatus realization remain open.
+controllability and calibrated apparatus realization remain open. The broad
+100 fs finite-probe branch is still hierarchy-depth unstable through `D3,K0`.
+A source-locked tail and cost diagnostic now authorizes exactly one `D4,K0`
+classification run, but its empirical forecast is not a convergence or error
+certificate and no `D4` result is included in this snapshot.
