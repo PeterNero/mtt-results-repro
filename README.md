@@ -1,6 +1,6 @@
 # MTT Results Reproduction
 
-Current snapshot: 2026-08-16
+Current snapshot: 2026-08-17
 
 This repository is a self-contained numerical-results capsule for Modal Triplet
 Theory (MTT). It collects the matrices, spectra, scalar values, covariance
@@ -18,7 +18,7 @@ The repository has three deliberately separate layers:
    Original source paths remain in the inventory and blob map. Open, no-go,
    superseded, and retired routes remain discoverable at their declared tier.
 3. `release/` is curated and versioned. It preserves the 2026-07-12 A01-A62
-   Standard-Model baseline and adds a 2026-08-16 promoted-results layer, with
+   Standard-Model baseline and adds a 2026-08-17 promoted-results layer, with
    explicit claim tiers, stable short paths, provenance hashes, and paper-corpus
    identity data.
 
@@ -50,12 +50,12 @@ mirrored artifact and every hash-only index row. See `STATUS.md` for the scienti
 ## Snapshot Contents
 
 - 23 configured source trees/documents;
-- 29,060 SHA-256-indexed artifacts;
-- 21,924 byte-mirrored artifacts and 7,136 hash-only bulk diagnostics;
-- 61,647 detected numerical objects;
+- 29,082 SHA-256-indexed artifacts;
+- 21,944 byte-mirrored artifacts and 7,138 hash-only bulk diagnostics;
+- 66,975 detected numerical objects;
 - all 99 configured authority entries indexed;
 - 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
-- 28 baseline short-path results plus 100 current promoted results;
+- 28 baseline short-path results plus 102 current promoted results;
 - a lock to 139 canonical papers and all 138 latest Zenodo records;
 - zero commercial-book artifacts in the public result archive.
 
@@ -74,7 +74,7 @@ indexed artifact. Source repositories are pinned in
 `config/source_repositories.json`; public mirroring policy is explicit in
 `config/archive_policy.json`.
 
-The current census covers 22 sources, including the frozen SM baseline and the
+The current census covers 23 sources, including the frozen SM baseline and the
 newer QM/QFT source proof, quantum-gravity cutsets, closure-dynamics language
 work, Eta9 execution packets, and unified-source theorem repository. Large
 exploratory trees remain exhaustively indexed where configured; only explicitly
@@ -114,7 +114,9 @@ higher-corner stabilization certificate and the independently replayed two-seed
 direct bath-aware control result. The tested canonical waveform and both local
 direct-control candidates are rejected at their declared tiers; bath-aware
 controllability and calibrated apparatus realization remain open. The broad
-100 fs finite-probe branch is still hierarchy-depth unstable through `D3,K0`.
-A source-locked tail and cost diagnostic now authorizes exactly one `D4,K0`
-classification run, but its empirical forecast is not a convergence or error
-certificate and no `D4` result is included in this snapshot.
+100 fs finite-probe branch passes all four bounded rows at exploratory `D1,K0`,
+then fails its first depth comparisons. The one authorized corrected-accuracy
+`D4,K0` rung passes the inherited replay gate and stabilizes the effect tensor
+relative to `D3,K0`, but all four bounded rows fail. The frozen classifier thus
+records a stable negative for this profile. No `D5` rung is authorized; this is
+not infinite-HEOM convergence or a general readout no-go.

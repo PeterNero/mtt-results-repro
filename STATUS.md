@@ -1,6 +1,6 @@
 # Current Scientific Status
 
-Snapshot date: 2026-08-16
+Snapshot date: 2026-08-17
 
 ## Headline
 
@@ -95,13 +95,15 @@ the declared scope of the SM baseline or silently close physical endpoints.
   probe family passes all four bounded rows at exploratory `D1,K0` and passes
   the `D1,K1` bath-expansion comparison, but fails depth convergence at `D2`
   and remains hierarchy-depth unstable through `D3`, where zero of four
-  bounded rows survive. A locked D1/D2/D3 tail diagnostic finds contraction in
-  all 882 matched effect increments and costs one `D4,K0` rung at 330 ADOs and
-  about 2.37 hours, so that single classification rung is warranted. Its
-  one-step forecast is not a convergence bound, no `D4` result is integrated,
-  and no `D5` rung is authorized. These are scoped finite-model results, not
-  infinite-HEOM convergence, calibrated laboratory readout, physiological
-  evidence, or a bath-aware controllability no-go.
+  bounded rows survive. A locked D1/D2/D3 tail diagnostic authorizes one
+  corrected-accuracy `D4,K0` rung. That result passes its inherited replay gate
+  and the D3-to-D4 effect-stabilization bounds, with maximum per-effect change
+  about `0.000393` and stacked relative change about `0.02335`. All four bounded
+  rows nevertheless fail at residuals `0.536` to `0.745`, selecting the frozen
+  stable-negative outcome for this profile. No `D5` rung is authorized. These
+  are scoped finite-model results, not infinite-HEOM convergence, a general
+  readout no-go, calibrated laboratory readout, physiological evidence, or a
+  bath-aware controllability no-go.
 
 ## Open Or Conditional
 
@@ -152,7 +154,7 @@ count is claimed. See `release/parameter_ledger.json` for the values and roles.
 
 The 62-entry A01-A62 authority chain is the frozen July baseline, not the whole
 current state. A63-A99 form a 37-entry authority extension, and the August
-short-path layer contains 100 promoted result entries.
+short-path layer contains 102 promoted result entries.
 Older packet statuses and unpromoted exploratory artifacts are raw evidence
 only. Adjacent source repositories remain in the archive at their configured
 scope, including open, no-go, superseded, and retired routes; they affect current

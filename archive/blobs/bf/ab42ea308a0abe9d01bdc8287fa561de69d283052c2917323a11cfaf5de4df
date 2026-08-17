@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""Diagnose one failed finite-probe adjoint/forward replay at tighter tolerances."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+import bath_aware_finite_probe_worker as worker
+
+
+ROOT = Path(__file__).resolve().parents[1]
+REPO = ROOT.parents[1]
+DEFAULT_REPAIR_LOCK = (
+    ROOT / "bath_aware_target3_broad_probe_D4_K0_replay_repair_lock.json"
+)
+DEFAULT_OUTPUT = (
+    ROOT / "results/bath_aware_target3_broad_probe_D4_K0_replay_repair.json"
+)
+
+
+class ReplayRepairError(ValueError):
+    """Raised when the replay-repair diagnostic contract is invalid."""
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_reference(reference: dict[str, Any]) -> Path:
+    path = REPO / reference["path"]
+    if not path.is_file():
+        raise ReplayRepairError(f"missing replay-repair input: {path}")
+    actual = sha256(path)
+    if actual != reference["sha256"]:
+        raise ReplayRepairError(
+            f"replay-repair input hash mismatch: {path}: {actual}"
+        )
+    return path
+
+
+def payload_array(payload: dict[str, Any]) -> np.ndarray:
+    return np.asarray(payload["real"], dtype=float) + 1j * np.asarray(
+        payload["imag"], dtype=float
+    )
+
+
+def relative_difference(left: complex, right: complex) -> float:
+    return float(abs(left - right) / max(abs(left), abs(right), 1e-12))
+
+
+def run(repair_lock_path: Path, output_path: Path) -> dict[str, Any]:
+    repair_lock_path = repair_lock_path.resolve()
+    output_path = output_path.resolve()
+    repair = json.loads(repair_lock_path.read_text(encoding="utf-8"))
+    if repair.get("schema") != "BEQ.FMOBathAwareFiniteProbeReplayRepairLock.v1":
+        raise ReplayRepairError("unsupported replay-repair lock")
+    if any(bool(value) for value in repair["selection_guards"].values()):
+        raise ReplayRepairError("a replay-repair selection guard overclaims")
+
+    source_lock_path = verify_reference(repair["inputs"]["D4_K0_source_lock"])
+    result_path = verify_reference(repair["inputs"]["returned_D4_K0_result"])
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    if result.get("rung", {}).get("id") != "D4_K0":
+        raise ReplayRepairError("the returned result is not D4_K0")
+    failed_rows = [
+        name for name, value in result["structural_checks"].items() if not value
+    ]
+    if failed_rows != ["adjoint_effect_matches_direct_forward_replay"]:
+        raise ReplayRepairError(
+            "the repair contract requires exactly the locked replay row to fail"
+        )
+
+    source_lock, finite_lock, finite, bath, sources = worker.load_sources(
+        source_lock_path
+    )
+    contract = source_lock["probe_contract"]
+    model = finite.FinitePulseModel(
+        finite_lock,
+        sources["finite_payloads"],
+        bath,
+        source_lock["exploratory_rung"],
+    )
+    pop_system = model.blocks["POP"]
+    final_system = model.blocks["FINAL"]
+    pop_ee_local = [index for index, value in enumerate(pop_system) if value != 0]
+    pop_ee = model.hierarchy_local(pop_ee_local, len(pop_system))
+
+    carrier_labels = [int(value) for value in contract["carrier_exciton_labels"]]
+    probe_axes = [int(value) for value in contract["molecular_probe_axes"]]
+    detector_axes = [int(value) for value in contract["molecular_detector_axes"]]
+    probe_channels = [
+        (label, axis) for label in carrier_labels for axis in probe_axes
+    ]
+    detector_channels = [
+        (label, axis) for label in carrier_labels for axis in detector_axes
+    ]
+    probe_index = int(repair["selected_channel"]["probe_index"])
+    detector_index = int(repair["selected_channel"]["detector_index"])
+    probe_label, probe_axis = probe_channels[probe_index]
+    detector_label, detector_axis = detector_channels[detector_index]
+
+    selected_total_map = model.transition_map(
+        probe_axis,
+        int(contract["probe_sign"]),
+        "POP",
+        "FINAL",
+    )
+    detector_row = worker.detector_row(model, detector_axis)
+    detector_effect = np.conjugate(detector_row)[:, None]
+
+    conversion = float(
+        sources["finite_payloads"]["execution"]["units"][
+            "cm_inverse_to_rad_ps_inverse"
+        ]
+    )
+    detunings = np.asarray(
+        sources["finite_payloads"]["optical"]["manifold"][
+            "single_exciton_detunings_cm_inverse"
+        ],
+        dtype=float,
+    )
+    offsets = {
+        label: float(detunings[label - 1] * conversion) for label in carrier_labels
+    }
+    center = float(contract["probe_center_fs"]) / 1000.0
+    fwhm = float(contract["probe_intensity_temporal_fwhm_fs"]) / 1000.0
+    start = float(contract["integration_start_fs"]) / 1000.0
+    end = float(contract["integration_end_fs"]) / 1000.0
+    heterodyne_start = float(contract["heterodyne_start_fs"]) / 1000.0
+
+    def selected_probe_value(time_ps: float) -> complex:
+        envelope = math.exp(
+            -2.0 * math.log(2.0) * ((time_ps - center) / fwhm) ** 2
+        )
+        return complex(
+            envelope
+            * np.exp(-1j * offsets[probe_label] * (time_ps - center))
+        )
+
+    def selected_detector_value(time_ps: float) -> complex:
+        if time_ps < heterodyne_start:
+            return 0.0j
+        return complex(np.exp(1j * offsets[detector_label] * (time_ps - center)))
+
+    selected_records = [
+        row
+        for row in result["effect_tensor"]["records"]
+        if int(row["probe_carrier_exciton"]) == probe_label
+        and int(row["probe_molecular_axis"]) == probe_axis
+        and int(row["detector_carrier_exciton"]) == detector_label
+        and int(row["detector_molecular_axis"]) == detector_axis
+    ]
+    records_by_quadrature = {
+        row["quadrature"]: payload_array(row["total_effect_real_imag"])
+        for row in selected_records
+    }
+    if set(records_by_quadrature) != {"real", "imaginary"}:
+        raise ReplayRepairError("selected returned quadratures are incomplete")
+    stored_hilbert = (
+        records_by_quadrature["real"]
+        - 1j * records_by_quadrature["imaginary"]
+    )
+    replay_quadratures = worker.hermitian_quadratures_from_hilbert_effect(
+        stored_hilbert
+    )
+    test_matrix = max(replay_quadratures, key=np.linalg.norm).copy()
+    test_matrix /= np.linalg.norm(test_matrix)
+    initial_population = np.zeros(len(model.indices["POP"]), dtype=complex)
+    initial_population[1 : len(pop_system)] = test_matrix.reshape(-1, order="F")
+
+    partial_path = output_path.with_suffix(".partial.json")
+    tier_rows: list[dict[str, Any]] = []
+    tier_values: dict[str, dict[str, complex]] = {}
+    partial_identity = {
+        "repair_lock_sha256": sha256(repair_lock_path),
+        "D4_K0_source_lock_sha256": sha256(source_lock_path),
+        "returned_D4_K0_result_sha256": sha256(result_path),
+    }
+    if partial_path.is_file():
+        partial = json.loads(partial_path.read_text(encoding="utf-8"))
+        if partial.get("source_identity") == partial_identity:
+            tier_rows = list(partial.get("completed_tiers", []))
+            for row in tier_rows:
+                tier_values[str(row["id"])] = {
+                    "forward": complex(*row["forward_real_imag"]),
+                    "adjoint": complex(*row["adjoint_real_imag"]),
+                }
+        else:
+            raise ReplayRepairError("stale replay-repair partial result")
+    for tier in repair["solver_tiers"]:
+        if str(tier["id"]) in tier_values:
+            continue
+        absolute_tolerance = float(tier["ode_absolute_tolerance"])
+        relative_tolerance = float(tier["ode_relative_tolerance"])
+        effects, runtime = worker.batched_adjoint_effects(
+            model.generators["POP"],
+            model.generators["FINAL"],
+            [[selected_total_map]],
+            detector_effect,
+            lambda value: np.asarray([selected_probe_value(value)]),
+            lambda value: np.asarray([selected_detector_value(value)]),
+            start,
+            end,
+            absolute_tolerance,
+            relative_tolerance,
+        )
+        selected_effect = effects[:, 0, 0, 0]
+        forward = worker.forward_replay(
+            model.generators["POP"],
+            model.generators["FINAL"],
+            selected_total_map,
+            detector_row,
+            selected_probe_value,
+            selected_detector_value,
+            initial_population,
+            start,
+            end,
+            absolute_tolerance,
+            relative_tolerance,
+        )
+        adjoint = complex(np.vdot(selected_effect, initial_population))
+        root_hilbert = worker.root_effect_matrix(selected_effect, len(pop_system))
+        tier_id = str(tier["id"])
+        tier_values[tier_id] = {"forward": forward, "adjoint": adjoint}
+        tier_rows.append(
+            {
+                **tier,
+                "runtime": runtime,
+                "forward_real_imag": [float(forward.real), float(forward.imag)],
+                "adjoint_real_imag": [float(adjoint.real), float(adjoint.imag)],
+                "adjoint_forward_replay_relative_error": relative_difference(
+                    adjoint, forward
+                ),
+                "adjoint_forward_replay_absolute_error": float(abs(adjoint - forward)),
+                "stored_to_recomputed_root_effect_relative_Frobenius_difference": float(
+                    np.linalg.norm(stored_hilbert - root_hilbert)
+                    / max(np.linalg.norm(stored_hilbert), np.linalg.norm(root_hilbert), 1e-30)
+                ),
+            }
+        )
+        partial_path.parent.mkdir(parents=True, exist_ok=True)
+        partial_path.write_text(
+            json.dumps(
+                {
+                    "schema": "BEQ.FMOBathAwareFiniteProbeReplayRepairPartial.v1",
+                    "source_identity": partial_identity,
+                    "completed_tiers": tier_rows,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(
+            json.dumps(
+                {
+                    "completed_tier": tier["id"],
+                    "adjoint_forward_replay_relative_error": tier_rows[-1][
+                        "adjoint_forward_replay_relative_error"
+                    ],
+                    "partial": str(partial_path),
+                }
+            ),
+            flush=True,
+        )
+
+    tight = tier_values["tight"]
+    reference = tier_values["reference"]
+    acceptance = repair["acceptance_contract"]
+    cross_tier_forward = relative_difference(
+        tight["forward"], reference["forward"]
+    )
+    cross_tier_adjoint = relative_difference(
+        tight["adjoint"], reference["adjoint"]
+    )
+    checks = {
+        "returned_result_has_only_the_declared_failed_row": True,
+        "both_tiers_pass_the_original_adjoint_forward_threshold": all(
+            row["adjoint_forward_replay_relative_error"]
+            <= float(
+                acceptance[
+                    "maximum_each_tier_adjoint_forward_replay_relative_error"
+                ]
+            )
+            for row in tier_rows
+        ),
+        "tight_to_reference_forward_is_stable": cross_tier_forward
+        <= float(
+            acceptance["maximum_tight_to_reference_forward_relative_difference"]
+        ),
+        "tight_to_reference_adjoint_is_stable": cross_tier_adjoint
+        <= float(
+            acceptance["maximum_tight_to_reference_adjoint_relative_difference"]
+        ),
+    }
+    stored_forward = complex(
+        *result["effect_tensor"]["adjoint_forward_replay_forward_real_imag"]
+    )
+    stored_adjoint = complex(
+        *result["effect_tensor"]["adjoint_forward_replay_adjoint_real_imag"]
+    )
+    payload = {
+        "schema": "BEQ.FMOBathAwareFiniteProbeReplayRepairDiagnostic.v1",
+        "all_diagnostic_checks_pass": all(checks.values()),
+        "checks": checks,
+        "source_provenance": {
+            "repair_lock_path": str(repair_lock_path),
+            "repair_lock_sha256": sha256(repair_lock_path),
+            "D4_K0_source_lock_sha256": sha256(source_lock_path),
+            "returned_D4_K0_result_sha256": sha256(result_path),
+            "finite_probe_worker_sha256": sha256(Path(worker.__file__)),
+        },
+        "selected_channel": {
+            "probe_index": probe_index,
+            "probe_carrier_exciton": probe_label,
+            "probe_molecular_axis": probe_axis,
+            "detector_index": detector_index,
+            "detector_carrier_exciton": detector_label,
+            "detector_molecular_axis": detector_axis,
+        },
+        "returned_replay": {
+            "forward_real_imag": [
+                float(stored_forward.real),
+                float(stored_forward.imag),
+            ],
+            "adjoint_real_imag": [
+                float(stored_adjoint.real),
+                float(stored_adjoint.imag),
+            ],
+            "relative_error": float(
+                result["effect_tensor"]["adjoint_forward_replay_relative_error"]
+            ),
+            "absolute_error": float(
+                result["effect_tensor"]["adjoint_forward_replay_absolute_error"]
+            ),
+        },
+        "tighter_replays": tier_rows,
+        "tight_to_reference": {
+            "forward_relative_difference": cross_tier_forward,
+            "adjoint_relative_difference": cross_tier_adjoint,
+        },
+        "diagnosis": (
+            "TIGHTER_ONE_CHANNEL_REPLAY_SUPPORTS_A_FULL_TENSOR_RERUN"
+            if all(checks.values())
+            else "TIGHTER_ONE_CHANNEL_REPLAY_DOES_NOT_YET_RESOLVE_THE_FAILURE"
+        ),
+        "promotion": {
+            "returned_882_effect_D4_K0_tensor": "NOT_ACCEPTED",
+            "D4_K0_classification": "OPEN",
+            "D5": "NOT_AUTHORIZED",
+        },
+        "scope_warning": (
+            "This is a one-channel numerical repair diagnostic. Passing it shows "
+            "whether tighter integration can restore the predeclared replay identity; "
+            "it neither edits nor accepts the failed returned tensor. A valid full-tensor "
+            "result or a separately locked global error certificate remains required."
+        ),
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    partial_path.unlink(missing_ok=True)
+    print(
+        json.dumps(
+            {
+                "output": str(output_path),
+                "all_diagnostic_checks_pass": payload[
+                    "all_diagnostic_checks_pass"
+                ],
+                "tier_relative_errors": {
+                    row["id"]: row["adjoint_forward_replay_relative_error"]
+                    for row in tier_rows
+                },
+                "tight_to_reference": payload["tight_to_reference"],
+                "diagnosis": payload["diagnosis"],
+            }
+        ),
+        flush=True,
+    )
+    return payload
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repair-lock", type=Path, default=DEFAULT_REPAIR_LOCK)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    args = parser.parse_args()
+    result = run(args.repair_lock, args.output)
+    return 0 if result["all_diagnostic_checks_pass"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

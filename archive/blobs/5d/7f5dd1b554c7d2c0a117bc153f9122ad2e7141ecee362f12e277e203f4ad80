@@ -1,0 +1,46 @@
+{
+  "schema": "BEQ.FMOBathAwareFiniteProbeReplayRepairLock.v1",
+  "lock_date": "2026-08-16",
+  "purpose": "Diagnose the sole failed D4_K0 execution row with an isolated one-channel adjoint/forward replay at two tighter, predeclared solver tolerances. This repair diagnostic does not alter or accept the returned 882-effect tensor and cannot itself classify D4_K0.",
+  "inputs": {
+    "D4_K0_source_lock": {
+      "path": "research/fmo-physical-readout-synthesis/bath_aware_target3_broad_probe_D4_K0_source_lock.json",
+      "sha256": "1e1cfce58874c58c67218df14015d3775c87b5783384fe97ebc51476da30579b"
+    },
+    "returned_D4_K0_result": {
+      "path": "research/fmo-physical-readout-synthesis/worker_results/broad_probe_D4_K0_0c0630f4/extracted/worker-output/bath_aware_target3_broad_probe_root_effect_D4_K0.json",
+      "sha256": "8ff4289d752e19adb59af8c7f864e6810e3c67a602266adf7a52526b8752062c"
+    },
+    "Kernel_job_id": "0c0630f4-f82a-4677-91b6-ed7b33a47156",
+    "result_capsule_sha256": "5877cd7f5e4a263e0c3218c782f2cfc573bf1e5571d041cb6728d77f870b9abd",
+    "result_manifest_sha256": "e83c521b9232494004ba7fb3b49f923c7327df824b2108f835bb9c5c7bbac34a"
+  },
+  "selected_channel": {
+    "probe_index": 0,
+    "detector_index": 0
+  },
+  "solver_tiers": [
+    {
+      "id": "tight",
+      "ode_absolute_tolerance": 1e-13,
+      "ode_relative_tolerance": 1e-11
+    },
+    {
+      "id": "reference",
+      "ode_absolute_tolerance": 1e-14,
+      "ode_relative_tolerance": 1e-12
+    }
+  ],
+  "acceptance_contract": {
+    "maximum_each_tier_adjoint_forward_replay_relative_error": 5e-08,
+    "maximum_tight_to_reference_forward_relative_difference": 5e-09,
+    "maximum_tight_to_reference_adjoint_relative_difference": 5e-09
+  },
+  "selection_guards": {
+    "repair_diagnostic_called_acceptance_of_returned_882_effect_tensor": false,
+    "single_channel_replay_called_global_effect_tensor_error_bound": false,
+    "failed_original_execution_row_silently_replaced": false,
+    "D4_classification_claimed_before_valid_full_tensor_evidence": false,
+    "D5_authorized": false
+  }
+}
