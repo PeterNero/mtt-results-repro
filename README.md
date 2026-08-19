@@ -43,9 +43,10 @@ python verify.py
 ```
 
 The verifier independently recomputes the headline finite calculations and
-checks all curated hashes. Use `python verify.py --full-archive` to check every
-mirrored artifact and every hash-only index row. See `STATUS.md` for the scientific boundary and
-`REPRODUCIBILITY.md` for the complete rebuild procedure.
+checks all curated hashes, including the portable q79 quantum-gravity terminal
+dependency closure. Use `python verify.py --full-archive` to check every mirrored
+artifact and every hash-only index row. See `STATUS.md` for the scientific
+boundary and `REPRODUCIBILITY.md` for the complete rebuild procedure.
 
 ## Snapshot Contents
 
@@ -56,6 +57,7 @@ mirrored artifact and every hash-only index row. See `STATUS.md` for the scienti
 - all 99 configured authority entries indexed;
 - 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
 - 28 baseline short-path results plus 102 current promoted results;
+- a 77-file, 206-edge exact-byte q79 terminal dependency closure;
 - a lock to 139 canonical papers and all 138 latest Zenodo records;
 - zero commercial-book artifacts in the public result archive.
 
@@ -103,6 +105,11 @@ is the strict G3FS exit and remains open. The source verifier currently reports
 two stale G3DI artifact locks, so G3FR is retained as the current committed
 frontier rather than promoted as a portable verified proof package. See
 `release/current_snapshot.json` and `STATUS.md`.
+
+The q79 dependency closure under `release/dependency_closures/` is a portability
+layer only. It preserves the exact packets and computer-algebra scripts needed
+by recursive verification when their historical source folders are absent; it
+does not promote any open q79 result or replace the checks inside those packets.
 
 The public paper corpus is pinned by `release/paper_corpus_lock.json` to the
 `mtt-papers` commit whose 138 released PDFs exactly match the latest Zenodo

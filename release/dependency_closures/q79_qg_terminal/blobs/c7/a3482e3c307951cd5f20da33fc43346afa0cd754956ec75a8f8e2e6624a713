@@ -1,0 +1,144 @@
+// Exact nodal-boundary certificate for the selected q79 spectral system.
+//
+// The section C of O_J(3H+3D0) below has one and only one singular point
+// after reduction modulo 101.  The nine charts x/y/z != 0 and t0/t1/t2 != 0
+// cover K3 x E because the q79 K3 avoids the weighted-projective orbifold
+// point.  Every chart must return the same reduced maximal ideal.
+
+option(redSB);
+ring r = 101,(x,y,z,w,t0,t1,t2),dp;
+
+poly F6 =
+  4*x^6 + 7*x^5*z - 3*x^4*y^2 - 6*x^4*y*z - 4*x^4*z^2
+  + 6*x^3*y^3 - 5*x^3*y^2*z + 6*x^3*y*z^2 - 3*x^3*z^3
+  + 2*x^2*y^4 + 3*x^2*y^3*z + 2*x^2*y^2*z^2 + 10*x^2*y*z^3
+  + 10*x^2*z^4 - x*y^5 - x*y^4*z - 7*x*y^3*z^2 - 8*x*y^2*z^3
+  - 9*x*y*z^4 - 2*x*z^5 + 2*y^6 + y^5*z + 4*y^4*z^2 + y^3*z^3
+  + 2*y^2*z^4 + 4*y*z^5 + z^6;
+poly K = w^2-F6;
+poly E = t0^3+t1^3+t2^3;
+
+poly a0 =
+  15*x^3 + 64*x^2*y + 30*x^2*z + 5*x*y^2 + x*y*z + 85*x*z^2
+  + 66*y^3 + 30*y^2*z + 4*y*z^2 + 27*z^3 + 23*w;
+poly a1 =
+  42*x^3 + 13*x^2*y + 94*x^2*z + 2*x*y^2 + 97*x*y*z + 2*x*z^2
+  + 76*y^2*z + 4*y*z^2 + 87*z^3 + 96*w;
+poly a2 =
+  35*x^3 + 30*x^2*y + 17*x^2*z + 90*x*y^2 + 16*x*y*z + 58*x*z^2
+  + 49*y^3 + 52*y^2*z + 65*y*z^2 + 32*z^3 + 89*w;
+poly C = a0*t0+a1*t1+a2*t2;
+
+// Six times the q79 splitting-conic residue polynomial.  Clearing the
+// denominator is harmless in characteristic 101 and makes this certificate
+// integral.  The elliptic residue factor is t0*t1*t2.
+poly P6 =
+  -24*x^6 - 8*x^5*y + 8*x^5*z + 48*x^4*y^2 - 84*x^4*y*z - 8*x^4*z^2
+  - 72*x^3*y^3 - 176*x^3*y^2*z + 228*x^3*y*z^2 + 24*x^3*z^3
+  - 18*x^2*y^4 + 26*x^2*y^3*z + 156*x^2*y^2*z^2 + 248*x^2*y*z^3
+  - 24*x^2*z^4 + 18*x*y^5 + 26*x*y^4*z - 70*x*y^3*z^2
+  + 82*x*y*z^4 + 16*x*z^5 + 4*y^6 + 14*y^5*z + 72*y^4*z^2
+  + 74*y^3*z^3 + 2*y^2*z^4 - 84*y*z^5 + 26*z^6;
+poly PE = t0*t1*t2;
+
+int passed = 0;
+
+proc ideal_is_zero(ideal A)
+{
+  int i;
+  for (i=1; i<=size(A); i++)
+  {
+    if (A[i] != 0)
+    {
+      return(0);
+    }
+  }
+  return(1);
+}
+
+proc check_node_chart(poly base_coordinate, poly fiber_coordinate, ideal expected_point, string label)
+{
+  ideal equations = K,E,C,base_coordinate-1,fiber_coordinate-1;
+  matrix J = jacob(equations);
+  ideal rank_drop = minor(J,5);
+  ideal G = std(equations+rank_drop);
+  ideal M = std(expected_point);
+  ideal GmodM = reduce(G,M);
+  ideal MmodG = reduce(M,G);
+
+  if (
+    dim(G)==0
+    && vdim(G)==1
+    && ideal_is_zero(GmodM)==1
+    && ideal_is_zero(MmodG)==1
+  )
+  {
+    passed = passed+1;
+    print(
+      "NODE_CHART_PASS "+label
+      +" dimension=0 quotient_length=1 expected_point_ideal=yes"
+    );
+  }
+  else
+  {
+    print(
+      "NODE_CHART_FAIL "+label
+      +" dimension="+string(dim(G))
+      +" quotient_length="+string(vdim(G))
+      +" GmodM_zero="+string(ideal_is_zero(GmodM))
+      +" MmodG_zero="+string(ideal_is_zero(MmodG))
+    );
+  }
+}
+
+// On t0=1 and t1=1 the point is
+// [x:y:z:w]=[1:1:1:97], [t0:t1:t2]=[1:1:75].
+ideal M_t0 = x-1,y-1,z-1,w-97,t0-1,t1-1,t2-75;
+ideal M_t1 = x-1,y-1,z-1,w-97,t0-1,t1-1,t2-75;
+
+// On t2=1, multiply the elliptic coordinates by 75^{-1}=66 modulo 101.
+ideal M_t2 = x-1,y-1,z-1,w-97,t0-66,t1-66,t2-1;
+
+check_node_chart(x,t0,M_t0,"x_T0");
+check_node_chart(x,t1,M_t1,"x_T1");
+check_node_chart(x,t2,M_t2,"x_T2");
+check_node_chart(y,t0,M_t0,"y_T0");
+check_node_chart(y,t1,M_t1,"y_T1");
+check_node_chart(y,t2,M_t2,"y_T2");
+check_node_chart(z,t0,M_t0,"z_T0");
+check_node_chart(z,t1,M_t1,"z_T1");
+check_node_chart(z,t2,M_t2,"z_T2");
+
+// Exact residue values in the t0=1 chart.  P6=6*P_delta.
+ideal Mpoint = std(M_t0);
+poly P6_at_node = reduce(P6,Mpoint);
+poly PE_at_node = reduce(PE,Mpoint);
+poly product_at_node = reduce(P6*PE,Mpoint);
+
+if (P6_at_node==100 && PE_at_node==75 && product_at_node==26)
+{
+  passed = passed+1;
+  print("RESIDUE_PASS P6=100 PE=75 product=26 nonzero=yes");
+}
+else
+{
+  print(
+    "RESIDUE_FAIL P6="+string(P6_at_node)
+    +" PE="+string(PE_at_node)
+    +" product="+string(product_at_node)
+  );
+}
+
+if (passed==10)
+{
+  print(
+    "AUDIT_PASS node_charts=9 unique_reduced_node=yes residue_nonzero=yes prime=101"
+  );
+}
+else
+{
+  print("AUDIT_FAIL passed="+string(passed));
+  quit;
+}
+
+quit;

@@ -1,0 +1,91 @@
+// Exact good-reduction smoothness certificate for
+// C1: w^2=F6, T0^3+T1^3+T2^3=0,
+//     a0*T0+a1*T1+a2*T2=0.
+//
+// The nine charts x/y/z != 0 and T0/T1/T2 != 0 cover the product because
+// the q79 K3 avoids the weighted-projective orbifold point.  Characteristic
+// 101 keeps 2 and 3 invertible.  A smooth proper special fiber implies the
+// characteristic-zero generic fiber is smooth.
+
+option(redSB);
+ring r = 101,(x,y,z,w,t0,t1,t2),dp;
+
+poly F6 =
+  4*x^6 + 7*x^5*z - 3*x^4*y^2 - 6*x^4*y*z - 4*x^4*z^2
+  + 6*x^3*y^3 - 5*x^3*y^2*z + 6*x^3*y*z^2 - 3*x^3*z^3
+  + 2*x^2*y^4 + 3*x^2*y^3*z + 2*x^2*y^2*z^2 + 10*x^2*y*z^3
+  + 10*x^2*z^4 - x*y^5 - x*y^4*z - 7*x*y^3*z^2 - 8*x*y^2*z^3
+  - 9*x*y*z^4 - 2*x*z^5 + 2*y^6 + y^5*z + 4*y^4*z^2 + y^3*z^3
+  + 2*y^2*z^4 + 4*y*z^5 + z^6;
+poly K = w^2-F6;
+poly E = t0^3+t1^3+t2^3;
+poly a0 = x^3+3*x^2*y+2*x^2*z+4*x*y^2+x*y*z+x*z^2+y^3+3*y^2*z+y*z^2+2*w;
+poly a1 = x^2*y+3*x*y^2+2*x*y*z+x*z^2+3*y^3+3*y^2*z+2*y*z^2+4*z^3;
+poly a2 = 3*x^3+2*x^2*z+3*x*y^2+2*x*z^2+3*y^3+3*z^3;
+poly C = a0*t0+a1*t1+a2*t2;
+
+int passed = 0;
+
+proc check_basepoint_chart(poly base_coordinate, string label)
+{
+  ideal B = K,a0,a1,a2,base_coordinate-1;
+  ideal G = std(B);
+  if (size(G)==1 && G[1]==1)
+  {
+    passed = passed+1;
+    print("BASEPOINT_PASS "+label+" basis_length=1");
+  }
+  else
+  {
+    print(
+      "BASEPOINT_FAIL "+label+" basis_length="+string(size(G))
+      +" dimension="+string(dim(G))
+    );
+  }
+}
+
+proc check_chart(poly base_coordinate, poly fiber_coordinate, string label)
+{
+  ideal equations = K,E,C,base_coordinate-1,fiber_coordinate-1;
+  matrix J = jacob(equations);
+  ideal rank_drop = minor(J,5);
+  ideal G = std(equations+rank_drop);
+  if (size(G)==1 && G[1]==1)
+  {
+    passed = passed+1;
+    print("CHART_PASS "+label+" basis_length=1");
+  }
+  else
+  {
+    print(
+      "CHART_FAIL "+label+" basis_length="+string(size(G))
+      +" dimension="+string(dim(G))
+    );
+  }
+}
+
+check_basepoint_chart(x,"x");
+check_basepoint_chart(y,"y");
+check_basepoint_chart(z,"z");
+
+check_chart(x,t0,"x_T0");
+check_chart(x,t1,"x_T1");
+check_chart(x,t2,"x_T2");
+check_chart(y,t0,"y_T0");
+check_chart(y,t1,"y_T1");
+check_chart(y,t2,"y_T2");
+check_chart(z,t0,"z_T0");
+check_chart(z,t1,"z_T1");
+check_chart(z,t2,"z_T2");
+
+if (passed==12)
+{
+  print("AUDIT_PASS basepoint_charts=3 smoothness_charts=9 prime=101");
+}
+else
+{
+  print("AUDIT_FAIL passed="+string(passed));
+  quit;
+}
+
+quit;

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / "release"
 CURRENT_RESULT_CONFIG = ROOT / "config" / "current_results.json"
+Q79_DEPENDENCY_CLOSURE = (
+    RELEASE / "dependency_closures" / "q79_qg_terminal" / "manifest.json"
+)
+Q79_TERMINAL_SHA256 = "f3efb2921385c2755b1b0bdf60262dcc8d2153aedf418aad261fbf468d6ce882"
 
 
 def io_path(path: Path) -> str:
@@ -469,6 +474,100 @@ def main() -> int:
         and parameters["current_effective_model_coordinate_accounting"]["non_neutrino_count_excluding_qcd_theta"] == 13
         and parameters["current_effective_model_coordinate_accounting"]["count_with_minimal_pmns_policy"] == 19
         and all(value is False for value in guards.values()),
+    )
+
+    dependency_closure_failures: list[str] = []
+    dependency_closure_details: dict[str, Any] = {}
+    if not Q79_DEPENDENCY_CLOSURE.is_file():
+        dependency_closure_failures.append("missing_manifest")
+    else:
+        closure = load(Q79_DEPENDENCY_CLOSURE)
+        rows = closure.get("records", [])
+        row_hashes = [row.get("sha256") for row in rows]
+        row_paths = [row.get("blob_path") for row in rows]
+        expected_paths: set[Path] = set()
+        if closure.get("schema") != "MTTHashLockedDependencyClosure.v1":
+            dependency_closure_failures.append("schema")
+        if closure.get("id") != "q79_qg_terminal":
+            dependency_closure_failures.append("id")
+        if closure.get("terminal", {}).get("sha256") != Q79_TERMINAL_SHA256:
+            dependency_closure_failures.append("terminal_hash_lock")
+        if (
+            closure.get("artifact_count") != 77
+            or closure.get("json_artifact_count") != 74
+            or closure.get("non_json_artifact_count") != 3
+            or closure.get("linked_input_edges") != 206
+        ):
+            dependency_closure_failures.append("graph_census_lock")
+        if len(rows) != closure.get("artifact_count"):
+            dependency_closure_failures.append("record_count")
+        if len(set(row_hashes)) != len(rows) or len(set(row_paths)) != len(rows):
+            dependency_closure_failures.append("duplicate_hash_or_path")
+        if sum(row.get("kind") == "json" for row in rows) != closure.get(
+            "json_artifact_count"
+        ):
+            dependency_closure_failures.append("json_count")
+        if sum(row.get("size_bytes", -1) for row in rows) != closure.get(
+            "total_bytes"
+        ):
+            dependency_closure_failures.append("byte_count")
+
+        scope = closure.get("claim_scope", {})
+        if not (
+            scope.get("tier") == "INTEGRITY_SUPPORT_ONLY"
+            and scope.get("promotes_scientific_claims") is False
+            and scope.get("closes_open_q79_theorems") is False
+            and scope.get("replaces_source_packet_checks") is False
+        ):
+            dependency_closure_failures.append("claim_scope")
+
+        for row in rows:
+            expected_hash = row.get("sha256", "")
+            expected_blob = (
+                f"release/dependency_closures/q79_qg_terminal/blobs/"
+                f"{expected_hash[:2]}/{expected_hash[2:]}"
+            )
+            if row.get("blob_path") != expected_blob:
+                dependency_closure_failures.append(
+                    f"non_content_addressed_path:{row.get('blob_path')}"
+                )
+                continue
+            path = ROOT / expected_blob
+            expected_paths.add(path.resolve())
+            if not path.is_file():
+                dependency_closure_failures.append(f"missing_blob:{expected_hash}")
+            elif path.stat().st_size != row.get("size_bytes") or sha256(path) != expected_hash:
+                dependency_closure_failures.append(f"blob_integrity:{expected_hash}")
+            for hint in row.get("logical_source_hints", []):
+                if (
+                    not isinstance(hint, str)
+                    or "\\" in hint
+                    or hint.startswith("/")
+                    or re.match(r"^[A-Za-z]:", hint)
+                ):
+                    dependency_closure_failures.append(f"nonportable_hint:{hint}")
+
+        actual_paths = {
+            path.resolve()
+            for path in Q79_DEPENDENCY_CLOSURE.parent.joinpath("blobs").rglob("*")
+            if path.is_file()
+        }
+        if actual_paths != expected_paths:
+            dependency_closure_failures.append("unmanifested_or_missing_blob")
+        if Q79_TERMINAL_SHA256 not in row_hashes:
+            dependency_closure_failures.append("terminal_blob_missing")
+        dependency_closure_details = {
+            "artifacts": closure.get("artifact_count"),
+            "json": closure.get("json_artifact_count"),
+            "non_json": closure.get("non_json_artifact_count"),
+            "linked_input_edges": closure.get("linked_input_edges"),
+            "total_bytes": closure.get("total_bytes"),
+        }
+    record(
+        "q79_qg_portable_dependency_closure",
+        not dependency_closure_failures,
+        failures=dependency_closure_failures,
+        **dependency_closure_details,
     )
 
     archive_hash_failures = []

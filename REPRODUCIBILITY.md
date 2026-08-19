@@ -10,7 +10,9 @@ python verify.py
 
 It verifies release hashes, the frozen baseline, the current promoted layer,
 the paper-corpus lock, the commercial-book exclusion, and the independent
-mathematical/scope checks. To hash every archived source artifact as well:
+mathematical/scope checks. It also hashes all 77 files in the portable q79
+terminal dependency closure on every run. To hash every artifact in the larger
+general source archive as well:
 
 ```powershell
 python verify.py --full-archive
@@ -27,6 +29,7 @@ Place this checkout next to the source repositories listed in
 python tools/build_inventory.py --source-root ..
 python tools/snapshot_sources.py --source-root ..
 python tools/build_release.py
+python tools/build_dependency_closure.py
 python verify.py --full-archive
 ```
 
@@ -53,10 +56,20 @@ dirty source tree is not mistaken for the named commit.
 - `release/paper_corpus_lock.json`: exact public-paper commit and Zenodo identity
   census for 139 canonical papers.
 - `release/machine_evidence_catalog.jsonl`: complete machine-evidence index.
+- `release/dependency_closures/q79_qg_terminal/`: portable exact-byte closure of
+  the recursive q79 QG terminal graph, with its own content-addressed manifest.
 
 Historical files retain original absolute provenance paths. These are evidence
 strings, not runtime dependencies. Portable release paths are recorded in the
 generated manifests.
+
+The q79 closure builder first verifies all 206 declared input hashes against the
+source workspace, then copies 77 unique files into a deterministic SHA-256
+layout. It may use an already archived blob only when the historical source path
+is absent. A present local source with the wrong hash is an error, so the
+portability fallback cannot hide source drift. The closure is classified as
+`INTEGRITY_SUPPORT_ONLY` and does not change the claim tier of any contained
+packet.
 
 The snapshot builder applies explicit source and archive policies. Files above
 the public size threshold are hash-only unless they are source/document formats;

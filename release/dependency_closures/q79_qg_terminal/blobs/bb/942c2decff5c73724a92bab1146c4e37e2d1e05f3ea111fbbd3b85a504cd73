@@ -1,0 +1,146 @@
+// Exact finite-field certificate for the nonfactorized q79 Cayley M_32 block.
+//
+// Cox degrees are
+//   x,y,z=(1,0,0), w=(3,0,0), t_i=(0,1,0),
+//   u=(-6,0,1), v=(0,-3,1), s=(-3,-1,1).
+// The Cayley polynomial Phi=u*K+v*E+s*C has degree beta=(0,0,1).
+// The primitive row and column sections have degree (3,1,0).
+// The differentiated gerbe numerator
+//   u*v*P_delta*(t0*t1*t2)*dot(C)
+// has degree (3,1,2), so its product with a row section reaches the
+// cup-product socle degree (6,2,2).
+
+option(redSB);
+ring r = 101,(x,y,z,w,t0,t1,t2,u,v,s),dp;
+
+poly F6 =
+  4*x^6 + 7*x^5*z - 3*x^4*y^2 - 6*x^4*y*z - 4*x^4*z^2
+  + 6*x^3*y^3 - 5*x^3*y^2*z + 6*x^3*y*z^2 - 3*x^3*z^3
+  + 2*x^2*y^4 + 3*x^2*y^3*z + 2*x^2*y^2*z^2 + 10*x^2*y*z^3
+  + 10*x^2*z^4 - x*y^5 - x*y^4*z - 7*x*y^3*z^2 - 8*x*y^2*z^3
+  - 9*x*y*z^4 - 2*x*z^5 + 2*y^6 + y^5*z + 4*y^4*z^2 + y^3*z^3
+  + 2*y^2*z^4 + 4*y*z^5 + z^6;
+poly K = w^2-F6;
+poly E = t0^3+t1^3+t2^3;
+poly a0 = x^3+3*x^2*y+2*x^2*z+4*x*y^2+x*y*z+x*z^2+y^3+3*y^2*z+y*z^2+2*w;
+poly a1 = x^2*y+3*x*y^2+2*x*y*z+x*z^2+3*y^3+3*y^2*z+2*y*z^2+4*z^3;
+poly a2 = 3*x^3+2*x^2*z+3*x*y^2+2*x*z^2+3*y^3+3*z^3;
+poly C = a0*t0+a1*t1+a2*t2;
+poly Phi = u*K+v*E+s*C;
+
+poly Q2 = x*z-y^2;
+poly G3 = -2*x^3-2*x^2*z+x*y^2+x*y*z+2*x*z^2-y^3-2*y*z^2-z^3;
+poly H4 = -x^4-2*x^3*y-x^2*y^2+2*x^2*y*z+x^2*z^2-x*y^3
+  -2*x*y^2*z-2*x*y*z^2+2*x*z^3-y^4-y^3*z+y*z^3+2*z^4;
+ideal cycleRows = Q2,-H4,w-G3,w+G3;
+matrix cycleJacobian[4][4];
+int ci;
+int cj;
+for (ci=1;ci<=4;ci++)
+{
+  for (cj=1;cj<=4;cj++)
+  {
+    cycleJacobian[ci,cj] = diff(cycleRows[ci],var(cj));
+  }
+}
+poly Pdelta = 17*det(cycleJacobian); // 17=1/6 mod 101
+poly fixedGerbe = u*v*Pdelta*t0*t1*t2;
+
+ideal J = jacob(Phi);
+ideal G = std(J);
+
+// Tensor order agrees with the 33-coordinate cover packet.  The first
+// section x^3*t0 is the pivot because its selected-cover coefficient is 1;
+// deleting it gives a basis of H0(O(C))/<C>.
+list sections =
+  x^3*t0,x^2*y*t0,x^2*z*t0,x*y^2*t0,x*y*z*t0,x*z^2*t0,
+  y^3*t0,y^2*z*t0,y*z^2*t0,z^3*t0,w*t0,
+  x^3*t1,x^2*y*t1,x^2*z*t1,x*y^2*t1,x*y*z*t1,x*z^2*t1,
+  y^3*t1,y^2*z*t1,y*z^2*t1,z^3*t1,w*t1,
+  x^3*t2,x^2*y*t2,x^2*z*t2,x*y^2*t2,x*y*z*t2,x*z^2*t2,
+  y^3*t2,y^2*z*t2,y*z^2*t2,z^3*t2,w*t2;
+
+poly socleMonomial = w^4*t2^4*s^2;
+poly reducedSocle = reduce(socleMonomial,G);
+matrix M[32][32];
+int mi;
+int mj;
+int badNormalForms = 0;
+int nonzeroEntries = 0;
+poly entryNormal;
+number entryCoefficient;
+for (mi=2;mi<=33;mi++)
+{
+  for (mj=mi;mj<=33;mj++)
+  {
+    entryNormal = reduce(fixedGerbe*sections[mi]*sections[mj],G);
+    entryCoefficient = 0;
+    if (entryNormal!=0)
+    {
+      if (size(entryNormal)==1 && leadmonom(entryNormal)==socleMonomial)
+      {
+        entryCoefficient = leadcoef(entryNormal);
+      }
+      else
+      {
+        badNormalForms = badNormalForms+1;
+      }
+    }
+    M[mi-1,mj-1] = entryCoefficient;
+    M[mj-1,mi-1] = entryCoefficient;
+  }
+}
+
+for (mi=1;mi<=32;mi++)
+{
+  for (mj=1;mj<=32;mj++)
+  {
+    if (M[mi,mj]!=0)
+    {
+      nonzeroEntries = nonzeroEntries+1;
+    }
+  }
+}
+
+poly detM = det(M);
+int rankM = rank(M);
+print("CAYLEY_J_GENERATORS="+string(size(J)));
+print("CAYLEY_GB_SIZE="+string(size(G)));
+print("CAYLEY_AFFINE_DIMENSION="+string(dim(G)));
+print("M32_SOCLE_MONOMIAL="+string(socleMonomial));
+print("M32_BAD_NORMAL_FORMS="+string(badNormalForms));
+print("M32_NONZERO_ENTRIES="+string(nonzeroEntries));
+print("M32_RANK="+string(rankM));
+print("M32_DET="+string(detM));
+
+string rowText;
+for (mi=1;mi<=32;mi++)
+{
+  rowText = "";
+  for (mj=1;mj<=32;mj++)
+  {
+    if (mj>1)
+    {
+      rowText = rowText+",";
+    }
+    rowText = rowText+string(M[mi,mj]);
+  }
+  print("M32_ROW_"+string(mi)+"="+rowText);
+}
+
+if (
+  size(sections)==33
+  && reduce(C,G)==0
+  && reducedSocle==socleMonomial
+  && badNormalForms==0
+  && rankM==32
+  && detM==32
+)
+{
+  print("CAYLEY_AUDIT_PASS prime=101 rank=32 determinant=32");
+}
+else
+{
+  print("CAYLEY_AUDIT_FAIL");
+  quit;
+}
