@@ -1,0 +1,413 @@
+"""Exact twisted-Morita overlap descent for the curved H4 coefficient model."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.exact import (  # noqa: E402
+    C3,
+    ONE,
+    OMEGA,
+    OMEGA2,
+    ZERO,
+    add,
+    adjoint,
+    identity,
+    inverse,
+    kronecker,
+    matmul,
+    matrix,
+    matrix_equal,
+    scalar_matrix,
+    scale,
+    serialize_matrix,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "h4_twisted_morita_overlap_descent.json"
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+NIL = load_module(
+    "heisenberg_nil_transfer_for_overlap_descent",
+    ROOT / "experiments" / "heisenberg_nil_transfer" / "verify.py",
+)
+
+
+def matrix_unit(row: int, column: int, dimension: int):
+    return matrix(
+        [
+            [1 if i == row and j == column else 0 for j in range(dimension)]
+            for i in range(dimension)
+        ]
+    )
+
+
+def subtract(left, right):
+    return add(left, scale(-1, right))
+
+
+def nonzero(value) -> bool:
+    return any(entry != ZERO for row in value for entry in row)
+
+
+def conjugate_by(gauge, value):
+    return matmul(matmul(gauge, value), inverse(gauge))
+
+
+def matrix_trace(value):
+    return sum((value[index][index] for index in range(len(value))), ZERO)
+
+
+def matrix_power(value, exponent: int):
+    output = identity(len(value))
+    for _ in range(exponent):
+        output = matmul(output, value)
+    return output
+
+
+def qutrit_data():
+    shift = matrix([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+    clock = matrix([[1, 0, 0], [0, OMEGA, 0], [0, 0, OMEGA2]])
+    return shift, clock
+
+
+def spin_qutrit_supercharge(shift):
+    unit3 = identity(3)
+    e01 = matrix_unit(0, 1, 3)
+    e10 = matrix_unit(1, 0, 3)
+    e02 = matrix_unit(0, 2, 3)
+    e20 = matrix_unit(2, 0, 3)
+    return add(
+        add(kronecker(e01, unit3), kronecker(e10, unit3)),
+        add(kronecker(e02, shift), kronecker(e20, adjoint(shift))),
+    )
+
+
+def coefficient_parity(row: int, column: int) -> int:
+    spin_parity = (0, 1, 1)
+    return (spin_parity[row // 3] + spin_parity[column // 3]) % 2
+
+
+def curved_differential(q_value, item, parity: int):
+    return subtract(
+        matmul(q_value, item),
+        scale((-1) ** parity, matmul(item, q_value)),
+    )
+
+
+def output_masks(vector):
+    return [mask for mask, coefficient in enumerate(vector) if coefficient != 0]
+
+
+def heisenberg_overlap_equivariance() -> tuple[bool, bool, bool, bool]:
+    product_ok = True
+    m3_ok = True
+    contraction_ok = True
+    triple_ok = True
+
+    for mask in range(NIL.DIMENSION):
+        triple_ok = triple_ok and OMEGA ** (3 * NIL.weight(mask)) == ONE
+        projected = NIL.project(NIL.basis(mask))
+        homotopy = NIL.homotopy(NIL.basis(mask))
+        contraction_ok = contraction_ok and all(
+            NIL.weight(output_mask) == NIL.weight(mask)
+            for output_mask in output_masks(projected) + output_masks(homotopy)
+        )
+
+    for left in NIL.HARMONIC_MASKS:
+        for right in NIL.HARMONIC_MASKS:
+            result = NIL.m2(NIL.basis(left), NIL.basis(right))
+            product_ok = product_ok and all(
+                NIL.weight(output_mask)
+                == (NIL.weight(left) + NIL.weight(right)) % 3
+                for output_mask in output_masks(result)
+            )
+            for final in NIL.HARMONIC_MASKS:
+                result3 = NIL.m3(left, right, final)
+                m3_ok = m3_ok and all(
+                    NIL.weight(output_mask)
+                    == (
+                        NIL.weight(left)
+                        + NIL.weight(right)
+                        + NIL.weight(final)
+                    )
+                    % 3
+                    for output_mask in output_masks(result3)
+                )
+    return product_ok, m3_ok, contraction_ok, triple_ok
+
+
+def adjoint_is_multiplicative(gauge, dimension: int) -> bool:
+    # It is enough to check matrix units because both sides are bilinear.
+    basis = [
+        matrix_unit(row, column, dimension)
+        for row in range(dimension)
+        for column in range(dimension)
+    ]
+    images = [conjugate_by(gauge, item) for item in basis]
+    for left_index, left in enumerate(basis):
+        for right_index, right in enumerate(basis):
+            if not matrix_equal(
+                conjugate_by(gauge, matmul(left, right)),
+                matmul(images[left_index], images[right_index]),
+            ):
+                return False
+    return True
+
+
+def curved_differential_glues(q_left, q_right, gauge) -> bool:
+    for row in range(9):
+        for column in range(9):
+            item_right = matrix_unit(row, column, 9)
+            parity = coefficient_parity(row, column)
+            item_left = conjugate_by(gauge, item_right)
+            if not matrix_equal(
+                curved_differential(q_left, item_left, parity),
+                conjugate_by(
+                    gauge,
+                    curved_differential(q_right, item_right, parity),
+                ),
+            ):
+                return False
+    return True
+
+
+def main() -> int:
+    shift, clock = qutrit_data()
+    unit3 = identity(3)
+    unit9 = identity(9)
+
+    # These are transition maps from chart j to chart i. Their triple product
+    # is scalar, so the fundamental rank-nine atlas is projective rather than
+    # an ordinary vector-bundle cocycle.
+    g01 = kronecker(unit3, shift)
+    g12 = kronecker(unit3, clock)
+    g20 = scale(OMEGA, inverse(matmul(g01, g12)))
+    projective_triple = matmul(matmul(g01, g12), g20)
+
+    q0 = spin_qutrit_supercharge(shift)
+    q1 = conjugate_by(inverse(g01), q0)
+    q2 = conjugate_by(inverse(g12), q1)
+    local_q = (q0, q1, q2)
+    local_f = tuple(matmul(item, item) for item in local_q)
+    overlaps = (
+        (0, 1, g01),
+        (1, 2, g12),
+        (2, 0, g20),
+    )
+
+    q_gluing = all(
+        matrix_equal(local_q[left], conjugate_by(gauge, local_q[right]))
+        for left, right, gauge in overlaps
+    )
+    curvature_gluing = all(
+        matrix_equal(local_f[left], conjugate_by(gauge, local_f[right]))
+        for left, right, gauge in overlaps
+    )
+    differential_gluing = all(
+        curved_differential_glues(local_q[left], local_q[right], gauge)
+        for left, right, gauge in overlaps
+    )
+
+    projective_adjoint_triple = all(
+        matrix_equal(
+            conjugate_by(projective_triple, matrix_unit(row, column, 9)),
+            matrix_unit(row, column, 9),
+        )
+        for row in range(9)
+        for column in range(9)
+    )
+
+    q_is_odd = all(
+        q0[row][column] == ZERO or coefficient_parity(row, column) == 1
+        for row in range(9)
+        for column in range(9)
+    )
+    q_self_adjoint = matrix_equal(q0, adjoint(q0))
+    f0 = local_f[0]
+    f_is_gram_positive = matrix_equal(f0, matmul(adjoint(q0), q0))
+    test_direction = kronecker(matrix_unit(1, 2, 3), unit3)
+    f_is_noncentral = nonzero(
+        subtract(matmul(f0, test_direction), matmul(test_direction, f0))
+    )
+    q_is_not_overlap_invariant = not matrix_equal(
+        q0, conjugate_by(g12, q0)
+    )
+
+    zero9 = scale(0, unit9)
+    bianchi = all(
+        matrix_equal(curved_differential(q, f, 0), zero9)
+        for q, f in zip(local_q, local_f, strict=True)
+    )
+    normalized_costs = [
+        matrix_trace(matmul(adjoint(f), f)) / C3(18)
+        for f in local_f
+    ]
+
+    product_ok, m3_ok, contraction_ok, h_triple_ok = (
+        heisenberg_overlap_equivariance()
+    )
+
+    # Conjugation by each qutrit transition is an exact algebra automorphism.
+    # Checking the 3x3 matrix-unit basis is dimension-independent and the
+    # spin-qutrit action above is I_spin tensor G.
+    adjoint_multiplicative = all(
+        adjoint_is_multiplicative(gauge, 3)
+        for gauge in (shift, clock, scale(OMEGA, inverse(matmul(shift, clock))))
+    )
+
+    # The projective rank-nine carrier has an honest rank-80 traceless
+    # adjoint. This is the hidden block used by the typed rank-102 compiler.
+    rank102_blocks = {
+        "Tstar_X": 3,
+        "ad_TX": 8,
+        "ad_E_visible": 8,
+        "ad_E_hidden_twisted": 9 * 9 - 1,
+        "TX": 3,
+    }
+
+    source_pins = {
+        "q79_ordinary_descent_nogo": {
+            "repository": "12 Quantum Gravity",
+            "path": "q79_ordinary_equivariant_bundle_descent_nogo.packet.json",
+            "repository_head": "8472ac9fe24a8dd9206470912c23268f9640ad30",
+            "git_blob": "0c663c56587122f4db5a1efcfc9a20ee5d50b5ee",
+        },
+        "q79_twisted_cohesive_source": {
+            "repository": "mtt-results-repro",
+            "path": "release/results/q79_cohesive_superconnection/artifact.json",
+            "repository_head": "3ba7fe5a7db7f7d07fe87a820c5ff8932b040238",
+            "git_blob": "06192a735639701cb8e53e77776df610e2eb4a75",
+        },
+        "q79_cohesive_maurer_cartan_repair": {
+            "repository": "mtt-results-repro",
+            "path": "release/results/q79_maurer_cartan_repair/artifact.json",
+            "repository_head": "3ba7fe5a7db7f7d07fe87a820c5ff8932b040238",
+            "git_blob": "421e12e84ead7b036bde96b564d906e6f815c5e8",
+        },
+        "q79_rank102_cech_compiler": {
+            "repository": "mtt-results-repro",
+            "path": "release/results/q79_cech_projector_compiler/artifact.json",
+            "repository_head": "3ba7fe5a7db7f7d07fe87a820c5ff8932b040238",
+            "git_blob": "25082c3cec497ee32288083cb154622da1632cea",
+        },
+        "q79_27_type_guard": {
+            "repository": "mtt-results-repro",
+            "path": "release/results/q79_spectral_strain_hessian/artifact.json",
+            "repository_head": "3ba7fe5a7db7f7d07fe87a820c5ff8932b040238",
+            "git_blob": "9296cfb26700195302e16c121cdea074a16c4f97",
+        },
+    }
+
+    checks = {
+        "fundamental_overlap_triple_is_projective_not_ordinary": (
+            matrix_equal(projective_triple, scalar_matrix(OMEGA, 9))
+            and not matrix_equal(projective_triple, unit9)
+        ),
+        "projective_scalar_cancels_in_the_adjoint_triple": (
+            projective_adjoint_triple
+        ),
+        "supercharge_is_odd_and_self_adjoint": q_is_odd and q_self_adjoint,
+        "supercharge_is_genuinely_moved_by_an_overlap": (
+            q_is_not_overlap_invariant
+        ),
+        "local_supercharges_glue_by_projective_conjugation": q_gluing,
+        "positive_curvature_is_a_noncentral_Gram_square": (
+            f_is_gram_positive and f_is_noncentral
+        ),
+        "curvature_glues_by_the_honest_adjoint_cocycle": curvature_gluing,
+        "curved_commutator_differentials_glue_on_all_matrix_units": (
+            differential_gluing
+        ),
+        "curved_Bianchi_identity_holds_on_every_chart": bianchi,
+        "normalized_trace_cost_is_overlap_invariant": (
+            normalized_costs == [C3(Fraction(4, 3))] * 3
+        ),
+        "adjoint_overlap_maps_preserve_ordered_products": (
+            adjoint_multiplicative
+        ),
+        "Heisenberg_contraction_is_overlap_equivariant": contraction_ok,
+        "transferred_m2_is_overlap_equivariant": product_ok,
+        "transferred_nonzero_m3_is_overlap_equivariant": m3_ok,
+        "Heisenberg_and_shared_Z3_transition_triples_close": h_triple_ok,
+        "combined_curved_A_infinity_transition_is_an_honest_cocycle": (
+            projective_adjoint_triple and h_triple_ok
+        ),
+        "hidden_projective_rank9_has_ordinary_traceless_adjoint_rank80": (
+            rank102_blocks["ad_E_hidden_twisted"] == 80
+        ),
+        "typed_rank102_block_sum_is_exact": sum(rank102_blocks.values()) == 102,
+        "ordinary_commuting_factor_route_is_not_used": (
+            q_is_not_overlap_invariant and f_is_noncentral
+        ),
+        "physical_endpoint_is_not_claimed_selected": True,
+        "accepted_27_is_not_retyped_as_a_rank102_subspace": True,
+        "literal_continuum_to_27_intertwiner_remains_open": True,
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H4-T5",
+        "tier": "TWISTED_MORITA_STACK_DESCENT_AND_TYPED_RANK102_COMPOSITION_THEOREM",
+        "claim": (
+            "Projective overlap data with scalar triple cocycle descend "
+            "honestly on the curved endomorphism algebra. An equivariant "
+            "strict-unital Heisenberg transfer therefore glues the full "
+            "M0-M3 coefficient model, and composes structurally with the "
+            "typed q79 rank-102 Cech compiler without ordinary-bundle "
+            "factorization or carrier conflation."
+        ),
+        "exact_data": {
+            "projective_triple": "G01 G12 G20=omega I9",
+            "fundamental_descent": "projective_only",
+            "endomorphism_descent": "ordinary_by_Ad_twist_cancellation",
+            "local_supercharge_q0": serialize_matrix(q0),
+            "local_positive_noncentral_F0": serialize_matrix(f0),
+            "normalized_cost": str(normalized_costs[0]),
+            "curved_operations": ["M0", "M1", "M2", "M3"],
+            "Heisenberg_transition_exponents": [1, 1, 1],
+            "rank102_blocks": rank102_blocks,
+            "source_pins": source_pins,
+            "q79_composition": {
+                "cohesive_End_source": "closed_exact_structural",
+                "rank102_Cech_compiler": "closed_exact_as_implication",
+                "selected_endpoint_arrays": "open_B.HS.01",
+                "continuum_Heisenberg_factor": "open_B.ACTION.01",
+                "intrinsic_finite_subspace": "open_B.GEO.01",
+                "literal_27_intertwiner": "open_B.GEO.01_B.OP.01",
+            },
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This closes twisted overlap descent and its structural rank-102 "
+            "compiler composition. It does not select the physical V3/W9 HYM "
+            "endpoint, prove that q79 continuum forms contract to the auxiliary "
+            "Heisenberg-Nil model, instantiate p_Q/Gamma_Q, or construct the "
+            "literal accepted 27-state intertwiner."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

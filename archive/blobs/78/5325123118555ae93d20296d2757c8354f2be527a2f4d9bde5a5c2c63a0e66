@@ -1,0 +1,775 @@
+"""Exact positive noncentral same-source nested-transfer witness."""
+
+from __future__ import annotations
+
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "h4_positive_noncentral_nested_transfer.json"
+
+FORM_DIMENSION = 8
+SPIN_DIMENSION = 3
+SPIN_PARITY = (0, 1, 1)
+HARMONIC_MASKS = (0, 1, 2, 5, 6, 7)
+HARMONIC_INDEX = {mask: index for index, mask in enumerate(HARMONIC_MASKS)}
+SOURCE_DIMENSION = FORM_DIMENSION * SPIN_DIMENSION
+TARGET_DIMENSION = len(HARMONIC_MASKS) * SPIN_DIMENSION
+WEIGHTS = (1, 1, 2)
+
+Poly = tuple[Fraction, ...]
+Vector = tuple[Poly, ...]
+Matrix = list[list[Poly]]
+AlgVector = tuple[Fraction, ...]
+
+
+def trim(poly: Poly) -> Poly:
+    result = list(poly)
+    while len(result) > 1 and result[-1] == 0:
+        result.pop()
+    return tuple(result)
+
+
+def polynomial(*coefficients: int | Fraction) -> Poly:
+    return trim(tuple(Fraction(value) for value in coefficients))
+
+
+ZERO = polynomial(0)
+ONE = polynomial(1)
+X = polynomial(0, 1)
+
+
+def p_add(left: Poly, right: Poly) -> Poly:
+    size = max(len(left), len(right))
+    return trim(
+        tuple(
+            (left[index] if index < len(left) else Fraction(0))
+            + (right[index] if index < len(right) else Fraction(0))
+            for index in range(size)
+        )
+    )
+
+
+def p_scale(value: int | Fraction, poly: Poly) -> Poly:
+    scalar = Fraction(value)
+    return trim(tuple(scalar * coefficient for coefficient in poly))
+
+
+def p_subtract(left: Poly, right: Poly) -> Poly:
+    return p_add(left, p_scale(-1, right))
+
+
+def p_multiply(left: Poly, right: Poly) -> Poly:
+    output = [Fraction(0) for _ in range(len(left) + len(right) - 1)]
+    for left_index, left_value in enumerate(left):
+        for right_index, right_value in enumerate(right):
+            output[left_index + right_index] += left_value * right_value
+    return trim(tuple(output))
+
+
+def p_derivative(poly: Poly) -> Poly:
+    if len(poly) <= 1:
+        return ZERO
+    return trim(
+        tuple(Fraction(index) * poly[index] for index in range(1, len(poly)))
+    )
+
+
+def p_value_at_zero(poly: Poly) -> Fraction:
+    return poly[0]
+
+
+def matrix_zero(rows: int, columns: int) -> Matrix:
+    return [[ZERO for _ in range(columns)] for _ in range(rows)]
+
+
+def matrix_identity(dimension: int) -> Matrix:
+    return [
+        [ONE if row == column else ZERO for column in range(dimension)]
+        for row in range(dimension)
+    ]
+
+
+def matrix_unit(row: int, column: int, value: Poly = ONE) -> Matrix:
+    output = matrix_zero(SPIN_DIMENSION, SPIN_DIMENSION)
+    output[row][column] = value
+    return output
+
+
+def matrix_add(left: Matrix, right: Matrix) -> Matrix:
+    return [
+        [p_add(lhs, rhs) for lhs, rhs in zip(left_row, right_row, strict=True)]
+        for left_row, right_row in zip(left, right, strict=True)
+    ]
+
+
+def matrix_subtract(left: Matrix, right: Matrix) -> Matrix:
+    return [
+        [p_subtract(lhs, rhs) for lhs, rhs in zip(left_row, right_row, strict=True)]
+        for left_row, right_row in zip(left, right, strict=True)
+    ]
+
+
+def matrix_scale(value: int | Fraction, matrix: Matrix) -> Matrix:
+    return [[p_scale(value, entry) for entry in row] for row in matrix]
+
+
+def matrix_multiply(left: Matrix, right: Matrix) -> Matrix:
+    rows = len(left)
+    shared = len(left[0])
+    if shared != len(right):
+        raise ValueError("incompatible matrix dimensions")
+    columns = len(right[0])
+    output = matrix_zero(rows, columns)
+    for row in range(rows):
+        for inner in range(shared):
+            if left[row][inner] == ZERO:
+                continue
+            for column in range(columns):
+                if right[inner][column] == ZERO:
+                    continue
+                output[row][column] = p_add(
+                    output[row][column],
+                    p_multiply(left[row][inner], right[inner][column]),
+                )
+    return output
+
+
+def matrix_transpose(matrix: Matrix) -> Matrix:
+    return [list(row) for row in zip(*matrix, strict=True)]
+
+
+def matrix_trace(matrix: Matrix) -> Poly:
+    output = ZERO
+    for index in range(len(matrix)):
+        output = p_add(output, matrix[index][index])
+    return output
+
+
+def matrix_derivative(matrix: Matrix) -> Matrix:
+    return [[p_derivative(entry) for entry in row] for row in matrix]
+
+
+def matrix_at_zero(matrix: Matrix) -> Matrix:
+    return [[polynomial(p_value_at_zero(entry)) for entry in row] for row in matrix]
+
+
+def matrix_nonzero(matrix: Matrix) -> bool:
+    return any(entry != ZERO for row in matrix for entry in row)
+
+
+def rational_rank(matrix: list[list[Fraction]]) -> int:
+    work = [row[:] for row in matrix]
+    rows = len(work)
+    columns = len(work[0]) if work else 0
+    pivot_row = 0
+    for column in range(columns):
+        pivot = next(
+            (row for row in range(pivot_row, rows) if work[row][column] != 0),
+            None,
+        )
+        if pivot is None:
+            continue
+        work[pivot_row], work[pivot] = work[pivot], work[pivot_row]
+        pivot_value = work[pivot_row][column]
+        work[pivot_row] = [value / pivot_value for value in work[pivot_row]]
+        for row in range(rows):
+            if row == pivot_row or work[row][column] == 0:
+                continue
+            factor = work[row][column]
+            work[row] = [
+                value - factor * pivot_entry
+                for value, pivot_entry in zip(work[row], work[pivot_row], strict=True)
+            ]
+        pivot_row += 1
+        if pivot_row == rows:
+            break
+    return pivot_row
+
+
+Q_SPIN = [
+    [ZERO, ONE, X],
+    [ONE, ZERO, ZERO],
+    [X, ZERO, ZERO],
+]
+F_SPIN = matrix_multiply(Q_SPIN, Q_SPIN)
+
+
+def source_index(mask: int, spin: int) -> int:
+    return mask * SPIN_DIMENSION + spin
+
+
+def target_index(mask: int, spin: int) -> int:
+    return HARMONIC_INDEX[mask] * SPIN_DIMENSION + spin
+
+
+def degree(mask: int) -> int:
+    return mask.bit_count()
+
+
+def vector_zero(dimension: int) -> Vector:
+    return tuple(ZERO for _ in range(dimension))
+
+
+def vector_basis(dimension: int, index: int, value: Poly = ONE) -> Vector:
+    output = [ZERO for _ in range(dimension)]
+    output[index] = value
+    return tuple(output)
+
+
+def vector_add(left: Vector, right: Vector) -> Vector:
+    return tuple(p_add(lhs, rhs) for lhs, rhs in zip(left, right, strict=True))
+
+
+def vector_multiply(poly: Poly, vector: Vector) -> Vector:
+    return tuple(p_multiply(poly, entry) for entry in vector)
+
+
+def vector_derivative(vector: Vector) -> Vector:
+    return tuple(p_derivative(entry) for entry in vector)
+
+
+def add_component(output: list[Poly], index: int, value: Poly) -> None:
+    output[index] = p_add(output[index], value)
+
+
+def spin_image(spin: int) -> tuple[tuple[int, Poly], ...]:
+    images = {
+        0: ((1, ONE), (2, X)),
+        1: ((0, ONE),),
+        2: ((0, X),),
+    }
+    return images[spin]
+
+
+def source_q0(vector: Vector) -> Vector:
+    output = [ZERO for _ in range(SOURCE_DIMENSION)]
+    for spin in range(SPIN_DIMENSION):
+        output[source_index(3, spin)] = vector[source_index(4, spin)]
+    return tuple(output)
+
+
+def source_delta(vector: Vector) -> Vector:
+    output = [ZERO for _ in range(SOURCE_DIMENSION)]
+    for mask in range(FORM_DIMENSION):
+        sign = -1 if degree(mask) % 2 else 1
+        for spin in range(SPIN_DIMENSION):
+            value = vector[source_index(mask, spin)]
+            if value == ZERO:
+                continue
+            for output_spin, coefficient in spin_image(spin):
+                add_component(
+                    output,
+                    source_index(mask, output_spin),
+                    p_scale(sign, p_multiply(coefficient, value)),
+                )
+    return tuple(output)
+
+
+def source_q(vector: Vector) -> Vector:
+    return vector_add(source_q0(vector), source_delta(vector))
+
+
+def target_q(vector: Vector) -> Vector:
+    output = [ZERO for _ in range(TARGET_DIMENSION)]
+    for mask in HARMONIC_MASKS:
+        sign = -1 if degree(mask) % 2 else 1
+        for spin in range(SPIN_DIMENSION):
+            value = vector[target_index(mask, spin)]
+            if value == ZERO:
+                continue
+            for output_spin, coefficient in spin_image(spin):
+                add_component(
+                    output,
+                    target_index(mask, output_spin),
+                    p_scale(sign, p_multiply(coefficient, value)),
+                )
+    return tuple(output)
+
+
+def project(vector: Vector) -> Vector:
+    output = [ZERO for _ in range(TARGET_DIMENSION)]
+    for mask in HARMONIC_MASKS:
+        for spin in range(SPIN_DIMENSION):
+            output[target_index(mask, spin)] = vector[source_index(mask, spin)]
+    return tuple(output)
+
+
+def include(vector: Vector) -> Vector:
+    output = [ZERO for _ in range(SOURCE_DIMENSION)]
+    for mask in HARMONIC_MASKS:
+        for spin in range(SPIN_DIMENSION):
+            output[source_index(mask, spin)] = vector[target_index(mask, spin)]
+    return tuple(output)
+
+
+def homotopy(vector: Vector) -> Vector:
+    output = [ZERO for _ in range(SOURCE_DIMENSION)]
+    for spin in range(SPIN_DIMENSION):
+        output[source_index(4, spin)] = vector[source_index(3, spin)]
+    return tuple(output)
+
+
+def operator_matrix(operator, input_dimension: int) -> Matrix:
+    columns = [
+        operator(vector_basis(input_dimension, index))
+        for index in range(input_dimension)
+    ]
+    return [
+        [columns[column][row] for column in range(input_dimension)]
+        for row in range(len(columns[0]))
+    ]
+
+
+def projection_matrix() -> Matrix:
+    output = matrix_zero(TARGET_DIMENSION, SOURCE_DIMENSION)
+    for mask in HARMONIC_MASKS:
+        for spin in range(SPIN_DIMENSION):
+            output[target_index(mask, spin)][source_index(mask, spin)] = ONE
+    return output
+
+
+def homotopy_matrix() -> Matrix:
+    output = matrix_zero(SOURCE_DIMENSION, SOURCE_DIMENSION)
+    for spin in range(SPIN_DIMENSION):
+        output[source_index(4, spin)][source_index(3, spin)] = ONE
+    return output
+
+
+def lifted_spin_matrix(spin_matrix: Matrix, masks: tuple[int, ...], target: bool) -> Matrix:
+    dimension = len(masks) * SPIN_DIMENSION
+    output = matrix_zero(dimension, dimension)
+    for mask in masks:
+        for row_spin in range(SPIN_DIMENSION):
+            for column_spin in range(SPIN_DIMENSION):
+                row = (
+                    target_index(mask, row_spin)
+                    if target
+                    else source_index(mask, row_spin)
+                )
+                column = (
+                    target_index(mask, column_spin)
+                    if target
+                    else source_index(mask, column_spin)
+                )
+                output[row][column] = spin_matrix[row_spin][column_spin]
+    return output
+
+
+def outer_a(vector: Vector, potential_prime: Poly) -> Vector:
+    return vector_add(vector_derivative(vector), vector_multiply(potential_prime, vector))
+
+
+def outer_a_adjoint(vector: Vector, potential_prime: Poly) -> Vector:
+    return vector_add(
+        tuple(p_scale(-1, entry) for entry in vector_derivative(vector)),
+        vector_multiply(potential_prime, vector),
+    )
+
+
+def alg_zero() -> AlgVector:
+    return tuple(Fraction(0) for _ in range(FORM_DIMENSION))
+
+
+def alg_basis(mask: int, coefficient: int | Fraction = 1) -> AlgVector:
+    output = [Fraction(0) for _ in range(FORM_DIMENSION)]
+    output[mask] = Fraction(coefficient)
+    return tuple(output)
+
+
+def alg_add(left: AlgVector, right: AlgVector) -> AlgVector:
+    return tuple(lhs + rhs for lhs, rhs in zip(left, right, strict=True))
+
+
+def alg_scale(value: int | Fraction, vector: AlgVector) -> AlgVector:
+    scalar = Fraction(value)
+    return tuple(scalar * entry for entry in vector)
+
+
+def alg_subtract(left: AlgVector, right: AlgVector) -> AlgVector:
+    return alg_add(left, alg_scale(-1, right))
+
+
+def wedge_basis(left: int, right: int) -> tuple[int, int | None]:
+    if left & right:
+        return 0, None
+    inversions = 0
+    for left_index in range(3):
+        if not left & (1 << left_index):
+            continue
+        for right_index in range(3):
+            if right & (1 << right_index) and left_index > right_index:
+                inversions += 1
+    return (-1 if inversions % 2 else 1), left | right
+
+
+def wedge(left: AlgVector, right: AlgVector) -> AlgVector:
+    output = [Fraction(0) for _ in range(FORM_DIMENSION)]
+    for left_mask, left_value in enumerate(left):
+        if left_value == 0:
+            continue
+        for right_mask, right_value in enumerate(right):
+            if right_value == 0:
+                continue
+            sign, output_mask = wedge_basis(left_mask, right_mask)
+            if output_mask is not None:
+                output[output_mask] += sign * left_value * right_value
+    return tuple(output)
+
+
+def alg_homotopy(vector: AlgVector) -> AlgVector:
+    output = [Fraction(0) for _ in range(FORM_DIMENSION)]
+    output[4] = vector[3]
+    return tuple(output)
+
+
+def alg_project(vector: AlgVector) -> AlgVector:
+    return tuple(
+        value if mask in HARMONIC_MASKS else Fraction(0)
+        for mask, value in enumerate(vector)
+    )
+
+
+def transferred_m3(left_mask: int, middle_mask: int, right_mask: int) -> AlgVector:
+    left = alg_basis(left_mask)
+    middle = alg_basis(middle_mask)
+    right = alg_basis(right_mask)
+    first_tree = wedge(alg_homotopy(wedge(left, middle)), right)
+    second_tree = wedge(left, alg_homotopy(wedge(middle, right)))
+    return alg_project(
+        alg_subtract(first_tree, alg_scale((-1) ** degree(left_mask), second_tree))
+    )
+
+
+def circle_weight(mask: int) -> int:
+    return sum(
+        WEIGHTS[index] for index in range(3) if mask & (1 << index)
+    )
+
+
+def form_pair(left_mask: int, right_mask: int) -> Fraction:
+    sign, output_mask = wedge_basis(left_mask, right_mask)
+    return Fraction(sign if output_mask == 7 else 0)
+
+
+def serialize_poly(poly: Poly) -> list[str]:
+    return [str(value) for value in trim(poly)]
+
+
+def serialize_matrix(matrix: Matrix) -> list[list[list[str]]]:
+    return [[serialize_poly(entry) for entry in row] for row in matrix]
+
+
+def serialize_alg(vector: AlgVector) -> dict[str, str]:
+    names = ("1", "a", "b", "ab", "c", "ac", "bc", "abc")
+    return {
+        names[index]: str(value)
+        for index, value in enumerate(vector)
+        if value != 0
+    }
+
+
+def main() -> int:
+    source_q0_matrix = operator_matrix(source_q0, SOURCE_DIMENSION)
+    source_delta_matrix = operator_matrix(source_delta, SOURCE_DIMENSION)
+    source_q_matrix = matrix_add(source_q0_matrix, source_delta_matrix)
+    target_q_matrix = operator_matrix(target_q, TARGET_DIMENSION)
+    projection = projection_matrix()
+    inclusion = matrix_transpose(projection)
+    contraction_h = homotopy_matrix()
+    source_identity = matrix_identity(SOURCE_DIMENSION)
+    target_identity = matrix_identity(TARGET_DIMENSION)
+    retained_projector = matrix_multiply(inclusion, projection)
+
+    source_curvature = matrix_multiply(source_q_matrix, source_q_matrix)
+    target_curvature = matrix_multiply(target_q_matrix, target_q_matrix)
+    expected_source_curvature = lifted_spin_matrix(
+        F_SPIN, tuple(range(FORM_DIMENSION)), False
+    )
+    expected_target_curvature = lifted_spin_matrix(F_SPIN, HARMONIC_MASKS, True)
+
+    contraction_left = matrix_add(
+        matrix_multiply(source_q_matrix, contraction_h),
+        matrix_multiply(contraction_h, source_q_matrix),
+    )
+    contraction_right = matrix_subtract(source_identity, retained_projector)
+
+    source_norm_squared = p_scale(
+        Fraction(1, SOURCE_DIMENSION),
+        matrix_trace(
+            matrix_multiply(matrix_transpose(source_curvature), source_curvature)
+        ),
+    )
+    target_norm_squared = p_scale(
+        Fraction(1, TARGET_DIMENSION),
+        matrix_trace(
+            matrix_multiply(matrix_transpose(target_curvature), target_curvature)
+        ),
+    )
+    source_potential = p_scale(Fraction(1, 2), source_norm_squared)
+    target_potential = p_scale(Fraction(1, 2), target_norm_squared)
+    potential_prime = p_derivative(source_potential)
+    potential_second = p_derivative(potential_prime)
+
+    f_prime = matrix_derivative(F_SPIN)
+    f_second = matrix_derivative(f_prime)
+    gram_polynomial = p_scale(
+        Fraction(1, SPIN_DIMENSION),
+        matrix_trace(matrix_multiply(matrix_transpose(f_prime), f_prime)),
+    )
+    residual_polynomial = p_scale(
+        Fraction(1, SPIN_DIMENSION),
+        matrix_trace(matrix_multiply(matrix_transpose(F_SPIN), f_second)),
+    )
+
+    x_witness = matrix_unit(1, 2)
+    lie_shadow = matrix_subtract(
+        matrix_multiply(F_SPIN, x_witness), matrix_multiply(x_witness, F_SPIN)
+    )
+    jordan_shadow = matrix_add(
+        matrix_multiply(F_SPIN, x_witness), matrix_multiply(x_witness, F_SPIN)
+    )
+
+    outer_intertwining = True
+    outer_adjoint_intertwining = True
+    outer_h0_intertwining = True
+    outer_h1_intertwining = True
+    outer_nilpotence = True
+    for index in range(SOURCE_DIMENSION):
+        for power in range(4):
+            monomial = polynomial(*(0 for _ in range(power)), 1)
+            section = vector_basis(SOURCE_DIMENSION, index, monomial)
+            projected = project(section)
+            a_source = outer_a(section, potential_prime)
+            a_target = outer_a(projected, potential_prime)
+            adjoint_source = outer_a_adjoint(section, potential_prime)
+            adjoint_target = outer_a_adjoint(projected, potential_prime)
+            outer_intertwining = outer_intertwining and project(a_source) == a_target
+            outer_adjoint_intertwining = (
+                outer_adjoint_intertwining
+                and project(adjoint_source) == adjoint_target
+            )
+            outer_h0_intertwining = (
+                outer_h0_intertwining
+                and project(outer_a_adjoint(a_source, potential_prime))
+                == outer_a_adjoint(a_target, potential_prime)
+            )
+            outer_h1_intertwining = (
+                outer_h1_intertwining
+                and project(outer_a(adjoint_source, potential_prime))
+                == outer_a(adjoint_target, potential_prime)
+            )
+            first_image = (vector_zero(SOURCE_DIMENSION), a_source)
+            second_image = (
+                vector_zero(SOURCE_DIMENSION),
+                outer_a(first_image[0], potential_prime),
+            )
+            outer_nilpotence = outer_nilpotence and second_image == (
+                vector_zero(SOURCE_DIMENSION),
+                vector_zero(SOURCE_DIMENSION),
+            )
+
+    matrix_basis = [
+        (matrix_unit(row, column), (SPIN_PARITY[row] + SPIN_PARITY[column]) % 2)
+        for row in range(SPIN_DIMENSION)
+        for column in range(SPIN_DIMENSION)
+    ]
+
+    def supertrace_constant(matrix: Matrix) -> Fraction:
+        return sum(
+            (
+                Fraction(-1 if SPIN_PARITY[index] else 1)
+                * p_value_at_zero(matrix[index][index])
+                for index in range(SPIN_DIMENSION)
+            ),
+            Fraction(0),
+        )
+
+    pairing = [
+        [supertrace_constant(matrix_multiply(left, right)) for right, _ in matrix_basis]
+        for left, _ in matrix_basis
+    ]
+    graded_cyclic = all(
+        supertrace_constant(matrix_multiply(left, right))
+        == ((-1) ** (left_parity * right_parity))
+        * supertrace_constant(matrix_multiply(right, left))
+        for left, left_parity in matrix_basis
+        for right, right_parity in matrix_basis
+    )
+
+    cyclic_form_projection = True
+    cyclic_form_homotopy = True
+    for left_mask in range(FORM_DIMENSION):
+        for right_mask in HARMONIC_MASKS:
+            projected_pair = (
+                form_pair(left_mask, right_mask)
+                if left_mask in HARMONIC_MASKS
+                else Fraction(0)
+            )
+            cyclic_form_projection = cyclic_form_projection and (
+                projected_pair == form_pair(left_mask, right_mask)
+            )
+        for right_mask in range(FORM_DIMENSION):
+            h_left = 4 if left_mask == 3 else None
+            h_right = 4 if right_mask == 3 else None
+            left_value = (
+                form_pair(h_left, right_mask) if h_left is not None else Fraction(0)
+            )
+            right_value = (
+                ((-1) ** degree(left_mask)) * form_pair(left_mask, h_right)
+                if h_right is not None
+                else Fraction(0)
+            )
+            cyclic_form_homotopy = cyclic_form_homotopy and left_value == right_value
+
+    h_delta = matrix_multiply(contraction_h, source_delta_matrix)
+    delta_h = matrix_multiply(source_delta_matrix, contraction_h)
+
+    source_weight_equivariant = True
+    for mask in range(FORM_DIMENSION):
+        for spin in range(SPIN_DIMENSION):
+            image = source_q(vector_basis(SOURCE_DIMENSION, source_index(mask, spin)))
+            for output_mask in range(FORM_DIMENSION):
+                for output_spin in range(SPIN_DIMENSION):
+                    if image[source_index(output_mask, output_spin)] != ZERO:
+                        source_weight_equivariant = (
+                            source_weight_equivariant
+                            and circle_weight(output_mask) == circle_weight(mask)
+                        )
+
+    m3_aab = transferred_m3(1, 1, 2)
+    m3_abb = transferred_m3(1, 2, 2)
+
+    checks = {
+        "q_is_real_symmetric_and_odd": (
+            Q_SPIN == matrix_transpose(Q_SPIN)
+            and all(
+                entry == ZERO
+                or (SPIN_PARITY[row] + SPIN_PARITY[column]) % 2 == 1
+                for row, matrix_row in enumerate(Q_SPIN)
+                for column, entry in enumerate(matrix_row)
+            )
+        ),
+        "curvature_is_positive_square": F_SPIN
+        == matrix_multiply(matrix_transpose(Q_SPIN), Q_SPIN),
+        "curvature_is_noncentral": matrix_nonzero(lie_shadow),
+        "curvature_jordan_shadow_is_nonzero": matrix_nonzero(jordan_shadow),
+        "noncentrality_is_visible_at_critical_point": matrix_at_zero(lie_shadow)
+        == matrix_unit(1, 2),
+        "source_superconnection_squares_to_positive_noncentral_curvature": (
+            source_curvature == expected_source_curvature
+        ),
+        "target_superconnection_squares_to_same_curvature": target_curvature
+        == expected_target_curvature,
+        "projection_inclusion_identity": matrix_multiply(projection, inclusion)
+        == target_identity,
+        "retained_projector_is_idempotent": matrix_multiply(
+            retained_projector, retained_projector
+        )
+        == retained_projector,
+        "curved_contraction_identity": contraction_left == contraction_right,
+        "contraction_side_conditions": (
+            matrix_multiply(contraction_h, contraction_h)
+            == matrix_zero(SOURCE_DIMENSION, SOURCE_DIMENSION)
+            and matrix_multiply(projection, contraction_h)
+            == matrix_zero(TARGET_DIMENSION, SOURCE_DIMENSION)
+            and matrix_multiply(contraction_h, inclusion)
+            == matrix_zero(SOURCE_DIMENSION, TARGET_DIMENSION)
+        ),
+        "projection_intertwines_Q": matrix_multiply(projection, source_q_matrix)
+        == matrix_multiply(target_q_matrix, projection),
+        "projection_intertwines_Q_adjoint": matrix_multiply(
+            projection, matrix_transpose(source_q_matrix)
+        )
+        == matrix_multiply(matrix_transpose(target_q_matrix), projection),
+        "projection_intertwines_curvature": matrix_multiply(
+            projection, source_curvature
+        )
+        == matrix_multiply(target_curvature, projection),
+        "normalized_source_cost_is_one_third_phi_squared": source_potential
+        == polynomial(Fraction(1, 3), 0, Fraction(2, 3), 0, Fraction(1, 3)),
+        "normalized_target_cost_matches_source": target_potential == source_potential,
+        "nonzero_defect_point_is_critical": (
+            matrix_nonzero(matrix_at_zero(F_SPIN))
+            and p_value_at_zero(potential_prime) == 0
+        ),
+        "gram_hessian_at_zero_is_two_thirds": p_value_at_zero(gram_polynomial)
+        == Fraction(2, 3),
+        "residual_hessian_at_zero_is_two_thirds": p_value_at_zero(
+            residual_polynomial
+        )
+        == Fraction(2, 3),
+        "full_hessian_at_zero_is_four_thirds": p_value_at_zero(potential_second)
+        == Fraction(4, 3),
+        "outer_witten_differential_is_nilpotent": outer_nilpotence,
+        "projection_intertwines_outer_witten_differential": outer_intertwining,
+        "projection_intertwines_outer_witten_adjoint": outer_adjoint_intertwining,
+        "projection_intertwines_zero_form_witten_square": outer_h0_intertwining,
+        "projection_intertwines_one_form_witten_square": outer_h1_intertwining,
+        "supertrace_pairing_is_non_degenerate": rational_rank(pairing)
+        == len(matrix_basis),
+        "supertrace_pairing_is_graded_cyclic": graded_cyclic,
+        "cyclic_form_projection_is_preserved": cyclic_form_projection,
+        "cyclic_form_homotopy_is_preserved": cyclic_form_homotopy,
+        "h_delta_is_nonzero_and_square_zero": matrix_nonzero(h_delta)
+        and matrix_multiply(h_delta, h_delta)
+        == matrix_zero(SOURCE_DIMENSION, SOURCE_DIMENSION),
+        "delta_h_is_nonzero_and_square_zero": matrix_nonzero(delta_h)
+        and matrix_multiply(delta_h, delta_h)
+        == matrix_zero(SOURCE_DIMENSION, SOURCE_DIMENSION),
+        "shared_circle_and_Z3_weight_are_preserved": source_weight_equivariant,
+        "transferred_m3_a_a_b_equals_ac": m3_aab == alg_basis(5),
+        "transferred_m3_a_b_b_equals_minus_bc": m3_abb
+        == alg_scale(-1, alg_basis(6)),
+        "transferred_m3_preserves_shared_weight": (
+            circle_weight(5)
+            == circle_weight(1) + circle_weight(1) + circle_weight(2)
+            and circle_weight(6)
+            == circle_weight(1) + circle_weight(2) + circle_weight(2)
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H4-T3",
+        "tier": "LOCAL_POSITIVE_NONCENTRAL_NESTED_TRANSFER_WITH_EXACT_WITNESS",
+        "claim": (
+            "One real self-adjoint noncentral superconnection emits a positive "
+            "curvature, normalized nonzero-defect cost and outer Witten repair; "
+            "one cyclic Heisenberg contraction intertwines every strict shadow "
+            "and transfers the shared-phase m3 interaction."
+        ),
+        "exact_data": {
+            "q(x)": serialize_matrix(Q_SPIN),
+            "F(x)=q(x)^2": serialize_matrix(F_SPIN),
+            "source_module_dimension": SOURCE_DIMENSION,
+            "target_module_dimension": TARGET_DIMENSION,
+            "V": serialize_poly(source_potential),
+            "V_prime": serialize_poly(potential_prime),
+            "V_second": serialize_poly(potential_second),
+            "gram_hessian_at_zero": str(p_value_at_zero(gram_polynomial)),
+            "residual_hessian_at_zero": str(p_value_at_zero(residual_polynomial)),
+            "full_hessian_at_zero": str(p_value_at_zero(potential_second)),
+            "noncentral_witness": "[F(0),E12]=E12",
+            "transferred_m3_a_a_b": serialize_alg(m3_aab),
+            "transferred_m3_a_b_b": serialize_alg(m3_abb),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is a positive finite nested-transfer benchmark, not a physical "
+            "source selection. The full noncentral curved A-infinity expansion "
+            "with arbitrary curvature insertions is not certified here; no "
+            "continuum principal symbol, q79 descent, accepted 27/rank-102 "
+            "operator, Lorentzian action or physical clock is supplied."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

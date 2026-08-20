@@ -1,0 +1,237 @@
+# Curved Cyclic Repair Germ and Curvature Trichotomy v1
+
+**Date:** 2026-08-20
+
+**Local status:** `DEFINITION_AND_LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS`
+
+**MTT status:** candidate branch-independent preprojection language.
+
+## 1. Minimal algebraic germ
+
+A finite curved cyclic repair germ consists of
+
+```text
+R = (A=A_even+A_odd, Q, star, tau, L_sh, G),
+```
+
+where:
+
+- `A` is a Z2-graded associative star algebra;
+- `Q` is an odd superconnection/closure charge;
+- `tau` is a cyclic trace or supertrace supplying the pairing;
+- `L_sh` is a central differential-line representation; and
+- `G` is the symmetry/descent groupoid.
+
+Define
+
+```text
+F = Q^2,
+d_Q(X)=QX-(-1)^|X| XQ.
+```
+
+The element `F` is the curvature or closure defect.
+
+## 2. Curved differential identities
+
+### Theorem 2.1
+
+For every homogeneous `X`:
+
+```text
+d_Q^2(X)=[F,X],
+d_Q(F)=0.
+```
+
+Moreover, `d_Q` is a graded derivation:
+
+```text
+d_Q(XY)
+ = d_Q(X)Y+(-1)^|X|X d_Q(Y).
+```
+
+### Proof
+
+Expand the double graded commutator. The two mixed terms cancel and leave
+
+```text
+Q^2X-XQ^2=[F,X].
+```
+
+Since `Q` commutes with its square, `d_Q(F)=[Q,F]=0`. Expanding `d_Q(XY)`
+gives the graded Leibniz identity. QED.
+
+These are the first curved differential graded algebra identities. In
+curved-A-infinity notation, `F` is `m0`, `d_Q` is `m1`, and multiplication is
+`m2`.
+
+## 3. Curvature trichotomy
+
+### Theorem 3.1
+
+Exactly three algebraic regimes must be distinguished.
+
+### Regime I: exact closure
+
+```text
+F=0.
+```
+
+Then `d_Q^2=0` and the ordinary cohomological/Hodge language applies.
+
+### Regime II: central persistent curvature
+
+```text
+F!=0,
+F in center(A).
+```
+
+Then `d_Q^2=0` in the adjoint representation even though the closure defect is
+nonzero. The Jordan action
+
+```text
+C_F(X)=FX+XF
+```
+
+may still change the residual Hessian. Thus stability pressure can survive
+without inner gauge curvature.
+
+### Regime III: noncentral persistent curvature
+
+```text
+[F,.]!=0.
+```
+
+Then the adjoint differential is genuinely curved:
+
+```text
+d_Q^2=ad_F!=0.
+```
+
+Both Jordan stability response and Lie/gauge curvature can be present.
+
+### Consequence
+
+The implication
+
+```text
+d_Q^2=0 => F=0
+```
+
+is false without a faithful noncentrality condition. An ordinary nilpotent
+adjoint differential can coexist with a nonzero central defect.
+
+This is important for projective and shared-line sectors, where central
+curvature is mathematically natural.
+
+## 4. Twisting and fixed points
+
+Let `Q_0` be an exact-background superconnection and let `a` be an odd
+perturbation:
+
+```text
+Q_a=Q_0+a.
+```
+
+If `Q_0^2=0`, then
+
+```text
+F(a)=Q_a^2=d a+a^2.
+```
+
+The Maurer-Cartan equation `F(a)=0` selects integrable perturbations. Off that
+zero set, `Q_a` is a curved repair germ and the residual-Hessian and Jordan-Lie
+theorems apply.
+
+This gives fixed points a narrower role:
+
+- exact fixed points solve `F=0`;
+- persistent defects minimize `||F||^2` within an obstructed sector;
+- symmetry-relative states may move within an orbit;
+- central persistent defects can retain a nilpotent adjoint complex.
+
+## 5. Cyclic action and local expansion
+
+When the trace pairing is positive on the chosen real slice, define
+
+```text
+V(Q)=1/2 ||F||^2.
+```
+
+The first variation is controlled by the linearized curvature
+
+```text
+D F_Q(a)=Q a+a Q
+```
+
+on odd perturbations. The second variation contains the Jordan curvature action
+from the common-curvature theorem.
+
+Higher products or a curved cyclic A-infinity enhancement can be added when
+projection or integrating out creates non-binary interactions. They are not
+required to define the present germ.
+
+## 6. Relationship to current MTT structures
+
+This one object organizes the current local results:
+
+```text
+F=0:
+    ordinary cohesive dg algebra,
+    nilpotent differential,
+    Hodge Hessian,
+    heat kernel and cohomology;
+
+F central and nonzero:
+    persistent scalar/projective pressure,
+    nilpotent adjoint differential,
+    nonzero Jordan Hessian correction;
+
+F noncentral:
+    curved differential,
+    Jordan stability response,
+    Lie/gauge curvature,
+    phase-curvature coupling.
+```
+
+The qutrit Weyl algebra and 27-state tensor witness are representations of
+associative matrix algebras, so they are compatible with this language at the
+finite structural tier. The First-Tits/Albert 27 remains a distinct exceptional
+Jordan object and cannot be silently identified with the family qutrit carrier.
+
+## 7. What remains before a genuine preprojection category
+
+The local germ still needs:
+
+1. stratified and Cech descent;
+2. morphisms and the exact notion of equivalence;
+3. a curved homotopy-transfer theorem;
+4. the BV/index readout for eliminated sectors;
+5. shared-line equivariance and holonomy;
+6. continuum operator domains and positivity;
+7. a selected physical q79 realization.
+
+The next formal target is therefore a category/stack of these germs, not another
+matrix ansatz.
+
+## 8. Falsifiers
+
+This language is not useful for MTT if:
+
+- the accepted nonlinear residual cannot be represented as superconnection
+  curvature;
+- its physical second jet does not arise from the same multiplication;
+- the shared line fails to act centrally/equivariantly;
+- the required projections do not preserve the curved identities; or
+- it adds no compression over the existing cohesive plus A-infinity language.
+
+## 9. Verification
+
+Run:
+
+```powershell
+python experiments/curved_repair_germ/verify.py
+python verify.py
+```
+
+The exact witnesses verify the curved derivation identities, Bianchi identity,
+and all three curvature regimes.

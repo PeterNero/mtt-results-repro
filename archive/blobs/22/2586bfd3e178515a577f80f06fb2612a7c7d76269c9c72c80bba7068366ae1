@@ -1,0 +1,241 @@
+# Preprojection Single-Charge Factorization Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:** `LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS`
+
+**MTT status:** exploratory; the physical differential, phase, scale, and clock
+are not selected.
+
+## 1. Purpose
+
+The previous repair theorem used a skew reversible operator `K` and a positive
+damping operator `Gamma`. Leaving them independent would simply replace one
+upstream ambiguity with two.
+
+This theorem shows that a single nilpotent first-order differential generates:
+
+- a phase-bearing reversible operator;
+- a phase-blind positive Hodge repair operator;
+- a commuting damped-unitary evolution; and
+- a harmonic sector on which the shared central line may act without damping.
+
+## 2. Finite Hilbert-complex setup
+
+Let `H` be a finite-dimensional complex Hilbert space and let
+
+```text
+d:H->H,
+d^2=0.
+```
+
+For a unit phase `u in U(1)`, define
+
+```text
+B_u = u d + conjugate(u) d^*,
+Delta = d d^* + d^* d.
+```
+
+Let `gamma>=0`. Let `P_h` be the orthogonal projector onto `ker Delta`, and let
+`Z` be a skew-adjoint shared-line generator commuting with `d` and `d^*`.
+
+Define
+
+```text
+L_(u,gamma,Z)
+  = -i B_u - gamma Delta + Z P_h.
+```
+
+## 3. Single-charge factorization
+
+### Theorem 3.1
+
+The following identities hold:
+
+```text
+B_u^* = B_u,
+B_u^2 = Delta,
+Delta >= 0,
+ker Delta = ker d intersect ker d^*.
+```
+
+In particular, `Delta` is independent of `u`. The phase changes the first-order
+polarization but is erased by squaring.
+
+### Proof
+
+Self-adjointness follows directly from the definition. Expanding the square,
+
+```text
+B_u^2
+ = u^2 d^2
+   + |u|^2 d d^*
+   + |u|^2 d^* d
+   + conjugate(u)^2 (d^*)^2.
+```
+
+Nilpotence of `d` and `d^*` and `|u|=1` leave exactly `Delta`. Moreover,
+
+```text
+<x,Delta x> = ||d x||^2 + ||d^*x||^2,
+```
+
+which proves positivity and the kernel identity. QED.
+
+## 4. Reversible-dissipative evolution
+
+### Theorem 4.1
+
+The three summands
+
+```text
+-i B_u,
+-gamma Delta,
+Z P_h
+```
+
+commute under the stated hypotheses. Therefore
+
+```text
+exp(t L_(u,gamma,Z))
+ = exp(t Z P_h)
+   exp(-it B_u)
+   exp(-gamma t Delta).
+```
+
+For every solution `psi(t)`,
+
+```text
+d/dt ||psi||^2
+ = -2 gamma <psi,Delta psi>
+ = -2 gamma ||B_u psi||^2
+ <= 0.
+```
+
+The unitary first-order factor retains `u`. The heat factor is phase-blind.
+
+### Proof
+
+Since `Delta=B_u^2`, `B_u` commutes with `Delta`. The harmonic projector is a
+spectral projector of `Delta`. On its range, `d=d^*=B_u=Delta=0`. The assumed
+commutation of `Z` with the complex gives the remaining commutators.
+Factorization follows for commuting finite matrices.
+
+The skew-adjoint terms contribute zero to the derivative of the norm. The
+self-adjoint term contributes `-2 gamma <psi,Delta psi>`. QED.
+
+## 5. Phase and harmonic-sector consequences
+
+### Corollary 5.1
+
+Changing `u` can reverse or rotate the first-order reversible transport without
+changing `Delta` or its heat kernel. Thus the squared repair operator cannot
+select the first-order phase.
+
+### Corollary 5.2
+
+For `gamma>0`, every positive-`Delta` mode decays. A persistent undamped mode
+must lie in `ker Delta` or in a separately declared zero-damping sector.
+
+On `ker Delta`, the first-order charge `B_u` vanishes. Any persistent harmonic
+phase must therefore come from `Z P_h`, the shared central-line action, rather
+than from the Hodge square.
+
+This gives the central line a precise role:
+
+```text
+shared line:
+    phase transport on protected cohomology;
+
+first-order charge:
+    phase-sensitive transport off cohomology;
+
+Hodge square:
+    phase-blind transverse repair.
+```
+
+The shared line is not identified with time. It supplies an internal
+skew-adjoint action; a separate clock theorem would be needed to interpret an
+evolution parameter physically.
+
+## 6. Realification
+
+The theorem is exactly representable over a real state space. Complex
+multiplication becomes a real skew-symmetric complex structure `I_c`.
+For a real matrix representative of `B_u`,
+
+```text
+K_u = -I_c B_u
+```
+
+is skew-symmetric, while
+
+```text
+Gamma = gamma B_u^2
+```
+
+is symmetric positive semidefinite. This realizes the abstract operators of the
+reversible-dissipative repair theorem from one first-order source.
+
+## 7. What is genuinely reduced
+
+Before this theorem:
+
+```text
+choose K,
+choose Gamma,
+choose their compatibility.
+```
+
+After this theorem:
+
+```text
+choose one differential d,
+choose one unit phase u,
+choose one nonnegative rate gamma,
+choose the shared central-line representation Z on cohomology.
+```
+
+Compatibility, positivity, phase loss under squaring, and semigroup
+factorization are then automatic.
+
+The phase may become discrete if the selected shared-line holonomy restricts
+`u` to a finite root. The rate `gamma` remains a scale until a source or unit
+normalization fixes it.
+
+## 8. Current MTT boundary
+
+This theorem is a stronger preprojection candidate for `B.ACTION.01`, but it
+does not discharge that blocker. It remains necessary to prove that:
+
+1. the selected physical q79 differential is the `d` used here;
+2. its adjoint comes from the selected physical metric;
+3. the central shared line supplies `u` and `Z` with the required holonomy;
+4. the physical action uses this generator;
+5. its projections recover the accepted finite, QM, QFT, SM, and GR operators;
+6. `gamma` and the physical clock/scale are selected.
+
+## 9. Falsifiers
+
+This candidate fails as the MTT common source if:
+
+- the physical reversible operator does not arise from the selected
+  first-order differential;
+- the physical damping is not a function of its Hodge square;
+- the required phase acts nontrivially on the repair spectrum but cannot be
+  represented by `u` or `Z`; or
+- the projected accepted operators do not commute with the proposed
+  factorization.
+
+## 10. Verification
+
+Run:
+
+```powershell
+python experiments/single_charge_factorization/verify.py
+python verify.py
+```
+
+The exact realified witness checks nilpotence, phase-sensitive sign reversal,
+phase-independent squaring, skew/positive decomposition, commutation, harmonic
+central motion, and transverse decay.

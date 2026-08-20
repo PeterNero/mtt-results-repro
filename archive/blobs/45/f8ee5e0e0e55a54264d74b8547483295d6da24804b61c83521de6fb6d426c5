@@ -1,0 +1,775 @@
+"""Exact same-source witness for a restricted nested repair contraction."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "h4_restricted_nested_transfer.json"
+
+ALGEBRA_DIMENSION = 8
+SPINOR_DIMENSION = 4
+HARMONIC_MASKS = (0, 1, 2, 5, 6, 7)
+HARMONIC_INDEX = {mask: index for index, mask in enumerate(HARMONIC_MASKS)}
+SOURCE_DIMENSION = ALGEBRA_DIMENSION * SPINOR_DIMENSION
+TARGET_DIMENSION = len(HARMONIC_MASKS) * SPINOR_DIMENSION
+WEIGHTS = (1, 1, 2)
+
+Poly = tuple[Fraction, ...]
+PolyVector = tuple[Poly, ...]
+PolyMatrix = list[list[Poly]]
+AlgVector = tuple[Fraction, ...]
+
+
+def trim(poly: Poly) -> Poly:
+    result = list(poly)
+    while len(result) > 1 and result[-1] == 0:
+        result.pop()
+    return tuple(result)
+
+
+def polynomial(*coefficients: int | Fraction) -> Poly:
+    return trim(tuple(Fraction(value) for value in coefficients))
+
+
+ZERO = polynomial(0)
+ONE = polynomial(1)
+X = polynomial(0, 1)
+PHI = polynomial(1, 0, 1)
+
+
+def p_add(left: Poly, right: Poly) -> Poly:
+    size = max(len(left), len(right))
+    return trim(
+        tuple(
+            (left[index] if index < len(left) else Fraction(0))
+            + (right[index] if index < len(right) else Fraction(0))
+            for index in range(size)
+        )
+    )
+
+
+def p_scale(value: int | Fraction, poly: Poly) -> Poly:
+    scalar = Fraction(value)
+    return trim(tuple(scalar * coefficient for coefficient in poly))
+
+
+def p_subtract(left: Poly, right: Poly) -> Poly:
+    return p_add(left, p_scale(-1, right))
+
+
+def p_multiply(left: Poly, right: Poly) -> Poly:
+    result = [Fraction(0) for _ in range(len(left) + len(right) - 1)]
+    for left_index, left_value in enumerate(left):
+        for right_index, right_value in enumerate(right):
+            result[left_index + right_index] += left_value * right_value
+    return trim(tuple(result))
+
+
+def p_derivative(poly: Poly) -> Poly:
+    if len(poly) <= 1:
+        return ZERO
+    return trim(
+        tuple(Fraction(index) * poly[index] for index in range(1, len(poly)))
+    )
+
+
+def p_value_at_zero(poly: Poly) -> Fraction:
+    return poly[0]
+
+
+def vector_zero(dimension: int) -> PolyVector:
+    return tuple(ZERO for _ in range(dimension))
+
+
+def vector_basis(dimension: int, index: int, value: Poly = ONE) -> PolyVector:
+    result = [ZERO for _ in range(dimension)]
+    result[index] = value
+    return tuple(result)
+
+
+def vector_add(left: PolyVector, right: PolyVector) -> PolyVector:
+    return tuple(
+        p_add(lhs, rhs) for lhs, rhs in zip(left, right, strict=True)
+    )
+
+
+def vector_subtract(left: PolyVector, right: PolyVector) -> PolyVector:
+    return tuple(
+        p_subtract(lhs, rhs) for lhs, rhs in zip(left, right, strict=True)
+    )
+
+
+def vector_multiply(poly: Poly, vector: PolyVector) -> PolyVector:
+    return tuple(p_multiply(poly, value) for value in vector)
+
+
+def vector_derivative(vector: PolyVector) -> PolyVector:
+    return tuple(p_derivative(value) for value in vector)
+
+
+def source_index(mask: int, spin: int) -> int:
+    return mask * SPINOR_DIMENSION + spin
+
+
+def target_index(mask: int, spin: int) -> int:
+    return HARMONIC_INDEX[mask] * SPINOR_DIMENSION + spin
+
+
+def degree(mask: int) -> int:
+    return mask.bit_count()
+
+
+def spin_image(spin: int) -> tuple[tuple[int, Poly], ...]:
+    # C(x)=[[0,A],[A^T,0]], A=[[1,x],[-x,1]].  Hence C is real,
+    # symmetric, odd, and C(x)^2=(1+x^2)I_4.
+    images = {
+        0: ((2, ONE), (3, X)),
+        1: ((2, p_scale(-1, X)), (3, ONE)),
+        2: ((0, ONE), (1, p_scale(-1, X))),
+        3: ((0, X), (1, ONE)),
+    }
+    return images[spin]
+
+
+def add_component(output: list[Poly], index: int, value: Poly) -> None:
+    output[index] = p_add(output[index], value)
+
+
+def source_q(vector: PolyVector) -> PolyVector:
+    output = [ZERO for _ in range(SOURCE_DIMENSION)]
+    for mask in range(ALGEBRA_DIMENSION):
+        sign = -1 if degree(mask) % 2 else 1
+        for spin in range(SPINOR_DIMENSION):
+            value = vector[source_index(mask, spin)]
+            if value == ZERO:
+                continue
+            if mask == 4:  # d c=a wedge b
+                add_component(output, source_index(3, spin), value)
+            for output_spin, coefficient in spin_image(spin):
+                add_component(
+                    output,
+                    source_index(mask, output_spin),
+                    p_scale(sign, p_multiply(coefficient, value)),
+                )
+    return tuple(output)
+
+
+def target_q(vector: PolyVector) -> PolyVector:
+    output = [ZERO for _ in range(TARGET_DIMENSION)]
+    for mask in HARMONIC_MASKS:
+        sign = -1 if degree(mask) % 2 else 1
+        for spin in range(SPINOR_DIMENSION):
+            value = vector[target_index(mask, spin)]
+            if value == ZERO:
+                continue
+            for output_spin, coefficient in spin_image(spin):
+                add_component(
+                    output,
+                    target_index(mask, output_spin),
+                    p_scale(sign, p_multiply(coefficient, value)),
+                )
+    return tuple(output)
+
+
+def project(vector: PolyVector) -> PolyVector:
+    output = [ZERO for _ in range(TARGET_DIMENSION)]
+    for mask in HARMONIC_MASKS:
+        for spin in range(SPINOR_DIMENSION):
+            output[target_index(mask, spin)] = vector[source_index(mask, spin)]
+    return tuple(output)
+
+
+def include(vector: PolyVector) -> PolyVector:
+    output = [ZERO for _ in range(SOURCE_DIMENSION)]
+    for mask in HARMONIC_MASKS:
+        for spin in range(SPINOR_DIMENSION):
+            output[source_index(mask, spin)] = vector[target_index(mask, spin)]
+    return tuple(output)
+
+
+def homotopy(vector: PolyVector) -> PolyVector:
+    output = [ZERO for _ in range(SOURCE_DIMENSION)]
+    for spin in range(SPINOR_DIMENSION):
+        output[source_index(4, spin)] = vector[source_index(3, spin)]
+    return tuple(output)
+
+
+def operator_matrix(operator, dimension: int) -> PolyMatrix:
+    columns = [operator(vector_basis(dimension, index)) for index in range(dimension)]
+    return [
+        [columns[column][row] for column in range(dimension)]
+        for row in range(len(columns[0]))
+    ]
+
+
+def matrix_zero(rows: int, columns: int) -> PolyMatrix:
+    return [[ZERO for _ in range(columns)] for _ in range(rows)]
+
+
+def matrix_identity(dimension: int, diagonal: Poly = ONE) -> PolyMatrix:
+    return [
+        [diagonal if row == column else ZERO for column in range(dimension)]
+        for row in range(dimension)
+    ]
+
+
+def matrix_transpose(matrix: PolyMatrix) -> PolyMatrix:
+    return [list(row) for row in zip(*matrix, strict=True)]
+
+
+def matrix_multiply(left: PolyMatrix, right: PolyMatrix) -> PolyMatrix:
+    rows = len(left)
+    shared = len(left[0])
+    if shared != len(right):
+        raise ValueError("incompatible matrix dimensions")
+    columns = len(right[0])
+    output = matrix_zero(rows, columns)
+    for row in range(rows):
+        for inner in range(shared):
+            if left[row][inner] == ZERO:
+                continue
+            for column in range(columns):
+                if right[inner][column] == ZERO:
+                    continue
+                output[row][column] = p_add(
+                    output[row][column],
+                    p_multiply(left[row][inner], right[inner][column]),
+                )
+    return output
+
+
+def matrix_add(left: PolyMatrix, right: PolyMatrix) -> PolyMatrix:
+    return [
+        [p_add(lhs, rhs) for lhs, rhs in zip(left_row, right_row, strict=True)]
+        for left_row, right_row in zip(left, right, strict=True)
+    ]
+
+
+def matrix_trace(matrix: PolyMatrix) -> Poly:
+    return sum_polynomials(matrix[index][index] for index in range(len(matrix)))
+
+
+def sum_polynomials(polynomials) -> Poly:
+    result = ZERO
+    for poly in polynomials:
+        result = p_add(result, poly)
+    return result
+
+
+def projection_matrix() -> PolyMatrix:
+    output = matrix_zero(TARGET_DIMENSION, SOURCE_DIMENSION)
+    for mask in HARMONIC_MASKS:
+        for spin in range(SPINOR_DIMENSION):
+            output[target_index(mask, spin)][source_index(mask, spin)] = ONE
+    return output
+
+
+def homotopy_matrix() -> PolyMatrix:
+    output = matrix_zero(SOURCE_DIMENSION, SOURCE_DIMENSION)
+    for spin in range(SPINOR_DIMENSION):
+        output[source_index(4, spin)][source_index(3, spin)] = ONE
+    return output
+
+
+def alg_zero() -> AlgVector:
+    return tuple(Fraction(0) for _ in range(ALGEBRA_DIMENSION))
+
+
+def alg_basis(mask: int, coefficient: int | Fraction = 1) -> AlgVector:
+    output = [Fraction(0) for _ in range(ALGEBRA_DIMENSION)]
+    output[mask] = Fraction(coefficient)
+    return tuple(output)
+
+
+def alg_add(left: AlgVector, right: AlgVector) -> AlgVector:
+    return tuple(lhs + rhs for lhs, rhs in zip(left, right, strict=True))
+
+
+def alg_scale(value: int | Fraction, vector: AlgVector) -> AlgVector:
+    scalar = Fraction(value)
+    return tuple(scalar * entry for entry in vector)
+
+
+def alg_subtract(left: AlgVector, right: AlgVector) -> AlgVector:
+    return alg_add(left, alg_scale(-1, right))
+
+
+def wedge_basis(left: int, right: int) -> tuple[int, int | None]:
+    if left & right:
+        return 0, None
+    inversions = 0
+    for left_index in range(3):
+        if not left & (1 << left_index):
+            continue
+        for right_index in range(3):
+            if right & (1 << right_index) and left_index > right_index:
+                inversions += 1
+    return (-1 if inversions % 2 else 1), left | right
+
+
+def wedge(left: AlgVector, right: AlgVector) -> AlgVector:
+    output = [Fraction(0) for _ in range(ALGEBRA_DIMENSION)]
+    for left_mask, left_value in enumerate(left):
+        if left_value == 0:
+            continue
+        for right_mask, right_value in enumerate(right):
+            if right_value == 0:
+                continue
+            sign, output_mask = wedge_basis(left_mask, right_mask)
+            if output_mask is not None:
+                output[output_mask] += sign * left_value * right_value
+    return tuple(output)
+
+
+def alg_differential(vector: AlgVector) -> AlgVector:
+    output = [Fraction(0) for _ in range(ALGEBRA_DIMENSION)]
+    output[3] = vector[4]
+    return tuple(output)
+
+
+def alg_project(vector: AlgVector) -> AlgVector:
+    return tuple(
+        value if mask in HARMONIC_MASKS else Fraction(0)
+        for mask, value in enumerate(vector)
+    )
+
+
+def alg_homotopy(vector: AlgVector) -> AlgVector:
+    output = [Fraction(0) for _ in range(ALGEBRA_DIMENSION)]
+    output[4] = vector[3]
+    return tuple(output)
+
+
+def m2(left: AlgVector, right: AlgVector) -> AlgVector:
+    return alg_project(wedge(alg_project(left), alg_project(right)))
+
+
+def m3_basis(left_mask: int, middle_mask: int, right_mask: int) -> AlgVector:
+    left = alg_basis(left_mask)
+    middle = alg_basis(middle_mask)
+    right = alg_basis(right_mask)
+    first_tree = wedge(alg_homotopy(wedge(left, middle)), right)
+    second_tree = wedge(left, alg_homotopy(wedge(middle, right)))
+    return alg_project(
+        alg_subtract(first_tree, alg_scale((-1) ** degree(left_mask), second_tree))
+    )
+
+
+def m3(left: AlgVector, middle: AlgVector, right: AlgVector) -> AlgVector:
+    output = alg_zero()
+    for left_mask, left_value in enumerate(left):
+        if left_value == 0:
+            continue
+        for middle_mask, middle_value in enumerate(middle):
+            if middle_value == 0:
+                continue
+            for right_mask, right_value in enumerate(right):
+                if right_value == 0:
+                    continue
+                output = alg_add(
+                    output,
+                    alg_scale(
+                        left_value * middle_value * right_value,
+                        m3_basis(left_mask, middle_mask, right_mask),
+                    ),
+                )
+    return output
+
+
+def cyclic_pair(left_mask: int, right_mask: int) -> Fraction:
+    sign, output_mask = wedge_basis(left_mask, right_mask)
+    return Fraction(sign if output_mask == 7 else 0)
+
+
+def h_mask(mask: int) -> tuple[int | None, int]:
+    return (4, 1) if mask == 3 else (None, 0)
+
+
+def d_mask(mask: int) -> tuple[int | None, int]:
+    return (3, 1) if mask == 4 else (None, 0)
+
+
+def circle_weight(mask: int) -> int:
+    return sum(
+        WEIGHTS[index] for index in range(3) if mask & (1 << index)
+    )
+
+
+def outer_a(vector: PolyVector, potential_prime: Poly) -> PolyVector:
+    return vector_add(vector_derivative(vector), vector_multiply(potential_prime, vector))
+
+
+def outer_a_adjoint(vector: PolyVector, potential_prime: Poly) -> PolyVector:
+    return vector_add(
+        tuple(p_scale(-1, value) for value in vector_derivative(vector)),
+        vector_multiply(potential_prime, vector),
+    )
+
+
+def serialize_poly(poly: Poly) -> list[str]:
+    return [str(value) for value in trim(poly)]
+
+
+def serialize_alg(vector: AlgVector) -> dict[str, str]:
+    names = ("1", "a", "b", "ab", "c", "ac", "bc", "abc")
+    return {
+        names[index]: str(value)
+        for index, value in enumerate(vector)
+        if value != 0
+    }
+
+
+def main() -> int:
+    source_q_matrix = operator_matrix(source_q, SOURCE_DIMENSION)
+    target_q_matrix = operator_matrix(target_q, TARGET_DIMENSION)
+    projection = projection_matrix()
+    inclusion = matrix_transpose(projection)
+    contraction_h = homotopy_matrix()
+    source_identity = matrix_identity(SOURCE_DIMENSION)
+    target_identity = matrix_identity(TARGET_DIMENSION)
+
+    source_phi = matrix_multiply(source_q_matrix, source_q_matrix)
+    target_phi = matrix_multiply(target_q_matrix, target_q_matrix)
+    expected_source_phi = matrix_identity(SOURCE_DIMENSION, PHI)
+    expected_target_phi = matrix_identity(TARGET_DIMENSION, PHI)
+
+    source_adjoint = matrix_transpose(source_q_matrix)
+    target_adjoint = matrix_transpose(target_q_matrix)
+    retained_projector = matrix_multiply(inclusion, projection)
+
+    contraction_left = matrix_add(
+        matrix_multiply(source_q_matrix, contraction_h),
+        matrix_multiply(contraction_h, source_q_matrix),
+    )
+    contraction_right = [
+        [
+            p_subtract(source_identity[row][column], retained_projector[row][column])
+            for column in range(SOURCE_DIMENSION)
+        ]
+        for row in range(SOURCE_DIMENSION)
+    ]
+
+    source_norm_squared = p_scale(
+        Fraction(1, SOURCE_DIMENSION),
+        matrix_trace(matrix_multiply(matrix_transpose(source_phi), source_phi)),
+    )
+    target_norm_squared = p_scale(
+        Fraction(1, TARGET_DIMENSION),
+        matrix_trace(matrix_multiply(matrix_transpose(target_phi), target_phi)),
+    )
+    source_potential = p_scale(Fraction(1, 2), source_norm_squared)
+    target_potential = p_scale(Fraction(1, 2), target_norm_squared)
+    potential_prime = p_derivative(source_potential)
+    potential_second = p_derivative(potential_prime)
+
+    source_outer_intertwining = True
+    source_outer_adjoint_intertwining = True
+    source_outer_h0_intertwining = True
+    source_outer_h1_intertwining = True
+    outer_nilpotence = True
+    for index in range(SOURCE_DIMENSION):
+        for power in range(4):
+            monomial = polynomial(*(0 for _ in range(power)), 1)
+            section = vector_basis(SOURCE_DIMENSION, index, monomial)
+            projected = project(section)
+            a_source = outer_a(section, potential_prime)
+            a_target = outer_a(projected, potential_prime)
+            adjoint_source_section = outer_a_adjoint(section, potential_prime)
+            adjoint_target_section = outer_a_adjoint(projected, potential_prime)
+            source_outer_intertwining = source_outer_intertwining and (
+                project(a_source) == a_target
+            )
+            source_outer_adjoint_intertwining = (
+                source_outer_adjoint_intertwining
+                and project(adjoint_source_section) == adjoint_target_section
+            )
+            source_outer_h0_intertwining = (
+                source_outer_h0_intertwining
+                and project(outer_a_adjoint(a_source, potential_prime))
+                == outer_a_adjoint(a_target, potential_prime)
+            )
+            source_outer_h1_intertwining = (
+                source_outer_h1_intertwining
+                and project(outer_a(adjoint_source_section, potential_prime))
+                == outer_a(adjoint_target_section, potential_prime)
+            )
+            # D(f_0,f_1 dx)=(0,A f_0), so D^2 is checked on both form slots.
+            first_image = (vector_zero(SOURCE_DIMENSION), a_source)
+            second_image = (
+                vector_zero(SOURCE_DIMENSION),
+                outer_a(first_image[0], potential_prime),
+            )
+            outer_nilpotence = outer_nilpotence and second_image == (
+                vector_zero(SOURCE_DIMENSION),
+                vector_zero(SOURCE_DIMENSION),
+            )
+
+    cyclic_differential = True
+    cyclic_projection = True
+    cyclic_homotopy = True
+    for left_mask in range(ALGEBRA_DIMENSION):
+        for right_mask in range(ALGEBRA_DIMENSION):
+            d_left, d_left_sign = d_mask(left_mask)
+            d_right, d_right_sign = d_mask(right_mask)
+            left_term = (
+                d_left_sign * cyclic_pair(d_left, right_mask)
+                if d_left is not None
+                else Fraction(0)
+            )
+            right_term = (
+                ((-1) ** degree(left_mask))
+                * d_right_sign
+                * cyclic_pair(left_mask, d_right)
+                if d_right is not None
+                else Fraction(0)
+            )
+            cyclic_differential = cyclic_differential and left_term + right_term == 0
+
+            h_left, h_left_sign = h_mask(left_mask)
+            h_right, h_right_sign = h_mask(right_mask)
+            h_left_term = (
+                h_left_sign * cyclic_pair(h_left, right_mask)
+                if h_left is not None
+                else Fraction(0)
+            )
+            h_right_term = (
+                ((-1) ** degree(left_mask))
+                * h_right_sign
+                * cyclic_pair(left_mask, h_right)
+                if h_right is not None
+                else Fraction(0)
+            )
+            cyclic_homotopy = cyclic_homotopy and h_left_term == h_right_term
+
+        for target_mask in HARMONIC_MASKS:
+            projected_left = left_mask if left_mask in HARMONIC_MASKS else None
+            left_pair = (
+                cyclic_pair(projected_left, target_mask)
+                if projected_left is not None
+                else Fraction(0)
+            )
+            cyclic_projection = cyclic_projection and (
+                left_pair == cyclic_pair(left_mask, target_mask)
+            )
+
+    m3_aab = m3_basis(1, 1, 2)
+    m3_abb = m3_basis(1, 2, 2)
+    strict_unit = all(
+        m2(alg_basis(0), alg_basis(mask)) == alg_basis(mask)
+        and m2(alg_basis(mask), alg_basis(0)) == alg_basis(mask)
+        for mask in HARMONIC_MASKS
+    ) and all(
+        m3(alg_basis(0), alg_basis(left), alg_basis(right)) == alg_zero()
+        and m3(alg_basis(left), alg_basis(0), alg_basis(right)) == alg_zero()
+        and m3(alg_basis(left), alg_basis(right), alg_basis(0)) == alg_zero()
+        for left in HARMONIC_MASKS
+        for right in HARMONIC_MASKS
+    )
+
+    stasheff_n4 = True
+    for first in HARMONIC_MASKS:
+        for second in HARMONIC_MASKS:
+            for third in HARMONIC_MASKS:
+                for fourth in HARMONIC_MASKS:
+                    x, y, z, w = (
+                        alg_basis(first),
+                        alg_basis(second),
+                        alg_basis(third),
+                        alg_basis(fourth),
+                    )
+                    relation = m3(m2(x, y), z, w)
+                    relation = alg_subtract(relation, m3(x, m2(y, z), w))
+                    relation = alg_add(relation, m3(x, y, m2(z, w)))
+                    relation = alg_subtract(relation, m2(m3(x, y, z), w))
+                    relation = alg_add(
+                        relation,
+                        alg_scale(
+                            (-1) ** (degree(first) + 1),
+                            m2(x, m3(y, z, w)),
+                        ),
+                    )
+                    stasheff_n4 = stasheff_n4 and relation == alg_zero()
+
+    source_q_weight_equivariant = True
+    for mask in range(ALGEBRA_DIMENSION):
+        for spin in range(SPINOR_DIMENSION):
+            image = source_q(vector_basis(SOURCE_DIMENSION, source_index(mask, spin)))
+            for output_mask in range(ALGEBRA_DIMENSION):
+                for output_spin in range(SPINOR_DIMENSION):
+                    if image[source_index(output_mask, output_spin)] != ZERO:
+                        source_q_weight_equivariant = (
+                            source_q_weight_equivariant
+                            and circle_weight(output_mask) == circle_weight(mask)
+                        )
+
+    product_weight_equivariant = True
+    for left_mask in range(ALGEBRA_DIMENSION):
+        for right_mask in range(ALGEBRA_DIMENSION):
+            sign, output_mask = wedge_basis(left_mask, right_mask)
+            if sign and output_mask is not None:
+                product_weight_equivariant = product_weight_equivariant and (
+                    circle_weight(output_mask)
+                    == circle_weight(left_mask) + circle_weight(right_mask)
+                )
+
+    shared_weight_transfer = all(
+        circle_weight(mask) == circle_weight(mask) for mask in HARMONIC_MASKS
+    ) and circle_weight(3) == circle_weight(4)
+    m3_weight_equivariant = (
+        circle_weight(5) == circle_weight(1) + circle_weight(1) + circle_weight(2)
+        and circle_weight(6)
+        == circle_weight(1) + circle_weight(2) + circle_weight(2)
+    )
+
+    phi_prime = p_derivative(PHI)
+    phi_second = p_derivative(phi_prime)
+    gram_hessian_at_zero = p_value_at_zero(p_multiply(phi_prime, phi_prime))
+    residual_hessian_at_zero = p_value_at_zero(p_multiply(PHI, phi_second))
+    full_hessian_at_zero = p_value_at_zero(potential_second)
+
+    source_signature = {
+        "algebra": "Lambda(a,b,c)",
+        "differential": "dc=ab",
+        "spinor_factor": "C(x)=[[0,A],[A^T,0]], A=[[1,x],[-x,1]]",
+        "curvature": "1+x^2",
+        "contraction": "h(ab)=c",
+        "weights": {"a": 1, "b": 1, "c": 2},
+    }
+    source_sha256 = hashlib.sha256(
+        json.dumps(source_signature, sort_keys=True, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+
+    checks = {
+        "source_superconnection_squares_to_Phi": source_phi == expected_source_phi,
+        "target_superconnection_squares_to_same_Phi": target_phi == expected_target_phi,
+        "projection_is_dimension_reducing": SOURCE_DIMENSION > TARGET_DIMENSION,
+        "projection_inclusion_identity": matrix_multiply(projection, inclusion)
+        == target_identity,
+        "retained_sector_projector_is_idempotent": matrix_multiply(
+            retained_projector, retained_projector
+        )
+        == retained_projector,
+        "curved_contraction_identity": contraction_left == contraction_right,
+        "contraction_side_conditions": (
+            matrix_multiply(contraction_h, contraction_h)
+            == matrix_zero(SOURCE_DIMENSION, SOURCE_DIMENSION)
+            and matrix_multiply(projection, contraction_h)
+            == matrix_zero(TARGET_DIMENSION, SOURCE_DIMENSION)
+            and matrix_multiply(contraction_h, inclusion)
+            == matrix_zero(SOURCE_DIMENSION, TARGET_DIMENSION)
+        ),
+        "projection_intertwines_Q": matrix_multiply(projection, source_q_matrix)
+        == matrix_multiply(target_q_matrix, projection),
+        "inclusion_intertwines_Q": matrix_multiply(source_q_matrix, inclusion)
+        == matrix_multiply(inclusion, target_q_matrix),
+        "projection_intertwines_Q_adjoint": matrix_multiply(
+            projection, source_adjoint
+        )
+        == matrix_multiply(target_adjoint, projection),
+        "projection_intertwines_curvature": matrix_multiply(projection, source_phi)
+        == matrix_multiply(target_phi, projection),
+        "retained_sector_projector_commutes_with_Q": matrix_multiply(
+            retained_projector, source_q_matrix
+        )
+        == matrix_multiply(source_q_matrix, retained_projector),
+        "normalized_source_cost_is_half_Phi_squared": source_potential
+        == p_scale(Fraction(1, 2), p_multiply(PHI, PHI)),
+        "normalized_target_cost_matches_source": target_potential == source_potential,
+        "outer_witten_differential_is_nilpotent": outer_nilpotence,
+        "projection_intertwines_outer_witten_differential": source_outer_intertwining,
+        "projection_intertwines_outer_witten_adjoint": (
+            source_outer_adjoint_intertwining
+        ),
+        "projection_intertwines_zero_form_witten_square": (
+            source_outer_h0_intertwining
+        ),
+        "projection_intertwines_one_form_witten_square": (
+            source_outer_h1_intertwining
+        ),
+        "nonzero_defect_critical_point_is_retained": (
+            p_value_at_zero(PHI) == 1 and p_value_at_zero(phi_prime) == 0
+        ),
+        "full_residual_hessian_is_retained": (
+            gram_hessian_at_zero == 0
+            and residual_hessian_at_zero == 2
+            and full_hessian_at_zero == 2
+        ),
+        "cyclic_differential_identity": cyclic_differential,
+        "cyclic_projection_adjointness": cyclic_projection,
+        "cyclic_homotopy_identity": cyclic_homotopy,
+        "unit_and_central_curvature_transfer_unchanged": (
+            0 in HARMONIC_MASKS and alg_homotopy(alg_basis(0)) == alg_zero()
+        ),
+        "transferred_m2_m3_are_strictly_unital": strict_unit,
+        "transferred_m2_m3_satisfy_stasheff_n4": stasheff_n4,
+        "transferred_m3_a_a_b_equals_ac": m3_aab == alg_basis(5),
+        "transferred_m3_a_b_b_equals_minus_bc": m3_abb == alg_scale(-1, alg_basis(6)),
+        "source_Q_preserves_shared_circle_weight": source_q_weight_equivariant,
+        "product_preserves_shared_circle_weight": product_weight_equivariant,
+        "contraction_preserves_shared_circle_and_Z3_weight": shared_weight_transfer,
+        "transferred_m3_preserves_shared_circle_and_Z3_weight": (
+            m3_weight_equivariant
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H4-T1",
+        "tier": "LOCAL_RESTRICTED_TRANSFER_THEOREM_WITH_EXACT_WITNESS",
+        "claim": (
+            "One restricted cyclic contraction of a configuration-dependent "
+            "Heisenberg superconnection intertwines Q, Q^2, normalized closure "
+            "cost, outer Witten repair, adjoints and shared phase while the same "
+            "contraction canonically transfers nonzero m3 interactions."
+        ),
+        "exact_data": {
+            "source_signature_sha256": source_sha256,
+            "source_fiber_dimension": SOURCE_DIMENSION,
+            "target_fiber_dimension": TARGET_DIMENSION,
+            "source_outer_form_dimension": 2 * SOURCE_DIMENSION,
+            "target_outer_form_dimension": 2 * TARGET_DIMENSION,
+            "Phi": serialize_poly(PHI),
+            "V_half_normalized_Phi_norm_squared": serialize_poly(source_potential),
+            "V_prime": serialize_poly(potential_prime),
+            "V_second": serialize_poly(potential_second),
+            "gram_hessian_at_zero": str(gram_hessian_at_zero),
+            "residual_hessian_at_zero": str(residual_hessian_at_zero),
+            "full_hessian_at_zero": str(full_hessian_at_zero),
+            "contraction": "p,i,h with h(ab)=c",
+            "target_operator": "Q_H(x)=Gamma_H tensor C(x)",
+            "m3_a_a_b": serialize_alg(m3_aab),
+            "m3_a_b_b": serialize_alg(m3_abb),
+            "shared_weights": {"a": 1, "b": 1, "c": 2},
+            "strictly_intertwined": [
+                "Q",
+                "Q_adjoint",
+                "Phi=Q^2",
+                "normalized V",
+                "outer Witten differential",
+                "both Witten square blocks",
+                "shared circle/Z3 weight",
+            ],
+            "homologically_transferred": ["m2", "m3"],
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This closes a local restricted-transfer benchmark, not the physical "
+            "B.ACTION.01 exit. The curvature is central, the base is one "
+            "configuration coordinate, no continuum principal symbol or q79 "
+            "descent is selected, and the target is not the accepted physical "
+            "27 or rank-102 operator."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

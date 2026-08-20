@@ -1,0 +1,386 @@
+# Preprojection Restricted Nested-Repair Transfer Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:** `LOCAL_RESTRICTED_TRANSFER_THEOREM_WITH_EXACT_WITNESS`
+
+**MTT status:** the local morphism and same-source finite benchmark are exact.
+No continuum principal symbol, q79 endpoint, physical action, or accepted physical
+finite operator is selected.
+
+## 1. Why the morphism must be restricted
+
+An unrestricted quasi-isomorphism remembers cohomology but can forget the
+specific data MTT is trying to explain: the admissible stratum, first-order
+phase, cyclic normalization, shared-line holonomy, branch type, and the
+homotopy that produces higher interactions. The relevant local object is
+therefore not just a complex. Write a nested repair germ schematically as
+
+```text
+R=(M_adm,A,E,Q,star,tau,g,L_sh,T,V,d_(beta,V)).
+```
+
+Here `A` is the internal graded algebra, `E` its graded module, `Q` an odd
+superconnection with curvature `Phi=Q^2`, `tau` the cyclic pairing, `g` the
+Hilbert metric used for adjoints, `L_sh` the shared differential line, and `T`
+the fixed typing data. The scalar repair potential and outer differential are
+
+```text
+V=(1/2r) Tr(Phi^* Phi),
+d_(beta,V)=exp(-beta V) d_M exp(beta V),
+```
+
+where the displayed normalized trace is one admissible finite normalization.
+In a continuum model its replacement must be declared explicitly.
+
+## 2. Restricted contraction arrows
+
+For local objects over the same admissible base, a restricted contraction arrow
+from `R` to `R_H` consists of
+
+```text
+C=(p,i,h; ell; T)
+```
+
+and must satisfy the following clauses.
+
+### C0. Type and admissibility
+
+The base stratum, fixed principal symbol where one exists, domains, boundary
+conditions, descent representation, and branch label are preserved. A finite
+model with no principal symbol must say so rather than treating this clause as
+vacuous evidence for a continuum result.
+
+### C1. Normalized contraction
+
+```text
+p i = id,
+Q h+h Q=id-i p,
+h^2=p h=h i=0.
+```
+
+For homological transfer, the corresponding contraction identities for the
+internal differential `m1` must also hold.
+
+### C2. Curved first-order intertwining
+
+```text
+p Q=Q_H p,
+Q i=i Q_H,
+p Q^*=Q_H^* p.
+```
+
+The adjoint clause is separate. It cannot be inferred from a bare
+quasi-isomorphism.
+
+### C3. Cyclic and metric normalization
+
+The inclusion and projection are adjoint for the declared cyclic pairing, the
+homotopy is cyclic with the appropriate graded sign, the unit is retained, and
+the normalization defining `V` agrees on source and target. The Hilbert metric
+used by the outer adjoint is also retained.
+
+### C4. Shared-line equivariance
+
+The line map `ell` preserves the connection and holonomy, and `p,i,h,Q` are
+equivariant. Integer circle weights may then be reduced to finite characters,
+but a finite character alone does not reconstruct the differential line.
+
+### C5. Outer repair compatibility
+
+The contraction is parallel over `M_adm`, the scalar potential pulls back
+exactly, and source and target use the same `beta`. Therefore it can be extended
+coefficientwise to the outer de Rham/Witten complexes.
+
+### C6. Transfer control
+
+The perturbation trees defining `m_n` must terminate or converge. A finite
+nilpotent filtration, an explicit truncation theorem, or an analytic majorant is
+required. The contraction data are part of the arrow because different
+homotopies can produce different representatives of the transferred higher
+operations.
+
+These clauses are summarized as a reusable evidence contract in
+`docs/RESTRICTED_NESTED_REPAIR_MORPHISM_CONTRACT.md`.
+
+## 3. Local category theorem
+
+### Theorem 3.1
+
+Restricted contractions with fixed typing data form a local category. The
+identity arrow is
+
+```text
+(id,id,0).
+```
+
+If
+
+```text
+C1=(p1,i1,h1): R0 -> R1,
+C2=(p2,i2,h2): R1 -> R2,
+```
+
+then their composite is
+
+```text
+p=p2 p1,
+i=i1 i2,
+h=h1+i1 h2 p1.
+```
+
+### Proof
+
+The intertwining and typing clauses are closed under composition. For the
+homotopy identity, use `Q0 i1=i1 Q1` and `p1 Q0=Q1 p1`:
+
+```text
+Q0 h+h Q0
+ =(id-i1 p1)+i1(id-i2 p2)p1
+ =id-i1 i2 p2 p1.
+```
+
+The side conditions follow from those of `C1,C2`. For three arrows, both
+parenthesizations give
+
+```text
+h1+i1 h2 p1+i1 i2 h3 p2 p1,
+```
+
+so composition is associative. The cyclic, metric, shared-line, and outer
+clauses compose by their ordinary functorial laws. QED.
+
+This is a local category theorem. A stack theorem additionally requires
+effective gluing and cocycle descent over overlaps; that is not asserted here.
+
+## 4. Derived-shadow theorem
+
+### Theorem 4.1
+
+Every restricted contraction arrow preserves the following strict shadows:
+
+```text
+Q and Q^*,
+Phi=Q^2,
+the declared normalized V,
+d_(beta,V) and d_(beta,V)^*,
+both positive Witten-square blocks,
+shared-line weights and holonomy,
+the retained-sector projector `i p`.
+```
+
+It also canonically transfers the internal products `m2,m3,...` determined by
+the declared contraction and its convergence clause.
+
+### Proof
+
+Curvature intertwining is forced by the first-order relation:
+
+```text
+p Phi=p Q^2=Q_H^2 p=Phi_H p.
+```
+
+If `X` is also intertwined, the Jordan and Lie shadows follow by applying this
+identity to `Phi X+X Phi` and `Phi X-X Phi`. Clause C3 supplies equality of the
+chosen normalized scalar cost. Since `p` is parallel over the base and commutes
+with multiplication by `V`,
+
+```text
+p d_(beta,V)=d_(beta,V_H) p.
+```
+
+The adjoint clause gives the same statement for `d_(beta,V)^*`; multiplication
+then gives both Witten squares. Shared-line equivariance is C4. Finally,
+homological perturbation expresses every transferred `m_n` as a sum of rooted
+trees built from `p,i,h` and the source products. C6 makes those sums legitimate.
+QED.
+
+The last statement is transfer, not strict projection. In particular, a source
+DGA may have `m3=0` while its reduced model has `m3!=0`. Writing
+`p m3=m3_H p^3` in that situation would be false.
+
+## 5. Exact same-source witness
+
+Let
+
+```text
+A=Lambda(a,b,c),
+d a=d b=0,
+d c=a wedge b.
+```
+
+Give it circle weights
+
+```text
+w(a)=1,
+w(b)=1,
+w(c)=2.
+```
+
+Let `Gamma_A` be parity and let `S=R^(2|2)`. On `S`, define the real symmetric
+odd matrix
+
+```text
+C(x) = [ 0    A(x)   ],
+       [ A(x)^T  0   ],
+
+A(x) = [ 1   x ],
+       [-x   1 ].
+```
+
+Direct multiplication gives
+
+```text
+C(x)^2=(1+x^2) I_4.
+```
+
+On `E=A tensor S`, define one configuration-dependent first-order source
+
+```text
+Q_A(x)=d tensor I_4+Gamma_A tensor C(x).
+```
+
+Because `d^2=0` and `d Gamma_A=-Gamma_A d`, the cross terms cancel and
+
+```text
+Q_A(x)^2=(1+x^2) I_32.
+```
+
+Thus the inner curvature and normalized repair cost are emitted by the same
+first-order object:
+
+```text
+Phi(x)=(1+x^2)I,
+V(x)=1/2(1+x^2)^2.
+```
+
+At `x=0`, `Phi!=0` and `Phi'=0`. The Gram part of `V''` is zero, the
+residual-contracted second jet is `2`, and the full Hessian is `2`.
+
+## 6. Dimension-reducing contraction
+
+Use the Heisenberg contraction
+
+```text
+H=span(1,a,b,a wedge c,b wedge c,a wedge b wedge c),
+h(a wedge b)=c.
+```
+
+Tensor `p,i,h` with `I_4`. The source fiber has dimension `8*4=32`; the target
+fiber has dimension `6*4=24`. Since `h` anticommutes with parity,
+
+```text
+Q_A h+h Q_A=id-i p.
+```
+
+The target operator is
+
+```text
+Q_H(x)=Gamma_H tensor C(x),
+Q_H(x)^2=(1+x^2)I_24.
+```
+
+The same projection intertwines `Q`, `Q^*`, `Phi`, and the orthogonal
+retained-sector projector. This is a fiber projector, not yet the physical
+admissible-tangent projector on configuration space. Normalized trace rather
+than raw trace is essential:
+both ranks then give the same `V`.
+
+The top-form functional on `A` supplies a cyclic pairing. The verifier checks
+that `d` is cyclic, `p` is adjoint to `i`, and
+
+```text
+<h x,y>=(-1)^|x| <x,h y>.
+```
+
+## 7. Outer Witten repair from the same curvature
+
+On polynomial sections over the configuration line, set `beta=1` and
+
+```text
+A_V=partial_x+V'(x),
+A_V^*=-partial_x+V'(x).
+```
+
+Here `A_V^*` is the formal polynomial adjoint. Analytic domains and boundary
+conditions are not asserted by this witness.
+
+The outer differential on zero- and one-forms is
+
+```text
+D_V(f_0,f_1 dx)=(0,A_V f_0),
+D_V^2=0.
+```
+
+Because `p` is constant in `x` and source and target have the same `V`, it
+intertwines `A_V`, `A_V^*`, `A_V^*A_V`, and `A_V A_V^*`. This is the requested
+finite same-source conjunction:
+
+```text
+one Q_A(x)
+  -> one Phi(x)
+  -> one normalized V(x)
+  -> one outer Witten repair,
+
+one cyclic contraction
+  -> one lower Q_H(x)
+  -> the same Phi and V
+  -> the same outer repair blocks.
+```
+
+## 8. Interactions and phase
+
+The same `p,i,h` transfer the wedge product to
+
+```text
+m3(a,a,b)=a wedge c,
+m3(a,b,b)=-b wedge c.
+```
+
+They satisfy the arity-four Stasheff identity and strict unity. Every source
+map preserves the integer circle weights and therefore their `Z3` reduction.
+The curvature is central and proportional to the retained unit, so it transfers
+unchanged and contributes one normalized scalar coordinate.
+
+This shows that phase, curvature, repair, and a nontrivial higher interaction
+can coexist in one exact projection packet. It does not show that the selected
+MTT source has this local algebra.
+
+## 9. What has and has not closed
+
+Closed at the local benchmark tier:
+
+- an explicit restricted-contraction category;
+- exact first-order, curvature, adjoint, potential, and Witten intertwining;
+- cyclic normalization and a dimension-reducing retained-sector projector;
+- shared circle/`Z3` equivariance; and
+- canonical nonzero `m3` transfer from the same contraction.
+
+Still open at the H4-T1 tier:
+
+- effective overlap descent and the full stack theorem;
+- noncentral curved transfer and its convergence certificate;
+- the selected continuum principal symbol and physical admissible stratum;
+- the accepted 27/rank-102 representation and finite operator;
+- q79 endpoint selection; and
+- the Lorentzian action, physical clock, and normalization theorem.
+
+Therefore `B.ACTION.01` remains open. This result discharges its local
+same-source transfer benchmark, not its physical exit certificate.
+
+H4-T2 through H4-T4 subsequently close the local noncentral and full curved
+coefficient-extension items. They leave the overlap/descent, continuum typing,
+accepted target, and physical-action items unchanged.
+
+## 10. Verification
+
+Run:
+
+```powershell
+python experiments/restricted_nested_transfer/verify.py
+python verify.py
+```
+
+The verifier uses exact rational polynomial arithmetic. It checks 33 named
+identities, all source and target basis directions, polynomial test sections,
+the cyclic contraction, and all 1,296 arity-four Stasheff basis quadruples.

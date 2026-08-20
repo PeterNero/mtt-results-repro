@@ -1,0 +1,368 @@
+# Preprojection Repair-Jet to Perturbative-Graph Functor Theorem
+
+**Identifier:** H4-T8
+
+**Tier:** finite/formal repair-action theorem with an exact rational witness
+
+**Physical status:** the universal derivation is proved; the selected q79
+endpoint, metric jet and physical quantum interpretation remain open
+
+## 1. The missing upstream arrow
+
+The current modal-diagrammatics theorem begins with a typed perturbative datum
+
+```text
+(E, Gr(E), K, G, {V_n}, epsilon, R).
+```
+
+It correctly proves the Wick graph expansion and compatible projection of
+that datum. It does not explain where `K` and the vertex tensors `{V_n}` come
+from.
+
+The q79 unified-source result supplies a more primitive object: one nonlinear
+seven-lane repair residual. H4-T8 proves the finite/formal arrow from such a
+residual to the quadratic and higher perturbative tensors. It therefore
+removes `{V_n}` as an independent source package at the repair-action tier.
+
+## 2. Repair data
+
+Let `E` be a finite-dimensional real inner-product space, or a declared
+finite regularization of a Hilbert field space. Let `F` be a residual space.
+Choose:
+
+1. a background `a_* in E`;
+2. a smooth or formal residual `Phi:E -> F`;
+3. a smooth positive residual metric field `W(a)`; and
+4. an optional grading preserved by all maps.
+
+Define the repair functional
+
+```text
+S_rep(a)=1/2 <Phi(a), W(a) Phi(a)>.
+```
+
+This is a positive repair cost. It is not automatically a Lorentzian,
+ten-dimensional, BV or quantum action.
+
+Write
+
+```text
+R_m = D^m Phi(a_*),
+W_m = D^m W(a_*),
+V_n = D^n S_rep(a_*).
+```
+
+Every `R_m` and `W_m` is a symmetric multilinear tensor on the declared real
+slice. In a finite graded formal model the same statements hold with graded
+symmetry and the corresponding Koszul signs.
+
+## 3. Complete jet theorem
+
+Let `[n]={1,...,n}`. For every ordered three-color partition
+
+```text
+[n] = A disjoint_union B disjoint_union C,
+```
+
+preserve the original order inside each block and write `v_A` for the
+arguments indexed by `A`. Repeated differentiation gives the exact identity
+
+```text
+V_n(v_1,...,v_n)
+ = 1/2 sum_(A,B,C)
+   <R_|A|(v_A), W_|B|(v_B) R_|C|(v_C)>.
+```
+
+Here `W_|B|(v_B)` is an endomorphism of the residual space. The sum has
+`3^n` terms before zero and symmetry reductions.
+
+**Proof.** Apply the multivariable Leibniz rule to the three factors
+`Phi`, `W` and `Phi`. Every derivative label is assigned once to the left
+residual, metric field or right residual. Summing over the assignments gives
+the displayed ordered-partition formula. No independent tensor remains. QED.
+
+### Constant metric specialization
+
+If `W(a)=W_0` is constant, only `B=empty` survives and
+
+```text
+V_n(v_1,...,v_n)
+ = 1/2 sum_(A subset [n])
+   <R_|A|(v_A), W_0 R_(n-|A|)(v_Ac)>.
+```
+
+This is the formula exhaustively checked by the exact witness.
+
+### Zero-defect specialization
+
+If `Phi(a_*)=R_0=0`, every term with `A=empty` or `C=empty` vanishes. Hence
+
+```text
+V_1=0,
+
+V_2(v_1,v_2)=<R_1(v_1),W_0 R_1(v_2)>.
+```
+
+Thus the quadratic form is the Gram Hessian
+
+```text
+K = R_1^dagger W_0 R_1.
+```
+
+For constant `W_0`, the first interactions are
+
+```text
+V_3(v_1,v_2,v_3)
+ = sum_cyclic <R_1(v_i),W_0 R_2(v_j,v_k)>,
+
+V_4(v_1,v_2,v_3,v_4)
+ = sum_(4 singleton choices) <R_1(v_i),W_0 R_3(v_rest)>
+   + sum_(3 pair partitions) <R_2(v_i,v_j),W_0 R_2(v_k,v_l)>.
+```
+
+For a variable metric, the same orders also contain the terms selected by
+`W_1,W_2,...` in the complete three-color formula. Therefore the proper
+same-source input is the joint residual-and-metric jet, not a list of
+independently supplied graph vertices.
+
+### Nonzero-defect specialization
+
+For constant `W_0` but `R_0 != 0`, the Hessian is
+
+```text
+V_2(v,w)
+ = <R_1(v),W_0 R_1(w)>
+   + <R_0,W_0 R_2(v,w)>.
+```
+
+The second term is the residual-pressure correction proved independently in
+H1-T1. With a variable metric, the complete three-color formula supplies the
+additional metric-jet terms. This does not reopen H1-T1; it identifies its
+constant-metric hypothesis precisely.
+
+### Polynomial termination
+
+If `Phi` is polynomial of degree `r` and `W` is constant, then
+
+```text
+V_n=0 for n>2r.
+```
+
+In particular, a quadratic Maurer-Cartan residual emits only quadratic,
+cubic and quartic repair vertices. An infinite independent vertex tower is
+not present in that case.
+
+## 4. Hessian, propagator, semigroup and kernel
+
+At a zero-defect background, let `K` be the Riesz operator of `V_2` for the
+selected field metric. If `K` has a kernel, work on the declared reduced
+sector `ker(K)^perp` and let `P_0` be the kernel projector. Define
+
+```text
+G = (K|_(ker K)^perp)^-1 (I-P_0).
+```
+
+This is the canonical finite Euclidean reduced inverse. Then the residual and
+metric jet determine:
+
+```text
+Hessian:       K,
+zero modes:    P_0,
+heat repair:   exp(-tK),
+reduced inverse: G,
+matrix kernel: <e_i, f(K)e_j>,
+vertices:      {V_n}.
+```
+
+The word `kernel` here means a finite matrix kernel or the kernel of a
+specified bounded functional calculus. It does not select retarded,
+advanced, causal or Feynman boundary conditions.
+
+## 5. Functoriality
+
+Consider two repair objects `(E,F,Phi,W,a_*)` and
+`(E',F',Phi',W',a'_*)`. Let
+
+```text
+T:E -> E',
+U:F -> F'
+```
+
+be grading-preserving linear bijections satisfying
+
+```text
+T a_* = a'_*,
+Phi'(Ta)=U Phi(a),
+<Ur,W'(Ta)Us>=<r,W(a)s>.
+```
+
+Differentiating the residual identity gives
+
+```text
+R'_n(Tv_1,...,Tv_n)=U R_n(v_1,...,v_n).
+```
+
+The metric identity and the complete jet theorem then give
+
+```text
+V'_n(Tv_1,...,Tv_n)=V_n(v_1,...,v_n)
+```
+
+for every `n`. If the field metric is also transported, then
+
+```text
+K'T=TK,
+P'_0T=TP_0,
+G'T=TG,
+f(K')T=T f(K)
+```
+
+for every finite polynomial and every admitted functional calculus `f`.
+H4-T7 shows that initial field-metric unitarity is unnecessary: a bounded
+invertible transform carries its canonical transported metric, while any
+independently selected physical mismatch is measured by the H4-T7 defects.
+
+Now decorate a finite graph with `V_n` at each vertex and `G` on every edge.
+Every `T` and `T^-1` introduced at one end of a contraction cancels with the
+corresponding factor at the other end. Grading preservation retains the
+Koszul sign. Therefore every finite formal graph coefficient is carried
+exactly. This is the required repair-object-to-graph functor.
+
+## 6. Exact witness
+
+Take
+
+```text
+Phi(x,y)=(x,y+y^2),
+W=I,
+a_*=(0,0).
+```
+
+Then
+
+```text
+S_rep=1/2 x^2 + 1/2 y^2 + y^3 + 1/2 y^4,
+K=I,
+G=I,
+V_3(y,y,y)=6,
+V_4(y,y,y,y)=12.
+```
+
+All vertices above arity four vanish. The verifier checks the subset formula
+on every basis tuple through order six.
+
+A second exact witness keeps the same nonlinear scalar residual but uses the
+strictly positive field-dependent metric
+
+```text
+W(y)=1+y+y^2.
+```
+
+The full three-color partition formula is checked on every basis tuple through
+the resulting sextic action. The metric derivatives change the derived values
+to
+
+```text
+V_3(y,y,y)=9,
+V_4(y,y,y,y)=48.
+```
+
+They are still outputs of the joint residual/metric jet, not independently
+chosen interaction rows.
+
+Under the non-isometric field transform
+
+```text
+T=diag(2,3),
+```
+
+the target residual and action are
+
+```text
+Phi'(x,y)=(x/2,y/3+y^2/9),
+
+S'_rep=x^2/8+y^2/18+y^3/27+y^4/162.
+```
+
+The Hessian form and covariance are
+
+```text
+K'=diag(1/4,1/9),
+G'=diag(4,9).
+```
+
+The transported field metric equals `K'`, so the Hessian Riesz operator is
+again exactly `I`. The transformed vertices are
+
+```text
+V'_3(y,y,y)=2/9,
+V'_4(y,y,y,y)=4/27.
+```
+
+The tensor rescaling cancels the covariance rescaling. Two explicit Wick
+coefficients agree exactly in both presentations:
+
+```text
+one quartic vertex:   -3/2,
+two cubic vertices:   15/2.
+```
+
+Thus the graph invariance is not inferred from floating point similarity.
+
+## 7. q79 consequence
+
+The current symbolic q79 residual is
+
+```text
+Phi_phys=(Phi_0,mu_TX,mu_V,mu_W,balanced,anomaly_Bianchi,SU3_normalization).
+```
+
+Its current structural repair metric is the zero-fit orthogonal direct sum of
+the seven endpoint-induced `L2` pairings. H4-T8 implies:
+
+1. the repair Hessian and every finite repair vertex are joint derivatives of
+   this same residual and metric field;
+2. they must not be counted as independent physical source rows;
+3. once the selected endpoint and metric jet are emitted, their numerical
+   tensors are compiler outputs;
+4. the finite Euclidean graph weights then follow from the existing Wick
+   theorem after a reduced inverse prescription is certified.
+
+For the direct-geometry route, these repair vertices can be constructed
+intrinsically on `X`. A `J`-to-`X` BHT transform is needed only to prove that
+the Hartshorne-Serre presentation gives the same physical object; it is not a
+logical prerequisite for deriving graph tensors from an independently
+selected physical residual on `X`.
+
+This is a dependency reduction, not a physical endpoint promotion.
+
+## 8. Exact boundary
+
+H4-T8 does not:
+
+- select the q79 `V3/W9` endpoint or evaluate its residual/metric jet;
+- prove that the positive repair functional is the physical Lorentzian, BV or
+  ten-dimensional action;
+- select a retarded, advanced, causal or Feynman inverse;
+- provide the BV bracket, BRST differential, ghost/antifield fields, quantum
+  state or Hadamard condition;
+- perform continuum renormalization or choose counterterms;
+- prove convergence or a fixed-coupling interacting `C*` completion; or
+- turn formal repair graphs into a quantization theorem.
+
+The result closes the finite/formal residual-to-graph arrow only. Physical
+`B.ACTION.01` remains open at endpoint selection, action identification,
+graded gauge data, physical inverse and lower intertwiners.
+
+## 9. Reproduction and provenance
+
+Run:
+
+```powershell
+python experiments/repair_jet_graph_functor/verify.py
+```
+
+The generated certificate is
+`certificates/h4_repair_jet_graph_functor.json`. It pins the current typed
+modal-diagrammatics paper, the clean curated q79 symbolic physical-residual
+artifact and H4-T7 by repository head and Git blob.

@@ -1,0 +1,183 @@
+"""Small exact linear-algebra helpers over Q(omega), omega^2 + omega + 1 = 0."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from fractions import Fraction
+from typing import Iterable, Sequence
+
+
+@dataclass(frozen=True)
+class C3:
+    """Element a + b*omega of Q(omega), where omega^2 = -1 - omega."""
+
+    a: Fraction = Fraction(0)
+    b: Fraction = Fraction(0)
+
+    def __init__(self, a: int | Fraction = 0, b: int | Fraction = 0):
+        object.__setattr__(self, "a", Fraction(a))
+        object.__setattr__(self, "b", Fraction(b))
+
+    def __add__(self, other: object) -> "C3":
+        rhs = coerce(other)
+        return C3(self.a + rhs.a, self.b + rhs.b)
+
+    __radd__ = __add__
+
+    def __neg__(self) -> "C3":
+        return C3(-self.a, -self.b)
+
+    def __sub__(self, other: object) -> "C3":
+        return self + (-coerce(other))
+
+    def __rsub__(self, other: object) -> "C3":
+        return coerce(other) - self
+
+    def __mul__(self, other: object) -> "C3":
+        rhs = coerce(other)
+        # (a+bw)(c+dw) = (ac-bd) + (ad+bc-bd)w.
+        return C3(
+            self.a * rhs.a - self.b * rhs.b,
+            self.a * rhs.b + self.b * rhs.a - self.b * rhs.b,
+        )
+
+    __rmul__ = __mul__
+
+    def conjugate(self) -> "C3":
+        # conjugate(omega) = omega^2 = -1 - omega.
+        return C3(self.a - self.b, -self.b)
+
+    def norm(self) -> Fraction:
+        product = self * self.conjugate()
+        assert product.b == 0
+        return product.a
+
+    def reciprocal(self) -> "C3":
+        if self == ZERO:
+            raise ZeroDivisionError("zero has no reciprocal")
+        n = self.norm()
+        c = self.conjugate()
+        return C3(c.a / n, c.b / n)
+
+    def __truediv__(self, other: object) -> "C3":
+        return self * coerce(other).reciprocal()
+
+    def __pow__(self, power: int) -> "C3":
+        if power < 0:
+            return (self.reciprocal()) ** (-power)
+        result = ONE
+        base = self
+        n = power
+        while n:
+            if n & 1:
+                result = result * base
+            base = base * base
+            n >>= 1
+        return result
+
+    def __str__(self) -> str:
+        return f"({self.a})+({self.b})*omega"
+
+
+def coerce(value: object) -> C3:
+    if isinstance(value, C3):
+        return value
+    if isinstance(value, (int, Fraction)):
+        return C3(value)
+    raise TypeError(f"cannot coerce {type(value)!r} to C3")
+
+
+ZERO = C3(0)
+ONE = C3(1)
+OMEGA = C3(0, 1)
+OMEGA2 = OMEGA**2
+Matrix = list[list[C3]]
+
+
+def matrix(rows: Iterable[Iterable[object]]) -> Matrix:
+    return [[coerce(value) for value in row] for row in rows]
+
+
+def shape(a: Sequence[Sequence[C3]]) -> tuple[int, int]:
+    return len(a), len(a[0]) if a else 0
+
+
+def identity(n: int) -> Matrix:
+    return [[ONE if i == j else ZERO for j in range(n)] for i in range(n)]
+
+
+def scalar_matrix(value: object, n: int) -> Matrix:
+    scalar = coerce(value)
+    return [[scalar if i == j else ZERO for j in range(n)] for i in range(n)]
+
+
+def matrix_equal(a: Sequence[Sequence[C3]], b: Sequence[Sequence[C3]]) -> bool:
+    return shape(a) == shape(b) and all(
+        a[i][j] == b[i][j]
+        for i in range(len(a))
+        for j in range(len(a[0]) if a else 0)
+    )
+
+
+def add(a: Matrix, b: Matrix) -> Matrix:
+    if shape(a) != shape(b):
+        raise ValueError("matrix shapes differ")
+    return [[a[i][j] + b[i][j] for j in range(len(a[0]))] for i in range(len(a))]
+
+
+def scale(value: object, a: Matrix) -> Matrix:
+    scalar = coerce(value)
+    return [[scalar * entry for entry in row] for row in a]
+
+
+def matmul(a: Matrix, b: Matrix) -> Matrix:
+    ar, ac = shape(a)
+    br, bc = shape(b)
+    if ac != br:
+        raise ValueError("incompatible matrix shapes")
+    return [
+        [sum((a[i][k] * b[k][j] for k in range(ac)), ZERO) for j in range(bc)]
+        for i in range(ar)
+    ]
+
+
+def adjoint(a: Matrix) -> Matrix:
+    rows, cols = shape(a)
+    return [[a[i][j].conjugate() for i in range(rows)] for j in range(cols)]
+
+
+def kronecker(a: Matrix, b: Matrix) -> Matrix:
+    ar, ac = shape(a)
+    br, bc = shape(b)
+    return [
+        [a[i // br][j // bc] * b[i % br][j % bc] for j in range(ac * bc)]
+        for i in range(ar * br)
+    ]
+
+
+def inverse(a: Matrix) -> Matrix:
+    n, m = shape(a)
+    if n != m:
+        raise ValueError("matrix is not square")
+    aug = [row[:] + identity(n)[i] for i, row in enumerate(a)]
+    for col in range(n):
+        pivot = next((r for r in range(col, n) if aug[r][col] != ZERO), None)
+        if pivot is None:
+            raise ValueError("matrix is singular")
+        aug[col], aug[pivot] = aug[pivot], aug[col]
+        inv_pivot = aug[col][col].reciprocal()
+        aug[col] = [inv_pivot * value for value in aug[col]]
+        for row in range(n):
+            if row == col:
+                continue
+            factor = aug[row][col]
+            if factor != ZERO:
+                aug[row] = [
+                    aug[row][j] - factor * aug[col][j]
+                    for j in range(2 * n)
+                ]
+    return [row[n:] for row in aug]
+
+
+def serialize_matrix(a: Matrix) -> list[list[str]]:
+    return [[str(value) for value in row] for row in a]

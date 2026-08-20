@@ -1,0 +1,160 @@
+"""Exact curved-superconnection identities and curvature-trichotomy witness."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    equal,
+    matmul,
+    matrix,
+    scale,
+    serialize_matrix,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "r1_curved_cyclic_repair_germ.json"
+
+
+def subtract(a, b):
+    return add(a, scale(-1, b))
+
+
+def graded_differential(charge, value, parity):
+    sign = -1 if parity else 1
+    return subtract(matmul(charge, value), scale(sign, matmul(value, charge)))
+
+
+def ordinary_commutator(left, right):
+    return subtract(matmul(left, right), matmul(right, left))
+
+
+def main() -> int:
+    # Grading C^(2|1); Q is odd and self-adjoint.
+    charge = matrix([[0, 0, 1], [0, 0, 0], [1, 0, 0]])
+    curvature = matmul(charge, charge)
+    even_value = matrix([[0, 1, 0], [1, 0, 0], [0, 0, 0]])
+    odd_value = matrix([[0, 0, 0], [0, 0, 1], [0, 0, 0]])
+
+    d_even = graded_differential(charge, even_value, parity=0)
+    d2_even = graded_differential(charge, d_even, parity=1)
+    curvature_action_even = ordinary_commutator(curvature, even_value)
+
+    d_odd = graded_differential(charge, odd_value, parity=1)
+    d2_odd = graded_differential(charge, d_odd, parity=0)
+    curvature_action_odd = ordinary_commutator(curvature, odd_value)
+
+    product_even_odd = matmul(even_value, odd_value)
+    d_product_even_odd = graded_differential(
+        charge, product_even_odd, parity=1
+    )
+    leibniz_even_odd = add(
+        matmul(d_even, odd_value),
+        matmul(even_value, d_odd),
+    )
+
+    product_odd_odd = matmul(odd_value, odd_value)
+    d_product_odd_odd = graded_differential(
+        charge, product_odd_odd, parity=0
+    )
+    leibniz_odd_odd = subtract(
+        matmul(d_odd, odd_value),
+        matmul(odd_value, d_odd),
+    )
+
+    bianchi = graded_differential(charge, curvature, parity=0)
+
+    # Regime I: exact closure.
+    zero_charge = matrix([[0, 0], [0, 0]])
+    zero_curvature = matmul(zero_charge, zero_charge)
+
+    # Regime II: nonzero central curvature with nilpotent adjoint differential.
+    central_charge = matrix([[0, 1], [1, 0]])
+    central_curvature = matmul(central_charge, central_charge)
+    central_test = matrix([[1, 0], [0, 0]])
+    central_d = graded_differential(central_charge, central_test, parity=0)
+    central_d2 = graded_differential(central_charge, central_d, parity=1)
+    central_jordan = add(
+        matmul(central_curvature, central_test),
+        matmul(central_test, central_curvature),
+    )
+
+    checks = {
+        "curvature_is_Q_squared": equal(
+            curvature, matrix([[1, 0, 0], [0, 0, 0], [0, 0, 1]])
+        ),
+        "curvature_is_noncentral": not equal(
+            curvature_action_even, matrix([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+        ),
+        "d_squared_even_is_curvature_action": equal(
+            d2_even, curvature_action_even
+        ),
+        "d_squared_odd_is_curvature_action": equal(
+            d2_odd, curvature_action_odd
+        ),
+        "graded_leibniz_even_odd": equal(
+            d_product_even_odd, leibniz_even_odd
+        ),
+        "graded_leibniz_odd_odd": equal(
+            d_product_odd_odd, leibniz_odd_odd
+        ),
+        "bianchi_identity": equal(
+            bianchi, matrix([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+        ),
+        "regime_I_exact_zero": equal(
+            zero_curvature, matrix([[0, 0], [0, 0]])
+        ),
+        "regime_II_curvature_is_nonzero_central": equal(
+            central_curvature, matrix([[1, 0], [0, 1]])
+        ),
+        "regime_II_adjoint_differential_still_nilpotent": equal(
+            central_d2, matrix([[0, 0], [0, 0]])
+        ),
+        "regime_II_jordan_pressure_survives": equal(
+            central_jordan, scale(2, central_test)
+        ),
+        "regime_III_adjoint_differential_is_curved": not equal(
+            d2_even, matrix([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+        ),
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "R1-T1",
+        "tier": "DEFINITION_AND_LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS",
+        "claim": (
+            "An odd superconnection defines a curved repair germ with "
+            "d_Q^2=ad_(Q^2), the Bianchi and graded-Leibniz identities, and "
+            "distinct zero, central, and noncentral curvature regimes."
+        ),
+        "exact_data": {
+            "Q_noncentral": serialize_matrix(charge),
+            "F_noncentral": serialize_matrix(curvature),
+            "d2_even": serialize_matrix(d2_even),
+            "ad_F_even": serialize_matrix(curvature_action_even),
+            "Q_central": serialize_matrix(central_charge),
+            "F_central": serialize_matrix(central_curvature),
+            "central_d2": serialize_matrix(central_d2),
+            "central_jordan": serialize_matrix(central_jordan),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This defines and verifies the finite algebraic germ. Stratified "
+            "descent, continuum domains, physical source selection, and q79 "
+            "realization remain open."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

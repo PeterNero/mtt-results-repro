@@ -1,0 +1,182 @@
+# Preprojection Central-Curvature Compression and Identifiability Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:** `LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS`
+
+**MTT status:** parameter-counting and source-identifiability constraint; no
+physical scalar is selected.
+
+## 1. Semisimple finite source
+
+Let
+
+```text
+A = direct_sum_(alpha=1)^r M_(n_alpha)(C)
+```
+
+be a finite-dimensional semisimple star algebra with positive weighted trace.
+For a self-adjoint curvature element `F=(F_alpha)`, define its canonical central
+and traceless parts blockwise:
+
+```text
+lambda_alpha = Tr(F_alpha)/n_alpha,
+z = direct_sum lambda_alpha I_(n_alpha),
+F_0 = F-z.
+```
+
+Then `z` lies in the center `Z(A)` and every block of `F_0` has trace zero.
+
+## 2. Orthogonal central decomposition
+
+### Theorem 2.1
+
+The decomposition
+
+```text
+F=z+F_0
+```
+
+is unique and orthogonal for the trace pairing. It is the conditional
+expectation of `F` onto the center followed by its orthogonal complement.
+
+### Proof
+
+The matrix trace makes scalar and traceless matrices orthogonal in every simple
+block. Direct summation preserves orthogonality. Uniqueness follows because the
+intersection of the scalar and traceless block subspaces is zero. QED.
+
+## 3. Gauge-blind center theorem
+
+### Theorem 3.1
+
+For every `X in A`,
+
+```text
+[F,X]=[F_0,X].
+```
+
+Moreover, the kernel of
+
+```text
+F |-> ad_F
+```
+
+is exactly `Z(A)`. Therefore adjoint, gauge, automorphism-generator, and
+commutator data determine `F` only modulo `r` real central coordinates before
+additional symmetry is imposed.
+
+### Proof
+
+Central elements commute with all `X`, proving the first identity. Conversely,
+an element whose commutator vanishes on all of `A` is central by definition.
+The self-adjoint center of the displayed semisimple algebra has one real scalar
+per simple summand. QED.
+
+This is an identifiability no-go. Repeating a search over Lie brackets or gauge
+orbits cannot recover the missing central magnitudes.
+
+## 4. Where the missing scalars remain visible
+
+The Jordan action does retain the center:
+
+```text
+C_F(X)=F X+X F
+      =C_(F_0)(X)+C_z(X).
+```
+
+On block `alpha`,
+
+```text
+C_z(X_alpha)=2 lambda_alpha X_alpha.
+```
+
+In particular,
+
+```text
+F=1/2 C_F(1).
+```
+
+Thus the complete symmetric action, residual Hessian, or a normalized value
+functional can recover data that the gauge/commutator shadow necessarily
+forgets. This locates the unresolved scalar problem in the action/Jordan/value
+layer, not in another automorphism calculation.
+
+## 5. Symmetry compression
+
+Let a finite group act by complex-linear star automorphisms and permute isomorphic simple
+blocks. The invariant self-adjoint center has one real coordinate for each
+orbit of blocks. Therefore
+
+```text
+number of central source scalars
+  = number of block orbits,
+```
+
+before further normalization or source equations.
+
+Examples:
+
+- a simple full matrix algebra has one central scalar;
+- three inequivalent sector blocks have at most three central scalars;
+- a transitive symmetry relating three isomorphic blocks reduces them to one.
+
+This gives a rigorous route by which a large matrix can retain only one to
+three universal scalar primitives. It does not prove that the current MTT
+sector algebra or symmetry has that form.
+
+## 6. Consequence for the 27 carrier
+
+The full endomorphism algebra of one irreducible 27-dimensional complex carrier
+is `M_27(C)` and has a one-dimensional center. If the accepted finite carrier
+uses this full simple algebra irreducibly, all commutator data are blind to one
+common scalar normalization. If instead the physical operator algebra is a
+proper direct sum or has superselection blocks, the center can be larger.
+
+The correct parameter count therefore comes from the commutant and central
+decomposition of the selected operator algebra, not from the matrix dimension
+`27 x 27` itself.
+
+This statement is conditional: the existing family-qutrit 27, exceptional
+Jordan 27, and physical finite carrier must not be identified without their
+accepted intertwiner and central-character tests.
+
+## 7. Source-language refinement
+
+A preprojection source should record both complementary readouts:
+
+```text
+Lie shadow:     ad_F       -> orientation, gauge response, automorphisms;
+Jordan shadow:  C_F        -> stability pressure and central magnitudes.
+```
+
+The trace normalization and admissible block decomposition are part of source
+typing. Otherwise the central coordinates can be rescaled or repartitioned and
+are not predictions.
+
+## 8. Falsifiers and limits
+
+This theorem does not show that an MTT scalar is a central curvature value. The
+candidate fails if:
+
+- the selected physical operator algebra is not the claimed semisimple algebra;
+- the scalar rows do not enter through the Jordan/action side;
+- the trace or real structure is not selected;
+- the symmetry does not identify the proposed blocks; or
+- empirical values are inserted to choose `lambda_alpha`.
+
+Even when only one central primitive remains, its numerical value still needs
+a selected source equation or normalization theorem.
+
+## 9. Verification
+
+Run:
+
+```powershell
+python experiments/central_curvature_compression/verify.py
+python verify.py
+```
+
+The exact witness uses `M_2(Q) direct_sum M_2(Q)`. It verifies orthogonal
+central/traceless decomposition, gauge blindness, Jordan recovery, two center
+coordinates, and reduction to one under block exchange.

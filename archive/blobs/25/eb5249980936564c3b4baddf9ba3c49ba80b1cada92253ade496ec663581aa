@@ -1,0 +1,739 @@
+"""Exact rational Hirsch transfer for the selected q79 circle topology."""
+
+from __future__ import annotations
+
+import json
+import math
+from fractions import Fraction
+from functools import cache
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "h4_q79_hirsch_transfer.json"
+
+ZERO = Fraction(0)
+ONE = Fraction(1)
+
+# H*(K3;Q) has basis 1, 22 middle classes, and the top class t.
+BASE_DIMENSION = 24
+TOP = 23
+BASE_DEGREES = (0,) + (2,) * 22 + (4,)
+
+
+def e8_cartan() -> list[list[int]]:
+    """Bourbaki-equivalent E8 Cartan matrix with determinant one."""
+    output = [[2 if row == column else 0 for column in range(8)] for row in range(8)]
+    for index in range(6):
+        output[index][index + 1] = -1
+        output[index + 1][index] = -1
+    output[2][7] = -1
+    output[7][2] = -1
+    return output
+
+
+def k3_gram() -> tuple[tuple[Fraction, ...], ...]:
+    """The even unimodular K3 lattice 3U + 2E8(-1)."""
+    output = [[ZERO for _ in range(22)] for _ in range(22)]
+    for offset in (0, 2, 4):
+        output[offset][offset + 1] = ONE
+        output[offset + 1][offset] = ONE
+    cartan = e8_cartan()
+    for block_start in (6, 14):
+        for row in range(8):
+            for column in range(8):
+                output[block_start + row][block_start + column] = Fraction(
+                    -cartan[row][column]
+                )
+    return tuple(tuple(row) for row in output)
+
+
+GRAM = k3_gram()
+
+# Coordinates are e1,f1,e2,f2,e3,f3,E8(-1),E8(-1).
+H_COORDS = (ONE, ONE) + (ZERO,) * 20
+DELTA_COORDS = (ZERO, ZERO, ONE, Fraction(-2)) + (ZERO,) * 18
+DELTA_SQUARE = Fraction(-4)
+GAMMA_COORDS = tuple(value / DELTA_SQUARE for value in DELTA_COORDS)
+
+STATES = tuple(
+    (base, u_power, v_power)
+    for base in range(BASE_DIMENSION)
+    for u_power in range(2)
+    for v_power in range(2)
+)
+STATE_INDEX = {state: index for index, state in enumerate(STATES)}
+DIMENSION = len(STATES)
+Vector = dict[int, Fraction]
+FrozenVector = tuple[tuple[int, Fraction], ...]
+
+
+def clean(vector: Vector) -> Vector:
+    return {index: value for index, value in vector.items() if value}
+
+
+def freeze(vector: Vector) -> FrozenVector:
+    return tuple(sorted(clean(vector).items()))
+
+
+def thaw(vector: FrozenVector) -> Vector:
+    return dict(vector)
+
+
+def basis(index: int, coefficient: Fraction | int = ONE) -> Vector:
+    value = Fraction(coefficient)
+    return {} if value == 0 else {index: value}
+
+
+def state(base: int, u_power: int = 0, v_power: int = 0, coefficient=ONE) -> Vector:
+    return basis(STATE_INDEX[(base, u_power, v_power)], Fraction(coefficient))
+
+
+def add(left: Vector, right: Vector) -> Vector:
+    output = dict(left)
+    for index, value in right.items():
+        output[index] = output.get(index, ZERO) + value
+    return clean(output)
+
+
+def scale(value: Fraction | int, vector: Vector) -> Vector:
+    scalar = Fraction(value)
+    return clean({index: scalar * item for index, item in vector.items()})
+
+
+def subtract(left: Vector, right: Vector) -> Vector:
+    return add(left, scale(-1, right))
+
+
+def vector_sum(vectors) -> Vector:
+    output: Vector = {}
+    for vector in vectors:
+        output = add(output, vector)
+    return output
+
+
+def degree_index(index: int) -> int:
+    base, u_power, v_power = STATES[index]
+    return BASE_DEGREES[base] + u_power + v_power
+
+
+def homogeneous_degree(vector: Vector) -> int:
+    degrees = {degree_index(index) for index in vector}
+    if len(degrees) != 1:
+        raise ValueError("vector is not nonzero homogeneous")
+    return degrees.pop()
+
+
+def lattice_pair(left, right) -> Fraction:
+    return sum(
+        (
+            left[row] * GRAM[row][column] * right[column]
+            for row in range(22)
+            for column in range(22)
+        ),
+        ZERO,
+    )
+
+
+def base_product(left: int, right: int) -> tuple[Fraction, int | None]:
+    if left == 0:
+        return ONE, right
+    if right == 0:
+        return ONE, left
+    if 1 <= left <= 22 and 1 <= right <= 22:
+        coefficient = GRAM[left - 1][right - 1]
+        return coefficient, TOP if coefficient else None
+    return ZERO, None
+
+
+@cache
+def product_basis(left_index: int, right_index: int) -> Vector:
+    left_base, left_u, left_v = STATES[left_index]
+    right_base, right_u, right_v = STATES[right_index]
+    if left_u and right_u or left_v and right_v:
+        return {}
+    coefficient, output_base = base_product(left_base, right_base)
+    if output_base is None:
+        return {}
+    sign = -1 if left_v and right_u else 1
+    return state(
+        output_base,
+        left_u + right_u,
+        left_v + right_v,
+        sign * coefficient,
+    )
+
+
+@cache
+def product_frozen(left_frozen: FrozenVector, right_frozen: FrozenVector) -> FrozenVector:
+    left = thaw(left_frozen)
+    right = thaw(right_frozen)
+    output: Vector = {}
+    for left_index, left_value in left.items():
+        for right_index, right_value in right.items():
+            output = add(
+                output,
+                scale(
+                    left_value * right_value,
+                    product_basis(left_index, right_index),
+                ),
+            )
+    return freeze(output)
+
+
+def product(left: Vector, right: Vector) -> Vector:
+    return thaw(product_frozen(freeze(left), freeze(right)))
+
+
+def middle_vector(coords, u_power=0, v_power=0) -> Vector:
+    return vector_sum(
+        state(index + 1, u_power, v_power, coefficient)
+        for index, coefficient in enumerate(coords)
+        if coefficient
+    )
+
+
+DELTA = middle_vector(DELTA_COORDS)
+H_CLASS = middle_vector(H_COORDS)
+GAMMA = middle_vector(GAMMA_COORDS)
+
+
+def differential_basis(index: int) -> Vector:
+    base, u_power, v_power = STATES[index]
+    if not u_power:
+        return {}
+    return product(state(base, 0, v_power), DELTA)
+
+
+@cache
+def differential_frozen(vector_frozen: FrozenVector) -> FrozenVector:
+    vector = thaw(vector_frozen)
+    return freeze(
+        vector_sum(
+            scale(value, differential_basis(index))
+            for index, value in vector.items()
+        )
+    )
+
+
+def differential(vector: Vector) -> Vector:
+    return thaw(differential_frozen(freeze(vector)))
+
+
+def parallel_coefficient(coords) -> Fraction:
+    return lattice_pair(DELTA_COORDS, coords) / DELTA_SQUARE
+
+
+def middle_basis_coords(base: int):
+    output = [ZERO] * 22
+    output[base - 1] = ONE
+    return tuple(output)
+
+
+def project_basis(index: int) -> Vector:
+    base, u_power, v_power = STATES[index]
+    if not u_power:
+        if base == 0:
+            return basis(index)
+        if 1 <= base <= 22:
+            coords = middle_basis_coords(base)
+            coefficient = parallel_coefficient(coords)
+            return subtract(
+                basis(index),
+                scale(coefficient, middle_vector(DELTA_COORDS, 0, v_power)),
+            )
+        return {}
+    if base == 0:
+        return {}
+    if 1 <= base <= 22:
+        coords = middle_basis_coords(base)
+        coefficient = parallel_coefficient(coords)
+        return subtract(
+            basis(index),
+            scale(coefficient, middle_vector(DELTA_COORDS, 1, v_power)),
+        )
+    return basis(index)
+
+
+@cache
+def project_frozen(vector_frozen: FrozenVector) -> FrozenVector:
+    vector = thaw(vector_frozen)
+    return freeze(
+        vector_sum(
+            scale(value, project_basis(index)) for index, value in vector.items()
+        )
+    )
+
+
+def project(vector: Vector) -> Vector:
+    return thaw(project_frozen(freeze(vector)))
+
+
+def homotopy_basis(index: int) -> Vector:
+    base, u_power, v_power = STATES[index]
+    if u_power or base == 0:
+        return {}
+    if 1 <= base <= 22:
+        coefficient = parallel_coefficient(middle_basis_coords(base))
+        return state(0, 1, v_power, coefficient)
+    if base == TOP:
+        return middle_vector(GAMMA_COORDS, 1, v_power)
+    return {}
+
+
+@cache
+def homotopy_frozen(vector_frozen: FrozenVector) -> FrozenVector:
+    vector = thaw(vector_frozen)
+    return freeze(
+        vector_sum(
+            scale(value, homotopy_basis(index)) for index, value in vector.items()
+        )
+    )
+
+
+def homotopy(vector: Vector) -> Vector:
+    return thaw(homotopy_frozen(freeze(vector)))
+
+
+def matrix_rank(rows: list[list[Fraction]]) -> int:
+    if not rows:
+        return 0
+    work = [list(map(Fraction, row)) for row in rows]
+    row_count = len(work)
+    column_count = len(work[0])
+    pivot_row = 0
+    for column in range(column_count):
+        pivot = next(
+            (row for row in range(pivot_row, row_count) if work[row][column]),
+            None,
+        )
+        if pivot is None:
+            continue
+        work[pivot_row], work[pivot] = work[pivot], work[pivot_row]
+        pivot_value = work[pivot_row][column]
+        work[pivot_row] = [value / pivot_value for value in work[pivot_row]]
+        for row in range(row_count):
+            if row == pivot_row or not work[row][column]:
+                continue
+            factor = work[row][column]
+            work[row] = [
+                value - factor * pivot_value
+                for value, pivot_value in zip(
+                    work[row], work[pivot_row], strict=True
+                )
+            ]
+        pivot_row += 1
+        if pivot_row == row_count:
+            break
+    return pivot_row
+
+
+def determinant(matrix: tuple[tuple[Fraction, ...], ...]) -> Fraction:
+    work = [list(row) for row in matrix]
+    output = ONE
+    size = len(work)
+    for column in range(size):
+        pivot = next((row for row in range(column, size) if work[row][column]), None)
+        if pivot is None:
+            return ZERO
+        if pivot != column:
+            work[column], work[pivot] = work[pivot], work[column]
+            output *= -1
+        pivot_value = work[column][column]
+        output *= pivot_value
+        for row in range(column + 1, size):
+            if not work[row][column]:
+                continue
+            factor = work[row][column] / pivot_value
+            for target in range(column, size):
+                work[row][target] -= factor * work[column][target]
+    return output
+
+
+def rank_of_vectors(vectors: list[Vector], ambient_indices=None) -> int:
+    indices = tuple(range(DIMENSION)) if ambient_indices is None else tuple(ambient_indices)
+    rows = [
+        [vector.get(index, ZERO) for vector in vectors]
+        for index in indices
+    ]
+    return matrix_rank(rows)
+
+
+def cohomology_ranks(vectors_by_degree: dict[int, list[Vector]]) -> tuple[int, ...]:
+    differential_ranks: dict[int, int] = {}
+    dimensions: dict[int, int] = {}
+    for degree in range(7):
+        vectors = vectors_by_degree.get(degree, [])
+        ambient = [index for index in range(DIMENSION) if degree_index(index) == degree]
+        dimensions[degree] = rank_of_vectors(vectors, ambient)
+        differential_ranks[degree] = rank_of_vectors(
+            [differential(vector) for vector in vectors],
+            [index for index in range(DIMENSION) if degree_index(index) == degree + 1],
+        )
+    return tuple(
+        dimensions[degree]
+        - differential_ranks[degree]
+        - differential_ranks.get(degree - 1, 0)
+        for degree in range(7)
+    )
+
+
+def delta_perp_basis() -> list[tuple[Fraction, ...]]:
+    output = []
+    for coordinate in (0, 1, *range(4, 22)):
+        vector = [ZERO] * 22
+        vector[coordinate] = ONE
+        output.append(tuple(vector))
+    mixed = [ZERO] * 22
+    mixed[2] = ONE
+    mixed[3] = Fraction(2)
+    output.append(tuple(mixed))
+    return output
+
+
+PERP_COORDS = delta_perp_basis()
+
+
+def harmonic_representatives() -> list[tuple[str, Vector]]:
+    output = [("1", state(0)), ("v", state(0, 0, 1))]
+    for index, coords in enumerate(PERP_COORDS):
+        output.extend(
+            [
+                (f"x{index}", middle_vector(coords)),
+                (f"u*x{index}", middle_vector(coords, 1, 0)),
+                (f"x{index}*v", middle_vector(coords, 0, 1)),
+                (f"u*x{index}*v", middle_vector(coords, 1, 1)),
+            ]
+        )
+    output.extend([("u*t", state(TOP, 1, 0)), ("u*t*v", state(TOP, 1, 1))])
+    return sorted(output, key=lambda item: (homogeneous_degree(item[1]), item[0]))
+
+
+HARMONIC = harmonic_representatives()
+UNIT = state(0)
+
+
+@cache
+def m2_frozen(left_frozen: FrozenVector, right_frozen: FrozenVector) -> FrozenVector:
+    return freeze(project(product(thaw(left_frozen), thaw(right_frozen))))
+
+
+def m2(left: Vector, right: Vector) -> Vector:
+    return thaw(m2_frozen(freeze(left), freeze(right)))
+
+
+def m3(left: Vector, right: Vector, final: Vector) -> Vector:
+    first_tree = product(homotopy(product(left, right)), final)
+    second_tree = product(left, homotopy(product(right, final)))
+    signed_second = scale((-1) ** homogeneous_degree(left), second_tree)
+    return project(subtract(first_tree, signed_second))
+
+
+def top_coefficient(vector: Vector) -> Fraction:
+    return vector.get(STATE_INDEX[(TOP, 1, 1)], ZERO)
+
+
+def pairing(left: Vector, right: Vector) -> Fraction:
+    return top_coefficient(product(left, right))
+
+
+def selected_subdga() -> dict[int, list[Vector]]:
+    base = [state(0), H_CLASS, DELTA, state(TOP)]
+    output = {degree: [] for degree in range(7)}
+    for item in base:
+        for u_power in range(2):
+            for v_power in range(2):
+                promoted = vector_sum(
+                    state(
+                        STATES[index][0],
+                        u_power,
+                        v_power,
+                        coefficient,
+                    )
+                    for index, coefficient in item.items()
+                )
+                output[homogeneous_degree(promoted)].append(promoted)
+    return output
+
+
+def serialize_fraction(value: Fraction) -> str:
+    return str(value.numerator) if value.denominator == 1 else str(value)
+
+
+def main() -> int:
+    all_basis = [basis(index) for index in range(DIMENSION)]
+    by_degree = {
+        degree: [basis(index) for index in range(DIMENSION) if degree_index(index) == degree]
+        for degree in range(7)
+    }
+    harmonic_vectors = [vector for _, vector in HARMONIC]
+
+    gram_symmetric = all(
+        GRAM[row][column] == GRAM[column][row]
+        for row in range(22)
+        for column in range(22)
+    )
+    gram_even = all(GRAM[index][index] % 2 == 0 for index in range(22))
+    gram_determinant = determinant(GRAM)
+    h_square = lattice_pair(H_COORDS, H_COORDS)
+    delta_square = lattice_pair(DELTA_COORDS, DELTA_COORDS)
+    h_delta = lattice_pair(H_COORDS, DELTA_COORDS)
+    delta_pairings = [lattice_pair(DELTA_COORDS, middle_basis_coords(i + 1)) for i in range(22)]
+    delta_divisibility = math.gcd(*(abs(value.numerator) for value in delta_pairings))
+
+    d_squared = all(not differential(differential(item)) for item in all_basis)
+    derivation = True
+    graded_commutative = True
+    for left_index, left in enumerate(all_basis):
+        for right_index, right in enumerate(all_basis):
+            lhs = differential(product(left, right))
+            rhs = add(
+                product(differential(left), right),
+                scale(
+                    (-1) ** degree_index(left_index),
+                    product(left, differential(right)),
+                ),
+            )
+            derivation = derivation and lhs == rhs
+            graded_commutative = graded_commutative and product(left, right) == scale(
+                (-1) ** (degree_index(left_index) * degree_index(right_index)),
+                product(right, left),
+            )
+
+    associative = True
+    for left_index in range(DIMENSION):
+        left = all_basis[left_index]
+        for middle_index in range(DIMENSION):
+            middle = all_basis[middle_index]
+            left_middle = product(left, middle)
+            for right_index in range(DIMENSION):
+                right = all_basis[right_index]
+                if product(left_middle, right) != product(left, product(middle, right)):
+                    associative = False
+                    break
+            if not associative:
+                break
+        if not associative:
+            break
+
+    contraction = all(
+        add(differential(homotopy(item)), homotopy(differential(item)))
+        == subtract(item, project(item))
+        for item in all_basis
+    )
+    contraction_side_conditions = all(
+        not homotopy(homotopy(item))
+        and not project(homotopy(item))
+        and not homotopy(project(item))
+        and project(project(item)) == project(item)
+        for item in all_basis
+    )
+
+    full_betti = cohomology_ranks(by_degree)
+    projected_ranks = tuple(
+        rank_of_vectors(
+            [project(item) for item in by_degree[degree]],
+            [index for index in range(DIMENSION) if degree_index(index) == degree],
+        )
+        for degree in range(7)
+    )
+    harmonic_ranks = tuple(
+        rank_of_vectors(
+            [vector for _, vector in HARMONIC if homogeneous_degree(vector) == degree],
+            [index for index in range(DIMENSION) if degree_index(index) == degree],
+        )
+        for degree in range(7)
+    )
+    harmonic_closed_and_fixed = all(
+        not differential(vector) and project(vector) == vector
+        for vector in harmonic_vectors
+    )
+
+    selected = selected_subdga()
+    selected_closed = all(
+        rank_of_vectors(selected[degree + 1] + [differential(vector)], [
+            index for index in range(DIMENSION) if degree_index(index) == degree + 1
+        ])
+        == rank_of_vectors(selected[degree + 1], [
+            index for index in range(DIMENSION) if degree_index(index) == degree + 1
+        ])
+        for degree in range(6)
+        for vector in selected[degree]
+    )
+    selected_betti = cohomology_ranks(selected)
+
+    m2_associative = True
+    strict_unit = True
+    nonzero_m2 = 0
+    for left in harmonic_vectors:
+        strict_unit = strict_unit and m2(UNIT, left) == left and m2(left, UNIT) == left
+        for right in harmonic_vectors:
+            if m2(left, right):
+                nonzero_m2 += 1
+            for final in harmonic_vectors:
+                if m2(m2(left, right), final) != m2(left, m2(right, final)):
+                    m2_associative = False
+
+    nonzero_m3 = []
+    for left_label, left in HARMONIC:
+        for right_label, right in HARMONIC:
+            for final_label, final in HARMONIC:
+                value = m3(left, right, final)
+                if value:
+                    nonzero_m3.append((left_label, right_label, final_label, value))
+                if left == UNIT or right == UNIT or final == UNIT:
+                    strict_unit = strict_unit and not value
+
+    homotopy_image_square_zero = all(
+        not product(homotopy(left), homotopy(right))
+        for left in all_basis
+        for right in all_basis
+    )
+    homotopy_kills_image_products = all(
+        not homotopy(product(homotopy(left), right))
+        and not homotopy(product(left, homotopy(right)))
+        for left in all_basis
+        for right in all_basis
+    )
+
+    full_pairing_matrix = [[pairing(left, right) for right in all_basis] for left in all_basis]
+    harmonic_pairing_matrix = [
+        [pairing(left, right) for right in harmonic_vectors]
+        for left in harmonic_vectors
+    ]
+    projection_is_cyclic = all(
+        pairing(project(left), right) == pairing(left, project(right))
+        for left in all_basis
+        for right in all_basis
+    )
+    homotopy_is_cyclic = all(
+        pairing(homotopy(left), right)
+        == (-1) ** degree_index(left_index) * pairing(left, homotopy(right))
+        for left_index, left in enumerate(all_basis)
+        for right in all_basis
+    )
+    differential_is_cyclic = all(
+        pairing(differential(left), right)
+        + (-1) ** degree_index(left_index) * pairing(left, differential(right))
+        == 0
+        for left_index, left in enumerate(all_basis)
+        for right in all_basis
+    )
+
+    checks = {
+        "K3_form_is_symmetric_even_unimodular": (
+            gram_symmetric and gram_even and abs(gram_determinant) == 1
+        ),
+        "selected_H_square_is_two": h_square == 2,
+        "selected_delta_is_primitive_square_minus_four": (
+            delta_square == -4 and delta_divisibility == 1
+        ),
+        "selected_H_is_delta_orthogonal": h_delta == 0,
+        "Hirsch_differential_squares_to_zero": d_squared,
+        "Hirsch_differential_is_a_graded_derivation": derivation,
+        "Hirsch_product_is_associative_and_graded_commutative": (
+            associative and graded_commutative
+        ),
+        "explicit_contraction_identity_holds_on_all_96_basis_states": contraction,
+        "contraction_side_conditions_hold": contraction_side_conditions,
+        "computed_q79_Betti_ranks_are_1_1_21_42_21_1_1": (
+            full_betti == (1, 1, 21, 42, 21, 1, 1)
+        ),
+        "projected_and_explicit_representative_ranks_equal_cohomology": (
+            projected_ranks == full_betti
+            and harmonic_ranks == full_betti
+            and harmonic_closed_and_fixed
+        ),
+        "selected_H_delta_subDGA_is_closed": selected_closed,
+        "selected_H_delta_subDGA_Betti_ranks_are_1_1_1_2_1_1_1": (
+            selected_betti == (1, 1, 1, 2, 1, 1, 1)
+        ),
+        "transferred_m2_is_strictly_unital_and_associative": (
+            strict_unit and m2_associative
+        ),
+        "all_681472_transferred_m3_values_vanish": not nonzero_m3,
+        "all_higher_binary_transfer_trees_vanish_structurally": (
+            homotopy_image_square_zero and homotopy_kills_image_products
+        ),
+        "source_and_cohomology_pairings_are_nondegenerate": (
+            matrix_rank(full_pairing_matrix) == DIMENSION
+            and matrix_rank(harmonic_pairing_matrix) == len(HARMONIC)
+        ),
+        "source_pairing_is_differentially_cyclic": differential_is_cyclic,
+        "contraction_preserves_the_cyclic_pairing": (
+            projection_is_cyclic and homotopy_is_cyclic
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H4-T6",
+        "tier": "SELECTED_Q79_TOPOLOGICAL_HIRSCH_TRANSFER_AND_INTERACTION_LOCATION_THEOREM",
+        "claim": (
+            "The selected q79 topology X=P_delta x S1_shared has an exact "
+            "96-dimensional rational Hirsch model H*(K3) tensor Lambda(u,v), "
+            "du=delta, with an explicit cyclic contraction onto its "
+            "88-dimensional cohomology. Its transferred minimal model is "
+            "strict at this topology-only tier: m2 survives while every m3 "
+            "and higher binary-tree operation vanishes."
+        ),
+        "exact_data": {
+            "source_DGA": "H*(K3;Q) tensor Lambda(u,v), du=delta, dv=0",
+            "source_dimension": DIMENSION,
+            "K3_lattice": "3U + 2E8(-1)",
+            "K3_Gram_determinant": serialize_fraction(gram_determinant),
+            "H_square": serialize_fraction(h_square),
+            "delta_square": serialize_fraction(delta_square),
+            "H_dot_delta": serialize_fraction(h_delta),
+            "delta_divisibility": delta_divisibility,
+            "contraction": {
+                "parallel_projection": "x_parallel=(delta.x/delta^2)delta",
+                "gamma": "delta/delta^2=-delta/4",
+                "h_on_middle": "h(x)=(delta.x/delta^2)u",
+                "h_on_top": "h(t)=u gamma",
+            },
+            "q79_Betti_ranks": list(full_betti),
+            "cohomology_dimension": sum(full_betti),
+            "selected_H_delta_subDGA_dimension": sum(len(value) for value in selected.values()),
+            "selected_H_delta_subDGA_Betti_ranks": list(selected_betti),
+            "ordered_nonzero_m2_count": nonzero_m2,
+            "m3_triples_tested": len(HARMONIC) ** 3,
+            "nonzero_m3_count": len(nonzero_m3),
+            "higher_tree_reason": (
+                "im(h) contains u; h vanishes on every u-containing product "
+                "and im(h)^2=0 because u^2=0"
+            ),
+            "source_pins": {
+                "selected_degree_two_K3_and_FuYau_circle": {
+                    "repository": "mtt-protospinor-gr-response-proof",
+                    "path": "certificates/q79_degree2_k3_fuyau_torsion_glsm_base_certificate.json",
+                    "repository_head": "a350d0d1a706845205d669542cf344750033c6f6",
+                    "git_blob": "94ed5127f9f460ed7abe552f17d34965b63c8f5b",
+                },
+                "integral_cohomology_and_shared_circle": {
+                    "repository": "mtt-protospinor-gr-response-proof",
+                    "path": "certificates/q79_shared_circle_clutching_c2_c3_independence_certificate.json",
+                    "repository_head": "a350d0d1a706845205d669542cf344750033c6f6",
+                    "git_blob": "536d26c34613aa095bd90e10814b77164baf360f",
+                },
+            },
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is the selected q79 rational topology factor, not the "
+            "physical de Rham/HYM coefficient complex. Vanishing transferred "
+            "higher products localizes any interaction-generating structure "
+            "to bundle, superconnection, overlap/Yoneda, analytic, or other "
+            "coefficient data. It does not prove formality of the full "
+            "Hull-Strominger source, select V3/W9, construct the continuum "
+            "Hessian, or identify a 27-state physical target."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

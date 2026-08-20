@@ -7,8 +7,9 @@ archive.
   bundled source hash.
 - `authority/Axx/` contains each theorem note, its candidate/certificate,
   builder/audit, subordinate packets, and directly cited dependencies.
-- `result_manifest.json` selects 28 high-signal matrices, values, spectra,
-  ledgers, and adjacent-program summaries.
+- `result_manifest.json` selects 28 frozen baseline results plus 133 current
+  matrices, values, spectra, ledgers, structural theorems and adjacent-program
+  summaries.
 - `results/` contains those result objects in short stable paths.
 - `parameter_ledger.json` separates MTT construction primitives from measured
   profile coordinates and transported outputs.

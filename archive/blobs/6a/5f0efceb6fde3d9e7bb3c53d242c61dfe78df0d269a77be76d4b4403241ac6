@@ -1,0 +1,200 @@
+# Preprojection Admissible-Tangent and Radial No-Go Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:** `LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS`
+
+**MTT status:** structural constraint on any persistent-defect interpretation;
+no physical admissible stratum is selected.
+
+## 1. Why the tangent space must be source data
+
+Let `A` be a finite-dimensional graded star algebra with a positive cyclic
+pairing on its self-adjoint real slice. Let `Q` be an odd self-adjoint charge
+and set
+
+```text
+F=Q^2,
+E(Q)=1/2 <F,F>.
+```
+
+The choice of admissible variations cannot be postponed until after the
+Hessian is formed. Let `V` be the real space of allowed odd self-adjoint
+variations at `Q`. It may encode a fixed principal symbol, topology, boundary
+conditions, a normalization shell, or a selected stratum.
+
+Define the linearized curvature map
+
+```text
+L_Q(a)=Q a+a Q.
+```
+
+## 2. Restricted criticality and Hessian
+
+### Theorem 2.1
+
+For `a,b in V`,
+
+```text
+dE_Q(a)=<F,L_Q(a)>,
+
+Hess_ambient E_Q(a,b)
+  = <L_Q(a),L_Q(b)>
+    + <F,a b+b a>.
+```
+
+Therefore `Q` is critical relative to `V` exactly when
+
+```text
+F perpendicular to L_Q(V).
+```
+
+At a nonzero relative critical point, the surviving residual is an obstruction
+component in the orthogonal cokernel of the admissible linearized curvature
+map. It is not merely an arbitrary nonzero value of `F`.
+
+### Proof
+
+For a two-parameter perturbation,
+
+```text
+(Q+s a+t b)^2
+ = F+s L_Q(a)+t L_Q(b)+s t(a b+b a)
+   +s^2a^2+t^2b^2.
+```
+
+Differentiating `1/2` times the squared norm gives the two displayed formulas.
+The criticality criterion is their first line evaluated on every `a in V`.
+QED.
+
+## 3. Radial no-go theorem
+
+### Theorem 3.1
+
+If the radial direction `Q` itself belongs to `V`, then a relative critical
+point must have exact closure:
+
+```text
+Q in V and dE_Q|_V=0  =>  F=0.
+```
+
+### Proof
+
+Since `L_Q(Q)=2F`,
+
+```text
+dE_Q(Q)=2||F||^2.
+```
+
+Positivity forces `F=0`. QED.
+
+Consequently, a persistent nonzero curvature cannot be obtained by minimizing
+`||Q^2||^2` over the unrestricted odd charge space. At least one of the
+following must be genuine source data:
+
+- a fixed differential or principal symbol that cannot be scaled;
+- a constrained admissible stratum;
+- a topological or boundary sector;
+- an external source or additional action term; or
+- a quotient in which the radial direction is absent.
+
+This is the finite algebraic analogue of why Yang-Mills varies a connection
+with fixed differential symbol rather than scaling the complete covariant
+derivative.
+
+## 4. Intrinsic Hessian on an admissible stratum
+
+Let `S` be a smooth admissible stratum in the ambient charge space and let
+`II` denote its second fundamental form, represented by the normal acceleration
+of curves in `S`. At a critical point of `E|_S`,
+
+```text
+Hess_S(E|_S)(a,b)
+ = Hess_ambient E(a,b)+<grad_ambient E,II(a,b)>.
+```
+
+Thus simply restricting the ambient Hessian matrix to tangent vectors is
+incorrect whenever the ambient gradient is nonzero. The geometry of the
+preprojection stratum contributes an additional term.
+
+## 5. Clifford phase-circle corollary
+
+Suppose two odd self-adjoint charges satisfy
+
+```text
+Q_0^2=Q_1^2=Delta,
+Q_0 Q_1+Q_1 Q_0=0.
+```
+
+Then
+
+```text
+Q_theta=cos(theta)Q_0+sin(theta)Q_1
+```
+
+obeys
+
+```text
+Q_theta^2=Delta
+```
+
+for every angle. The first-order charge retains a full circle coordinate while
+its square is constant. The points at quarter turns give
+
+```text
+Q_0, Q_1, -Q_0, -Q_1.
+```
+
+This provides a precise structural model for a shared phase circle and its
+quarter-turn samples. It does not identify that circle with Lorentzian time or
+with the selected q79 line.
+
+The same example also exposes the difference between ambient and intrinsic
+stability. At `Q_0`, the tangent `Q_1` can have a positive ambient Hessian, but
+the phase-circle acceleration contributes the opposite normal term. Since the
+cost is constant around the circle, the intrinsic Hessian is zero. The phase
+is a symmetry/protected direction, not a damped repair direction.
+
+## 6. Consequence for the source language
+
+The minimal repair germ must include the admissible variation object. A charge
+and curvature alone do not determine physical criticality or the physical
+Hessian. A sharper finite source is therefore
+
+```text
+R=(A,Q,V_or_S,star,tau,L_sh,G),
+```
+
+where `V_or_S` is an admissible tangent module or stratified admissible space.
+For a continuum superconnection, the corresponding datum is the affine space
+of allowed lower-order perturbations with fixed symbol and boundary/domain
+conditions.
+
+This is a correction to any proposal that forms the full ambient Hessian first
+and only then projects to admissible directions.
+
+## 7. Remaining bridge
+
+For MTT one must still derive, rather than choose:
+
+1. the physical admissible stratum or tangent projector;
+2. the fixed-symbol and domain conditions;
+3. the shared-line action on that stratum;
+4. whether its phase circle is a symmetry orbit, a holonomy orbit, or merely a
+   representation parameter;
+5. the continuum Fredholm/positivity properties; and
+6. the q79 and finite projection intertwiners.
+
+## 8. Verification
+
+Run:
+
+```powershell
+python experiments/admissible_tangent/verify.py
+python verify.py
+```
+
+The exact witness uses two anticommuting real self-adjoint odd charges. It
+checks the radial no-go, restricted nonzero criticality, a positive ambient
+Hessian, exact cancellation by the phase-circle second fundamental term, and
+a rational point on the constant-square circle.

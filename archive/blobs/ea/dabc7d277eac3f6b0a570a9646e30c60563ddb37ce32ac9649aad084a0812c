@@ -1,0 +1,115 @@
+"""Exact rational matrix operations used by theorem witnesses."""
+
+from __future__ import annotations
+
+from fractions import Fraction
+from typing import Iterable, Sequence
+
+
+RMatrix = list[list[Fraction]]
+RVector = list[Fraction]
+
+
+def q(value: int | Fraction) -> Fraction:
+    return Fraction(value)
+
+
+def matrix(rows: Iterable[Iterable[int | Fraction]]) -> RMatrix:
+    return [[Fraction(value) for value in row] for row in rows]
+
+
+def vector(values: Iterable[int | Fraction]) -> RVector:
+    return [Fraction(value) for value in values]
+
+
+def shape(a: Sequence[Sequence[Fraction]]) -> tuple[int, int]:
+    return len(a), len(a[0]) if a else 0
+
+
+def identity(n: int) -> RMatrix:
+    return [[Fraction(int(i == j)) for j in range(n)] for i in range(n)]
+
+
+def transpose(a: RMatrix) -> RMatrix:
+    rows, cols = shape(a)
+    return [[a[i][j] for i in range(rows)] for j in range(cols)]
+
+
+def matmul(a: RMatrix, b: RMatrix) -> RMatrix:
+    ar, ac = shape(a)
+    br, bc = shape(b)
+    if ac != br:
+        raise ValueError("incompatible matrix shapes")
+    return [
+        [
+            sum((a[i][k] * b[k][j] for k in range(ac)), Fraction(0))
+            for j in range(bc)
+        ]
+        for i in range(ar)
+    ]
+
+
+def matvec(a: RMatrix, v: RVector) -> RVector:
+    rows, cols = shape(a)
+    if cols != len(v):
+        raise ValueError("incompatible matrix/vector shapes")
+    return [
+        sum((a[i][j] * v[j] for j in range(cols)), Fraction(0))
+        for i in range(rows)
+    ]
+
+
+def add(a: RMatrix, b: RMatrix) -> RMatrix:
+    if shape(a) != shape(b):
+        raise ValueError("matrix shapes differ")
+    return [[a[i][j] + b[i][j] for j in range(len(a[0]))] for i in range(len(a))]
+
+
+def scale(value: int | Fraction, a: RMatrix) -> RMatrix:
+    scalar = Fraction(value)
+    return [[scalar * entry for entry in row] for row in a]
+
+
+def linear_combination(coefficients: RVector, matrices: list[RMatrix]) -> RMatrix:
+    if len(coefficients) != len(matrices) or not matrices:
+        raise ValueError("coefficient/matrix count mismatch")
+    rows, cols = shape(matrices[0])
+    out = matrix([[0 for _ in range(cols)] for _ in range(rows)])
+    for coefficient, item in zip(coefficients, matrices, strict=True):
+        out = add(out, scale(coefficient, item))
+    return out
+
+
+def dot(u: RVector, v: RVector) -> Fraction:
+    if len(u) != len(v):
+        raise ValueError("vector lengths differ")
+    return sum((x * y for x, y in zip(u, v, strict=True)), Fraction(0))
+
+
+def equal(a: RMatrix, b: RMatrix) -> bool:
+    return shape(a) == shape(b) and all(
+        a[i][j] == b[i][j]
+        for i in range(len(a))
+        for j in range(len(a[0]) if a else 0)
+    )
+
+
+def determinant_2x2(a: RMatrix) -> Fraction:
+    if shape(a) != (2, 2):
+        raise ValueError("expected a 2 by 2 matrix")
+    return a[0][0] * a[1][1] - a[0][1] * a[1][0]
+
+
+def trace(a: RMatrix) -> Fraction:
+    rows, cols = shape(a)
+    if rows != cols:
+        raise ValueError("expected a square matrix")
+    return sum((a[i][i] for i in range(rows)), Fraction(0))
+
+
+def serialize_matrix(a: RMatrix) -> list[list[str]]:
+    return [[str(entry) for entry in row] for row in a]
+
+
+def serialize_vector(v: RVector) -> list[str]:
+    return [str(entry) for entry in v]

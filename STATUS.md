@@ -174,7 +174,7 @@ count is claimed. See `release/parameter_ledger.json` for the values and roles.
 
 The 62-entry A01-A62 authority chain is the frozen July baseline, not the whole
 current state. A63-A99 form a 37-entry authority extension, and the August
-short-path layer contains 112 promoted result entries.
+short-path layer contains 133 promoted result entries.
 Older packet statuses and unpromoted exploratory artifacts are raw evidence
 only. Adjacent source repositories remain in the archive at their configured
 scope, including open, no-go, superseded, and retired routes; they affect current

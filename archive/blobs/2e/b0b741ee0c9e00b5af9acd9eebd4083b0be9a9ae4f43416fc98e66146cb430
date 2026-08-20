@@ -1,0 +1,118 @@
+"""Exact qutrit Heisenberg-Weyl and 27-dimensional carrier witness."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.exact import (  # noqa: E402
+    OMEGA,
+    OMEGA2,
+    identity,
+    inverse,
+    kronecker,
+    matmul,
+    matrix,
+    matrix_equal,
+    scalar_matrix,
+    scale,
+    shape,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "h3_qutrit_central_extension.json"
+
+
+def power(a, n):
+    out = identity(len(a))
+    for _ in range(n):
+        out = matmul(out, a)
+    return out
+
+
+def main() -> int:
+    # X e_j = e_(j+1), Z e_j = omega^j e_j.
+    x = matrix([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
+    z = matrix([[1, 0, 0], [0, OMEGA, 0], [0, 0, OMEGA2]])
+    unit3 = identity(3)
+    x_inv = power(x, 2)
+    z_inv = power(z, 2)
+
+    # Unnormalized discrete Fourier matrix F_(j,k)=omega^(j*k).
+    f = matrix([[OMEGA ** (j * k) for k in range(3)] for j in range(3)])
+    f_inv = inverse(f)
+
+    # Three commuting qutrit lanes produce a 3^3 carrier.
+    unit = identity(3)
+    x1 = kronecker(kronecker(x, unit), unit)
+    z1 = kronecker(kronecker(z, unit), unit)
+    x2 = kronecker(kronecker(unit, x), unit)
+    z2 = kronecker(kronecker(unit, z), unit)
+    x3 = kronecker(kronecker(unit, unit), x)
+    z3 = kronecker(kronecker(unit, unit), z)
+    unit27 = identity(27)
+
+    fxfinv = matmul(matmul(f, x), f_inv)
+    fzfinv = matmul(matmul(f, z), f_inv)
+
+    checks = {
+        "x_cubed_is_identity": matrix_equal(power(x, 3), unit3),
+        "z_cubed_is_identity": matrix_equal(power(z, 3), unit3),
+        "weyl_relation_xz_equals_omega2_zx": matrix_equal(
+            matmul(x, z), scale(OMEGA2, matmul(z, x))
+        ),
+        "central_commutator": matrix_equal(
+            matmul(matmul(matmul(x, z), x_inv), z_inv),
+            scalar_matrix(OMEGA2, 3),
+        ),
+        "fourier_conjugates_x_to_z": matrix_equal(fxfinv, z),
+        "fourier_conjugates_z_to_x_inverse": matrix_equal(fzfinv, x_inv),
+        "tensor_carrier_dimension_is_27": shape(x1) == (27, 27),
+        "lane_1_weyl_relation": matrix_equal(
+            matmul(x1, z1), scale(OMEGA2, matmul(z1, x1))
+        ),
+        "lane_2_weyl_relation": matrix_equal(
+            matmul(x2, z2), scale(OMEGA2, matmul(z2, x2))
+        ),
+        "lane_3_weyl_relation": matrix_equal(
+            matmul(x3, z3), scale(OMEGA2, matmul(z3, x3))
+        ),
+        "different_lanes_commute": all(
+            matrix_equal(matmul(a, b), matmul(b, a))
+            for a, b in ((x1, x2), (x1, z2), (z1, x3), (z2, x3))
+        ),
+        "shared_central_phase_on_27_carrier": matrix_equal(
+            matmul(matmul(matmul(x1, z1), power(x1, 2)), power(z1, 2)),
+            scale(OMEGA2, unit27),
+        ),
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H3-W1",
+        "tier": "EXACT_FINITE_WITNESS",
+        "claim": (
+            "One qutrit central extension supplies Weyl phase, Fourier "
+            "automorphism, and a 27-dimensional three-lane tensor carrier."
+        ),
+        "carrier_dimension": 27,
+        "centre_order": 3,
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is an algebraic compression candidate. It does not prove that "
+            "CLN or the accepted physical 27-state carrier is this representation."
+        ),
+    }
+    CERTIFICATE.parent.mkdir(parents=True, exist_ok=True)
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

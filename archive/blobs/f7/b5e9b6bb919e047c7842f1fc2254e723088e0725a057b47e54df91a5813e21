@@ -1,0 +1,726 @@
+"""Exact metric transport and polar-obstruction witness for the q79 BHT bridge."""
+
+from __future__ import annotations
+
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "h4_bht_metric_polar_bridge.json"
+
+Matrix = tuple[tuple[Fraction, ...], ...]
+Vector = tuple[Fraction, ...]
+Monomial = tuple[int, int]
+Polynomial = dict[Monomial, Fraction]
+
+
+def matrix(rows) -> Matrix:
+    return tuple(tuple(Fraction(value) for value in row) for row in rows)
+
+
+def shape(value: Matrix) -> tuple[int, int]:
+    return len(value), len(value[0]) if value else 0
+
+
+def zero(rows: int, columns: int) -> Matrix:
+    return matrix([[0 for _ in range(columns)] for _ in range(rows)])
+
+
+def identity(dimension: int) -> Matrix:
+    return matrix(
+        [
+            [1 if row == column else 0 for column in range(dimension)]
+            for row in range(dimension)
+        ]
+    )
+
+
+def diagonal(*values) -> Matrix:
+    return matrix(
+        [
+            [value if row == column else 0 for column, value in enumerate(values)]
+            for row in range(len(values))
+        ]
+    )
+
+
+def transpose(value: Matrix) -> Matrix:
+    rows, columns = shape(value)
+    return matrix([[value[row][column] for row in range(rows)] for column in range(columns)])
+
+
+def add(left: Matrix, right: Matrix) -> Matrix:
+    if shape(left) != shape(right):
+        raise ValueError("matrix shapes differ")
+    return matrix(
+        [
+            [lhs + rhs for lhs, rhs in zip(left_row, right_row, strict=True)]
+            for left_row, right_row in zip(left, right, strict=True)
+        ]
+    )
+
+
+def subtract(left: Matrix, right: Matrix) -> Matrix:
+    return add(left, matrix([[-entry for entry in row] for row in right]))
+
+
+def multiply(left: Matrix, right: Matrix) -> Matrix:
+    left_rows, shared = shape(left)
+    right_rows, right_columns = shape(right)
+    if shared != right_rows:
+        raise ValueError("incompatible matrix shapes")
+    return matrix(
+        [
+            [
+                sum(
+                    (left[row][inner] * right[inner][column] for inner in range(shared)),
+                    Fraction(0),
+                )
+                for column in range(right_columns)
+            ]
+            for row in range(left_rows)
+        ]
+    )
+
+
+def inverse(value: Matrix) -> Matrix:
+    rows, columns = shape(value)
+    if rows != columns:
+        raise ValueError("matrix is not square")
+    augmented = [list(value[row] + identity(rows)[row]) for row in range(rows)]
+    for column in range(columns):
+        pivot = next(
+            (row for row in range(column, rows) if augmented[row][column]),
+            None,
+        )
+        if pivot is None:
+            raise ValueError("matrix is singular")
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        pivot_value = augmented[column][column]
+        augmented[column] = [entry / pivot_value for entry in augmented[column]]
+        for row in range(rows):
+            if row == column or not augmented[row][column]:
+                continue
+            factor = augmented[row][column]
+            augmented[row] = [
+                entry - factor * pivot_entry
+                for entry, pivot_entry in zip(
+                    augmented[row], augmented[column], strict=True
+                )
+            ]
+    return matrix([row[columns:] for row in augmented])
+
+
+def matvec(value: Matrix, vector: Vector) -> Vector:
+    return tuple(
+        sum((entry * coordinate for entry, coordinate in zip(row, vector, strict=True)), Fraction(0))
+        for row in value
+    )
+
+
+def transported_metric(source_metric: Matrix, transform: Matrix) -> Matrix:
+    transform_inverse = inverse(transform)
+    return multiply(transpose(transform_inverse), multiply(source_metric, transform_inverse))
+
+
+def metric_adjoint(operator: Matrix, domain_metric: Matrix, codomain_metric: Matrix) -> Matrix:
+    return multiply(
+        inverse(domain_metric),
+        multiply(transpose(operator), codomain_metric),
+    )
+
+
+def hodge_laplacian(
+    previous_differential: Matrix,
+    next_differential: Matrix,
+    previous_metric: Matrix,
+    current_metric: Matrix,
+    next_metric: Matrix,
+) -> Matrix:
+    previous_adjoint = metric_adjoint(
+        previous_differential, previous_metric, current_metric
+    )
+    next_adjoint = metric_adjoint(next_differential, current_metric, next_metric)
+    return add(
+        multiply(previous_differential, previous_adjoint),
+        multiply(next_adjoint, next_differential),
+    )
+
+
+def infinity_norm(value: Matrix) -> Fraction:
+    return max(
+        (sum((abs(entry) for entry in row), Fraction(0)) for row in value),
+        default=Fraction(0),
+    )
+
+
+def basis(dimension: int) -> tuple[Vector, ...]:
+    return tuple(
+        tuple(Fraction(1 if row == column else 0) for row in range(dimension))
+        for column in range(dimension)
+    )
+
+
+def source_product(left: Vector, right: Vector) -> Vector:
+    return (left[1] * right[1],)
+
+
+DEGREE_DIMENSIONS = (1, 2, 1)
+
+
+def zero_vector(degree: int) -> Vector:
+    if not 0 <= degree < len(DEGREE_DIMENSIONS):
+        return ()
+    return tuple(Fraction(0) for _ in range(DEGREE_DIMENSIONS[degree]))
+
+
+def add_vectors(left: Vector, right: Vector) -> Vector:
+    if len(left) != len(right):
+        raise ValueError("vector dimensions differ")
+    return tuple(lhs + rhs for lhs, rhs in zip(left, right, strict=True))
+
+
+def scale_vector(coefficient, value: Vector) -> Vector:
+    scalar = Fraction(coefficient)
+    return tuple(scalar * entry for entry in value)
+
+
+def graded_product(
+    left_degree: int,
+    left: Vector,
+    right_degree: int,
+    right: Vector,
+) -> Vector:
+    target_degree = left_degree + right_degree
+    if not 0 <= target_degree < len(DEGREE_DIMENSIONS):
+        return ()
+    if left_degree == right_degree == 1:
+        return source_product(left, right)
+    return zero_vector(target_degree)
+
+
+def graded_differential(
+    degree: int,
+    value: Vector,
+    d0: Matrix,
+    d1: Matrix,
+) -> Vector:
+    if degree == 0:
+        return matvec(d0, value)
+    if degree == 1:
+        return matvec(d1, value)
+    return ()
+
+
+def source_dg_algebra_laws(d0: Matrix, d1: Matrix) -> bool:
+    degree_bases = tuple(basis(dimension) for dimension in DEGREE_DIMENSIONS)
+
+    for degree, vectors in enumerate(degree_bases):
+        for value in vectors:
+            first = graded_differential(degree, value, d0, d1)
+            second = graded_differential(degree + 1, first, d0, d1)
+            if second != zero_vector(degree + 2):
+                return False
+
+    for left_degree, left_vectors in enumerate(degree_bases):
+        for right_degree, right_vectors in enumerate(degree_bases):
+            for left in left_vectors:
+                for right in right_vectors:
+                    product = graded_product(
+                        left_degree, left, right_degree, right
+                    )
+                    lhs = graded_differential(
+                        left_degree + right_degree, product, d0, d1
+                    )
+                    right_first = graded_product(
+                        left_degree + 1,
+                        graded_differential(left_degree, left, d0, d1),
+                        right_degree,
+                        right,
+                    )
+                    right_second = graded_product(
+                        left_degree,
+                        left,
+                        right_degree + 1,
+                        graded_differential(right_degree, right, d0, d1),
+                    )
+                    rhs = add_vectors(
+                        right_first,
+                        scale_vector((-1) ** left_degree, right_second),
+                    )
+                    if lhs != rhs:
+                        return False
+
+    for left_degree, left_vectors in enumerate(degree_bases):
+        for middle_degree, middle_vectors in enumerate(degree_bases):
+            for right_degree, right_vectors in enumerate(degree_bases):
+                for left in left_vectors:
+                    for middle in middle_vectors:
+                        for right in right_vectors:
+                            lhs = graded_product(
+                                left_degree + middle_degree,
+                                graded_product(
+                                    left_degree, left, middle_degree, middle
+                                ),
+                                right_degree,
+                                right,
+                            )
+                            rhs = graded_product(
+                                left_degree,
+                                left,
+                                middle_degree + right_degree,
+                                graded_product(
+                                    middle_degree, middle, right_degree, right
+                                ),
+                            )
+                            if lhs != rhs:
+                                return False
+    return True
+
+
+def transported_product(
+    left: Vector,
+    right: Vector,
+    degree_one_transform: Matrix,
+    degree_two_transform: Matrix,
+) -> Vector:
+    source_left = matvec(inverse(degree_one_transform), left)
+    source_right = matvec(inverse(degree_one_transform), right)
+    return matvec(
+        degree_two_transform,
+        source_product(source_left, source_right),
+    )
+
+
+def poly_clean(value: Polynomial) -> Polynomial:
+    return {monomial: coefficient for monomial, coefficient in value.items() if coefficient}
+
+
+def poly_add(left: Polynomial, right: Polynomial) -> Polynomial:
+    output = dict(left)
+    for monomial, coefficient in right.items():
+        output[monomial] = output.get(monomial, Fraction(0)) + coefficient
+    return poly_clean(output)
+
+
+def poly_scale(coefficient, value: Polynomial) -> Polynomial:
+    scalar = Fraction(coefficient)
+    return poly_clean({monomial: scalar * item for monomial, item in value.items()})
+
+
+def poly_multiply(left: Polynomial, right: Polynomial) -> Polynomial:
+    output: Polynomial = {}
+    for (left_x, left_y), left_value in left.items():
+        for (right_x, right_y), right_value in right.items():
+            monomial = (left_x + right_x, left_y + right_y)
+            output[monomial] = output.get(monomial, Fraction(0)) + left_value * right_value
+    return poly_clean(output)
+
+
+X1: Polynomial = {(1, 0): Fraction(1)}
+X2: Polynomial = {(0, 1): Fraction(1)}
+
+
+def poly_linear_combination(row: tuple[Fraction, ...], variables) -> Polynomial:
+    output: Polynomial = {}
+    for coefficient, variable in zip(row, variables, strict=True):
+        output = poly_add(output, poly_scale(coefficient, variable))
+    return output
+
+
+def residual_polynomials(
+    d0_adjoint: Matrix,
+    d1: Matrix,
+    degree_one_transform: Matrix,
+    degree_two_transform: Matrix,
+) -> tuple[Polynomial, Polynomial]:
+    variables = (X1, X2)
+    linear_curvature = poly_linear_combination(d1[0], variables)
+    inverse_t1 = inverse(degree_one_transform)
+    source_second = poly_linear_combination(inverse_t1[1], variables)
+    quadratic_curvature = poly_scale(
+        degree_two_transform[0][0],
+        poly_multiply(source_second, source_second),
+    )
+    curvature = poly_add(linear_curvature, quadratic_curvature)
+    gauge = poly_linear_combination(d0_adjoint[0], variables)
+    return curvature, gauge
+
+
+def residual_cost(
+    curvature: Polynomial,
+    gauge: Polynomial,
+    degree_two_metric: Matrix,
+    degree_zero_metric: Matrix,
+) -> Polynomial:
+    return poly_scale(
+        Fraction(1, 2),
+        poly_add(
+            poly_scale(degree_two_metric[0][0], poly_multiply(curvature, curvature)),
+            poly_scale(degree_zero_metric[0][0], poly_multiply(gauge, gauge)),
+        ),
+    )
+
+
+def substitute_diagonal(value: Polynomial, x_scale, y_scale) -> Polynomial:
+    return poly_clean(
+        {
+            monomial: coefficient
+            * Fraction(x_scale) ** monomial[0]
+            * Fraction(y_scale) ** monomial[1]
+            for monomial, coefficient in value.items()
+        }
+    )
+
+
+def serialize_matrix(value: Matrix) -> list[list[str]]:
+    return [[str(entry) for entry in row] for row in value]
+
+
+def serialize_polynomial(value: Polynomial) -> dict[str, str]:
+    return {
+        f"x1^{monomial[0]}*x2^{monomial[1]}": str(coefficient)
+        for monomial, coefficient in sorted(value.items())
+    }
+
+
+def compiled_differentials(
+    d0: Matrix,
+    d1: Matrix,
+    t0: Matrix,
+    t1: Matrix,
+    t2: Matrix,
+) -> tuple[Matrix, Matrix]:
+    return (
+        multiply(t1, multiply(d0, inverse(t0))),
+        multiply(t2, multiply(d1, inverse(t1))),
+    )
+
+
+def polar_chain_defects(
+    source_d0: Matrix,
+    source_d1: Matrix,
+    target_d0: Matrix,
+    target_d1: Matrix,
+    unitary0: Matrix,
+    unitary1: Matrix,
+    unitary2: Matrix,
+) -> tuple[Matrix, Matrix]:
+    return (
+        subtract(multiply(target_d0, unitary0), multiply(unitary1, source_d0)),
+        subtract(multiply(target_d1, unitary1), multiply(unitary2, source_d1)),
+    )
+
+
+def polar_product_defects(
+    t1: Matrix,
+    t2: Matrix,
+    unitary1: Matrix,
+    unitary2: Matrix,
+) -> list[Vector]:
+    output = []
+    for left in basis(2):
+        for right in basis(2):
+            target_left = matvec(unitary1, left)
+            target_right = matvec(unitary1, right)
+            target_value = transported_product(target_left, target_right, t1, t2)
+            source_value = matvec(unitary2, source_product(left, right))
+            output.append(
+                tuple(lhs - rhs for lhs, rhs in zip(target_value, source_value, strict=True))
+            )
+    return output
+
+
+def main() -> int:
+    d0 = matrix([[1], [0]])
+    d1 = matrix([[0, 1]])
+    g0 = identity(1)
+    g1 = identity(2)
+    g2 = identity(1)
+    source_delta = hodge_laplacian(d0, d1, g0, g1, g2)
+
+    source_curvature: Polynomial = poly_add(X2, poly_multiply(X2, X2))
+    source_gauge: Polynomial = X1
+    source_cost = residual_cost(source_curvature, source_gauge, g2, g0)
+
+    # Incompatible positive polar distortion. T is an exact chain/product
+    # transport, but its unitary polar part is not one.
+    bad_t0 = identity(1)
+    bad_t1 = diagonal(2, 3)
+    bad_t2 = identity(1)
+    bad_d0, bad_d1 = compiled_differentials(d0, d1, bad_t0, bad_t1, bad_t2)
+    bad_g0 = transported_metric(g0, bad_t0)
+    bad_g1 = transported_metric(g1, bad_t1)
+    bad_g2 = transported_metric(g2, bad_t2)
+    bad_d0_adjoint = metric_adjoint(bad_d0, bad_g0, bad_g1)
+    bad_d1_adjoint = metric_adjoint(bad_d1, bad_g1, bad_g2)
+    bad_delta_transport = hodge_laplacian(
+        bad_d0, bad_d1, bad_g0, bad_g1, bad_g2
+    )
+    bad_delta_physical = hodge_laplacian(
+        bad_d0, bad_d1, identity(1), identity(2), identity(1)
+    )
+    bad_curvature, bad_gauge = residual_polynomials(
+        bad_d0_adjoint, bad_d1, bad_t1, bad_t2
+    )
+    bad_cost = residual_cost(bad_curvature, bad_gauge, bad_g2, bad_g0)
+    source_cost_in_bad_coordinates = substitute_diagonal(
+        source_cost, Fraction(1, 2), Fraction(1, 3)
+    )
+
+    bad_e0 = multiply(inverse(bad_g0), identity(1))
+    bad_e1 = multiply(inverse(bad_g1), identity(2))
+    bad_e2 = multiply(inverse(bad_g2), identity(1))
+    bad_c0 = subtract(multiply(bad_e1, bad_d0), multiply(bad_d0, bad_e0))
+    bad_c1 = subtract(multiply(bad_e2, bad_d1), multiply(bad_d1, bad_e1))
+    bad_c0_adjoint = metric_adjoint(bad_c0, bad_g0, bad_g1)
+    bad_c1_adjoint = metric_adjoint(bad_c1, bad_g1, bad_g2)
+    bad_adjoint_defect0 = subtract(
+        metric_adjoint(bad_d0, identity(1), identity(2)), bad_d0_adjoint
+    )
+    bad_adjoint_defect1 = subtract(
+        metric_adjoint(bad_d1, identity(2), identity(1)), bad_d1_adjoint
+    )
+    bad_adjoint_formula0 = multiply(inverse(bad_e0), bad_c0_adjoint)
+    bad_adjoint_formula1 = multiply(inverse(bad_e1), bad_c1_adjoint)
+    bad_delta_formula = add(
+        multiply(bad_d0, multiply(inverse(bad_e0), bad_c0_adjoint)),
+        multiply(inverse(bad_e1), multiply(bad_c1_adjoint, bad_d1)),
+    )
+    bad_delta_difference = subtract(bad_delta_physical, bad_delta_transport)
+    bad_delta_bound = (
+        infinity_norm(bad_d0)
+        * infinity_norm(inverse(bad_e0))
+        * infinity_norm(bad_c0_adjoint)
+        + infinity_norm(inverse(bad_e1))
+        * infinity_norm(bad_c1_adjoint)
+        * infinity_norm(bad_d1)
+    )
+
+    bad_u0 = identity(1)
+    bad_u1 = identity(2)
+    bad_u2 = identity(1)
+    bad_polar_chain = polar_chain_defects(
+        d0, d1, bad_d0, bad_d1, bad_u0, bad_u1, bad_u2
+    )
+    bad_polar_product = polar_product_defects(
+        bad_t1, bad_t2, bad_u1, bad_u2
+    )
+
+    # Compatible non-isometric distortion. S scales the gauge lane together
+    # with degree zero and is a genuine dg-algebra automorphism.
+    good_t0 = diagonal(2)
+    good_t1 = diagonal(2, 1)
+    good_t2 = identity(1)
+    good_d0, good_d1 = compiled_differentials(d0, d1, good_t0, good_t1, good_t2)
+    good_g0 = transported_metric(g0, good_t0)
+    good_g1 = transported_metric(g1, good_t1)
+    good_g2 = transported_metric(g2, good_t2)
+    good_e0 = multiply(inverse(good_g0), identity(1))
+    good_e1 = multiply(inverse(good_g1), identity(2))
+    good_e2 = multiply(inverse(good_g2), identity(1))
+    good_c0 = subtract(multiply(good_e1, good_d0), multiply(good_d0, good_e0))
+    good_c1 = subtract(multiply(good_e2, good_d1), multiply(good_d1, good_e1))
+    good_u0 = identity(1)
+    good_u1 = identity(2)
+    good_u2 = identity(1)
+    good_polar_chain = polar_chain_defects(
+        d0, d1, good_d0, good_d1, good_u0, good_u1, good_u2
+    )
+    good_polar_product = polar_product_defects(
+        good_t1, good_t2, good_u1, good_u2
+    )
+    good_delta_physical = hodge_laplacian(
+        good_d0, good_d1, identity(1), identity(2), identity(1)
+    )
+
+    phase0 = diagonal(-1)
+    phase1 = diagonal(-1, 1)
+    phase2 = identity(1)
+    phase_chain = (
+        multiply(phase1, d0) == multiply(d0, phase0)
+        and multiply(phase2, d1) == multiply(d1, phase1)
+    )
+    phase_product = all(
+        source_product(matvec(phase1, left), matvec(phase1, right))
+        == matvec(phase2, source_product(left, right))
+        for left in basis(2)
+        for right in basis(2)
+    )
+    transforms_phase_equivariant = all(
+        multiply(transform, phase) == multiply(phase, transform)
+        for transform, phase in (
+            (bad_t0, phase0),
+            (bad_t1, phase1),
+            (bad_t2, phase2),
+            (good_t0, phase0),
+            (good_t1, phase1),
+            (good_t2, phase2),
+        )
+    )
+
+    bad_product_transport = all(
+        transported_product(matvec(bad_t1, left), matvec(bad_t1, right), bad_t1, bad_t2)
+        == matvec(bad_t2, source_product(left, right))
+        for left in basis(2)
+        for right in basis(2)
+    )
+    good_product_transport = all(
+        transported_product(matvec(good_t1, left), matvec(good_t1, right), good_t1, good_t2)
+        == matvec(good_t2, source_product(left, right))
+        for left in basis(2)
+        for right in basis(2)
+    )
+
+    checks = {
+        "source_is_a_nonunital_dg_algebra_with_identity_Hodge_operator": (
+            source_dg_algebra_laws(d0, d1) and source_delta == identity(2)
+        ),
+        "bad_transform_is_an_exact_chain_and_product_transport": (
+            multiply(bad_d0, bad_t0) == multiply(bad_t1, d0)
+            and multiply(bad_d1, bad_t1) == multiply(bad_t2, d1)
+            and bad_product_transport
+        ),
+        "transported_metric_makes_bad_transform_exactly_isometric": (
+            multiply(transpose(bad_t0), multiply(bad_g0, bad_t0)) == g0
+            and multiply(transpose(bad_t1), multiply(bad_g1, bad_t1)) == g1
+            and multiply(transpose(bad_t2), multiply(bad_g2, bad_t2)) == g2
+        ),
+        "transported_adjoints_and_Hodge_operator_intertwine_exactly": (
+            bad_d0_adjoint
+            == multiply(bad_t0, multiply(transpose(d0), inverse(bad_t1)))
+            and bad_d1_adjoint
+            == multiply(bad_t1, multiply(transpose(d1), inverse(bad_t2)))
+            and bad_delta_transport
+            == multiply(bad_t1, multiply(source_delta, inverse(bad_t1)))
+        ),
+        "nonlinear_Maurer_Cartan_cost_intertwines_under_transported_metric": (
+            bad_cost == source_cost_in_bad_coordinates
+        ),
+        "physical_metric_adjoint_defect_equals_metric_commutator_formula": (
+            bad_adjoint_defect0 == bad_adjoint_formula0
+            and bad_adjoint_defect1 == bad_adjoint_formula1
+        ),
+        "physical_Hodge_defect_equals_exact_two_commutator_formula": (
+            bad_delta_difference == bad_delta_formula
+        ),
+        "physical_Hodge_defect_obeys_submultiplicative_bound": (
+            infinity_norm(bad_delta_difference) <= bad_delta_bound
+        ),
+        "incompatible_polar_unitary_fails_chain_and_product_transport": (
+            any(value != zero(*shape(value)) for value in bad_polar_chain)
+            and any(any(coordinate for coordinate in value) for value in bad_polar_product)
+        ),
+        "good_transform_is_nonisometric_but_exact_chain_product_transport": (
+            multiply(transpose(good_t1), good_t1) != identity(2)
+            and multiply(good_d0, good_t0) == multiply(good_t1, d0)
+            and multiply(good_d1, good_t1) == multiply(good_t2, d1)
+            and good_product_transport
+        ),
+        "good_metric_distortion_is_a_chain_automorphism": (
+            good_c0 == zero(2, 1) and good_c1 == zero(1, 2)
+        ),
+        "good_polar_unitary_is_an_exact_dg_algebra_intertwiner": (
+            all(value == zero(*shape(value)) for value in good_polar_chain)
+            and all(not any(coordinate for coordinate in value) for value in good_polar_product)
+            and good_delta_physical == source_delta
+        ),
+        "shared_phase_is_preserved_by_transport_and_polar_factors": (
+            phase_chain and phase_product and transforms_phase_equivariant
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H4-T7",
+        "tier": "BOUNDED_TRANSFORMED_METRIC_AND_POLAR_OBSTRUCTION_THEOREM_WITH_EXACT_WITNESS",
+        "claim": (
+            "A bounded invertible chain/product transform need not be unitary "
+            "for a preselected target metric: it canonically transports a "
+            "metric under which nonlinear Maurer-Cartan cost, adjoints, Hodge "
+            "operators and repair semigroups intertwine exactly. Relative to "
+            "a physical metric, all adjoint/Hodge failure is measured by the "
+            "positive metric-distortion chain commutators, and the polar "
+            "unitary is a dg-algebra map exactly when its positive factor is "
+            "a dg-algebra automorphism."
+        ),
+        "exact_data": {
+            "source_d0": serialize_matrix(d0),
+            "source_d1": serialize_matrix(d1),
+            "source_Hodge": serialize_matrix(source_delta),
+            "source_Maurer_Cartan_cost": serialize_polynomial(source_cost),
+            "incompatible_case": {
+                "T0": serialize_matrix(bad_t0),
+                "T1": serialize_matrix(bad_t1),
+                "T2": serialize_matrix(bad_t2),
+                "transported_metric_degree1": serialize_matrix(bad_g1),
+                "transported_Hodge": serialize_matrix(bad_delta_transport),
+                "physical_Hodge": serialize_matrix(bad_delta_physical),
+                "physical_minus_transported_Hodge": serialize_matrix(bad_delta_difference),
+                "metric_chain_defect_C0": serialize_matrix(bad_c0),
+                "metric_chain_defect_C1": serialize_matrix(bad_c1),
+                "polar_chain_defect_d0": serialize_matrix(bad_polar_chain[0]),
+                "polar_chain_defect_d1": serialize_matrix(bad_polar_chain[1]),
+                "polar_product_defect_on_e2_e2": [str(value) for value in bad_polar_product[-1]],
+                "Hodge_defect_infinity_norm": str(infinity_norm(bad_delta_difference)),
+                "certified_submultiplicative_bound": str(bad_delta_bound),
+            },
+            "compatible_case": {
+                "T0": serialize_matrix(good_t0),
+                "T1": serialize_matrix(good_t1),
+                "T2": serialize_matrix(good_t2),
+                "metric_chain_defect_C0": serialize_matrix(good_c0),
+                "metric_chain_defect_C1": serialize_matrix(good_c1),
+                "physical_Hodge": serialize_matrix(good_delta_physical),
+                "polar_unitary": "identity_on_all_three_degrees",
+                "nontrivial_positive_distortion": True,
+            },
+            "exact_formulas": {
+                "transported_metric": "g_tr=(T^-1)^* g_source T^-1",
+                "metric_mismatch": "g_phys(x,y)=g_tr(x,E y)",
+                "adjoint": "D^dagger_phys=E_k^-1 D^dagger_tr E_(k+1)",
+                "chain_defect": "C_k=E_(k+1)D_k-D_k E_k",
+                "adjoint_defect": "D^dagger_phys-D^dagger_tr=E_k^-1 C_k^dagger_tr",
+                "polar_chain_defect": "D U-U d=T_(k+1)(d S_k^-1-S_(k+1)^-1 d)",
+                "polar_product_criterion": "S_(p+q)mu=mu(S_p tensor S_q)",
+            },
+            "source_pins": {
+                "curated_cohesive_Maurer_Cartan_repair_artifact": {
+                    "repository": "mtt-results-repro",
+                    "path": "release/results/q79_maurer_cartan_repair/artifact.json",
+                    "repository_head": "3ba7fe5a7db7f7d07fe87a820c5ff8932b040238",
+                    "git_blob": "421e12e84ead7b036bde96b564d906e6f815c5e8",
+                },
+                "cohesive_Maurer_Cartan_source_theorem": {
+                    "repository": "20 Mathematical Language Discovery Program - Closure Dynamics",
+                    "path": "Q79_COHESIVE_MAURER_CARTAN_REPAIR_AND_DERIVED_TRANSFORM_INTERTWINER_THEOREM_v1.md",
+                    "repository_head": "aafecf2201ab5573b63968175592062d91d10a0a",
+                    "git_blob": "ceccbaf73ef9b28a3946178176a19375c1a1bc98",
+                },
+                "FM_HYM_dependency_compression": {
+                    "repository": "mtt-qm-source-proof",
+                    "path": "proof_corpus/q79_FourierMukai_HYM_Contract_DependencyCompression_Theorem_v1.md",
+                    "repository_head": "cd3c13b665d6712dd78655cf0d2007231f634065",
+                    "git_blob": "6ccdf0d21cf1424a16a2a451631dcde0ec4ac540",
+                },
+            },
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This proves a universal bounded-transform theorem and a finite "
+            "exact witness. It does not construct a bounded analytic BHT map "
+            "on the physical q79 Sobolev domains, select the physical HYM "
+            "metric or V3/W9 endpoint, increment the literal 2/11 FM/HYM "
+            "count, or replace the smaller direct-geometry route."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

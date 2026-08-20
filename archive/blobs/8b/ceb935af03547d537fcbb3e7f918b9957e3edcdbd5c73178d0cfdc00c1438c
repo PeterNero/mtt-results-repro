@@ -1,0 +1,571 @@
+# Result Index
+
+## H1-W1: Nonzero-defect Hessian witness
+
+For
+
+```text
+Phi_a(x) = (x, x^2 + a),  a=1,
+E_a(x) = 1/2 ||Phi_a(x)||^2,
+```
+
+the point `x=0` has:
+
+```text
+Phi(0)              = (0,1) != 0
+grad E(0)           = 0
+D Phi(0)^* D Phi(0) = 1
+<Phi(0),D^2Phi(0)>  = 2
+Hess E(0)           = 3 > 0
+```
+
+Thus it is a strict local minimum with nonzero defect, and the derivative Gram
+operator alone gives the wrong Hessian. This is an exact counterexample to the
+unrestricted use of the zero-defect identity, not evidence that MTT selects this
+state.
+
+Certificate: `certificates/h1_nonzero_defect_hessian.json`
+
+## H2-W1: First-order phase-loss witness
+
+For a nilpotent two-term differential `D`, define
+
+```text
+B_u = u D + conjugate(u) D^*.
+```
+
+The exact witnesses `B_1` and `B_omega` are distinct Hermitian matrices but both
+square to the identity. Therefore the map `B -> B^2` is not phase-faithful.
+
+Certificate: `certificates/h2_first_order_phase_loss.json`
+
+## H3-W1: qutrit central-extension witness
+
+The exact matrices `X` and `Z` over `Q(omega)` satisfy:
+
+```text
+X^3 = Z^3 = I
+XZ = omega^2 ZX
+XZX^-1Z^-1 = omega^2 I.
+```
+
+The exact discrete Fourier operator exchanges shift and clock generators, and
+three commuting tensor lanes form a 27-dimensional carrier sharing the same
+central phase.
+
+This is a finite representation-compression witness. A typed map to CLN and the
+accepted q79 carrier remains open.
+
+Certificate: `certificates/h3_qutrit_central_extension.json`
+
+## H1-T1: Covariant residual-Hessian theorem
+
+For a metric vector bundle defect section `Phi` and
+`V=1/2||Phi||^2`, the exact covariant identity is
+
+```text
+grad V = D Phi^* Phi,
+
+Hess V(X,Y)
+  = <D Phi X,D Phi Y>
+    + <Phi,nabla^2 Phi(X,Y)>.
+```
+
+This classifies nonzero-defect criticality by `D Phi^* Phi=0`, proves symmetry
+orbit directions are Hessian zero modes, and proves that a compact sector where
+`Phi` cannot vanish has a positive sectorwise minimum.
+
+The exact witness has residual `(0,0,1)`, Gram matrix `I`, residual correction
+`[[2,1],[1,4]]`, and full positive Hessian `[[3,1],[1,5]]`. A second defect map
+with the same residual and first derivative has Hessian
+`[[-1,0],[0,1]]` and is unstable.
+
+Certificate: `certificates/h1_covariant_residual_hessian_theorem.json`
+
+## D1-T1: Reversible-dissipative repair theorem
+
+For skew-adjoint `K` and positive semidefinite `Gamma`,
+
+```text
+dC/dt = (K-Gamma) grad V
+```
+
+satisfies
+
+```text
+dV/dt = -<grad V,Gamma grad V> <= 0.
+```
+
+At a critical state its linearization is `(K-Gamma)H`, using the full residual
+Hessian. The exact two-dimensional witness has generator
+`[[-4,-6],[2,-4]]`, energy derivative `-34` on the test displacement, and
+negative characteristic discriminant `-48`. A separate four-dimensional
+witness has a reversible protected plane and damped transverse directions.
+
+Strictly positive damping forbids a nonconstant periodic repair orbit. Thus
+particle-like circulation cannot come from pure gradient repair alone.
+
+Certificate: `certificates/d1_reversible_dissipative_repair.json`
+
+## Q1-T1: Single-charge factorization theorem
+
+For a nilpotent differential `d` and unit phase `u`,
+
+```text
+B_u = u d + conjugate(u)d^*,
+B_u^2 = d d^* + d^* d = Delta.
+```
+
+Thus one first-order source emits:
+
+```text
+reversible transport:  -i B_u;
+positive damping:       gamma Delta;
+harmonic phase:         Z P_h.
+```
+
+The exact realified witness proves phase-sign reversal of the first-order
+generator, phase-independent positive damping, commuting shared-line motion on
+the harmonic plane, and strict transverse decay.
+
+Certificate: `certificates/q1_single_charge_factorization.json`
+
+## C1-T1: Curved-charge phase-curvature theorem
+
+Without nilpotence,
+
+```text
+B_u^2
+ = Delta_0
+   + u^2 d^2
+   + conjugate(u)^2(d^*)^2.
+```
+
+The square is independent of every phase if and only if `d^2=0`. In the exact
+witness,
+
+```text
+d^2      = 2I,
+Delta_0  = 5I,
+B_1^2    = 9I,
+B_i^2    = I.
+```
+
+The phase difference is exactly the curvature correction. The sign pair `u`
+and `-u` remains indistinguishable after squaring.
+
+Certificate: `certificates/c1_curved_charge_phase_curvature.json`
+
+## J1-T1: Common-curvature Jordan-Lie splitting
+
+For a cyclic star algebra and self-adjoint curvature `F`, define
+
+```text
+C_F(X)=F X+X F,
+A_F(X)=F X-X F.
+```
+
+The residual Hessian of a Maurer-Cartan cost contains the Jordan action `C_F`,
+while the twisted differential squares to the Lie action `A_F=ad_F`. They are
+complementary shadows of the same left/right multiplication, not identical
+operators.
+
+Certificate: `certificates/j1_common_curvature_jordan_lie.json`
+
+## R1-T1: Curved cyclic repair germ
+
+For an odd charge `Q`,
+
+```text
+F=Q^2,
+d_Q(X)=QX-(-1)^|X|XQ
+```
+
+satisfies `d_Q^2=ad_F`, the Bianchi identity, and graded Leibniz. Exact-zero,
+central nonzero, and noncentral curvature are distinct regimes. In particular,
+nilpotence of the adjoint differential does not imply `F=0` when `F` is central.
+
+Certificate: `certificates/r1_curved_cyclic_repair_germ.json`
+
+## A1-T1: Admissible tangent and radial no-go
+
+For `E(Q)=1/2||Q^2||^2`, a nonzero critical curvature is impossible if the
+radial direction `Q` is admissible. Persistent curvature therefore requires a
+fixed symbol, sector, topology, boundary condition, normalization shell, or
+other genuine constraint.
+
+The exact Clifford witness also proves that two anticommuting equal-square
+charges form a constant-square phase circle. Its tangent has positive ambient
+Hessian but zero intrinsic Hessian after the stratum's second fundamental term
+is included.
+
+Certificate: `certificates/a1_admissible_tangent_radial_no_go.json`
+
+## Z1-T1: Central-curvature compression and identifiability
+
+In a finite semisimple operator algebra, `ad_F` determines curvature only
+modulo the center. The Jordan/action shadow retains those central coordinates.
+Their structural count is one per symmetry-orbit of simple blocks, independent
+of the raw matrix dimension.
+
+Certificate: `certificates/z1_central_curvature_compression.json`
+
+## W1-T1: Nested superconnection-Witten repair
+
+An inner curvature residual `Phi=Q^2` defines
+
+```text
+V=1/2||Phi||^2.
+```
+
+The outer Witten differential on admissible configuration space remains
+nilpotent even at `Phi!=0`, while its positive square contains the full Hessian
+of `V`, including the residual-contracted second jet. The exact witness uses
+`Phi(x)=1+x^2` at `x=0`, where the Gram term is zero and the residual term is
+the entire Hessian.
+
+Certificate: `certificates/w1_nested_witten_repair.json`
+
+## N1-T1: Heisenberg-Nil transfer and shared line
+
+The DGA
+
+```text
+d a=d b=0,
+d c=a wedge b
+```
+
+contracts to a six-dimensional cohomology model with nonzero transferred
+operations
+
+```text
+m3(a,a,b)=a wedge c,
+m3(a,b,b)=-b wedge c.
+```
+
+The exact contraction preserves a shared circle weight and its `Z3` reduction,
+and the transferred `m2,m3` satisfy the arity-four Stasheff identity on all
+1,296 basis quadruples.
+
+Certificate: `certificates/n1_heisenberg_nil_transfer.json`
+
+## H4-T1: Restricted nested-repair transfer theorem
+
+On the Heisenberg DGA, let `S=R^(2|2)` and define
+
+```text
+Q_A(x)=d tensor I_4+Gamma_A tensor C(x),
+C(x)^2=(1+x^2)I_4.
+```
+
+Then one first-order source emits
+
+```text
+Phi(x)=Q_A(x)^2=(1+x^2)I,
+V(x)=1/2(1+x^2)^2.
+```
+
+The cyclic contraction `h(ab)=c` reduces the inner fiber from dimension 32 to
+24 and exactly intertwines `Q`, `Q^*`, `Phi`, normalized `V`, the outer Witten
+differential, and both positive Witten-square blocks. The same contraction
+preserves the shared integer circle weight and its `Z3` reduction and
+canonically transfers
+
+```text
+m3(a,a,b)=a wedge c,
+m3(a,b,b)=-b wedge c.
+```
+
+This is the first exact packet in the repository where first-order curvature,
+scalar repair, outer Witten dynamics, phase, and a generated higher interaction
+are tied to one source and one dimension-reducing map. The target is a declared
+24-dimensional benchmark, not the accepted physical 27 or rank-102 operator.
+
+Certificate: `certificates/h4_restricted_nested_transfer.json`
+
+## H4-T2: Noncentral curved transfer with exact termination
+
+Over the dual numbers `D=Q[epsilon]/(epsilon^2)`, the odd supermatrix
+
+```text
+q=E_10+epsilon E_21
+```
+
+has nonzero, noncentral curvature
+
+```text
+F=q^2=epsilon E_20,
+[F,E_00]=F,
+F^2=0.
+```
+
+The curved matrix differential satisfies `d_q^2=ad_F` on the full
+18-dimensional rational basis and is compatible with a nondegenerate graded
+cyclic supertrace pairing. Tensoring it with the Heisenberg DGA gives an exact
+24-to-18 module contraction. Its interacting perturbation obeys
+
+```text
+(h delta)^2=(delta h)^2=0,
+F X F=0 for every matrix X.
+```
+
+Therefore both Neumann resolvents and every repeated-curvature sector terminate
+exactly. The noncentral Lie/Jordan shadows, shared circle/`Z3` weight, and the
+two nonzero transferred `m3` values survive. This is an infinitesimal curved
+benchmark, not a positive physical repair source.
+
+Certificate: `certificates/h4_noncentral_curved_transfer.json`
+
+## H4-T3: Positive noncentral nested transfer
+
+The real symmetric odd matrix
+
+```text
+       [0 1 x]
+q(x) = [1 0 0]
+       [x 0 0]
+```
+
+has positive, noncentral curvature `F=q^2`. Tensoring it with the Heisenberg
+differential gives one 24-dimensional first-order source whose cyclic
+contraction to dimension 18 exactly preserves `Q`, `Q^*`, `F`, its nonzero Lie
+and Jordan shadows, normalized cost, and all outer Witten blocks.
+
+The common cost is
+
+```text
+V(x)=1/3(1+x^2)^2.
+```
+
+At `x=0`, `F!=0` and `V'=0`, while
+
+```text
+Gram Hessian       =2/3,
+residual Hessian   =2/3,
+full Hessian       =4/3.
+```
+
+The same contraction preserves the shared circle/`Z3` weight and emits the
+nonzero transferred `m3` values. This proves positivity and noncentrality are
+compatible in one same-source finite packet. Convergence of its complete
+nonnilpotent curved `A_infinity` expansion remains open.
+
+Certificate: `certificates/h4_positive_noncentral_nested_transfer.json`
+
+## H4-T4: Strict-unital curvature-as-coefficient extension
+
+Let `H` be the strict-unital Heisenberg minimal model with nonzero `m2,m3`, and
+let `B` be the H4-T3 positive noncentral curved matrix DGA. On `H tensor B`, set
+
+```text
+M0=1 tensor (-F),
+M1(h tensor b)=(-1)^|h| h tensor d_B b,
+
+M_n(h1 tensor b1,...,hn tensor bn)
+ =(-1)^chi m_n(h1,...,hn) tensor b1...bn,
+n=2,3.
+```
+
+All `M_n` for `n>=4` vanish. More importantly,
+
+```text
+M_n(...,M0,...)=0 for n>=3
+```
+
+because `M0` carries the strict unit of `H`. The curvature therefore remains
+exact coefficient data and never produces an infinite insertion tower. The
+verifier exhausts the curved identities through arity five, including 20,736
+arity-four and 248,832 arity-five cohomology/parity cases; no higher relation
+can occur.
+
+This closes the local positive noncentral curved-`A_infinity` convergence wall
+for the coefficient-extension model. Selection of that factorization in the
+continuum source remains open.
+
+Certificate: `certificates/h4_strict_unital_curved_extension.json`
+
+## H4-T5: Twisted-Morita overlap descent and rank-102 composition
+
+Let projective graded-module transitions satisfy
+
+```text
+G_ij G_jk G_ki=alpha_ijk I.
+```
+
+Although the fundamental module need not descend as an ordinary bundle, the
+adjoint transitions do:
+
+```text
+Ad(G_ij) Ad(G_jk) Ad(G_ki)=id.
+```
+
+For local odd supercharges related by conjugation, this honest cocycle glues
+`F_i=q_i^2`, the curved differential `d_i=[q_i,-]`, normalized trace cost, and
+ordered coefficient products. Tensoring it with an overlap-equivariant
+strict-unital transferred model therefore glues every H4-T4 operation
+`M0,M1,M2,M3` and every curved Stasheff identity.
+
+The exact witness uses a nonordinary qutrit triple
+
+```text
+G01 G12 G20=omega I9
+```
+
+and an odd self-adjoint supercharge that is moved by the clock overlap. Its
+curvature is the positive noncentral Gram square `F=q^*q`, and its normalized
+cost is exactly `4/3` on all three charts. The verifier checks the curved
+differential on every `9 x 9` matrix unit, multiplicativity on the qutrit
+matrix-unit basis, Heisenberg `p,i,h,m2,m3` equivariance, and the exact
+
+```text
+3+8+8+80+3=102
+```
+
+typed carrier sum.
+
+This closes the abstract twisted stack/descent wall and composes with the
+already exact q79 cohesive-endomorphism and rank-102 Cech compiler theorems.
+It does not supply the selected `V3/W9` endpoint, identify the auxiliary
+Heisenberg-Nil `m3` with q79 geometry, instantiate the rank-102 arrays, or map
+to the distinct accepted 27-state algebra. H4-T6 subsequently proves that the
+bare selected topology has a different, strict transfer.
+
+Certificate: `certificates/h4_twisted_morita_overlap_descent.json`
+
+## H4-T6: Selected q79 Hirsch transfer and interaction location
+
+For the selected q79 topology
+
+```text
+X=P_delta x S1_shared,
+```
+
+the exact rational Hirsch model is
+
+```text
+A=H*(K3;Q) tensor Lambda(u,v),
+du=delta,
+dv=0,
+```
+
+where `delta^2=-4` is primitive and `H.delta=0`. The full source has 96
+basis states. Orthogonal splitting along `delta`, with
+`gamma=delta/delta^2`, gives the explicit cyclic contraction
+
+```text
+p(x)=x_perp,
+h(x)=(delta.x/delta^2)u,
+h(t)=u gamma.
+```
+
+The verifier checks the contraction on every source basis state and computes
+
+```text
+b(X)=(1,1,21,42,21,1,1),
+dim H*(X;Q)=88.
+```
+
+The selected 16-dimensional `{H,delta,u,v}` sub-DGA has Betti ranks
+`(1,1,1,2,1,1,1)`. On the full retained model, all `681472` ternary transfer
+values vanish, and the homotopy-image identities prove every higher binary
+transfer tree vanishes. Thus `m2` survives but `m_n=0` for all `n>=3`.
+
+This closes the selected rational topology factor and proves that the
+auxiliary Heisenberg-Nil `m3` is not a literal global Fu-Yau topology product.
+Nonlinear physical vertices must come from the twisted coefficient, Yoneda,
+nonlinear defect, or analytic overlap sector. The physical BHT/HYM
+coefficient-to-carrier realization, endpoint arrays, and literal 27 map remain
+open.
+
+Certificate: `certificates/h4_q79_hirsch_transfer.json`
+
+## H4-T7: BHT transported metric and polar obstruction
+
+For a bounded invertible degreewise chain/product transform `T`, define
+
+```text
+g_tr(x,y)=g(T^-1x,T^-1y).
+```
+
+Then `T` is exactly unitary for `g_tr`, and it intertwines the nonlinear
+Maurer-Cartan residual, adjoints, Hodge operator, Hessian and repair semigroup.
+If `g_phys(x,y)=g_tr(x,Ey)`, define
+
+```text
+C_k=E_(k+1)D_k-D_kE_k.
+```
+
+The exact defects are
+
+```text
+D_k^dagger,phys-D_k^dagger,tr=E_k^-1 C_k^dagger,tr,
+
+Delta_k^phys-Delta_k^tr
+ =D_(k-1)E_(k-1)^-1C_(k-1)^dagger,tr
+  +E_k^-1C_k^dagger,trD_k.
+```
+
+Thus a nontrivial physical metric mismatch is harmless when it is a chain
+automorphism. For the polar decomposition `T=US`, the unitary factor `U`
+retains the dg algebra exactly iff the positive factor `S` is a dg-algebra
+automorphism.
+
+The incompatible exact witness has transported Hodge `I_2` but physical Hodge
+`diag(4,1/9)`; its exact defect `diag(3,-8/9)` is reconstructed by the two
+commutators and has infinity norm `3`, below the certified bound `5`. A second
+non-isometric witness has compatible distortion, zero chain/product defects,
+and exact unitary transport.
+
+This closes the universal quantified non-isometric comparison requested by the
+cohesive BHT result. It does not construct the physical q79 analytic map or
+increase the literal `2/11` FM/HYM count.
+
+Certificate: `certificates/h4_bht_metric_polar_bridge.json`
+
+## H4-T8: Repair-jet to perturbative-graph functor
+
+For a repair functional
+
+```text
+S_rep(a)=1/2 <Phi(a),W(a)Phi(a)>,
+```
+
+every Taylor tensor is fixed by the joint residual and metric-field jet. The
+complete formula is the sum over ordered three-color partitions
+`[n]=A disjoint_union B disjoint_union C`:
+
+```text
+D^n S_rep(v_1,...,v_n)
+ =1/2 sum_(A,B,C)
+  <D^|A|Phi(v_A),D^|B|W(v_B) D^|C|Phi(v_C)>.
+```
+
+For a constant metric this reduces to the subset formula certified
+exhaustively through order six. At zero defect it emits the Gram Hessian;
+after choosing its reduced Euclidean inverse it emits every finite formal Wick
+graph coefficient. Exact residual/metric morphisms transport the Hessian,
+kernel projector, inverse, functional calculus, vertices and graph weights.
+
+The exact witness uses
+
+```text
+Phi(x,y)=(x,y+y^2),
+S_rep=x^2/2+y^2/2+y^3+y^4/2.
+```
+
+It derives `V3=6`, `V4=12`, and no vertices above arity four. Under
+`T=diag(2,3)`, these become `V3'=2/9`, `V4'=4/27`, while the interacting
+covariance becomes `9`. The one-quartic and two-cubic Wick coefficients remain
+exactly `-3/2` and `15/2`.
+
+A second witness uses the globally positive metric field `W(y)=1+y+y^2` and
+checks the complete three-color formula through the resulting sextic action.
+Its metric-jet contributions derive `V3=9` and `V4=48` without adding
+independent vertex rows.
+
+For q79, the seven-lane symbolic residual and endpoint-induced metric jet now
+own the repair vertices; those vertices are not independent source rows. The
+physical endpoint, metric jet, action identification, BV/BRST structure,
+causal inverse, state and renormalization remain open.
+
+Certificate: `certificates/h4_repair_jet_graph_functor.json`

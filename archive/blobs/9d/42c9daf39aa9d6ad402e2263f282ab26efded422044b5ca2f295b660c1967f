@@ -1,0 +1,323 @@
+"""Exact Heisenberg-Nil contraction, m3 transfer, and shared-weight witness."""
+
+from __future__ import annotations
+
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "n1_heisenberg_nil_transfer.json"
+
+DIMENSION = 8
+HARMONIC_MASKS = (0, 1, 2, 5, 6, 7)
+WEIGHTS = (1, 1, 2)  # a,b,c; reduce modulo three for the finite character.
+
+
+def zero():
+    return tuple(Fraction(0) for _ in range(DIMENSION))
+
+
+def basis(mask, coefficient=1):
+    values = [Fraction(0) for _ in range(DIMENSION)]
+    values[mask] = Fraction(coefficient)
+    return tuple(values)
+
+
+def add(left, right):
+    return tuple(lhs + rhs for lhs, rhs in zip(left, right, strict=True))
+
+
+def scale(value, vector):
+    scalar = Fraction(value)
+    return tuple(scalar * item for item in vector)
+
+
+def subtract(left, right):
+    return add(left, scale(-1, right))
+
+
+def degree(mask):
+    return mask.bit_count()
+
+
+def wedge_basis(left, right):
+    if left & right:
+        return 0, None
+    inversions = 0
+    for left_index in range(3):
+        if not (left & (1 << left_index)):
+            continue
+        for right_index in range(3):
+            if right & (1 << right_index) and left_index > right_index:
+                inversions += 1
+    sign = -1 if inversions % 2 else 1
+    return sign, left | right
+
+
+def wedge(left, right):
+    output = [Fraction(0) for _ in range(DIMENSION)]
+    for left_mask, left_value in enumerate(left):
+        if left_value == 0:
+            continue
+        for right_mask, right_value in enumerate(right):
+            if right_value == 0:
+                continue
+            sign, output_mask = wedge_basis(left_mask, right_mask)
+            if output_mask is not None:
+                output[output_mask] += sign * left_value * right_value
+    return tuple(output)
+
+
+def differential(vector):
+    # dc=ab; every other basis monomial is closed.
+    output = [Fraction(0) for _ in range(DIMENSION)]
+    output[3] = vector[4]
+    return tuple(output)
+
+
+def project(vector):
+    return tuple(
+        value if mask in HARMONIC_MASKS else Fraction(0)
+        for mask, value in enumerate(vector)
+    )
+
+
+def include(vector):
+    return project(vector)
+
+
+def homotopy(vector):
+    # h(ab)=c.
+    output = [Fraction(0) for _ in range(DIMENSION)]
+    output[4] = vector[3]
+    return tuple(output)
+
+
+def m2(left, right):
+    return project(wedge(include(left), include(right)))
+
+
+def m3(left_mask, right_mask, final_mask):
+    left = basis(left_mask)
+    right = basis(right_mask)
+    final = basis(final_mask)
+    first_tree = wedge(homotopy(wedge(left, right)), final)
+    second_tree = wedge(left, homotopy(wedge(right, final)))
+    signed_second = scale((-1) ** degree(left_mask), second_tree)
+    return project(subtract(first_tree, signed_second))
+
+
+def m3_multilinear(left, right, final):
+    output = zero()
+    for left_mask, left_value in enumerate(left):
+        if left_value == 0:
+            continue
+        for right_mask, right_value in enumerate(right):
+            if right_value == 0:
+                continue
+            for final_mask, final_value in enumerate(final):
+                if final_value == 0:
+                    continue
+                output = add(
+                    output,
+                    scale(
+                        left_value * right_value * final_value,
+                        m3(left_mask, right_mask, final_mask),
+                    ),
+                )
+    return output
+
+
+def weight(mask):
+    return sum(
+        WEIGHTS[index] for index in range(3) if mask & (1 << index)
+    ) % 3
+
+
+def serialize(vector):
+    names = ("1", "a", "b", "ab", "c", "ac", "bc", "abc")
+    return {
+        names[index]: str(value)
+        for index, value in enumerate(vector)
+        if value != 0
+    }
+
+
+def main() -> int:
+    all_basis = tuple(basis(mask) for mask in range(DIMENSION))
+    zero_vector = zero()
+
+    d_squared = all(differential(differential(item)) == zero_vector for item in all_basis)
+
+    derivation = True
+    for left_mask in range(DIMENSION):
+        for right_mask in range(DIMENSION):
+            left = basis(left_mask)
+            right = basis(right_mask)
+            lhs = differential(wedge(left, right))
+            rhs = add(
+                wedge(differential(left), right),
+                scale((-1) ** degree(left_mask), wedge(left, differential(right))),
+            )
+            derivation = derivation and lhs == rhs
+
+    contraction = all(
+        add(differential(homotopy(item)), homotopy(differential(item)))
+        == subtract(item, include(project(item)))
+        for item in all_basis
+    )
+    side_conditions = all(
+        homotopy(homotopy(item)) == zero_vector
+        and project(homotopy(item)) == zero_vector
+        and homotopy(include(project(item))) == zero_vector
+        for item in all_basis
+    )
+
+    m2_associative = all(
+        m2(m2(basis(x), basis(y)), basis(z))
+        == m2(basis(x), m2(basis(y), basis(z)))
+        for x in HARMONIC_MASKS
+        for y in HARMONIC_MASKS
+        for z in HARMONIC_MASKS
+    )
+    strict_unit = all(
+        m2(basis(0), basis(x)) == basis(x)
+        and m2(basis(x), basis(0)) == basis(x)
+        for x in HARMONIC_MASKS
+    ) and all(
+        m3_multilinear(basis(0), basis(x), basis(y)) == zero_vector
+        and m3_multilinear(basis(x), basis(0), basis(y)) == zero_vector
+        and m3_multilinear(basis(x), basis(y), basis(0)) == zero_vector
+        for x in HARMONIC_MASKS
+        for y in HARMONIC_MASKS
+    )
+
+    # Cohomological A-infinity convention |m_n|=2-n. This is the n=4
+    # Stasheff identity for minimal m1=0 and the transferred m2,m3 above.
+    stasheff_n4 = True
+    for x in HARMONIC_MASKS:
+        for y in HARMONIC_MASKS:
+            for z in HARMONIC_MASKS:
+                for w in HARMONIC_MASKS:
+                    x_v, y_v, z_v, w_v = (
+                        basis(x),
+                        basis(y),
+                        basis(z),
+                        basis(w),
+                    )
+                    relation = m3_multilinear(m2(x_v, y_v), z_v, w_v)
+                    relation = subtract(
+                        relation,
+                        m3_multilinear(x_v, m2(y_v, z_v), w_v),
+                    )
+                    relation = add(
+                        relation,
+                        m3_multilinear(x_v, y_v, m2(z_v, w_v)),
+                    )
+                    relation = subtract(
+                        relation,
+                        m2(m3_multilinear(x_v, y_v, z_v), w_v),
+                    )
+                    relation = add(
+                        relation,
+                        scale(
+                            (-1) ** (degree(x) + 1),
+                            m2(x_v, m3_multilinear(y_v, z_v, w_v)),
+                        ),
+                    )
+                    stasheff_n4 = stasheff_n4 and relation == zero_vector
+
+    product_weight_equivariant = True
+    for left_mask in range(DIMENSION):
+        for right_mask in range(DIMENSION):
+            sign, output_mask = wedge_basis(left_mask, right_mask)
+            if sign and output_mask is not None:
+                product_weight_equivariant = product_weight_equivariant and (
+                    weight(output_mask)
+                    == (weight(left_mask) + weight(right_mask)) % 3
+                )
+
+    differential_weight_equivariant = weight(4) == weight(3)
+    homotopy_weight_equivariant = weight(3) == weight(4)
+
+    m3_aab = m3(1, 1, 2)
+    m3_abb = m3(1, 2, 2)
+    m3_weight_equivariant = (
+        weight(5) == (weight(1) + weight(1) + weight(2)) % 3
+        and weight(6) == (weight(1) + weight(2) + weight(2)) % 3
+    )
+
+    central_curvature = scale(2, basis(0))
+    central_transfer = project(central_curvature)
+    central_commutes = all(
+        wedge(central_curvature, item) == wedge(item, central_curvature)
+        for item in all_basis
+    )
+    central_jordan_on_a = add(
+        wedge(central_curvature, basis(1)),
+        wedge(basis(1), central_curvature),
+    )
+
+    checks = {
+        "d_squared_is_zero": d_squared,
+        "d_is_graded_derivation_on_all_basis_pairs": derivation,
+        "contraction_identity_on_all_basis_vectors": contraction,
+        "contraction_side_conditions": side_conditions,
+        "cohomology_m2_is_associative": m2_associative,
+        "transferred_m2_m3_are_strictly_unital": strict_unit,
+        "transferred_m2_m3_satisfy_stasheff_n4": stasheff_n4,
+        "m3_a_a_b_equals_ac": m3_aab == basis(5),
+        "m3_a_b_b_equals_minus_bc": m3_abb == scale(-1, basis(6)),
+        "product_preserves_Z3_weight": product_weight_equivariant,
+        "differential_preserves_Z3_weight": differential_weight_equivariant,
+        "homotopy_preserves_Z3_weight": homotopy_weight_equivariant,
+        "m3_preserves_Z3_weight": m3_weight_equivariant,
+        "central_curvature_is_closed": differential(central_curvature) == zero_vector,
+        "central_curvature_is_harmonic_for_contraction": (
+            homotopy(central_curvature) == zero_vector
+        ),
+        "central_curvature_transfers_unchanged": (
+            central_transfer == central_curvature
+        ),
+        "central_curvature_commutes": central_commutes,
+        "central_jordan_pressure_survives": (
+            central_jordan_on_a == scale(4, basis(1))
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "N1-T1",
+        "tier": "LOCAL_TRANSFER_THEOREM_WITH_EXACT_FINITE_WITNESS",
+        "claim": (
+            "The Heisenberg-Nil DGA contracts equivariantly to cohomology with "
+            "nonzero transferred m3 operations, while a shared Z3 character and "
+            "central curvature survive exactly."
+        ),
+        "exact_data": {
+            "differential": "dc=ab",
+            "homotopy": "h(ab)=c",
+            "cohomology_basis": ["1", "a", "b", "ac", "bc", "abc"],
+            "weights_mod_3": {"a": 1, "b": 1, "c": 2},
+            "m3_a_a_b": serialize(m3_aab),
+            "m3_a_b_b": serialize(m3_abb),
+            "transferred_m0": serialize(central_transfer),
+            "central_jordan_on_a": serialize(central_jordan_on_a),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is an exact local transfer benchmark. It does not identify "
+            "the DGA with the physical CLN/q79 source, derive the 27 carrier, "
+            "or handle general noncentral curved transfer."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

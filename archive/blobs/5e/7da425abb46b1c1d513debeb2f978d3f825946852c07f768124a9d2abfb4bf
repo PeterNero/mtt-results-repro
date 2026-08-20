@@ -1,0 +1,141 @@
+"""Exact witness for the common-curvature Jordan-Lie splitting theorem."""
+
+from __future__ import annotations
+
+import json
+import sys
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    dot,
+    equal,
+    matmul,
+    matrix,
+    scale,
+    serialize_matrix,
+    trace,
+    transpose,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "j1_common_curvature_jordan_lie.json"
+
+
+def subtract(a, b):
+    return add(a, scale(-1, b))
+
+
+def frobenius(a, b):
+    return sum(
+        (a[i][j] * b[i][j] for i in range(len(a)) for j in range(len(a[0]))),
+        Fraction(0),
+    )
+
+
+def main() -> int:
+    curvature = matrix([[2, 0], [0, 1]])
+    variation = matrix([[0, 1], [1, 0]])
+    test_variation = variation
+
+    left = matmul(curvature, variation)
+    right = matmul(variation, curvature)
+    jordan = add(left, right)
+    lie = subtract(left, right)
+    reconstructed_left = scale(Fraction(1, 2), add(jordan, lie))
+    reconstructed_right = scale(Fraction(1, 2), subtract(jordan, lie))
+
+    second_defect = add(
+        matmul(variation, test_variation),
+        matmul(test_variation, variation),
+    )
+    residual_pairing = trace(matmul(curvature, second_defect))
+    jordan_pairing = frobenius(jordan, test_variation)
+
+    central_curvature = matrix([[2, 0], [0, 2]])
+    central_left = matmul(central_curvature, variation)
+    central_right = matmul(variation, central_curvature)
+    central_jordan = add(central_left, central_right)
+    central_lie = subtract(central_left, central_right)
+
+    # Self-adjointness of C_F as a superoperator is checked on two generators.
+    diagonal_test = matrix([[1, 0], [0, -1]])
+    jordan_diagonal = add(
+        matmul(curvature, diagonal_test),
+        matmul(diagonal_test, curvature),
+    )
+    jordan_symmetry_left = frobenius(jordan, diagonal_test)
+    jordan_symmetry_right = frobenius(variation, jordan_diagonal)
+
+    checks = {
+        "curvature_is_self_adjoint": equal(transpose(curvature), curvature),
+        "variation_is_self_adjoint": equal(transpose(variation), variation),
+        "jordan_action_is_symmetric_matrix": equal(transpose(jordan), jordan),
+        "lie_action_is_skew_matrix": equal(transpose(lie), scale(-1, lie)),
+        "left_multiplication_reconstructed": equal(reconstructed_left, left),
+        "right_multiplication_reconstructed": equal(reconstructed_right, right),
+        "cyclic_hessian_pairing_identity": residual_pairing == jordan_pairing,
+        "exact_pairing_value": residual_pairing == 6,
+        "jordan_superoperator_is_self_adjoint": (
+            jordan_symmetry_left == jordan_symmetry_right
+        ),
+        "positive_curvature_gives_positive_jordan_quadratic": (
+            frobenius(variation, jordan) > 0
+        ),
+        "noncentral_curvature_has_lie_shadow": not equal(
+            lie, matrix([[0, 0], [0, 0]])
+        ),
+        "central_curvature_has_zero_lie_shadow": equal(
+            central_lie, matrix([[0, 0], [0, 0]])
+        ),
+        "central_curvature_keeps_jordan_shadow": equal(
+            central_jordan, scale(4, variation)
+        ),
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "J1-T1",
+        "tier": (
+            "LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS;"
+            "BENCHMARK_BRIDGE_CONDITIONAL"
+        ),
+        "claim": (
+            "The residual-Hessian anticommutator and twisted-differential "
+            "commutator are the Jordan and Lie shadows of one curvature "
+            "multiplication and jointly reconstruct left and right action."
+        ),
+        "source_dependency": {
+            "result": "q79_maurer_cartan_repair",
+            "sha256": "4b9d6e653bb29c098c7a8f8825efc08682956db5e976af48f9a7478a392dbcf6",
+        },
+        "exact_data": {
+            "curvature": serialize_matrix(curvature),
+            "variation": serialize_matrix(variation),
+            "jordan_action": serialize_matrix(jordan),
+            "lie_action": serialize_matrix(lie),
+            "left_action": serialize_matrix(left),
+            "right_action": serialize_matrix(right),
+            "residual_hessian_pairing": str(residual_pairing),
+            "jordan_pairing": str(jordan_pairing),
+            "central_jordan_action": serialize_matrix(central_jordan),
+            "central_lie_action": serialize_matrix(central_lie),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "The algebraic bridge is conditional on a cyclic physical real "
+            "slice and does not select the q79 endpoint, action, or projection."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

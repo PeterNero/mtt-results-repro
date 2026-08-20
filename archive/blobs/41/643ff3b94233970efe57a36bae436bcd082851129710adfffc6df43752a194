@@ -1,0 +1,70 @@
+"""Exact witness that stable critical points may have nonzero closure defect."""
+
+from __future__ import annotations
+
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "h1_nonzero_defect_hessian.json"
+
+
+def main() -> int:
+    # Phi_a(x) = (x, x^2 + a), E_a = 1/2 ||Phi_a||^2, at x=0.
+    a = Fraction(1)
+    phi = (Fraction(0), a)
+    d_phi = (Fraction(1), Fraction(0))
+    d2_phi = (Fraction(0), Fraction(2))
+    gradient = sum((phi[i] * d_phi[i] for i in range(2)), Fraction(0))
+    gram = sum((entry * entry for entry in d_phi), Fraction(0))
+    residual_correction = sum(
+        (phi[i] * d2_phi[i] for i in range(2)), Fraction(0)
+    )
+    hessian = gram + residual_correction
+    energy = Fraction(1, 2) * sum((entry * entry for entry in phi), Fraction(0))
+
+    # At the exact-zero comparison Phi_0(x)=(x,x^2), the correction vanishes.
+    zero_phi = (Fraction(0), Fraction(0))
+    zero_correction = sum(
+        (zero_phi[i] * d2_phi[i] for i in range(2)), Fraction(0)
+    )
+
+    checks = {
+        "critical_point": gradient == 0,
+        "nonzero_defect": phi != (Fraction(0), Fraction(0)),
+        "positive_energy": energy > 0,
+        "strict_local_minimum_second_derivative": hessian > 0,
+        "gram_only_is_incomplete": hessian != gram,
+        "exact_hessian_decomposition": hessian == gram + residual_correction,
+        "zero_defect_removes_correction": zero_correction == 0,
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H1-W1",
+        "tier": "EXACT_FINITE_WITNESS",
+        "claim": (
+            "A nonzero-defect critical point can be a strict local minimum, "
+            "and its squared-defect Hessian need not equal the derivative Gram operator."
+        ),
+        "model": "Phi_a(x)=(x,x^2+a), a=1, x=0",
+        "exact_values": {
+            "energy": str(energy),
+            "gradient": str(gradient),
+            "gram": str(gram),
+            "residual_correction": str(residual_correction),
+            "hessian": str(hessian),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": "This proves possibility, not selection of a physical MTT state.",
+    }
+    CERTIFICATE.parent.mkdir(parents=True, exist_ok=True)
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

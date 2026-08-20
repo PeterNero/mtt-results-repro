@@ -50,13 +50,13 @@ boundary and `REPRODUCIBILITY.md` for the complete rebuild procedure.
 
 ## Snapshot Contents
 
-- 23 configured source trees/documents;
-- 25,409 SHA-256-indexed committed artifacts;
-- 21,697 byte-mirrored artifacts and 3,712 hash-only bulk diagnostics;
-- 56,290 detected numerical objects;
+- 24 configured source trees/documents;
+- 25,490 SHA-256-indexed committed artifacts;
+- 21,778 byte-mirrored artifacts and 3,712 hash-only bulk diagnostics;
+- 56,295 detected numerical objects;
 - all 99 configured authority entries indexed;
 - 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
-- 28 baseline short-path results plus 112 current promoted results;
+- 28 baseline short-path results plus 133 current promoted results;
 - a 77-file, 206-edge exact-byte q79 terminal dependency closure;
 - a lock to 139 canonical papers and all 138 latest Zenodo records;
 - zero commercial-book artifacts in the public result archive.
@@ -76,9 +76,10 @@ indexed artifact. Source repositories are pinned in
 `config/source_repositories.json`; public mirroring policy is explicit in
 `config/archive_policy.json`.
 
-The current census covers 23 sources, including the frozen SM baseline and the
+The current census covers 24 sources, including the frozen SM baseline and the
 newer QM/QFT source proof, quantum-gravity cutsets, closure-dynamics language
-work, Eta9 execution packets, and unified-source theorem repository. Large
+work, the preprojection repair calculus, Eta9 execution packets, and the
+unified-source theorem repository. Large
 exploratory trees remain exhaustively indexed where configured; only explicitly
 selected artifacts enter the promoted current layer.
 
@@ -109,6 +110,16 @@ local system, globalizes the shared-root `C4` action, and compresses the literal
 The hidden qutrit adjoint decomposition also gives a conditional rank-102 mask
 reduction from 10,404 to 1,548 ordered positions. None of these results supplies
 the selected visible/common HYM endpoint or its physical matrix entries.
+
+The preprojection repair layer adds 21 exact local, finite/formal or
+selected-topological certificates. Its strongest new implications are the
+twisted-Morita descent of the curved coefficient calculus, the strict rational
+Hirsch transfer of the selected q79 topology, the transported-metric comparison
+contract and the derivation of all finite/formal repair vertices and Wick graph
+weights from one residual-and-metric jet. These results reduce dependencies and
+locate the remaining physical data; they do not select the endpoint, identify a
+Lorentzian/BV action, quantize the repair functional or construct the literal
+continuum-to-27 intertwiner.
 
 G3FR gives an exact finite component-20 inverse-system description, but its
 same-source characteristic-zero promotion is the strict G3FS exit and remains

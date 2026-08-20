@@ -1,0 +1,199 @@
+# Preprojection Heisenberg-Nil Transfer and Shared-Line Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:** `LOCAL_TRANSFER_THEOREM_WITH_EXACT_FINITE_WITNESS`
+
+**MTT status:** exact structural benchmark; no identification with the physical
+CLN filtration, q79 vertical algebra, or finite 27 carrier is made.
+
+## 1. The source differential is simpler than its projection
+
+Let `A` be the exterior differential graded algebra on three degree-one
+generators `a,b,c`:
+
+```text
+d a=0,
+d b=0,
+d c=a wedge b.
+```
+
+This is the Chevalley-Eilenberg algebra of the three-dimensional Heisenberg/Nil
+Lie algebra. The only contractible pair is
+
+```text
+c -> a wedge b.
+```
+
+Its cohomology has representatives
+
+```text
+H=span(1,a,b,a wedge c,b wedge c,a wedge b wedge c).
+```
+
+Define inclusion `i`, projection `p`, and homotopy `h` by
+
+```text
+h(a wedge b)=c,
+h=0 on every other basis monomial.
+```
+
+Then
+
+```text
+d h+h d=id-i p,
+p i=id_H,
+h^2=p h=h i=0.
+```
+
+## 2. Transferred products
+
+The homological perturbation theorem transfers the DGA product to an
+`A_infinity` structure on `H`. At the first two nontrivial levels, use the
+convention
+
+```text
+m2(x,y)=p(i x wedge i y),
+
+m3(x,y,z)
+ =p(
+      h(i x wedge i y) wedge i z
+      -(-1)^|x| i x wedge h(i y wedge i z)
+    ).
+```
+
+### Theorem 2.1
+
+The transferred ternary product is nonzero. In particular,
+
+```text
+m3(a,a,b)=a wedge c,
+m3(a,b,b)=-b wedge c.
+```
+
+### Proof
+
+For the first identity, `a wedge a=0`, while
+
+```text
+h(a wedge b)=c.
+```
+
+Because `|a|=1`, the second tree enters with a plus sign and yields
+`a wedge c`. For the second identity, the first tree gives
+`c wedge b=-b wedge c`, while `b wedge b=0`. QED.
+
+With the displayed cohomological sign convention, the resulting `m2,m3`
+satisfy the arity-four Stasheff identity. The verifier checks that identity on
+all `6^4=1296` homogeneous cohomology-basis quadruples.
+
+Thus projection can turn one binary preprojection relation, `dc=ab`, into a
+genuine ternary postprojection operation. A complicated lower interaction need
+not be a separate primitive.
+
+## 3. Shared-line equivariance
+
+Assign integer circle weights
+
+```text
+w(a)=1,
+w(b)=1,
+w(c)=2.
+```
+
+The relation `dc=ab` is homogeneous because
+
+```text
+w(c)=w(a)+w(b).
+```
+
+The product, differential, projection, inclusion, and homotopy all preserve
+weight. Consequently every transferred operation preserves total weight. The
+same statement descends modulo three to a `Z3` character:
+
+```text
+w(a)=w(b)=1,
+w(c)=2 mod 3.
+```
+
+For example, the input and output weights of `m3(a,a,b)=ac` are both zero
+modulo three.
+
+This supplies an exact structural relation among:
+
+```text
+shared circle weight
+  -> finite Lens/Z3 character
+  -> Heisenberg-Nil differential
+  -> transferred higher interaction.
+```
+
+It does not prove that the selected MTT shared line has these weights.
+
+## 4. Central persistent curvature
+
+Adjoin a central even curvature
+
+```text
+m0=lambda 1.
+```
+
+It is closed, harmonic, annihilated by `h`, and commutes with the entire DGA.
+The contraction preserves the unit and is strictly unital, so the central
+curved-DGA datum survives the displayed contraction as
+
+```text
+m0_H=lambda 1_H
+```
+
+without curving the adjoint differential; higher operations vanish whenever a
+unit is inserted. Its Jordan action remains nonzero. This is an explicit
+strictly unital realization of the central-curvature regime.
+
+General noncentral curvature requires the full curved homological perturbation
+series and its convergence or nilpotent-filtration hypotheses. That step is not
+claimed here.
+
+## 5. What this says about preprojection complexity
+
+At the source level the benchmark needs only:
+
+- three degree-one directions;
+- one differential relation `dc=ab`;
+- exterior multiplication;
+- one contraction; and
+- one shared weight assignment.
+
+After projection it contains a nonzero ternary interaction and Massey-type
+information. This is a concrete example of the user's proposed strategy:
+simple rules before projection can look like more elaborate interaction rules
+after projection.
+
+The result also explains why retaining only cohomology dimensions is
+insufficient. The higher operation `m3` remembers how the eliminated pair was
+attached.
+
+## 6. Relation to the nested repair candidate
+
+This DGA can serve as one internal local fiber of the nested repair stack. A
+configuration-dependent superconnection may deform its differential and
+curvature; the outer Witten complex then acts on the admissible family of such
+fibers. Homological transfer produces finite interactions, while the shared line
+tracks phase through the transfer.
+
+The remaining same-source theorem must show that the selected q79 local
+algebra admits this contraction and that its finite output is the accepted
+operator, not merely an isomorphic toy model.
+
+## 7. Verification
+
+Run:
+
+```powershell
+python experiments/heisenberg_nil_transfer/verify.py
+python verify.py
+```
+
+The verifier exhaustively checks the DGA derivation law, contraction identity,
+side conditions, cohomology-product associativity, shared-weight equivariance,
+the two nonzero `m3` values, and central-curvature transfer over the rationals.

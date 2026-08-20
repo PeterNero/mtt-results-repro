@@ -1,0 +1,147 @@
+"""Exact coordinate, stability, symmetry, and sector checks for Theorems 2-5."""
+
+from __future__ import annotations
+
+import json
+import sys
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    determinant_2x2,
+    dot,
+    equal,
+    linear_combination,
+    matmul,
+    matrix,
+    matvec,
+    serialize_matrix,
+    serialize_vector,
+    transpose,
+    vector,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "h1_covariant_residual_hessian_theorem.json"
+
+
+def main() -> int:
+    # A quadratic defect germ at the origin:
+    # Phi_i(x)=c_i+J_i x+1/2 x^T B_i x.
+    residual = vector([0, 0, 1])
+    jacobian = matrix([[1, 0], [0, 1], [0, 0]])
+    second = [
+        matrix([[0, 0], [0, 0]]),
+        matrix([[0, 0], [0, 0]]),
+        matrix([[2, 1], [1, 4]]),
+    ]
+    gradient = matvec(transpose(jacobian), residual)
+    gram = matmul(transpose(jacobian), jacobian)
+    correction = linear_combination(residual, second)
+    hessian = add(gram, correction)
+
+    # Exact coordinate change x=A y.
+    coordinate_map = matrix([[2, 1], [1, 1]])
+    jacobian_y = matmul(jacobian, coordinate_map)
+    second_y = [
+        matmul(matmul(transpose(coordinate_map), item), coordinate_map)
+        for item in second
+    ]
+    hessian_y_from_data = add(
+        matmul(transpose(jacobian_y), jacobian_y),
+        linear_combination(residual, second_y),
+    )
+    hessian_y_tensor = matmul(
+        matmul(transpose(coordinate_map), hessian), coordinate_map
+    )
+
+    # Same value and first derivative, different second derivative: unstable.
+    unstable_second = second[:2] + [matrix([[-2, 0], [0, 0]])]
+    unstable_hessian = add(
+        gram, linear_combination(residual, unstable_second)
+    )
+
+    # SO(2)-invariant example Phi=(x^2+y^2-1,a) at p=(1,0).
+    symmetry_residual = vector([0, 1])
+    symmetry_jacobian = matrix([[2, 0], [0, 0]])
+    symmetry_second = [
+        matrix([[2, 0], [0, 2]]),
+        matrix([[0, 0], [0, 0]]),
+    ]
+    symmetry_hessian = add(
+        matmul(transpose(symmetry_jacobian), symmetry_jacobian),
+        linear_combination(symmetry_residual, symmetry_second),
+    )
+    orbit_tangent = vector([0, 1])
+
+    # Compact-sector model Phi(theta)=2+cos(theta), evaluated at theta=pi.
+    sector_residual = Fraction(1)
+    sector_first_derivative = Fraction(0)
+    sector_second_derivative = Fraction(1)
+    sector_hessian = (
+        sector_first_derivative**2
+        + sector_residual * sector_second_derivative
+    )
+
+    checks = {
+        "nonzero_residual": residual != vector([0, 0, 0]),
+        "criticality_Jstar_r_zero": gradient == vector([0, 0]),
+        "gram_is_identity": equal(gram, matrix([[1, 0], [0, 1]])),
+        "residual_correction_nonzero": not equal(
+            correction, matrix([[0, 0], [0, 0]])
+        ),
+        "full_hessian_exact": equal(hessian, matrix([[3, 1], [1, 5]])),
+        "full_hessian_positive_definite": (
+            hessian[0][0] > 0 and determinant_2x2(hessian) > 0
+        ),
+        "coordinate_covariance": equal(hessian_y_from_data, hessian_y_tensor),
+        "same_first_jet_can_be_unstable": determinant_2x2(unstable_hessian) < 0,
+        "symmetry_orbit_is_hessian_zero_mode": (
+            matvec(symmetry_hessian, orbit_tangent) == vector([0, 0])
+        ),
+        "symmetry_normal_direction_is_positive": symmetry_hessian[0][0] > 0,
+        "sector_minimum_has_positive_residual": sector_residual > 0,
+        "sector_minimum_is_critical": sector_first_derivative == 0,
+        "sector_minimum_is_stable": sector_hessian > 0,
+        "orthogonality_is_exact": dot(residual, matvec(jacobian, vector([2, -3]))) == 0,
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H1-T1",
+        "tier": "LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESSES",
+        "claim": (
+            "The squared-defect Hessian is the derivative Gram operator plus "
+            "the residual-contracted covariant second derivative; nonzero-defect "
+            "criticality, coordinate covariance, symmetry zero modes, and "
+            "sectorwise stability obey the theorem statement."
+        ),
+        "exact_data": {
+            "residual": serialize_vector(residual),
+            "gradient": serialize_vector(gradient),
+            "gram": serialize_matrix(gram),
+            "residual_correction": serialize_matrix(correction),
+            "full_hessian": serialize_matrix(hessian),
+            "coordinate_transformed_hessian": serialize_matrix(hessian_y_from_data),
+            "unstable_same_first_jet_hessian": serialize_matrix(unstable_hessian),
+            "symmetry_hessian": serialize_matrix(symmetry_hessian),
+            "sector_hessian": str(sector_hessian),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "The theorem is general differential geometry. The witnesses do not "
+            "select a physical MTT defect section, sector, or state."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

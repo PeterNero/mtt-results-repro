@@ -1,0 +1,131 @@
+"""Exact checks for the reversible-dissipative repair theorem."""
+
+from __future__ import annotations
+
+import json
+import sys
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    determinant_2x2,
+    dot,
+    identity,
+    matmul,
+    matrix,
+    matvec,
+    scale,
+    serialize_matrix,
+    serialize_vector,
+    trace,
+    transpose,
+    vector,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "d1_reversible_dissipative_repair.json"
+
+
+def subtract(a, b):
+    return add(a, scale(-1, b))
+
+
+def main() -> int:
+    hessian = matrix([[3, 1], [1, 5]])
+    reversible = matrix([[0, -1], [1, 0]])
+    damping = identity(2)
+    generator = matmul(subtract(reversible, damping), hessian)
+
+    displacement = vector([2, -1])
+    gradient = matvec(hessian, displacement)
+    reversible_gradient = matvec(reversible, gradient)
+    damping_gradient = matvec(damping, gradient)
+    energy_derivative = dot(
+        gradient,
+        vector([
+            reversible_gradient[i] - damping_gradient[i]
+            for i in range(2)
+        ]),
+    )
+    reversible_energy_derivative = dot(gradient, reversible_gradient)
+    characteristic_discriminant = trace(generator) ** 2 - 4 * determinant_2x2(generator)
+
+    # A protected two-dimensional reversible plane with transverse damping.
+    protected_reversible = matrix(
+        [
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, -1],
+            [0, 0, 1, 0],
+        ]
+    )
+    protected_damping = matrix(
+        [
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ]
+    )
+    protected_generator = subtract(protected_reversible, protected_damping)
+    protected_state = vector([0, 0, 1, 0])
+    damped_state = vector([1, 0, 0, 0])
+    protected_velocity = matvec(protected_generator, protected_state)
+    damped_velocity = matvec(protected_generator, damped_state)
+    protected_energy_derivative = dot(protected_state, protected_velocity)
+    damped_energy_derivative = dot(damped_state, damped_velocity)
+
+    checks = {
+        "reversible_operator_is_skew": (
+            transpose(reversible) == scale(-1, reversible)
+        ),
+        "damping_operator_is_positive_identity": damping == identity(2),
+        "linearized_generator_exact": generator == matrix([[-4, -6], [2, -4]]),
+        "reversible_term_preserves_energy": reversible_energy_derivative == 0,
+        "strict_damping_decreases_energy": energy_derivative == Fraction(-34),
+        "damped_oscillation_has_negative_trace": trace(generator) < 0,
+        "damped_oscillation_has_complex_pair": characteristic_discriminant < 0,
+        "protected_plane_has_nonzero_motion": protected_velocity == vector([0, 0, 0, 1]),
+        "protected_plane_has_zero_dissipation": protected_energy_derivative == 0,
+        "transverse_state_decays": damped_velocity == vector([-1, 0, 0, 0]),
+        "transverse_energy_strictly_decreases": damped_energy_derivative == -1,
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "D1-T1",
+        "tier": "LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESSES",
+        "claim": (
+            "Skew reversible transport plus positive repair damping gives a "
+            "monotone defect cost, uses the full residual Hessian at critical "
+            "states, and permits recurrent phase motion only in protected "
+            "null-dissipation sectors."
+        ),
+        "exact_data": {
+            "hessian": serialize_matrix(hessian),
+            "linearized_generator": serialize_matrix(generator),
+            "test_gradient": serialize_vector(gradient),
+            "energy_derivative": str(energy_derivative),
+            "characteristic_discriminant": str(characteristic_discriminant),
+            "protected_velocity": serialize_vector(protected_velocity),
+            "protected_energy_derivative": str(protected_energy_derivative),
+            "damped_energy_derivative": str(damped_energy_derivative),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "The theorem does not select K, Gamma, physical time, quantum "
+            "unitarity, or a physical MTT action."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

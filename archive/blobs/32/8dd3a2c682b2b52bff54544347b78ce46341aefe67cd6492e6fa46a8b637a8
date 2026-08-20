@@ -1,0 +1,125 @@
+"""Exact witness for phase-curvature coupling in a curved first-order charge."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    equal,
+    identity,
+    matmul,
+    matrix,
+    scale,
+    serialize_matrix,
+    transpose,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "c1_curved_charge_phase_curvature.json"
+
+
+def block_matrix(top_left, top_right, bottom_left, bottom_right):
+    top = [a + b for a, b in zip(top_left, top_right, strict=True)]
+    bottom = [a + b for a, b in zip(bottom_left, bottom_right, strict=True)]
+    return top + bottom
+
+
+def block_diagonal(a, b):
+    zero_ab = matrix([[0 for _ in range(len(b))] for _ in range(len(a))])
+    zero_ba = matrix([[0 for _ in range(len(a))] for _ in range(len(b))])
+    return block_matrix(a, zero_ab, zero_ba, b)
+
+
+def realify(real_part, imaginary_part):
+    return block_matrix(
+        real_part,
+        scale(-1, imaginary_part),
+        imaginary_part,
+        real_part,
+    )
+
+
+def main() -> int:
+    d = matrix([[0, 1], [2, 0]])
+    d_star = transpose(d)
+    unit2 = identity(2)
+    d_squared = matmul(d, d)
+    delta_zero = add(matmul(d, d_star), matmul(d_star, d))
+
+    # u=1: B_1=d+d^* is real.
+    b_one = add(d, d_star)
+    square_one = matmul(b_one, b_one)
+    correction_one = add(d_squared, matmul(d_star, d_star))
+
+    # u=i: B_i=i(d-d^*). Its complex realification is exact over Q.
+    skew_part = add(d, scale(-1, d_star))
+    b_i_realified = realify(matrix([[0, 0], [0, 0]]), skew_part)
+    square_i_realified = matmul(b_i_realified, b_i_realified)
+    correction_i = scale(-1, correction_one)
+    expected_i_base = add(delta_zero, correction_i)
+
+    # u=-1 gives -B_1 and therefore the same square.
+    b_minus_one = scale(-1, b_one)
+    square_minus_one = matmul(b_minus_one, b_minus_one)
+
+    checks = {
+        "curved_operator_is_not_nilpotent": not equal(d_squared, matrix([[0, 0], [0, 0]])),
+        "curvature_is_two_identity": equal(d_squared, scale(2, unit2)),
+        "phase_blind_laplacian_is_five_identity": equal(
+            delta_zero, scale(5, unit2)
+        ),
+        "u_one_curvature_correction_is_four_identity": equal(
+            correction_one, scale(4, unit2)
+        ),
+        "u_one_square_is_nine_identity": equal(square_one, scale(9, unit2)),
+        "u_i_curvature_correction_is_minus_four_identity": equal(
+            correction_i, scale(-4, unit2)
+        ),
+        "u_i_square_is_identity": equal(expected_i_base, unit2),
+        "realified_u_i_square_matches": equal(
+            square_i_realified, block_diagonal(unit2, unit2)
+        ),
+        "different_phases_give_different_squares": not equal(
+            square_one, expected_i_base
+        ),
+        "binary_sign_still_erased": equal(square_minus_one, square_one),
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "C1-T1",
+        "tier": "LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS",
+        "claim": (
+            "For a curved first-order operator, the charge square equals the "
+            "phase-blind Laplacian plus phase-weighted curvature terms; "
+            "nilpotence is exactly the all-phase-blind boundary."
+        ),
+        "exact_data": {
+            "d": serialize_matrix(d),
+            "d_squared": serialize_matrix(d_squared),
+            "Delta_0": serialize_matrix(delta_zero),
+            "B_1_squared": serialize_matrix(square_one),
+            "B_i_squared_base": serialize_matrix(expected_i_base),
+            "u_one_curvature_correction": serialize_matrix(correction_one),
+            "u_i_curvature_correction": serialize_matrix(correction_i),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This proves the algebraic curved-charge identity. It does not "
+            "identify physical MTT nonclosure with d^2 or select a q79 sector."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,396 @@
+"""Exact strict-unital coefficient extension for positive noncentral curvature."""
+
+from __future__ import annotations
+
+import importlib.util
+import itertools
+import json
+from fractions import Fraction
+from functools import lru_cache
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "h4_strict_unital_curved_extension.json"
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+NIL = load_module(
+    "heisenberg_nil_transfer",
+    ROOT / "experiments" / "heisenberg_nil_transfer" / "verify.py",
+)
+POS = load_module(
+    "positive_noncentral_nested_transfer",
+    ROOT / "experiments" / "positive_noncentral_nested_transfer" / "verify.py",
+)
+
+
+def matrix_basis():
+    return [
+        (
+            f"E{row}{column}",
+            POS.matrix_unit(row, column),
+            (POS.SPIN_PARITY[row] + POS.SPIN_PARITY[column]) % 2,
+        )
+        for row in range(POS.SPIN_DIMENSION)
+        for column in range(POS.SPIN_DIMENSION)
+    ]
+
+
+def curved_differential(matrix, parity):
+    return POS.matrix_subtract(
+        POS.matrix_multiply(POS.Q_SPIN, matrix),
+        POS.matrix_scale(
+            (-1) ** parity,
+            POS.matrix_multiply(matrix, POS.Q_SPIN),
+        ),
+    )
+
+
+def homogeneous_degree(vector):
+    degrees = {
+        NIL.degree(mask) for mask, coefficient in enumerate(vector) if coefficient != 0
+    }
+    if not degrees:
+        return None
+    if len(degrees) != 1:
+        raise ValueError("expected a homogeneous cohomology vector")
+    return next(iter(degrees))
+
+
+@lru_cache(maxsize=None)
+def cached_m2(left, right):
+    return NIL.m2(left, right)
+
+
+@lru_cache(maxsize=None)
+def cached_m3(left, middle, right):
+    return NIL.m3_multilinear(left, middle, right)
+
+
+def apply_higher(arity, elements):
+    """Apply M_n on H tensor B, retaining only B parity and Koszul sign."""
+
+    coefficient = Fraction(1)
+    for element in elements:
+        coefficient *= element[3]
+    chi = 0
+    for left in range(arity):
+        for right in range(left + 1, arity):
+            chi += elements[left][2] * elements[right][1]
+    coefficient *= (-1) ** chi
+
+    if arity == 2:
+        h_output = cached_m2(elements[0][0], elements[1][0])
+    elif arity == 3:
+        h_output = cached_m3(
+            elements[0][0], elements[1][0], elements[2][0]
+        )
+    else:
+        raise ValueError("only M2 and M3 are nonzero")
+
+    output_degree = homogeneous_degree(h_output)
+    if output_degree is None:
+        return h_output, 0, 0, Fraction(0)
+    return (
+        h_output,
+        output_degree,
+        sum(element[2] for element in elements) % 2,
+        coefficient,
+    )
+
+
+def tensor_stasheff_relation(masks, b_parities):
+    n = len(masks)
+    inputs = [
+        (NIL.basis(mask), NIL.degree(mask), b_parity, Fraction(1))
+        for mask, b_parity in zip(masks, b_parities, strict=True)
+    ]
+    relation = NIL.zero()
+    for inner_arity in (2, 3):
+        outer_arity = n - inner_arity + 1
+        if outer_arity not in (2, 3):
+            continue
+        for before in range(n - inner_arity + 1):
+            after = n - inner_arity - before
+            inner = apply_higher(
+                inner_arity, inputs[before : before + inner_arity]
+            )
+            if inner[3] == 0:
+                continue
+            outer_inputs = inputs[:before] + [inner] + inputs[before + inner_arity :]
+            outer = apply_higher(outer_arity, outer_inputs)
+            if outer[3] == 0:
+                continue
+            preceding_total_degree = sum(
+                element[1] + element[2] for element in inputs[:before]
+            )
+            exponent = (
+                before
+                + inner_arity * after
+                + (2 - inner_arity) * preceding_total_degree
+            )
+            relation = NIL.add(
+                relation,
+                NIL.scale(((-1) ** exponent) * outer[3], outer[0]),
+            )
+    return relation
+
+
+def differential_higher_compatibility(arity):
+    """Check all signs for d_B acting through M_2 and M_3 products."""
+
+    for masks in itertools.product(NIL.HARMONIC_MASKS, repeat=arity):
+        h_vectors = [NIL.basis(mask) for mask in masks]
+        h_output = (
+            NIL.m2(*h_vectors)
+            if arity == 2
+            else NIL.m3_multilinear(*h_vectors)
+        )
+        output_degree = homogeneous_degree(h_output)
+        if output_degree is None:
+            continue
+        h_degrees = [NIL.degree(mask) for mask in masks]
+        for b_parities in itertools.product((0, 1), repeat=arity):
+            chi = sum(
+                b_parities[left] * h_degrees[right]
+                for left in range(arity)
+                for right in range(left + 1, arity)
+            )
+            for differentiated in range(arity):
+                # Outer M1 applied to M_n, with Leibniz expansion of d_B.
+                outer_coefficient = (-1) ** (
+                    chi
+                    + output_degree
+                    + sum(b_parities[:differentiated])
+                )
+
+                # Stasheff term with the inner M1 in the selected slot.
+                changed_parities = list(b_parities)
+                changed_parities[differentiated] ^= 1
+                changed_chi = sum(
+                    changed_parities[left] * h_degrees[right]
+                    for left in range(arity)
+                    for right in range(left + 1, arity)
+                )
+                preceding_total = sum(
+                    h_degrees[index] + b_parities[index]
+                    for index in range(differentiated)
+                )
+                inner_coefficient = (-1) ** (
+                    (arity - 1)
+                    + preceding_total
+                    + h_degrees[differentiated]
+                    + changed_chi
+                )
+                if outer_coefficient + inner_coefficient != 0:
+                    return False
+    return True
+
+
+@lru_cache(maxsize=None)
+def planar_binary_trees(leaves):
+    if leaves == 1:
+        return (None,)
+    output = []
+    for left_count in range(1, leaves):
+        right_count = leaves - left_count
+        for left in planar_binary_trees(left_count):
+            for right in planar_binary_trees(right_count):
+                output.append((left, right))
+    return tuple(output)
+
+
+def evaluate_transfer_tree(tree, inputs, root=True):
+    iterator = iter(inputs)
+
+    def evaluate(node, is_root):
+        if node is None:
+            return next(iterator)
+        left = evaluate(node[0], False)
+        right = evaluate(node[1], False)
+        product = NIL.wedge(left, right)
+        return NIL.project(product) if is_root else NIL.homotopy(product)
+
+    return evaluate(tree, root)
+
+
+@lru_cache(maxsize=None)
+def transfer_trees_vanish(arity):
+    trees = planar_binary_trees(arity)
+    for masks in itertools.product(NIL.HARMONIC_MASKS, repeat=arity):
+        inputs = [NIL.basis(mask) for mask in masks]
+        for tree in trees:
+            if evaluate_transfer_tree(tree, inputs) != NIL.zero():
+                return False
+    return True
+
+
+def serialize_matrix(matrix):
+    return POS.serialize_matrix(matrix)
+
+
+def main() -> int:
+    basis = matrix_basis()
+    zero_matrix = POS.matrix_zero(POS.SPIN_DIMENSION, POS.SPIN_DIMENSION)
+    curvature = POS.F_SPIN
+    m0 = POS.matrix_scale(-1, curvature)
+
+    bianchi = curved_differential(m0, 0) == zero_matrix
+    curved_n1 = True
+    derivation = True
+    for _, item, parity in basis:
+        d_squared = curved_differential(
+            curved_differential(item, parity), 1 - parity
+        )
+        relation = POS.matrix_add(
+            d_squared,
+            POS.matrix_subtract(
+                POS.matrix_multiply(m0, item), POS.matrix_multiply(item, m0)
+            ),
+        )
+        curved_n1 = curved_n1 and relation == zero_matrix
+        for _, other, other_parity in basis:
+            lhs = curved_differential(
+                POS.matrix_multiply(item, other),
+                (parity + other_parity) % 2,
+            )
+            rhs = POS.matrix_add(
+                POS.matrix_multiply(curved_differential(item, parity), other),
+                POS.matrix_scale(
+                    (-1) ** parity,
+                    POS.matrix_multiply(
+                        item, curved_differential(other, other_parity)
+                    ),
+                ),
+            )
+            derivation = derivation and lhs == rhs
+
+    h_m2_associative = all(
+        NIL.m2(NIL.m2(NIL.basis(x), NIL.basis(y)), NIL.basis(z))
+        == NIL.m2(NIL.basis(x), NIL.m2(NIL.basis(y), NIL.basis(z)))
+        for x in NIL.HARMONIC_MASKS
+        for y in NIL.HARMONIC_MASKS
+        for z in NIL.HARMONIC_MASKS
+    )
+    h_strict_unit = all(
+        NIL.m2(NIL.basis(0), NIL.basis(x)) == NIL.basis(x)
+        and NIL.m2(NIL.basis(x), NIL.basis(0)) == NIL.basis(x)
+        for x in NIL.HARMONIC_MASKS
+    ) and all(
+        NIL.m3_multilinear(NIL.basis(0), NIL.basis(x), NIL.basis(y))
+        == NIL.zero()
+        and NIL.m3_multilinear(NIL.basis(x), NIL.basis(0), NIL.basis(y))
+        == NIL.zero()
+        and NIL.m3_multilinear(NIL.basis(x), NIL.basis(y), NIL.basis(0))
+        == NIL.zero()
+        for x in NIL.HARMONIC_MASKS
+        for y in NIL.HARMONIC_MASKS
+    )
+
+    tensor_n3 = all(
+        tensor_stasheff_relation(masks, parities) == NIL.zero()
+        for masks in itertools.product(NIL.HARMONIC_MASKS, repeat=3)
+        for parities in itertools.product((0, 1), repeat=3)
+    )
+    tensor_n4 = all(
+        tensor_stasheff_relation(masks, parities) == NIL.zero()
+        for masks in itertools.product(NIL.HARMONIC_MASKS, repeat=4)
+        for parities in itertools.product((0, 1), repeat=4)
+    )
+    tensor_n5 = all(
+        tensor_stasheff_relation(masks, parities) == NIL.zero()
+        for masks in itertools.product(NIL.HARMONIC_MASKS, repeat=5)
+        for parities in itertools.product((0, 1), repeat=5)
+    )
+
+    curvature_higher_insertions_vanish = all(
+        NIL.m3_multilinear(NIL.basis(0), NIL.basis(x), NIL.basis(y))
+        == NIL.zero()
+        and NIL.m3_multilinear(NIL.basis(x), NIL.basis(0), NIL.basis(y))
+        == NIL.zero()
+        and NIL.m3_multilinear(NIL.basis(x), NIL.basis(y), NIL.basis(0))
+        == NIL.zero()
+        for x in NIL.HARMONIC_MASKS
+        for y in NIL.HARMONIC_MASKS
+    )
+
+    checks = {
+        "positive_curvature_is_retained_from_H4_T3": curvature
+        == POS.matrix_multiply(POS.matrix_transpose(POS.Q_SPIN), POS.Q_SPIN),
+        "curvature_is_noncentral": POS.matrix_nonzero(
+            POS.matrix_subtract(
+                POS.matrix_multiply(curvature, POS.matrix_unit(1, 2)),
+                POS.matrix_multiply(POS.matrix_unit(1, 2), curvature),
+            )
+        ),
+        "cohomology_m2_is_associative": h_m2_associative,
+        "cohomology_m2_m3_are_strictly_unital": h_strict_unit,
+        "all_arity_four_transfer_trees_vanish": transfer_trees_vanish(4),
+        "all_arity_five_transfer_trees_vanish": transfer_trees_vanish(5),
+        "curved_coefficient_Bianchi_identity": bianchi,
+        "curved_n1_Stasheff_identity": curved_n1,
+        "coefficient_differential_is_graded_derivation": derivation,
+        "M2_differential_signs_are_coherent": differential_higher_compatibility(2),
+        "M3_differential_signs_are_coherent": differential_higher_compatibility(3),
+        "curvature_insertions_into_higher_operations_vanish": (
+            curvature_higher_insertions_vanish
+        ),
+        "tensor_arity_three_Stasheff_identity": tensor_n3,
+        "tensor_arity_four_Stasheff_identity": tensor_n4,
+        "tensor_arity_five_Stasheff_identity": tensor_n5,
+        "no_higher_Stasheff_terms_remain": (
+            transfer_trees_vanish(4) and transfer_trees_vanish(5)
+        ),
+        "nonzero_m3_is_retained": (
+            NIL.m3(1, 1, 2) == NIL.basis(5)
+            and NIL.m3(1, 2, 2) == NIL.scale(-1, NIL.basis(6))
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H4-T4",
+        "tier": "LOCAL_FULL_CURVED_A_INFINITY_COEFFICIENT_EXTENSION_THEOREM",
+        "claim": (
+            "The positive noncentral H4-T3 curvature extends the strict-unital "
+            "Heisenberg minimal model to a full curved A-infinity coefficient "
+            "algebra without an infinite curvature-insertion series."
+        ),
+        "exact_data": {
+            "coefficient_supercharge": serialize_matrix(POS.Q_SPIN),
+            "positive_noncentral_F": serialize_matrix(curvature),
+            "A_infinity_curvature_convention": "M0=-F",
+            "nonzero_operations": ["M0", "M1", "M2", "M3"],
+            "higher_operations": "M_n=0 for n>=4",
+            "curvature_insertion_rule": (
+                "M_n(...,M0,...)=0 for n>=3 by strict unity"
+            ),
+            "verified_tensor_arities": [0, 1, 2, 3, 4, 5],
+            "tensor_parity_cases_n4": 6**4 * 2**4,
+            "tensor_parity_cases_n5": 6**5 * 2**5,
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is a finite algebraic coefficient-extension theorem. It does "
+            "not prove continuum descent, select the physical coefficient "
+            "algebra, identify the accepted 27/rank-102 target, or derive a "
+            "Lorentzian action, clock, normalization, or measured value."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

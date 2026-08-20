@@ -1,0 +1,214 @@
+
+# Preprojection Curved-Charge and Phase-Curvature Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:** `LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS`
+
+**MTT status:** exploratory; no physical curved source has been selected.
+
+## 1. Why the nilpotent theorem is not the whole story
+
+At an exact integrable background, the deformation operator is a differential:
+
+```text
+d^2=0.
+```
+
+At a nonzero-defect configuration, the twisted first-order operator generally
+need not be nilpotent. In a differential graded algebra it instead obeys
+
+```text
+d_a^2 = ad_(F(a)),
+F(a)=d a+a^2.
+```
+
+Thus a persistent-defect interpretation naturally leads from an ordinary
+Hilbert complex to a curved differential or curved superconnection.
+
+## 2. General charge-square identity
+
+Let `d` be any operator on a finite-dimensional complex Hilbert space. It is
+not assumed nilpotent. For `u in U(1)` define
+
+```text
+B_u = u d + conjugate(u) d^*,
+Delta_0 = d d^* + d^* d.
+```
+
+### Theorem 2.1
+
+The operator `B_u` is self-adjoint and
+
+```text
+B_u^2
+ = Delta_0
+   + u^2 d^2
+   + conjugate(u)^2 (d^*)^2.
+```
+
+The full square remains positive because it is the square of a self-adjoint
+operator. The additional terms are curvature terms and may depend on phase.
+
+### Proof
+
+Self-adjointness is immediate. Expanding the square gives
+
+```text
+u^2 d^2
++ |u|^2 d d^*
++ |u|^2 d^* d
++ conjugate(u)^2 (d^*)^2.
+```
+
+Since `|u|=1`, the middle terms are `Delta_0`. QED.
+
+## 3. Exact boundary between phase-blind and phase-sensitive squares
+
+### Theorem 3.1
+
+The family `B_u^2` is independent of `u` for every unit phase if and only if
+
+```text
+d^2=0.
+```
+
+### Proof
+
+Nilpotence proves the forward phase-blind formula from Theorem 2.1.
+
+Conversely, let `A=d^2` and assume all phases give the same square. Comparing
+`u=1` with `u=i` yields
+
+```text
+A+A^*=0.
+```
+
+Comparing `u=1` with `u=exp(i pi/4)` and using the first identity yields
+
+```text
+A-A^*=0.
+```
+
+Therefore `A=0`. QED.
+
+### Corollary 3.2
+
+The sign pair `u` and `-u` always has the same square because
+
+```text
+B_(-u)=-B_u.
+```
+
+Thus curvature can recover phase modulo sign, but the binary orientation of the
+first-order charge is still erased by squaring.
+
+## 4. Curved Maurer-Cartan specialization
+
+Let `(A,d,[,])` be a differential graded algebra and set
+
+```text
+d_a = d+[a,.],
+F(a)=d a+a^2.
+```
+
+The standard identity is
+
+```text
+d_a^2 = [F(a),.].
+```
+
+Therefore
+
+```text
+B_(u,a)^2
+ = Delta_(0,a)
+   + u^2 ad_(F(a))
+   + conjugate(u)^2 ad_(F(a))^*.
+```
+
+At exact closure `F(a)=0`, the phase disappears from the square and ordinary
+cohomology is available. At nonzero defect, curvature couples the phase to the
+positive square.
+
+## 5. Relationship to the residual Hessian
+
+Two distinct curvature corrections now appear:
+
+```text
+defect-cost Hessian:
+    D Phi^* D Phi + <Phi,nabla^2 Phi>;
+
+curved charge square:
+    Delta_0 + u^2 d^2 + conjugate(u)^2(d^*)^2.
+```
+
+They should not be identified by analogy. A physical source theorem must prove
+that the selected defect section, curved differential, connection, and pairing
+make these two descriptions compatible.
+
+If such an intertwiner exists, it would explain simultaneously:
+
+- why the exact vacuum has a phase-blind Hodge Hessian;
+- why a persistent defect carries additional curvature response;
+- how phase can couple to nonclosure away from the vacuum; and
+- why the unsquared operator still retains a binary orientation.
+
+## 6. Revised minimal source candidate
+
+The current strongest candidate is no longer merely a nilpotent complex. It is
+a curved, centrally equivariant repair germ:
+
+```text
+(X, Phi, d_Phi, F, L_sh, g, omega, G),
+```
+
+with:
+
+```text
+d_Phi^2 = curvature(F),
+F=0 on the exact vacuum,
+F!=0 on a persistent-defect sector.
+```
+
+Ordinary cohomology and the Hodge decomposition are exact-vacuum shadows.
+Physical defect sectors may require curved complexes, matrix factorizations, or
+another replacement for ordinary cohomology.
+
+## 7. Important no-go
+
+It is inconsistent to demand all three of the following without an additional
+argument:
+
+1. the physical state has nonzero closure curvature;
+2. its linearized first-order operator is an ordinary nilpotent differential;
+3. the curvature acts nontrivially through the standard twisted-differential
+   identity.
+
+At least one clause must be weakened or the curvature must act trivially in the
+chosen representation.
+
+## 8. Current boundary
+
+This theorem does not prove that q79 particles are curved complexes. It changes
+the branch-independent target that must be tested against q79 after the current
+workers finish:
+
+- exact q79 endpoint: test the nilpotent/Hodge specialization;
+- finite excitation or particle sector: test the curved differential;
+- shared-line action: test phase-curvature covariance;
+- continuum-to-finite map: preserve the full curved square, not only
+  `Delta_0`.
+
+## 9. Verification
+
+Run:
+
+```powershell
+python experiments/curved_charge/verify.py
+python verify.py
+```
+
+The exact witness uses a nonnilpotent two-state operator with `d^2=2I`. Its
+phase-zero charge square is `9I`, while its quarter-turn charge square is `I`.
+Both are positive, and the difference is exactly the curvature term.

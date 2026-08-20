@@ -1,0 +1,221 @@
+
+# Preprojection Common-Curvature Jordan-Lie Splitting Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:**
+`LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS; COHESIVE_BENCHMARK_BRIDGE_CONDITIONAL_ON_CYCLIC_REAL_SLICE`
+
+**MTT status:** no physical q79 endpoint or action is selected.
+
+## 1. Controlling benchmark
+
+This theorem reads, but does not modify, the current cohesive
+Maurer-Cartan benchmark:
+
+- curated result:
+  `mtt-results-repro/release/results/q79_maurer_cartan_repair/artifact.json`;
+- SHA-256:
+  `4b9d6e653bb29c098c7a8f8825efc08682956db5e976af48f9a7478a392dbcf6`;
+- controlling statement:
+  `F(a)=d a+a^2=(Ebar+a)^2` on the ordinary endomorphism dg algebra.
+
+That benchmark proves the zero-defect Hodge tangent at an integrable point. The
+present theorem identifies the two complementary curvature operations away
+from that point.
+
+## 2. Associative trace source
+
+Let `A` be a finite-dimensional unital star algebra with positive faithful
+cyclic trace `tau`. On its real self-adjoint part use
+
+```text
+<X,Y> = tau(XY).
+```
+
+Let `F=F^*` be a curvature/residual element. Define
+
+```text
+C_F(X) = F X + X F,
+A_F(X) = F X - X F.
+```
+
+The first is the Jordan or anticommutator action. The second is the Lie or
+commutator action.
+
+## 3. Common-curvature splitting
+
+### Theorem 3.1
+
+The same multiplication by `F` emits both actions, and together they reconstruct
+left and right multiplication:
+
+```text
+L_F(X)=F X = 1/2 (C_F(X)+A_F(X)),
+R_F(X)=X F = 1/2 (C_F(X)-A_F(X)).
+```
+
+The Jordan action is self-adjoint on the real slice. The commutator action is
+the infinitesimal algebra automorphism; after multiplication by `-i` it acts on
+self-adjoint observables.
+
+### Proof
+
+The reconstruction identities follow by adding and subtracting the definitions.
+Cyclicity gives
+
+```text
+<C_F(X),Y>
+ = tau((F X+X F)Y)
+ = tau(F(XY+YX))
+ = <X,C_F(Y)>.
+```
+
+The commutator satisfies the Leibniz rule and is therefore the inner
+derivation `ad_F`. QED.
+
+## 4. Maurer-Cartan Hessian and curvature
+
+For the nonlinear curvature map
+
+```text
+Phi(a)=F(a)=d a+a^2,
+```
+
+its first and second derivatives are
+
+```text
+D Phi_a(X)=d_a X,
+D^2 Phi_a(X,Y)=X Y+Y X.
+```
+
+The residual-Hessian theorem therefore gives
+
+```text
+Hess E_a(X,Y)
+ = <d_a X,d_a Y>
+   + <F(a),X Y+Y X>
+
+ = <d_a X,d_a Y>
+   + <C_(F(a))X,Y>.
+```
+
+Meanwhile the twisted differential obeys
+
+```text
+d_a^2 X = [F(a),X] = A_(F(a))X.
+```
+
+Thus:
+
+```text
+stability/elastic response  <- Jordan action C_F;
+gauge/phase curvature       <- Lie action A_F.
+```
+
+They are not equal and should not be forced to intertwine as identical
+operators. They are complementary projections of one source multiplication.
+
+## 5. Consequences
+
+### Corollary 5.1: exact closure
+
+At `F=0` both curvature actions vanish:
+
+```text
+C_F=0,
+A_F=0.
+```
+
+The residual Hessian reduces to the derivative Gram/Hodge operator and the
+twisted differential becomes nilpotent.
+
+### Corollary 5.2: central residual
+
+If `F` is central, then
+
+```text
+A_F=0
+```
+
+while `C_F` may remain nonzero. A central closure pressure can therefore alter
+stability without producing inner gauge curvature.
+
+### Corollary 5.3: noncentral residual
+
+For noncentral `F`, the same residual can generate both a symmetric stability
+correction and an oriented commutator flow. Their joint data determine both
+left and right multiplication by `F`.
+
+## 6. Why this simplifies the preprojection language
+
+The source need not separately postulate:
+
+- an elastic curvature operator;
+- a gauge-curvature operator; and
+- a rule relating them.
+
+It needs one cyclic star multiplication and one curvature element. The two
+physical-looking operators are its Jordan and Lie shadows.
+
+This is closely aligned with ordinary quantum observable algebra, where the
+Jordan product controls symmetric observable composition and the Lie product
+controls reversible dynamics. It also aligns structurally with:
+
+- the ordinary endomorphism dg algebra of the cohesive benchmark;
+- the qutrit matrix algebra underlying the finite Weyl representation; and
+- the existing First-Tits/Albert investigation, which already treats a Jordan
+  structure on a distinct 27-dimensional carrier.
+
+The last item is inspiration, not an identification. The existing direct map
+from the family qutrit carrier to the physical exceptional 27 is excluded by
+its central-character test.
+
+## 7. Revised source object
+
+The minimal source candidate can now be sharpened to:
+
+```text
+(A,d,m2,star,tau,F,L_sh,G),
+```
+
+where:
+
+- `(A,d,m2)` is a graded associative or coherently associative algebra;
+- `star,tau` supply the real slice and cyclic pairing;
+- `F` is the selected closure curvature;
+- `d_F^2=ad_F` is its Lie shadow;
+- `C_F` is its residual-Hessian Jordan shadow;
+- `L_sh` supplies the central phase representation; and
+- `G` carries descent and gauge equivalence.
+
+Higher `A_infinity` products may be needed after projection, but they are not
+required for the present binary splitting theorem.
+
+## 8. Remaining physical bridge
+
+For the selected q79 source one must still prove:
+
+1. the physical real slice and cyclic pairing;
+2. the full graded sign convention;
+3. that the selected residual is represented by one `F`;
+4. that the Hessian correction is exactly `C_F` after gauge fixing;
+5. that the twisted curvature is exactly `A_F`;
+6. compatibility with the shared differential line and finite projection; and
+7. the physical action, clock, and normalization.
+
+Until those rows are supplied, this is a structural benchmark bridge and not a
+physical theorem.
+
+## 9. Verification
+
+Run:
+
+```powershell
+python experiments/jordan_lie_curvature/verify.py
+python verify.py
+```
+
+The exact `M_2(Q)` witness checks cyclic Hessian pairing, Jordan symmetry, Lie
+orientation, left/right reconstruction, positivity for positive curvature, and
+the central-residual separation.

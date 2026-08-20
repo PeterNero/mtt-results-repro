@@ -1,0 +1,332 @@
+# Preprojection Residual-Hessian and Repair-Dynamics Theorem v1
+
+**Date:** 2026-08-20
+
+**Local status:** `LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESSES`
+
+**MTT status:** exploratory; no physical source or q79 bridge is selected.
+
+## 1. Setup
+
+Let `(M,g)` be a finite-dimensional Riemannian state manifold and let
+`(E,h,nabla^E)` be a real metric or complex Hermitian vector bundle with metric
+connection. Let
+
+```text
+Phi in Gamma(E)
+```
+
+be a twice differentiable defect section. In the complex case every inner
+product below means its real part. Define the nonnegative defect cost
+
+```text
+V(p) = 1/2 h(Phi(p),Phi(p)).
+```
+
+At `p in M`, write
+
+```text
+r_p = Phi(p),
+J_p X = nabla^E_X Phi,
+B_p(X,Y)
+  = nabla^E_X nabla^E_Y Phi
+    - nabla^E_(nabla^M_X Y) Phi.
+```
+
+The map `J_p:T_pM -> E_p` is the first defect derivative. The tensor `B_p` is
+the covariant second derivative of the section.
+
+## 2. Covariant residual-Hessian identity
+
+### Theorem 2.1
+
+For all tangent vectors `X,Y in T_pM`,
+
+```text
+dV_p(X) = h(r_p,J_p X),
+
+Hess_p V(X,Y)
+  = h(J_p X,J_p Y) + h(r_p,B_p(X,Y)).
+```
+
+Equivalently,
+
+```text
+grad V(p) = J_p^* r_p,
+
+H_p = J_p^* J_p + S_(r_p),
+```
+
+where the residual-curvature endomorphism is defined by
+
+```text
+g(S_(r_p) X,Y) = h(r_p,B_p(X,Y)).
+```
+
+The displayed bilinear form is symmetric even when the bundle connection has
+curvature.
+
+### Proof
+
+Metric compatibility gives
+
+```text
+X[V] = h(nabla^E_X Phi,Phi),
+```
+
+which proves the differential and gradient formulas. Differentiate once more:
+
+```text
+X[dV(Y)]
+ = h(nabla^E_X Phi,nabla^E_Y Phi)
+   + h(Phi,nabla^E_X nabla^E_Y Phi).
+```
+
+Subtract `dV(nabla^M_XY)` to obtain the Hessian identity.
+
+The antisymmetric part of `B` is
+
+```text
+B(X,Y)-B(Y,X)=R^E(X,Y)Phi.
+```
+
+For a metric or Hermitian connection, `R^E(X,Y)` is skew-adjoint. Therefore
+
+```text
+Re h(Phi,R^E(X,Y)Phi)=0.
+```
+
+Consequently the residual-curvature form is symmetric, as a Hessian must be.
+QED.
+
+## 3. Critical-state classification
+
+### Corollary 3.1
+
+A state `p` is critical for the defect cost exactly when
+
+```text
+J_p^* r_p = 0.
+```
+
+Thus:
+
+```text
+zero-defect critical state:
+    r_p = 0;
+
+nonzero-defect critical state:
+    r_p != 0 and r_p is orthogonal to im J_p.
+```
+
+At a zero-defect state,
+
+```text
+H_p = J_p^* J_p.
+```
+
+At a nonzero-defect critical state, the residual-curvature term generally
+survives and cannot be reconstructed from `J_p` alone.
+
+### Corollary 3.2
+
+At a nonzero-defect critical point:
+
+- positive definiteness of `J_p^*J_p+S_(r_p)` is sufficient for a strict local
+  minimum;
+- positive semidefiniteness is necessary for a local minimum;
+- on `ker J_p`, stability is controlled entirely by `S_(r_p)`; and
+- two nonlinear defect maps with the same value and first derivative can have
+  different stability because their second derivatives differ.
+
+This closes the local mathematical classification. It does not select which
+critical point is physical.
+
+## 4. Symmetry and zero modes
+
+Let a Lie group `G` act isometrically on `M` and by fiberwise isometries on `E`,
+and suppose `Phi` is equivariant. Then `V` is `G`-invariant.
+
+### Theorem 4.1
+
+If `p` is critical and `xi_M(p)` is tangent to its `G` orbit, then
+
+```text
+Hess_p V(xi_M(p),Y)=0
+```
+
+for every `Y`. Hence every orbit tangent is a Hessian zero mode.
+
+### Proof
+
+Invariance gives `dV(xi_M)=0` identically. Differentiate this identity in the
+direction `Y`:
+
+```text
+0 = Hess V(Y,xi_M) + dV(nabla_Y xi_M).
+```
+
+The second term vanishes at a critical point. Symmetry of the Hessian completes
+the proof. QED.
+
+Therefore stability in a gauge or phase-symmetric theory means positivity on a
+normal slice, not positivity on the unreduced tangent space.
+
+## 5. Sectorwise persistent defects
+
+### Theorem 5.1
+
+Let `C` be a compact connected component of `M` without boundary. If
+
+```text
+Phi^{-1}(0) intersect C = empty,
+```
+
+then `V|_C` attains a strictly positive minimum at some `p_C`. Every such
+minimizer satisfies
+
+```text
+r_(p_C) != 0,
+J_(p_C)^* r_(p_C)=0,
+Hess_(p_C) V >= 0.
+```
+
+If a compact symmetry group acts and the Hessian is positive on a slice normal
+to the minimizing orbit, the defect is locally stable modulo that symmetry.
+
+### Proof
+
+The continuous function `V` attains a minimum on compact `C`. Because `Phi`
+has no zero on `C`, the minimum is positive. Since `C` has no boundary, every
+minimizer is critical. The second-order necessary condition gives the Hessian
+inequality. The slice statement is the ordinary second-derivative test on the
+quotient or a local normal slice. QED.
+
+### Interpretation
+
+This supplies a precise candidate for persistent closure defects:
+
+```text
+vacuum sector:
+    zero defect is attainable;
+
+charged/topological sector:
+    zero defect is obstructed;
+    the sector minimizes a positive residual cost.
+```
+
+Compactness may be replaced by a suitable properness, coercivity, or
+Palais-Smale hypothesis. Which hypothesis is correct for an infinite-dimensional
+MTT source remains open.
+
+## 6. Reversible-dissipative repair
+
+Let `K:TM->TM` be skew-adjoint and let `Gamma:TM->TM` be self-adjoint and
+positive semidefinite. Consider
+
+```text
+dC/dt = (K-Gamma) grad V.
+```
+
+The first term is reversible and tangent to the level sets of `V`; the second
+is dissipative repair.
+
+### Theorem 6.1
+
+Along every solution,
+
+```text
+dV/dt = -g(grad V,Gamma grad V) <= 0.
+```
+
+At a critical point `p`, the linearization is
+
+```text
+D[(K-Gamma)grad V]_p = (K_p-Gamma_p) H_p^sharp.
+```
+
+The derivatives of `K` and `Gamma` do not contribute because `grad V(p)=0`.
+For a nonzero-defect critical point, `H_p` is the full residual Hessian from
+Theorem 2.1, not merely `J_p^*J_p`.
+
+### Proof
+
+Skew-adjointness gives
+
+```text
+g(grad V,K grad V)=0.
+```
+
+The energy identity follows immediately. Differentiating the vector field at a
+critical point gives the linearization formula. QED.
+
+### Corollary 6.2: strict-dissipation circulation no-go
+
+If `Gamma` is positive definite along an orbit, the orbit cannot be a
+nonconstant periodic solution.
+
+Indeed, periodicity forces the integral of `dV/dt` over one period to vanish.
+The nonpositive integrand must therefore vanish everywhere. Positive
+definiteness gives `grad V=0`, and the vector field is zero.
+
+Consequently a persistent particle-like circulation requires at least one of:
+
+- a protected nullspace of `Gamma`;
+- an independently selected conservative sector;
+- a relative equilibrium generated by symmetry; or
+- external driving.
+
+Pure negative-gradient repair cannot by itself generate unitary or recurrent
+phase evolution.
+
+## 7. MTT consequences at the current tier
+
+The theorem preserves the exact existing zero-defect result while exposing its
+domain:
+
+```text
+Phi=0:
+    Hess V = D Phi^* D Phi;
+
+Phi!=0 and critical:
+    Hess V = D Phi^* D Phi + residual curvature.
+```
+
+It therefore suggests, but does not yet establish, the following separation:
+
+```text
+exact q79 closure endpoint  -> reference vacuum/background;
+nonzero sector minimum      -> persistent defect candidate;
+K                           -> reversible phase transport;
+Gamma                       -> repair/damping;
+full residual Hessian       -> local stability.
+```
+
+This does not close `B.ACTION.01`. The selected physical source must still
+provide `Phi`, its pairing and connection, `K`, `Gamma`, the action scale, and
+the bridge to accepted lower operators.
+
+## 8. Falsifiers
+
+The persistent-defect interpretation fails if any of the following is proved:
+
+1. all physically admissible MTT sectors necessarily contain a zero of `Phi`;
+2. the selected physical state is required to have `Phi=0`;
+3. the residual-curvature term vanishes identically for the selected nonlinear
+   source; or
+4. the claimed particle circulation is reproduced by a strictly positive
+   gradient repair without a reversible or null-dissipation sector.
+
+## 9. Verification
+
+Run:
+
+```powershell
+python experiments/residual_hessian_theorem/verify.py
+python experiments/reversible_dissipative/verify.py
+python verify.py
+```
+
+The exact finite witnesses check criticality, stability, coordinate covariance,
+symmetry zero modes, nonlinear-completion dependence, energy monotonicity,
+damped oscillation, and a protected reversible sector.

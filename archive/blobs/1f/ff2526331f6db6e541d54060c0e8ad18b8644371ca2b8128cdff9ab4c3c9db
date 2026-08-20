@@ -1,0 +1,170 @@
+"""Exact polynomial witness for nested Witten repair at nonzero defect."""
+
+from __future__ import annotations
+
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CERTIFICATE = ROOT / "certificates" / "w1_nested_witten_repair.json"
+
+
+def trim(poly):
+    result = list(poly)
+    while len(result) > 1 and result[-1] == 0:
+        result.pop()
+    return result
+
+
+def add(left, right):
+    size = max(len(left), len(right))
+    return trim(
+        [
+            (left[index] if index < len(left) else Fraction(0))
+            + (right[index] if index < len(right) else Fraction(0))
+            for index in range(size)
+        ]
+    )
+
+
+def scale(value, poly):
+    scalar = Fraction(value)
+    return trim([scalar * coefficient for coefficient in poly])
+
+
+def multiply(left, right):
+    result = [Fraction(0) for _ in range(len(left) + len(right) - 1)]
+    for i, lhs in enumerate(left):
+        for j, rhs in enumerate(right):
+            result[i + j] += lhs * rhs
+    return trim(result)
+
+
+def derivative(poly):
+    if len(poly) <= 1:
+        return [Fraction(0)]
+    return trim([Fraction(index) * poly[index] for index in range(1, len(poly))])
+
+
+def value_at_zero(poly):
+    return poly[0]
+
+
+def serialize(poly):
+    return [str(value) for value in trim(poly)]
+
+
+def main() -> int:
+    beta = Fraction(1)
+    defect = [Fraction(1), Fraction(0), Fraction(1)]  # 1+x^2
+    defect_prime = derivative(defect)
+    defect_second = derivative(defect_prime)
+    potential = scale(Fraction(1, 2), multiply(defect, defect))
+    potential_prime = derivative(potential)
+    potential_second = derivative(potential_prime)
+
+    test = [Fraction(1), Fraction(-1), Fraction(2), Fraction(1)]
+
+    def a_operator(poly):
+        return add(derivative(poly), scale(beta, multiply(potential_prime, poly)))
+
+    def a_adjoint_operator(poly):
+        return add(scale(-1, derivative(poly)), scale(beta, multiply(potential_prime, poly)))
+
+    h_zero_factorized = a_adjoint_operator(a_operator(test))
+    h_one_factorized = a_operator(a_adjoint_operator(test))
+
+    common_potential = scale(beta * beta, multiply(potential_prime, potential_prime))
+    h_zero_potential = add(common_potential, scale(-beta, potential_second))
+    h_one_potential = add(common_potential, scale(beta, potential_second))
+    negative_second_derivative = scale(-1, derivative(derivative(test)))
+    h_zero_expanded = add(
+        negative_second_derivative, multiply(h_zero_potential, test)
+    )
+    h_one_expanded = add(
+        negative_second_derivative, multiply(h_one_potential, test)
+    )
+
+    defect_at_zero = value_at_zero(defect)
+    defect_prime_at_zero = value_at_zero(defect_prime)
+    defect_second_at_zero = value_at_zero(defect_second)
+    gram_hessian_at_zero = defect_prime_at_zero * defect_prime_at_zero
+    residual_hessian_at_zero = defect_at_zero * defect_second_at_zero
+    full_residual_hessian = gram_hessian_at_zero + residual_hessian_at_zero
+    potential_second_at_zero = value_at_zero(potential_second)
+
+    h_zero_local_hessian_term = -beta * potential_second_at_zero
+    h_one_local_hessian_term = beta * potential_second_at_zero
+
+    # On pairs (f_0,f_1 dx), D(f_0,f_1)=(0,A f_0), hence D^2=0.
+    first_outer_image = ([Fraction(0)], a_operator(test))
+    second_outer_image = ([Fraction(0)], a_operator(first_outer_image[0]))
+
+    checks = {
+        "defect_is_nonzero_at_critical_point": defect_at_zero == 1,
+        "defect_derivative_vanishes_at_critical_point": (
+            defect_prime_at_zero == 0
+        ),
+        "gram_hessian_vanishes": gram_hessian_at_zero == 0,
+        "residual_second_jet_is_nonzero": residual_hessian_at_zero == 2,
+        "full_residual_hessian_is_two": full_residual_hessian == 2,
+        "potential_hessian_matches_residual_identity": (
+            potential_second_at_zero == full_residual_hessian
+        ),
+        "outer_witten_differential_is_nilpotent": (
+            second_outer_image == ([Fraction(0)], [Fraction(0)])
+        ),
+        "zero_form_factorization_matches_expansion": (
+            h_zero_factorized == h_zero_expanded
+        ),
+        "one_form_factorization_matches_expansion": (
+            h_one_factorized == h_one_expanded
+        ),
+        "zero_form_block_has_negative_hessian_sign": (
+            h_zero_local_hessian_term == -2
+        ),
+        "one_form_block_has_positive_hessian_sign": (
+            h_one_local_hessian_term == 2
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "W1-T1",
+        "tier": "LOCAL_THEOREM_WITH_EXACT_SYMBOLIC_WITNESS",
+        "claim": (
+            "An outer Witten-deformed differential remains nilpotent while its "
+            "positive square contains the full residual Hessian of a nonzero "
+            "inner closure defect."
+        ),
+        "exact_data": {
+            "Phi": serialize(defect),
+            "V_half_norm_squared": serialize(potential),
+            "V_prime": serialize(potential_prime),
+            "V_second": serialize(potential_second),
+            "test_polynomial": serialize(test),
+            "H0_factorized_on_test": serialize(h_zero_factorized),
+            "H0_expanded_on_test": serialize(h_zero_expanded),
+            "H1_factorized_on_test": serialize(h_one_factorized),
+            "H1_expanded_on_test": serialize(h_one_expanded),
+            "gram_hessian_at_zero": str(gram_hessian_at_zero),
+            "residual_hessian_at_zero": str(residual_hessian_at_zero),
+            "full_hessian_at_zero": str(full_residual_hessian),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is a one-dimensional exact structural witness. It does not "
+            "construct the physical infinite-dimensional configuration stack, "
+            "measure, action, q79 realization, or physical time."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

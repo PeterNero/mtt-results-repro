@@ -1,0 +1,310 @@
+# Proposed Architecture
+
+## Leading source candidate
+
+Use a nested typed object
+
+```text
+R_nested=(M_adm, A -> M_adm, Q, star, tau, L_sh, G, g_M)
+```
+
+where:
+
+- `M_adm` is the stratified admissible configuration object, including fixed
+  symbols, sectors, domains, and tangent projectors;
+- `A -> M_adm` is a family of internal graded algebras or categories;
+- `Q` is an odd internal superconnection/charge and `Phi=Q^2` its curvature;
+- `L_sh` is the shared central differential line;
+- `star,tau` supply the real structure and cyclic fiber pairing;
+- `G` is the restricted symmetry and descent groupoid; and
+- `g_M` supplies the configuration-space adjoint and repair geometry.
+
+Derived on the base:
+
+```text
+V=1/2||Phi||^2,
+d_(beta,V)=exp(-beta V)d_M exp(beta V),
+H_(beta,V)={d_(beta,V),d_(beta,V)^*}.
+```
+
+The inner charge and outer Witten differential are distinct. The former may be
+curved away from closure; the latter remains nilpotent.
+
+## Derived shadows
+
+Candidate functors should emit:
+
+```text
+inner Q,Q^2                  -> superconnection, curvature, gauge and phase data
+Jordan/Lie actions of Phi    -> stability and commutator shadows
+outer d_(beta,V)             -> nilpotent repair/Morse complex
+outer H_(beta,V)             -> full residual Hessian and heat repair
+exp(-tau H_(beta,V))         -> repair kernel after analytic hypotheses
+cohomology/kernel            -> admissible or protected sectors
+homological transfer         -> finite m2,m3,... interactions
+Taylor derivatives of V      -> Gaussian operator and nonlinear vertices
+central-line characters      -> phase and charge sectors through transfer
+finite representations       -> qutrit/27/operator shadows
+BV/index extension           -> determinants and quantum gauge readout
+instrument functor           -> operational records
+```
+
+## Dynamics under test
+
+The repository must compare, rather than conflate:
+
+```text
+gradient repair:       dC/ds = -grad_g E
+reversible flow:       dC/dt = X_H
+combined flow:         dC/dt = X_H - Gamma grad_g E
+relative equilibrium:  dC/dt = infinitesimal symmetry action
+```
+
+The parameter `s` is not physical time unless a separate clock theorem selects
+that identification.
+
+## Admissible-tangent rule
+
+For `E(Q)=1/2||Q^2||^2`, allowing the radial variation `Q` rules out every
+nonzero critical curvature. Therefore the admissible stratum and fixed-symbol
+condition must be specified before taking the gradient or Hessian.
+
+At a constrained critical point, the intrinsic Hessian is
+
+```text
+Hess_S E
+ = Hess_ambient E restricted to T S
+   + <grad_ambient E, second fundamental form of S>.
+```
+
+Projection after forming the ambient Hessian can miss the second term.
+
+## Closed local dynamics facts
+
+For `V=1/2||Phi||^2`:
+
+```text
+grad V = D Phi^* Phi
+
+Hess V
+  = D Phi^* D Phi
+    + <Phi, covariant second derivative of Phi>.
+```
+
+The second term vanishes at exact closure and generally survives at a
+nonzero-defect critical state.
+
+For a skew-adjoint `K` and positive semidefinite `Gamma`:
+
+```text
+dC/dt = (K-Gamma) grad V
+
+dV/dt = -<grad V,Gamma grad V> <= 0.
+```
+
+Strict damping excludes nonconstant periodic solutions. Recurrent phase motion
+must lie in a protected null-dissipation sector or come from a separately
+selected conservative/symmetry generator.
+
+## Single-charge reduction
+
+At the current local tier, one nilpotent differential `d` and unit phase `u`
+emit:
+
+```text
+B_u = u d + conjugate(u)d^*,
+K_u = -i B_u,
+Gamma = gamma B_u^2.
+```
+
+The shared central-line generator acts on `ker B_u^2`. This derives the
+compatibility of reversible transport and positive damping rather than assuming
+it.
+
+## Inner curved upgrade
+
+At nonzero closure curvature, `d^2` need not vanish:
+
+```text
+B_u^2
+  = d d^* + d^* d
+    + u^2 d^2
+    + conjugate(u)^2(d^*)^2.
+```
+
+Nilpotence is exactly the boundary where every phase gives the same square.
+The internal candidate must therefore allow a curved differential in physical
+defect sectors and specialize to an ordinary Hilbert complex at exact closure.
+
+For a cyclic associative source, the same curvature multiplication splits into
+
+```text
+Jordan action:  Phi X+X Phi  -> residual-Hessian pressure;
+Lie action:     Phi X-X Phi  -> adjoint/gauge curvature.
+```
+
+Commutator data are blind to the center. The number of structurally invisible
+central scalars equals the number of symmetry-orbits of simple operator blocks.
+
+## Outer Witten repair
+
+The configuration-space Witten differential is
+
+```text
+d_(beta,V)=d_M+beta dV wedge,
+d_(beta,V)^2=0.
+```
+
+Its positive square contains `||grad V||^2` and the full Hessian of `V`. This
+retains the residual second-jet correction at nonzero-defect critical points
+without requiring the outer complex to be curved.
+
+## Projection and higher interactions
+
+The exact Heisenberg-Nil benchmark proves that the simple source rule
+
+```text
+d c=a wedge b
+```
+
+can transfer to nonzero `m3` operations on cohomology while preserving a common
+circle weight and its `Z3` reduction. This is the current concrete model for
+simple preprojection rules becoming higher postprojection interactions.
+
+The `H4-T1` upgrade places that transfer inside one nested object. A real
+configuration-dependent superconnection satisfies
+
+```text
+Q_A(x)^2=(1+x^2)I,
+V(x)=1/2(1+x^2)^2,
+```
+
+and the same 32-to-24 cyclic contraction intertwines `Q`, its adjoint,
+curvature, normalized cost, outer Witten differential, and both Witten-square
+blocks. The `m2,m3` operations are canonically transferred by its `p,i,h`
+trees; they are not strict projections of source higher products. The exact
+morphism obligations are frozen in
+`docs/RESTRICTED_NESTED_REPAIR_MORPHISM_CONTRACT.md`.
+
+The H4-T2 companion shows that noncentral curvature is compatible with exact
+finite transfer. Over `Q[epsilon]/(epsilon^2)`, an odd matrix has
+
+```text
+q^2=epsilon E_20,
+d_q^2=ad_(q^2) !=0,
+```
+
+while `(h delta)^2=(delta h)^2=0` and every product containing two curvature
+insertions vanishes. This closes the algebraic termination question on a
+nilpotent infinitesimal neighborhood. It does not supply positivity or
+nonnilpotent analytic convergence.
+
+H4-T3 closes the orthogonal compatibility question. Its real self-adjoint
+source has positive noncentral curvature, nonzero Lie and Jordan shadows, and
+the normalized cost
+
+```text
+V(x)=1/3(1+x^2)^2.
+```
+
+The same 24-to-18 contraction preserves its outer Witten blocks and shared
+phase while transferring nonzero `m3`. Positivity and noncentrality therefore
+do not need separate source objects. At the H4-T3 tier alone, convergence of
+the full nonnilpotent curved `A_infinity` expansion was still open.
+
+H4-T4 resolves that last local caveat without a majorant. Transfer the
+strict-unital Heisenberg factor first and retain the noncommutative curved
+operator algebra as coefficients:
+
+```text
+minimal H with m2,m3
+  tensor
+positive noncentral curved coefficient DGA B.
+```
+
+The curvature operation is `M0=1_H tensor (-F)`. Strict unity forces every
+higher operation containing `M0` to vanish, so the full curved identities end
+at arity five. The curvature is retained data, not an endlessly regenerated
+vertex.
+
+H4-T5 globalizes this construction without violating the q79 ordinary-bundle
+no-go. If a twisted module has projective transitions
+
+```text
+G_ij G_jk G_ki=alpha_ijk I,
+```
+
+then its curved endomorphism algebra has honest transitions `Ad(G_ij)`. The
+curvature, commutator differential, ordered products, normalized trace, and
+all strict-unital transferred operations glue. This is a twisted-Morita stack,
+not an ordinary commuting tensor factor. The q79 cohesive source already
+supplies the coefficient half of this construction, and the exact Cech
+compiler transports it structurally to the typed rank-102 carrier after a
+physical endpoint is supplied.
+
+H4-T6 identifies the selected q79 rational topology factor rather than
+continuing to use the auxiliary Nil model. For
+
+```text
+X_q79=P_delta x S1_shared,
+```
+
+it constructs
+
+```text
+A_q79=H*(K3;Q) tensor Lambda(u,v),
+du=delta,
+dv=0,
+```
+
+and an exact cyclic contraction from 96 chain states to 88 cohomology states.
+The transfer is strict: `m2` survives and every `m_n`, `n>=3`, vanishes. Thus
+the selected circle topology is a valid transfer factor, but it is not itself
+the source of higher interaction vertices. Those must be supplied by the
+twisted coefficient/repair complex.
+
+H4-T7 supplies the universal analytic comparison needed for that bridge. A
+bounded chain/product transform canonically transports the source metric, so
+all Maurer-Cartan, adjoint, Hodge and heat data intertwine exactly for that
+metric. If `E` compares it with the selected physical metric, the failure is
+not an unspecified spectral discrepancy: it is the exact chain commutator
+
+```text
+C_k=E_(k+1)D_k-D_kE_k
+```
+
+and its two induced Hodge terms. Polar unitarization also preserves the full
+dg algebra exactly when the positive distortion is a dg-algebra automorphism.
+The physical bridge must therefore emit these finite defects or prove they
+vanish; it need not assume an initially unitary integral kernel.
+
+H4-T8 removes another artificial interface. Once a physical repair residual
+`Phi` and residual metric field `W` are selected, the tensors of
+`S_rep=1/2<Phi,W Phi>` are their joint Taylor jet. The Hessian, reduced
+Euclidean inverse, heat functional calculus and finite formal Wick weights are
+therefore functorial compiler outputs. A physical endpoint must export the
+residual and metric jets; it need not export a separately chosen list of
+interaction vertices. For the direct geometry route these data may be
+constructed intrinsically on `X`, without first proving a BHT equivalence to
+the auxiliary Hartshorne-Serre presentation on `J`.
+
+## Open source problem
+
+The local restricted category, positive noncentral coefficient extension,
+twisted overlap descent, and selected q79 rational topology contraction are
+now constructed. The next construction must realize their composition on the
+physical BHT/HYM source and replace the declared test target by the accepted
+typed operator while preserving:
+
+- continuum principal symbol, admissible tangent, and stratum geometry;
+- the source-hashed q79 endpoint, differential shared line, and compiled
+  connection/projector arrays;
+- a bounded domain-preserving BHT/HYM or equivalent bridge from the twisted
+  coefficient source on `J` to the carrier and topology on `X`, together with
+  the H4-T7 metric-chain and polar-product defects, when equivalence of those
+  two presentations is claimed;
+- the selected endpoint residual and metric jets required by H4-T8, plus the
+  physical BV/BRST, causal inverse and renormalization data not supplied by a
+  positive repair cost;
+- the accepted 27/rank-102 target without conflating distinct carriers; and
+- the distinction between physical action/time and repair data.

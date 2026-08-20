@@ -1,0 +1,200 @@
+"""Exact center decomposition, gauge blindness, and scalar compression witness."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    equal,
+    identity,
+    matmul,
+    matrix,
+    scale,
+    serialize_matrix,
+    trace,
+    transpose,
+)
+
+
+CERTIFICATE = (
+    ROOT / "certificates" / "z1_central_curvature_compression.json"
+)
+
+
+def subtract(left, right):
+    return add(left, scale(-1, right))
+
+
+def commutator(left, right):
+    return subtract(matmul(left, right), matmul(right, left))
+
+
+def anticommutator(left, right):
+    return add(matmul(left, right), matmul(right, left))
+
+
+def inner(left, right):
+    return trace(matmul(transpose(left), right))
+
+
+def block_diagonal_basis():
+    basis = []
+    for offset in (0, 2):
+        for row in range(2):
+            for col in range(2):
+                value = [[0 for _ in range(4)] for _ in range(4)]
+                value[offset + row][offset + col] = 1
+                basis.append(matrix(value))
+    return basis
+
+
+def main() -> int:
+    # Curvature in A=M_2(Q) direct_sum M_2(Q).
+    curvature = matrix(
+        [
+            [3, 1, 0, 0],
+            [1, 1, 0, 0],
+            [0, 0, -1, 2],
+            [0, 0, 2, 3],
+        ]
+    )
+    center = matrix(
+        [
+            [2, 0, 0, 0],
+            [0, 2, 0, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+        ]
+    )
+    traceless = subtract(curvature, center)
+    unit = identity(4)
+
+    test = matrix(
+        [
+            [0, 2, 0, 0],
+            [-1, 1, 0, 0],
+            [0, 0, 1, -1],
+            [0, 0, 3, 0],
+        ]
+    )
+
+    shifted_center = matrix(
+        [
+            [5, 0, 0, 0],
+            [0, 5, 0, 0],
+            [0, 0, -2, 0],
+            [0, 0, 0, -2],
+        ]
+    )
+    shifted_curvature = add(curvature, shifted_center)
+
+    block_one_unit = matrix(
+        [
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+        ]
+    )
+    block_two_unit = subtract(unit, block_one_unit)
+
+    # Exchange the two equal-size simple blocks.
+    swap = matrix(
+        [
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+        ]
+    )
+    swapped_center = matmul(matmul(swap, center), swap)
+    invariant_center = scale(3, unit)
+
+    reconstructed_from_jordan = scale(
+        1 / 2, anticommutator(curvature, unit)
+    )
+    basis = block_diagonal_basis()
+    shifted_commutators_match = all(
+        equal(commutator(curvature, value), commutator(shifted_curvature, value))
+        for value in basis
+    )
+
+    checks = {
+        "curvature_is_self_adjoint": equal(transpose(curvature), curvature),
+        "first_block_traceless": trace(
+            matrix([[traceless[0][0], traceless[0][1]],
+                    [traceless[1][0], traceless[1][1]]])
+        ) == 0,
+        "second_block_traceless": trace(
+            matrix([[traceless[2][2], traceless[2][3]],
+                    [traceless[3][2], traceless[3][3]]])
+        ) == 0,
+        "central_and_traceless_are_orthogonal": inner(center, traceless) == 0,
+        "center_commutes_with_test_algebra_element": equal(
+            commutator(center, test), matrix([[0] * 4 for _ in range(4)])
+        ),
+        "lie_shadow_ignores_center": equal(
+            commutator(curvature, test), commutator(traceless, test)
+        ),
+        "all_basis_commutators_ignore_arbitrary_center_shift": (
+            shifted_commutators_match
+        ),
+        "jordan_action_on_unit_recovers_full_curvature": equal(
+            reconstructed_from_jordan, curvature
+        ),
+        "first_center_coordinate_acts_as_twice_lambda": equal(
+            anticommutator(center, block_one_unit), scale(4, block_one_unit)
+        ),
+        "second_center_coordinate_acts_as_twice_lambda": equal(
+            anticommutator(center, block_two_unit), scale(2, block_two_unit)
+        ),
+        "two_block_center_is_not_exchange_invariant": not equal(
+            swapped_center, center
+        ),
+        "common_scalar_center_is_exchange_invariant": equal(
+            matmul(matmul(swap, invariant_center), swap), invariant_center
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "Z1-T1",
+        "tier": "LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS",
+        "claim": (
+            "In a semisimple operator algebra, commutator data identify "
+            "curvature only modulo the center; Jordan/action data retain the "
+            "central scalars, and block symmetry reduces their count by orbits."
+        ),
+        "exact_data": {
+            "F": serialize_matrix(curvature),
+            "central_part": serialize_matrix(center),
+            "traceless_part": serialize_matrix(traceless),
+            "arbitrary_center_shift": serialize_matrix(shifted_center),
+            "jordan_reconstruction": serialize_matrix(
+                reconstructed_from_jordan
+            ),
+            "center_dimension_before_exchange": 2,
+            "invariant_center_dimension_after_transitive_exchange": 1,
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is an identifiability and parameter-count theorem. It does "
+            "not prove that current MTT scalar rows are central curvature "
+            "coordinates or select their numerical values."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

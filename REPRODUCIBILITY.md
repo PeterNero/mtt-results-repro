@@ -58,7 +58,7 @@ preserving the exact selected Git object bytes.
   diagnostics omitted from the Git mirror.
 - `release/authority/`: frozen A01-A62 baseline plus the A63-A99 authority
   extension, with notes, certificates, calculations, and cited dependencies.
-- `release/results/`: 28 baseline result objects and 112 promoted current result
+- `release/results/`: 28 baseline result objects and 133 promoted current result
   objects.
 - `release/current_snapshot.json`: version boundary, current result IDs, source
   states, claim guard, and unified-source frontier.

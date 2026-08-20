@@ -1,0 +1,120 @@
+"""Run every deterministic local witness and validate its certificate."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+EXPERIMENTS = [
+    ROOT / "experiments" / "nonzero_defect" / "verify.py",
+    ROOT / "experiments" / "first_order_phase" / "verify.py",
+    ROOT / "experiments" / "central_extension" / "verify.py",
+    ROOT / "experiments" / "residual_hessian_theorem" / "verify.py",
+    ROOT / "experiments" / "reversible_dissipative" / "verify.py",
+    ROOT / "experiments" / "single_charge_factorization" / "verify.py",
+    ROOT / "experiments" / "curved_charge" / "verify.py",
+    ROOT / "experiments" / "jordan_lie_curvature" / "verify.py",
+    ROOT / "experiments" / "curved_repair_germ" / "verify.py",
+    ROOT / "experiments" / "admissible_tangent" / "verify.py",
+    ROOT / "experiments" / "central_curvature_compression" / "verify.py",
+    ROOT / "experiments" / "witten_repair" / "verify.py",
+    ROOT / "experiments" / "heisenberg_nil_transfer" / "verify.py",
+    ROOT / "experiments" / "restricted_nested_transfer" / "verify.py",
+    ROOT / "experiments" / "noncentral_curved_transfer" / "verify.py",
+    ROOT / "experiments" / "positive_noncentral_nested_transfer" / "verify.py",
+    ROOT / "experiments" / "strict_unital_curved_extension" / "verify.py",
+    ROOT / "experiments" / "twisted_morita_overlap_descent" / "verify.py",
+    ROOT / "experiments" / "q79_hirsch_transfer" / "verify.py",
+    ROOT / "experiments" / "bht_metric_polar_bridge" / "verify.py",
+    ROOT / "experiments" / "repair_jet_graph_functor" / "verify.py",
+]
+CERTIFICATES = [
+    ROOT / "certificates" / "h1_nonzero_defect_hessian.json",
+    ROOT / "certificates" / "h2_first_order_phase_loss.json",
+    ROOT / "certificates" / "h3_qutrit_central_extension.json",
+    ROOT / "certificates" / "h1_covariant_residual_hessian_theorem.json",
+    ROOT / "certificates" / "d1_reversible_dissipative_repair.json",
+    ROOT / "certificates" / "q1_single_charge_factorization.json",
+    ROOT / "certificates" / "c1_curved_charge_phase_curvature.json",
+    ROOT / "certificates" / "j1_common_curvature_jordan_lie.json",
+    ROOT / "certificates" / "r1_curved_cyclic_repair_germ.json",
+    ROOT / "certificates" / "a1_admissible_tangent_radial_no_go.json",
+    ROOT / "certificates" / "z1_central_curvature_compression.json",
+    ROOT / "certificates" / "w1_nested_witten_repair.json",
+    ROOT / "certificates" / "n1_heisenberg_nil_transfer.json",
+    ROOT / "certificates" / "h4_restricted_nested_transfer.json",
+    ROOT / "certificates" / "h4_noncentral_curved_transfer.json",
+    ROOT / "certificates" / "h4_positive_noncentral_nested_transfer.json",
+    ROOT / "certificates" / "h4_strict_unital_curved_extension.json",
+    ROOT / "certificates" / "h4_twisted_morita_overlap_descent.json",
+    ROOT / "certificates" / "h4_q79_hirsch_transfer.json",
+    ROOT / "certificates" / "h4_bht_metric_polar_bridge.json",
+    ROOT / "certificates" / "h4_repair_jet_graph_functor.json",
+]
+
+
+def main() -> int:
+    for experiment in EXPERIMENTS:
+        completed = subprocess.run(
+            [sys.executable, str(experiment)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            print(completed.stdout)
+            print(completed.stderr, file=sys.stderr)
+            return completed.returncode
+        print(f"PASS {experiment.relative_to(ROOT)}")
+
+    required = {"schema", "id", "tier", "claim", "checks", "all_passed", "guard"}
+    seen_ids: set[str] = set()
+    for certificate in CERTIFICATES:
+        payload = json.loads(certificate.read_text(encoding="ascii"))
+        missing = required.difference(payload)
+        checks = payload.get("checks")
+        valid_checks = (
+            isinstance(checks, dict)
+            and bool(checks)
+            and all(isinstance(value, bool) for value in checks.values())
+        )
+        certificate_id = payload.get("id")
+        internally_consistent = (
+            valid_checks
+            and payload.get("all_passed") is all(checks.values())
+        )
+        valid = (
+            not missing
+            and payload.get("schema") == "mtt.preprojection.certificate.v1"
+            and isinstance(certificate_id, str)
+            and bool(certificate_id)
+            and certificate_id not in seen_ids
+            and internally_consistent
+            and payload.get("all_passed") is True
+        )
+        if not valid:
+            print(f"FAIL {certificate.relative_to(ROOT)}")
+            if missing:
+                print(f"  missing fields: {sorted(missing)}")
+            if certificate_id in seen_ids:
+                print(f"  duplicate id: {certificate_id}")
+            if not internally_consistent:
+                print("  checks/all_passed are malformed or inconsistent")
+            return 1
+        seen_ids.add(certificate_id)
+        print(f"CERTIFIED {certificate_id} {payload['tier']}")
+
+    print(
+        f"ALL PASSED: {len(EXPERIMENTS)} experiments, "
+        f"{len(CERTIFICATES)} certificates"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

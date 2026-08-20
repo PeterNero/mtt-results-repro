@@ -1,0 +1,149 @@
+"""Exact realified witness for the single-charge factorization theorem."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    dot,
+    equal,
+    identity,
+    matmul,
+    matrix,
+    matvec,
+    scale,
+    serialize_matrix,
+    serialize_vector,
+    transpose,
+    vector,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "q1_single_charge_factorization.json"
+
+
+def block_matrix(top_left, top_right, bottom_left, bottom_right):
+    top = [a + b for a, b in zip(top_left, top_right, strict=True)]
+    bottom = [a + b for a, b in zip(bottom_left, bottom_right, strict=True)]
+    return top + bottom
+
+
+def block_diagonal(a, b):
+    zero_ab = matrix([[0 for _ in range(len(b))] for _ in range(len(a))])
+    zero_ba = matrix([[0 for _ in range(len(a))] for _ in range(len(b))])
+    return block_matrix(a, zero_ab, zero_ba, b)
+
+
+def main() -> int:
+    # A two-term differential with one harmonic basis vector.
+    d = matrix([[0, 1, 0], [0, 0, 0], [0, 0, 0]])
+    d_star = transpose(d)
+    b_plus = add(d, d_star)
+    b_minus = scale(-1, b_plus)
+    delta = matmul(b_plus, b_plus)
+
+    # Realification of C^3 as R^3(real) + R^3(imag).
+    zero = matrix([[0, 0, 0], [0, 0, 0], [0, 0, 0]])
+    unit = identity(3)
+    complex_structure = block_matrix(zero, scale(-1, unit), unit, zero)
+    b_real_plus = block_diagonal(b_plus, b_plus)
+    b_real_minus = block_diagonal(b_minus, b_minus)
+    delta_real = block_diagonal(delta, delta)
+    k_plus = scale(-1, matmul(complex_structure, b_real_plus))
+    k_minus = scale(-1, matmul(complex_structure, b_real_minus))
+    gamma = delta_real
+
+    harmonic_projector_base = matrix([[0, 0, 0], [0, 0, 0], [0, 0, 1]])
+    harmonic_projector = block_diagonal(
+        harmonic_projector_base, harmonic_projector_base
+    )
+    central_harmonic = matmul(complex_structure, harmonic_projector)
+
+    generator = add(add(k_plus, central_harmonic), scale(-1, gamma))
+    harmonic_state = vector([0, 0, 1, 0, 0, 0])
+    positive_state = vector([1, 0, 0, 0, 0, 0])
+    harmonic_velocity = matvec(generator, harmonic_state)
+    positive_velocity = matvec(generator, positive_state)
+
+    checks = {
+        "d_is_nilpotent": equal(matmul(d, d), zero),
+        "b_plus_is_self_adjoint": equal(transpose(b_plus), b_plus),
+        "phase_sign_changes_first_order_charge": not equal(b_plus, b_minus),
+        "phase_sign_leaves_square_unchanged": equal(
+            matmul(b_minus, b_minus), delta
+        ),
+        "hodge_square_exact": equal(
+            delta, matrix([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
+        ),
+        "complex_structure_is_skew": equal(
+            transpose(complex_structure), scale(-1, complex_structure)
+        ),
+        "reversible_generator_is_skew": equal(
+            transpose(k_plus), scale(-1, k_plus)
+        ),
+        "phase_sign_reverses_reversible_generator": equal(
+            k_minus, scale(-1, k_plus)
+        ),
+        "damping_is_symmetric": equal(transpose(gamma), gamma),
+        "reversible_and_damping_commute": equal(
+            matmul(k_plus, gamma), matmul(gamma, k_plus)
+        ),
+        "central_harmonic_is_skew": equal(
+            transpose(central_harmonic), scale(-1, central_harmonic)
+        ),
+        "central_action_commutes_with_damping": equal(
+            matmul(central_harmonic, gamma), matmul(gamma, central_harmonic)
+        ),
+        "harmonic_mode_has_persistent_central_motion": (
+            harmonic_velocity == vector([0, 0, 0, 0, 0, 1])
+        ),
+        "harmonic_motion_preserves_norm": (
+            dot(harmonic_state, harmonic_velocity) == 0
+        ),
+        "positive_mode_strictly_decays": (
+            dot(positive_state, positive_velocity) == -1
+        ),
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "Q1-T1",
+        "tier": "LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS",
+        "claim": (
+            "One nilpotent first-order charge emits phase-sensitive reversible "
+            "transport, a phase-independent positive Hodge damping operator, "
+            "and a harmonic sector carrying the commuting shared central action."
+        ),
+        "exact_data": {
+            "d": serialize_matrix(d),
+            "B_plus": serialize_matrix(b_plus),
+            "B_minus": serialize_matrix(b_minus),
+            "Delta": serialize_matrix(delta),
+            "K_plus_realified": serialize_matrix(k_plus),
+            "Gamma_realified": serialize_matrix(gamma),
+            "central_harmonic_generator": serialize_matrix(central_harmonic),
+            "harmonic_velocity": serialize_vector(harmonic_velocity),
+            "positive_mode_energy_derivative": str(
+                dot(positive_state, positive_velocity)
+            ),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This is a source-compression theorem, not a physical selection of "
+            "d, phase, damping rate, shared-line charge, or time."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,161 @@
+"""Exact admissible-tangent, radial no-go, and Clifford-circle witness."""
+
+from __future__ import annotations
+
+import json
+import sys
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.rational import (  # noqa: E402
+    add,
+    equal,
+    identity,
+    matmul,
+    matrix,
+    scale,
+    serialize_matrix,
+    trace,
+    transpose,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "a1_admissible_tangent_radial_no_go.json"
+
+
+def inner(left, right):
+    return trace(matmul(transpose(left), right))
+
+
+def anticommutator(left, right):
+    return add(matmul(left, right), matmul(right, left))
+
+
+def main() -> int:
+    # Grading is diag(I_2,-I_2). Both matrices are odd and self-adjoint.
+    grading = matrix(
+        [
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, -1, 0],
+            [0, 0, 0, -1],
+        ]
+    )
+    charge = matrix(
+        [
+            [0, 0, 1, 0],
+            [0, 0, 0, 1],
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+        ]
+    )
+    phase_tangent = matrix(
+        [
+            [0, 0, 0, 1],
+            [0, 0, -1, 0],
+            [0, -1, 0, 0],
+            [1, 0, 0, 0],
+        ]
+    )
+    unit = identity(4)
+    zero = matrix([[0, 0, 0, 0] for _ in range(4)])
+
+    curvature = matmul(charge, charge)
+    tangent_square = matmul(phase_tangent, phase_tangent)
+    linearized_tangent = anticommutator(charge, phase_tangent)
+    linearized_radial = anticommutator(charge, charge)
+
+    first_variation_tangent = inner(curvature, linearized_tangent)
+    first_variation_radial = inner(curvature, linearized_radial)
+    ambient_hessian_tangent = (
+        inner(linearized_tangent, linearized_tangent)
+        + inner(curvature, anticommutator(phase_tangent, phase_tangent))
+    )
+
+    ambient_gradient = scale(2, matmul(curvature, charge))
+    circle_acceleration = scale(-1, charge)
+    second_fundamental_correction = inner(
+        ambient_gradient, circle_acceleration
+    )
+    intrinsic_circle_hessian = (
+        ambient_hessian_tangent + second_fundamental_correction
+    )
+
+    rational_circle_charge = add(
+        scale(Fraction(3, 5), charge),
+        scale(Fraction(4, 5), phase_tangent),
+    )
+    rational_circle_square = matmul(
+        rational_circle_charge, rational_circle_charge
+    )
+
+    checks = {
+        "charge_is_self_adjoint": equal(transpose(charge), charge),
+        "phase_tangent_is_self_adjoint": equal(
+            transpose(phase_tangent), phase_tangent
+        ),
+        "charge_is_odd": equal(anticommutator(grading, charge), zero),
+        "phase_tangent_is_odd": equal(
+            anticommutator(grading, phase_tangent), zero
+        ),
+        "nonzero_curvature_is_identity": equal(curvature, unit),
+        "phase_generators_anticommute": equal(linearized_tangent, zero),
+        "phase_tangent_has_same_square": equal(tangent_square, unit),
+        "restricted_first_variation_vanishes": first_variation_tangent == 0,
+        "radial_first_variation_is_positive": first_variation_radial == 8,
+        "ambient_phase_hessian_is_positive": ambient_hessian_tangent == 8,
+        "circle_second_fundamental_term_cancels": (
+            second_fundamental_correction == -8
+        ),
+        "intrinsic_circle_hessian_is_zero": intrinsic_circle_hessian == 0,
+        "rational_circle_point_has_constant_square": equal(
+            rational_circle_square, unit
+        ),
+    }
+
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "A1-T1",
+        "tier": "LOCAL_THEOREM_WITH_EXACT_FINITE_WITNESS",
+        "claim": (
+            "Persistent nonzero curvature requires a restricted admissible "
+            "tangent: the radial direction excludes nonzero criticality, while "
+            "an anticommuting Clifford phase direction gives a constant-square "
+            "circle and an intrinsic Hessian zero mode."
+        ),
+        "exact_data": {
+            "Q": serialize_matrix(charge),
+            "phase_tangent": serialize_matrix(phase_tangent),
+            "F": serialize_matrix(curvature),
+            "L_Q_phase": serialize_matrix(linearized_tangent),
+            "L_Q_radial": serialize_matrix(linearized_radial),
+            "rational_circle_Q_3_5_4_5": serialize_matrix(
+                rational_circle_charge
+            ),
+            "rational_circle_square": serialize_matrix(rational_circle_square),
+            "first_variation_radial": str(first_variation_radial),
+            "ambient_phase_hessian": str(ambient_hessian_tangent),
+            "second_fundamental_correction": str(
+                second_fundamental_correction
+            ),
+            "intrinsic_circle_hessian": str(intrinsic_circle_hessian),
+        },
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This proves a finite structural no-go and constrained witness. It "
+            "does not select the physical admissible stratum, identify the "
+            "phase circle with time, or realize q79."
+        ),
+    }
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,75 @@
+"""Exact witness that a positive square erases first-order phase data."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mtt_repair.exact import (  # noqa: E402
+    C3,
+    OMEGA,
+    adjoint,
+    add,
+    identity,
+    matmul,
+    matrix,
+    matrix_equal,
+    scale,
+    serialize_matrix,
+)
+
+
+CERTIFICATE = ROOT / "certificates" / "h2_first_order_phase_loss.json"
+
+
+def main() -> int:
+    d = matrix([[0, 1], [0, 0]])
+    d_star = adjoint(d)
+    # B_u = u D + conjugate(u) D^*. Use u=1 and u=omega.
+    b_one = add(d, d_star)
+    b_omega = add(scale(OMEGA, d), scale(OMEGA.conjugate(), d_star))
+    square_one = matmul(b_one, b_one)
+    square_omega = matmul(b_omega, b_omega)
+    unit = identity(2)
+
+    checks = {
+        "d_is_nilpotent": matrix_equal(matmul(d, d), matrix([[0, 0], [0, 0]])),
+        "b_one_is_hermitian": matrix_equal(adjoint(b_one), b_one),
+        "b_omega_is_hermitian": matrix_equal(adjoint(b_omega), b_omega),
+        "first_order_charges_differ": not matrix_equal(b_one, b_omega),
+        "b_one_square_is_identity": matrix_equal(square_one, unit),
+        "b_omega_square_is_identity": matrix_equal(square_omega, unit),
+        "squares_are_identical": matrix_equal(square_one, square_omega),
+        "omega_is_nontrivial_cube_root": OMEGA != C3(1) and OMEGA**3 == C3(1),
+    }
+    payload = {
+        "schema": "mtt.preprojection.certificate.v1",
+        "id": "H2-W1",
+        "tier": "EXACT_FINITE_WITNESS",
+        "claim": (
+            "Distinct phase-bearing Hermitian first-order charges can have "
+            "the same positive square."
+        ),
+        "B_1": serialize_matrix(b_one),
+        "B_omega": serialize_matrix(b_omega),
+        "common_square": serialize_matrix(square_one),
+        "checks": checks,
+        "all_passed": all(checks.values()),
+        "guard": (
+            "This establishes information loss under squaring; it does not identify "
+            "the retained phase with physical CP or time orientation."
+        ),
+    }
+    CERTIFICATE.parent.mkdir(parents=True, exist_ok=True)
+    CERTIFICATE.write_text(json.dumps(payload, indent=2) + "\n", encoding="ascii")
+    print(json.dumps(payload, indent=2))
+    return 0 if payload["all_passed"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
