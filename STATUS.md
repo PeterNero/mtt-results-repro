@@ -1,6 +1,6 @@
 # Current Scientific Status
 
-Snapshot date: 2026-08-17
+Snapshot date: 2026-08-20
 
 ## Headline
 
@@ -38,18 +38,34 @@ the declared scope of the SM baseline or silently close physical endpoints.
 
 ## Added Since The July Baseline
 
-- A canonical q79 operational quantum model, Fock-output measure, and minimal
-  recorder action on their declared selected finite domains.
-- A framed free Dirac CAR net on a conditional background, plus formal local-QME
-  structure. Interacting nonperturbative four-dimensional QFT remains open.
-- Universal projective-HYM naturality, an explicit Cech projector compiler, and
-  the intrinsic spectral-strain shorted-Hessian theorem.
+- A canonical q79 operational quantum model, Fock-output measure, minimal
+  recorder action, projectively descended P/Q instrument and exact count-path
+  disintegration on their declared selected finite domains.
+- A framed free Dirac CAR net, formal local-QME structure, fixed-coupling
+  finite-regulator C-star dynamics and states, exact first-tangent matching,
+  compact-gauge/ghost-zero Ward control, and orbitwise finite spectral chiral
+  measures. Uniform regulator removal and interacting nonperturbative
+  four-dimensional QFT remain open.
+- Universal projective-HYM naturality, an explicit Cech projector compiler,
+  the intrinsic and globally stratified spectral-strain shorted-Hessian
+  theorems, and the exact boundary-Hessian no-go.
+- The selected connected degree-three cover has full S3 monodromy but trivial
+  deck group. The correct associated strain local system, Dic3/S3 Reynolds
+  descent and root-independent shared-Z64 C4 action are exact; physical
+  nonzero-Chern HYM invariance or a direct TT block remains open.
+- The literal Fourier-Mukai/HYM contract remains 2/11, but its nine open rows
+  reduce to three sequential source packages: the visible beta_C-zero twisted
+  source, a common visible-hidden HYM endpoint, and physical C4-HYM invariance
+  or the equivalent direct block.
 - A cohesive-superconnection and Maurer-Cartan repair language, global Fitting
-  descent, a conditional continuum-recorder compiler, and an operational
-  ontology non-entailment theorem.
+  descent, local Cech-Hilbert and nonlinear repair-basin descent, a conditional
+  continuum-recorder compiler, and an operational ontology non-entailment
+  theorem.
 - A rank-zero large-gauge kernel result and the complete symbolic six-row
-  V3/W9 residual with corrected rank-102 structure; its physical coefficients
-  and endpoint are not selected.
+  V3/W9 residual with corrected rank-102 structure. The hidden adjoint has the
+  exact E[3] split `8 + 8x9`; equivariance conditionally reduces the structural
+  mask from 10,404 to 1,548 ordered positions. Its physical character profile,
+  coefficients, Galerkin map and endpoint are not selected.
 - Eta9 Gate 1 completion for all 30 original-Jacobian groups and 225 selected
   support columns, together with a characteristic-zero reduction. The detecting
   meridian and integral periods remain open.
@@ -69,9 +85,11 @@ the declared scope of the SM baseline or silently close physical endpoints.
   open. The unified source itself remains a hypothesis; selected visible
   V3/common-chamber data, differential
   Green-Schwarz/Bianchi closure, physical endpoint coefficients, and numerical
-  continuum-to-finite execution remain open. The repository verifier also has
-  two stale G3DI artifact locks; those must be repaired before the G3FR campaign
-  is a portable promoted proof package.
+  continuum-to-finite execution remain open. A clean checkout of the committed
+  UST snapshot stops before theorem execution because
+  `state/ust_f1016_givaro_map_pivot_replay.selftest.packed-sms` is required but
+  not tracked. The active UST worktree contains that generated object, so this
+  is recorded as an ongoing portability obligation rather than promoted proof.
 - The A63-A89 gauge-action program reduces the three common-scheme gauge
   coordinates to one shared kinetic anchor at the adopted corpus-action/profile
   tier. The two ratios are frozen compatibility results, not held-out evidence;
@@ -115,7 +133,9 @@ the declared scope of the SM baseline or silently close physical endpoints.
   published numerical neutral matrix uses two measured mass-squared splittings.
 - A selected nonzero QCD axion-current anomaly map, strong-CP solution, and
   absolute axion normalization.
-- MTT derivation of BRST, path-integral, Born/record, and capture-measure rules.
+- Universal upper-source derivation of path-integral/BRST structures and an
+  objective actualization law. The canonical q79 Born/record rule is closed
+  only on its declared binary one-anchor operational domain.
 - Constructive nonperturbative four-dimensional QFT.
 - Physical Newton/Planck normalization and full stress-energy response.
 - Strict spectral-action normalization from selected four-dimensional base,
@@ -154,7 +174,7 @@ count is claimed. See `release/parameter_ledger.json` for the values and roles.
 
 The 62-entry A01-A62 authority chain is the frozen July baseline, not the whole
 current state. A63-A99 form a 37-entry authority extension, and the August
-short-path layer contains 102 promoted result entries.
+short-path layer contains 112 promoted result entries.
 Older packet statuses and unpromoted exploratory artifacts are raw evidence
 only. Adjacent source repositories remain in the archive at their configured
 scope, including open, no-go, superseded, and retired routes; they affect current

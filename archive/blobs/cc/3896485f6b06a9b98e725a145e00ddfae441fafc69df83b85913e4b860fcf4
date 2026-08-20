@@ -1,0 +1,276 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "local_closure_repair_descent_and_conditional_actualization_functor.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def matrix(values: list[list[object]], locals_: dict[str, object] | None = None) -> sp.Matrix:
+    local_values = locals_ or {}
+    return sp.Matrix(
+        [[sp.sympify(entry, locals=local_values) for entry in row] for row in values]
+    )
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    sources: dict[str, dict] = {}
+    for label, record in packet["inputs"].items():
+        require(record["repository"] == "closure-dynamics", f"repository: {label}")
+        source_path = ROOT / record["relative_path"]
+        require(source_path.is_file(), f"source exists: {label}")
+        require(sha256(source_path) == record["sha256"], f"source hash: {label}")
+        source = load(source_path)
+        identity = source.get("schema") or source.get("certificate")
+        require(identity == record["identity"], f"source identity: {label}")
+        require(source["status"] == record["status"], f"source status: {label}")
+        require(source_checks_pass(source), f"source checks: {label}")
+        sources[label] = source
+    require(len(sources) == 6, "six bound sources")
+    return sources
+
+
+def verify_two_basin_witness(packet: dict) -> None:
+    x, y, r = sp.symbols("x y r", real=True)
+    phi = sp.Matrix([x**2 - 1, y])
+    cost = sp.expand(phi.dot(phi) / 2)
+    repair = -sp.Matrix([sp.diff(cost, x), sp.diff(cost, y)])
+    require(is_zero(repair - sp.Matrix([-2 * x * (x**2 - 1), -y])), "repair field")
+    hessian = sp.hessian(cost, (x, y))
+    require(hessian.subs({x: 1, y: 0}) == sp.diag(4, 1), "plus Hessian")
+    require(hessian.subs({x: -1, y: 0}) == sp.diag(4, 1), "minus Hessian")
+    require(
+        repair.jacobian((x, y)).subs({x: 1, y: 0}) == -sp.diag(4, 1),
+        "flow Jacobian",
+    )
+
+    frames = [
+        sp.eye(2),
+        sp.Matrix([[0, -1], [1, 0]]),
+        -sp.eye(2),
+    ]
+    transitions = [
+        frames[1] * frames[0].T,
+        frames[2] * frames[1].T,
+        frames[0] * frames[2].T,
+    ]
+    require(is_zero(transitions[2] * transitions[1] * transitions[0] - sp.eye(2)), "cycle")
+
+    z = sp.Matrix([x, y])
+    local_costs: list[sp.Expr] = []
+    local_fields: list[sp.Matrix] = []
+    for frame in frames:
+        root = frame.T * z
+        local_phi = sp.Matrix([root[0] ** 2 - 1, root[1]])
+        local_cost = sp.expand(local_phi.dot(local_phi) / 2)
+        local_costs.append(local_cost)
+        local_fields.append(-sp.Matrix([sp.diff(local_cost, x), sp.diff(local_cost, y)]))
+
+    for edge, (source, target) in enumerate(((0, 1), (1, 2), (2, 0))):
+        transition = transitions[edge]
+        transformed = transition * z
+        target_cost = local_costs[target].subs(
+            {x: transformed[0], y: transformed[1]}, simultaneous=True
+        )
+        target_field = local_fields[target].subs(
+            {x: transformed[0], y: transformed[1]}, simultaneous=True
+        )
+        require(sp.simplify(target_cost - local_costs[source]) == 0, f"cost edge {edge}")
+        require(
+            is_zero(sp.simplify(target_field - transition * local_fields[source])),
+            f"field edge {edge}",
+        )
+
+    positive = sp.symbols("positive", positive=True)
+    denominator = sp.sqrt(positive**2 + (1 - positive**2) * r**4)
+    flow_x = positive / denominator
+    require(
+        sp.simplify(-r * sp.diff(flow_x, r) + 2 * flow_x * (flow_x**2 - 1)) == 0,
+        "exact flow",
+    )
+    require(sp.limit(flow_x.subs(positive, sp.Rational(1, 2)), r, 0, dir="+") == 1, "plus limit")
+    require(sp.limit(-flow_x.subs(positive, sp.Rational(1, 2)), r, 0, dir="+") == -1, "minus limit")
+
+    stored = packet["two_basin_nonlinear_witness"]
+    require(stored["cost"] == str(cost), "stored cost")
+    require(stored["fixed_point_Hessian"] == [["4", "0"], ["0", "1"]], "stored Hessian")
+    require(stored["global_labels_under_identity_holonomy"] == ["minus", "plus"], "stored labels")
+
+
+def verify_three_well_witness(packet: dict) -> None:
+    u = sp.symbols("u", real=True)
+    phi = u * (u**2 - 1)
+    cost = sp.expand(phi**2 / 2)
+    field = sp.factor(-sp.diff(cost, u))
+    require(field == -u * (u - 1) * (u + 1) * (3 * u**2 - 1), "three-well field")
+    require(sp.simplify(field.subs(u, -u) + field) == 0, "reflection")
+    hessian = sp.diff(cost, u, 2)
+    require([hessian.subs(u, point) for point in (-1, 0, 1)] == [4, 1, 4], "minimum Hessians")
+
+    identity = sp.Matrix([[-1, 1, 0], [0, -1, 1], [1, 0, -1]])
+    reflection = sp.Matrix([[-1, 1, 0], [0, -1, 1], [1, 0, 1]])
+    require(identity.rank() == 2 and len(identity.nullspace()) == 1, "identity equalizer")
+    require(reflection.rank() == 3 and len(reflection.nullspace()) == 0, "reflection equalizer")
+
+    stored = packet["three_well_holonomy_witness"]
+    require(stored["zero_defect_labels"] == [-1, 0, 1], "stored zeros")
+    require(stored["identity_holonomy_fixed_labels"] == [-1, 0, 1], "identity labels")
+    require(stored["reflection_holonomy_fixed_labels"] == [0], "reflection labels")
+    require(stored["identity_Cech"]["nullity"] == 1, "stored identity nullity")
+    require(stored["reflection_Cech"]["nullity"] == 0, "stored reflection nullity")
+
+
+def verify_q79_projective_witness(packet: dict, sources: dict[str, dict]) -> None:
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    twisted = sources["twisted_cohesive_overlap_witness"]["exact_twisted_descent_witness"]
+    shared = sources["finite_q79_closure_repair"]
+    local_first = sources["local_first_Cech_Hilbert_descent"]
+    open_stratum = sources["open_stratum_qutrit_unitary"]
+    require(
+        open_stratum["open_stratum_cohomology_intertwiner_theorem"]["clock_basis_intertwiner"]
+        == "I_open=I_3",
+        "open-stratum carrier identification",
+    )
+    g01 = matrix(twisted["G01"], locals_)
+    g12 = matrix(twisted["G12"], locals_)
+    g20 = matrix(twisted["G20"], locals_)
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    cycle = sp.simplify(g01 * g12 * g20)
+    require(is_zero(cycle - omega * sp.eye(3)), "central cycle")
+    require(all(is_zero(g.H * g - sp.eye(3)) for g in (g01, g12, g20)), "unitarity")
+
+    p_real = matrix(shared["finite_source_data"]["tangent_or_invariant_projector_P"], locals_)
+    p0 = p_real[:3, :3]
+    p1 = sp.simplify(g01.inv() * p0 * g01)
+    p2 = sp.simplify(g12.inv() * p1 * g12)
+    projectors = (p0, p1, p2)
+    complements = tuple(sp.eye(3) - p for p in projectors)
+    require(
+        all(
+            p.rank() == 1 and is_zero(p.H - p) and is_zero(p**2 - p)
+            for p in projectors
+        ),
+        "transported projectors",
+    )
+    require(is_zero(g01 * p1 - p0 * g01), "G01 projector")
+    require(is_zero(g12 * p2 - p1 * g12), "G12 projector")
+    require(is_zero(g20 * p0 - p2 * g20), "G20 projector")
+
+    s = sp.symbols("s", positive=True)
+    flows = tuple(p + s * q for p, q in zip(projectors, complements))
+    require(is_zero(g01 * flows[1] - flows[0] * g01), "G01 flow")
+    require(is_zero(g12 * flows[2] - flows[1] * g12), "G12 flow")
+    require(is_zero(g20 * flows[0] - flows[2] * g20), "G20 flow")
+    require(is_zero(g01.H * complements[0] * g01 - complements[1]), "G01 cost")
+    require(is_zero(g12.H * complements[1] * g12 - complements[2]), "G12 cost")
+    require(is_zero(g20.H * complements[2] * g20 - complements[0]), "G20 cost")
+
+    coherent = p0 * sp.Matrix([1, 0, 0])
+    require(is_zero(coherent - sp.ones(3, 1) / 3), "coherent limit")
+    require(is_zero(cycle * coherent - omega * coherent), "projective return")
+    require(
+        local_first["q79_central_twist_witness"]["ordinary_vector_global_dimension"] == 0,
+        "ordinary obstruction",
+    )
+
+    stored = packet["q79_projective_repair_witness"]
+    require(stored["projector_ranks"] == [1, 1, 1], "stored ranks")
+    require(stored["ordinary_vector_global_dimension"] == 0, "stored vector dimension")
+    require(stored["projective_coherent_limit_ray"] == ["1", "1", "1"], "stored ray")
+    require(stored["carrier_identification"].startswith("I_open=I_3"), "stored carrier")
+    require(stored["tier"].startswith("CLOSED_EXACT_OPEN_STRATUM_FINITE_STRUCTURAL"), "stored tier")
+
+
+def verify_theorem_contract(packet: dict, sources: dict[str, dict]) -> None:
+    theorem = packet["nonlinear_descent_theorem"]
+    require(theorem["cost"] == "C_i=1/2||Phi_i||^2", "cost theorem")
+    require(theorem["flow_intertwining"] == "U_ij o R_i(t)=R_j(t) o U_ij", "flow theorem")
+    actualization = packet["conditional_actualization_functor"]
+    require(actualization["global_map"] == "A:Gamma(Basin)->Gamma(Fix)", "limit map")
+    require("Hol_gamma" in actualization["global_label_formula"], "label formula")
+    require(len(actualization["unique_outcome_sufficient_conditions"]) == 2, "unique conditions")
+
+    linear = packet["linearization_recovery"]
+    require(linear["Hessian"] == "H_i=L_i^* L_i", "linear Hessian")
+    require("Cech equalizer" in linear["conclusion"], "linear descent")
+
+    cohesive = sources["cohesive_Maurer_Cartan_repair"]
+    require(
+        cohesive["same_source_cohesive_repair_theorem"]["curvature_residual"]
+        == packet["cohesive_specialization"]["existing_global_nonlinear_residual"],
+        "cohesive residual",
+    )
+
+    tiers = packet["claim_tiers"]
+    require(tiers["nonlinear_overlap_equivariant_flow_descent"] == "CLOSED_EXACT", "descent tier")
+    require(tiers["physical_q79_nonlinear_source"] == "OPEN", "source boundary")
+    require(tiers["unique_physical_actualization"] == "OPEN", "actualization boundary")
+    require(tiers["many_worlds_false"] == "NOT_CLAIMED", "interpretation boundary")
+    require(packet["frontier_delta"]["next_theorem"] == "mttSelectedPhysicalClosureRepairSourceMetricAndBasinLaw.v1", "next theorem")
+    require(packet["parameter_ledger"] == {
+        "new_continuous_fit_parameters": 0,
+        "new_discrete_fit_parameters": 0,
+        "observed_physical_values_used": 0,
+        "witness_coefficients_are_physical_inputs": False,
+    }, "parameter ledger")
+    require(all(value is False for value in packet["guardrails"].values()), "guardrails")
+    require(all_boolean_leaves_true(packet["checks"]), "packet checks")
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"]
+        == "MTTLocalClosureRepairDescentAndConditionalActualizationFunctor.v1",
+        "schema",
+    )
+    sources = verify_inputs(packet)
+    verify_two_basin_witness(packet)
+    verify_three_well_witness(packet)
+    verify_q79_projective_witness(packet, sources)
+    verify_theorem_contract(packet, sources)
+    print("LOCAL_CLOSURE_REPAIR_DESCENT_AND_CONDITIONAL_ACTUALIZATION_FUNCTOR_VERIFY_PASS")
+
+
+if __name__ == "__main__":
+    main()

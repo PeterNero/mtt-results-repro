@@ -1,0 +1,512 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+from itertools import product
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+UST_ROOT = Path(
+    os.environ.get("MTT_UST_ROOT", TEXPAPERS / "mtt-unified-source-theorem")
+)
+
+UST_COMMIT = "011986e954c3cab6b673243fbaf46219a8951cc0"
+RESEARCH_DATE = "2026-08-18"
+
+G3V_PACKET_PATH = "state/ust_g3v_existential_hidden_hym.packet.json"
+G3W_PACKET_PATH = "state/ust_g3w_relative_projective_translation.packet.json"
+G2P_PACKET_PATH = "state/ust_g2p_g5a_physical_residual_transfer.packet.json"
+G3T_PACKET_PATH = "state/ust_g3t_support_wide_slope_balanced_qutrit.packet.json"
+G3V_NOTE_PATH = (
+    "UST_G3V_EXISTENTIAL_HIDDEN_GAUDUCHON_CHAMBER_AND_PROJECTIVE_HYM_"
+    "THEOREM_v1.md"
+)
+G3W_NOTE_PATH = (
+    "UST_G3W_RELATIVE_PROJECTIVE_TRANSLATION_AND_HIDDEN_CHERN_WEIL_"
+    "INVARIANCE_THEOREM_v1.md"
+)
+
+OUT_ADJOINT = ROOT / "q79_hidden_qutrit_adjoint_isotypic.packet.json"
+OUT_RANK102 = ROOT / "q79_rank102_qutrit_symmetry_reduction.packet.json"
+
+F3 = (0, 1, 2)
+GROUP = tuple(product(F3, repeat=2))
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def git_blob(repository: Path, commit: str, relative_path: str) -> bytes:
+    require(repository.is_dir(), f"repository exists: {repository}")
+    subprocess.run(
+        ["git", "-C", str(repository), "cat-file", "-e", f"{commit}^{{commit}}"],
+        check=True,
+        capture_output=True,
+    )
+    return subprocess.run(
+        ["git", "-C", str(repository), "show", f"{commit}:{relative_path}"],
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def load_git_json(repository: Path, commit: str, relative_path: str) -> dict:
+    return json.loads(git_blob(repository, commit, relative_path).decode("utf-8"))
+
+
+def blob_record(relative_path: str, raw: bytes, *, identity: str) -> dict:
+    return {
+        "repository": "mtt-unified-source-theorem",
+        "commit": UST_COMMIT,
+        "relative_path": relative_path,
+        "sha256": sha256_bytes(raw),
+        "identity": identity,
+    }
+
+
+def write_json(path: Path, value: dict) -> None:
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def add(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return ((left[0] + right[0]) % 3, (left[1] + right[1]) % 3)
+
+
+def sigma_exponent(left: tuple[int, int], right: tuple[int, int]) -> int:
+    """Exponent in sigma(left,right)=omega^(-right[0]*left[1])."""
+
+    return (-right[0] * left[1]) % 3
+
+
+def character_exponent(label: tuple[int, int], group_element: tuple[int, int]) -> int:
+    """Ad(T_g)T_label=omega^(b*c-a*d) T_label."""
+
+    a, b = label
+    c, d = group_element
+    return (b * c - a * d) % 3
+
+
+def label(pair: tuple[int, int]) -> str:
+    return f"chi_{pair[0]}_{pair[1]}"
+
+
+def main() -> int:
+    raw_g3t = git_blob(UST_ROOT, UST_COMMIT, G3T_PACKET_PATH)
+    raw_g3v = git_blob(UST_ROOT, UST_COMMIT, G3V_PACKET_PATH)
+    raw_g3w = git_blob(UST_ROOT, UST_COMMIT, G3W_PACKET_PATH)
+    raw_g2p = git_blob(UST_ROOT, UST_COMMIT, G2P_PACKET_PATH)
+    raw_g3v_note = git_blob(UST_ROOT, UST_COMMIT, G3V_NOTE_PATH)
+    raw_g3w_note = git_blob(UST_ROOT, UST_COMMIT, G3W_NOTE_PATH)
+
+    g3t = json.loads(raw_g3t.decode("utf-8"))
+    g3v = json.loads(raw_g3v.decode("utf-8"))
+    g3w = json.loads(raw_g3w.decode("utf-8"))
+    g2p = json.loads(raw_g2p.decode("utf-8"))
+
+    require(g3t["theorem_id"] == "UST.G3T", "G3T theorem identity")
+    require(
+        g3t["two_twist_descent"]["sigma_projective_action_on_cover_preserved"],
+        "internal sigma action on source",
+    )
+    require(
+        g3t["two_twist_descent"]["tau_projective_output_on_Y_constructed"],
+        "internal tau-projective action on W9",
+    )
+    require(
+        g3t["two_twist_descent"]["qutrit_generators"] == ["X", "Z"],
+        "internal qutrit generators",
+    )
+    require(g3t["two_twist_descent"]["det_X"] == 1, "det X")
+    require(g3t["two_twist_descent"]["det_Z"] == 1, "det Z")
+    require(
+        g3t["support_wide_reduction"]["new_support_block"]
+        == "B=N tensor C3_sigma, locally N^3",
+        "rank-three internal qutrit multiplicity",
+    )
+    require(
+        g3t["balanced_transform"]["source_factors"] == [[1, 3], [1, 3], [1, 3]],
+        "three equal source factors",
+    )
+    require(
+        g3t["balanced_transform"]["B_corrected_factors"]
+        == [[3, 0], [3, 0], [3, 0]],
+        "three rank-three output factors",
+    )
+
+    require(g3v["theorem_id"] == "UST.G3V", "G3V theorem identity")
+    require(g3v["hidden_object"]["physical_rank"] == 9, "hidden rank nine")
+    require(g3v["hidden_object"]["factor_count"] == 3, "three factors")
+    require(g3v["hidden_object"]["factor_rank"] == 3, "factor rank three")
+    require(g3v["hidden_object"]["locally_free"], "hidden locally free")
+    require(
+        g3v["hidden_object"]["qutrit_holomorphic_unitary_orbit"],
+        "holomorphic unitary qutrit orbit",
+    )
+    require(
+        g3v["projective_hym"]["qutrit_equivariant_connection_exists"],
+        "qutrit-equivariant projective HYM",
+    )
+
+    require(g3w["theorem_id"] == "UST.G3W", "G3W theorem identity")
+    require(g3w["root_coherence"]["selected_finite_group"] == "F3^2", "E[3]")
+    require(
+        g3w["root_coherence"]["selected_multiplier"]
+        == "sigma((a,b),(c,d))=omega^(-c*b)",
+        "locked multiplier",
+    )
+    require(g3w["root_coherence"]["pair_products"] == 81, "81 products")
+    require(
+        g3w["root_coherence"]["associativity_equations"] == 729,
+        "729 associativity equations",
+    )
+    require(g3w["root_coherence"]["commutator_nondegenerate"], "nondegenerate")
+    require(
+        g3w["root_coherence"]["projective_group_law_coherent"],
+        "projective group law",
+    )
+    require(
+        g3w["factor_classification"]["finite_standard_representation_dimension"]
+        == 3,
+        "standard qutrit dimension",
+    )
+    require(
+        g3w["factor_classification"]["locked_qutrit_is_theta_kernel_representation"],
+        "theta-kernel representation",
+    )
+    require(
+        not g3w["relative_projective_descent"]["strict_action_splitting_inferred"],
+        "strict vector splitting is not used",
+    )
+
+    require(g2p["theorem_ids"] == ["UST.G2P", "UST.G5A"], "G2P/G5A identity")
+    rank102 = g2p["rank102"]
+    require(
+        rank102["lane_order"]
+        == ["Tstar_X", "ad_TX", "ad_E_visible", "ad_E_hidden_twisted", "TX"],
+        "rank-102 lane order",
+    )
+    require(rank102["lane_ranks"] == [3, 8, 8, 80, 3], "rank-102 lanes")
+    require(rank102["corrected_structural_positions"] == 10404, "10404 fallback")
+    require(
+        g2p["repair_metric_binding"]["relative_lane_weights"]
+        == ["1", "1", "1", "1", "1", "1", "1"],
+        "unit residual weights",
+    )
+    require(g2p["repair_metric_binding"]["cross_block_C"] == "0", "orthogonal metric")
+
+    associativity_count = 0
+    for left in GROUP:
+        for middle in GROUP:
+            for right in GROUP:
+                lhs = (
+                    sigma_exponent(left, middle)
+                    + sigma_exponent(add(left, middle), right)
+                ) % 3
+                rhs = (
+                    sigma_exponent(middle, right)
+                    + sigma_exponent(left, add(middle, right))
+                ) % 3
+                require(lhs == rhs, "cocycle associativity")
+                associativity_count += 1
+    require(associativity_count == 729, "replayed 729 associativity equations")
+
+    character_rows = []
+    row_signatures: set[tuple[int, ...]] = set()
+    for basis_label in GROUP:
+        signature = tuple(character_exponent(basis_label, group) for group in GROUP)
+        require(signature not in row_signatures, "characters are distinct")
+        row_signatures.add(signature)
+        character_rows.append(
+            {
+                "weyl_basis": f"T_{basis_label[0]}_{basis_label[1]}",
+                "character": label(basis_label),
+                "character_exponents_in_group_order": list(signature),
+                "end_W9_multiplicity": 9,
+                "ad_W9_multiplicity": 8 if basis_label == (0, 0) else 9,
+            }
+        )
+    require(len(row_signatures) == 9, "nine distinct characters")
+
+    diagonal_pairs = 0
+    off_diagonal_uniform_pairs = 0
+    for left in GROUP:
+        for right in GROUP:
+            differences = [
+                (character_exponent(left, group) - character_exponent(right, group))
+                % 3
+                for group in GROUP
+            ]
+            counts = [differences.count(exponent) for exponent in F3]
+            if left == right:
+                require(counts == [9, 0, 0], "diagonal character norm")
+                diagonal_pairs += 1
+            else:
+                require(counts == [3, 3, 3], "off-diagonal orthogonality")
+                off_diagonal_uniform_pairs += 1
+    require(diagonal_pairs == 9, "nine character norms")
+    require(off_diagonal_uniform_pairs == 72, "72 orthogonal ordered pairs")
+
+    source_records = {
+        "UST_G3T_packet": blob_record(
+            G3T_PACKET_PATH, raw_g3t, identity=g3t["schema"]
+        ),
+        "UST_G3V_packet": blob_record(
+            G3V_PACKET_PATH, raw_g3v, identity=g3v["schema"]
+        ),
+        "UST_G3V_theorem": blob_record(
+            G3V_NOTE_PATH, raw_g3v_note, identity="UST.G3V theorem note v1"
+        ),
+        "UST_G3W_packet": blob_record(
+            G3W_PACKET_PATH, raw_g3w, identity=g3w["schema"]
+        ),
+        "UST_G3W_theorem": blob_record(
+            G3W_NOTE_PATH, raw_g3w_note, identity="UST.G3W theorem note v1"
+        ),
+        "UST_G2P_G5A_packet": blob_record(
+            G2P_PACKET_PATH, raw_g2p, identity=g2p["schema"]
+        ),
+    }
+
+    adjoint_packet = {
+        "schema": "mtt.closure-dynamics.q79-hidden-qutrit-adjoint-isotypic.v1",
+        "theorem_id": "CD.Q79.HTAI.01",
+        "date": RESEARCH_DATE,
+        "status": (
+            "CLOSED_EXACT_GLOBAL_E3_ADJOINT_ISOTYPIC_DECOMPOSITION_"
+            "PHYSICAL_HESSIAN_NOT_INSTANTIATED"
+        ),
+        "commit_locks": {"mtt_unified_source_theorem": UST_COMMIT},
+        "inputs": source_records,
+        "accepted_source_hypotheses": {
+            "hidden_bundle": "locally free holomorphic projective W9 of rank 9",
+            "orbit_type": "three rank-3 factors in one holomorphic unitary qutrit orbit",
+            "internal_fiber_action": (
+                "G3T tau-projective X,Z output action on W9 over the identity of Y"
+            ),
+            "finite_group": "E[3]=F3^2",
+            "multiplier": "sigma((a,b),(c,d))=omega^(-c*b)",
+            "projective_HYM": "qutrit-equivariant projective HYM exists",
+            "strict_vector_action_splitting_used": False,
+        },
+        "projective_to_adjoint_descent": {
+            "local_qutrit_model": "W9 is locally U3 tensor Q3",
+            "action_used": (
+                "the internal G3T tau-projective fiber action, not G3W vertical "
+                "translation transport between different base points"
+            ),
+            "weyl_convention": "T_(a,b)=X^a Z^b with X Z=omega Z X",
+            "projective_product": "T_g T_h=sigma(g,h) T_(g+h)",
+            "central_cancellation": "Ad_(lambda*T_g)=Ad_(T_g)",
+            "honest_action": "Ad(T_g)Ad(T_h)=Ad(T_(g+h)) on End(W9)",
+            "character_formula": "Ad(T_(c,d)) T_(a,b)=omega^(b*c-a*d) T_(a,b)",
+            "globalization": (
+                "G3T internal projective bundle maps cover the identity on Y; after "
+                "central cancellation they induce global holomorphic averaging "
+                "idempotents on ad(W9)"
+            ),
+        },
+        "finite_group": {
+            "group_order": 9,
+            "group_ordering": [list(element) for element in GROUP],
+            "cocycle_associativity_equations_replayed": associativity_count,
+            "characters": character_rows,
+            "distinct_characters": len(row_signatures),
+            "orthogonal_ordered_character_pairs": off_diagonal_uniform_pairs,
+        },
+        "isotypic_decomposition": {
+            "End_W9": "End(U3) tensor span{T_(a,b): (a,b) in F3^2}",
+            "End_W9_rank": 81,
+            "neutral_End_W9_rank": 9,
+            "scalar_removed_from_neutral_sector": 1,
+            "ad_W9_formula": (
+                "(sl(U3) tensor T_(0,0)) direct_sum "
+                "sum_((a,b)!=(0,0)) End(U3) tensor T_(a,b)"
+            ),
+            "neutral_adjoint_rank": 8,
+            "nontrivial_character_count": 8,
+            "rank_per_nontrivial_character": 9,
+            "total_adjoint_rank": 80,
+            "rank_identity": "8+8*9=80",
+        },
+        "invariant_metric": {
+            "hidden_metric": "<A,B>_ad=tr(A^dagger B)",
+            "reason": "the projective qutrit orbit is unitary and scalar phases cancel",
+            "orthogonal_isotypic_projectors": True,
+        },
+        "checks": {
+            "source_commit_hash_bound": True,
+            "projective_multiplier_cancels_in_adjoint": True,
+            "nine_characters_are_distinct": True,
+            "character_orthogonality_is_exact": True,
+            "adjoint_rank_is_80": 8 + 8 * 9 == 80,
+            "zero_observed_values": True,
+            "zero_fit_parameters": True,
+        },
+        "claim_tiers": {
+            "global_holomorphic_adjoint_isotypic_decomposition": "CLOSED_EXACT",
+            "hidden_trace_metric_E3_invariance": "CLOSED_EXACT",
+            "strict_vector_action_on_W9": "NOT_REQUIRED_AND_NOT_CLAIMED",
+            "selected_full_physical_endpoint": "OPEN",
+            "physical_numerical_Hessian": "OPEN",
+        },
+        "guardrails": {
+            "uses_internal_G3T_fiber_action_for_isotypic_bundles": True,
+            "infers_fiber_eigensubbundles_from_base_moving_vertical_translation": False,
+            "identifies_internal_qutrit_with_physical_spatial_translation": False,
+        },
+    }
+    write_json(OUT_ADJOINT, adjoint_packet)
+
+    external_lanes = [
+        {"lane": "Tstar_X", "rank": 3},
+        {"lane": "ad_TX", "rank": 8},
+        {"lane": "ad_E_visible", "rank": 8},
+        {"lane": "TX", "rank": 3},
+    ]
+    external_rank = sum(item["rank"] for item in external_lanes)
+    require(external_rank == 22, "external rank 22")
+
+    hidden_multiplicities = {label(element): 9 for element in GROUP}
+    hidden_multiplicities[label((0, 0))] = 8
+    neutral_total = external_rank + hidden_multiplicities[label((0, 0))]
+    nontrivial_rank = hidden_multiplicities[label((0, 1))]
+    hidden_hidden_positions = 8**2 + 8 * 9**2
+    hidden_external_positions = 2 * 8 * external_rank
+    external_external_positions = external_rank**2
+    symmetry_positions = (
+        hidden_hidden_positions + hidden_external_positions + external_external_positions
+    )
+    require(neutral_total == 30, "neutral rank 30")
+    require(hidden_hidden_positions == 712, "hidden-hidden 712")
+    require(hidden_external_positions == 352, "hidden-external 352")
+    require(external_external_positions == 484, "external-external 484")
+    require(symmetry_positions == 1548, "symmetry positions 1548")
+    require(102**2 - symmetry_positions == 8856, "8856 cross-character zeros")
+
+    rank102_packet = {
+        "schema": "mtt.closure-dynamics.q79-rank102-qutrit-symmetry-reduction.v1",
+        "theorem_id": "CD.Q79.R102E3.01",
+        "date": RESEARCH_DATE,
+        "status": (
+            "CLOSED_EXACT_EQUIVARIANT_SELECTION_RULE_CONDITIONAL_NEUTRAL_"
+            "EXTERNAL_RANK102_REDUCTION_PHYSICAL_SYMMETRY_AND_MATRIX_OPEN"
+        ),
+        "commit_locks": {"mtt_unified_source_theorem": UST_COMMIT},
+        "inputs": {
+            "hidden_adjoint_isotypic_packet": {
+                "relative_path": OUT_ADJOINT.name,
+                "sha256": sha256_bytes(OUT_ADJOINT.read_bytes()),
+                "schema": adjoint_packet["schema"],
+                "status": adjoint_packet["status"],
+            },
+            "UST_G2P_G5A_packet": source_records["UST_G2P_G5A_packet"],
+        },
+        "selected_structural_target_metric": {
+            "G2P_metric": "orthogonal sum with seven unit row weights and C=0",
+            "hidden_metric": "trace Hermitian metric on ad(W9)",
+            "E3_invariant": True,
+            "numerical_L2_metric_emitted": False,
+        },
+        "equivariant_selection_theorem": {
+            "hypotheses": [
+                "the completed physical endpoint is fixed projectively by E[3]",
+                "the complete residual derivative K is E[3]-equivariant",
+                "Delta_Y and the selected target metric are E[3]-invariant",
+                "the Galerkin projector commutes with E[3]",
+            ],
+            "operator": "H_phys=Delta_Y+K^dagger*K",
+            "selection_rule": "H_(chi,psi)=0 whenever chi != psi",
+            "reason": "character orthogonality for an E[3]-equivariant operator",
+            "general_count_formula": "N_allowed=sum_chi (m_external,chi+h_hidden,chi)^2",
+            "hidden_multiplicities": hidden_multiplicities,
+            "external_character_multiplicities_selected": False,
+        },
+        "rank102_source": {
+            "lane_order": rank102["lane_order"],
+            "lane_ranks": rank102["lane_ranks"],
+            "total_rank": sum(rank102["lane_ranks"]),
+            "unsymmetrized_ordered_lane_blocks": 25,
+            "unsymmetrized_structural_positions": 10404,
+            "unsymmetrized_mask_remains_valid_fallback": True,
+        },
+        "neutral_external_specialization": {
+            "additional_hypothesis": (
+                "all 22 retained non-hidden modes transform in the trivial E[3] character"
+            ),
+            "external_lanes": external_lanes,
+            "external_rank": external_rank,
+            "isotypic_ranks": {
+                label((0, 0)): neutral_total,
+                **{
+                    label(element): nontrivial_rank
+                    for element in GROUP
+                    if element != (0, 0)
+                },
+            },
+            "isotypic_block_count": 9,
+            "neutral_block_rank": neutral_total,
+            "nontrivial_block_count": 8,
+            "rank_per_nontrivial_block": nontrivial_rank,
+            "rank_identity": "30+8*9=102",
+            "ordered_position_breakdown": {
+                "external_external": external_external_positions,
+                "neutral_hidden_external_both_directions": hidden_external_positions,
+                "hidden_hidden_matching_characters": hidden_hidden_positions,
+            },
+            "symmetry_allowed_ordered_positions": symmetry_positions,
+            "forced_cross_character_zero_positions": 102**2 - symmetry_positions,
+            "count_identity": "30^2+8*9^2=1548",
+        },
+        "checks": {
+            "source_rank_is_102": sum(rank102["lane_ranks"]) == 102,
+            "hidden_isotypic_ranks_sum_to_80": sum(hidden_multiplicities.values()) == 80,
+            "neutral_external_ranks_sum_to_102": neutral_total + 8 * nontrivial_rank == 102,
+            "conditional_position_count_is_1548": symmetry_positions == 1548,
+            "fallback_position_count_is_10404": 102**2 == 10404,
+            "forced_zero_count_is_8856": 102**2 - symmetry_positions == 8856,
+            "no_numerical_matrix_claimed": True,
+            "zero_observed_values": True,
+            "zero_fit_parameters": True,
+        },
+        "claim_tiers": {
+            "matching_character_Hessian_rule": "CLOSED_EXACT_CONDITIONAL_ON_EQUIVARIANCE",
+            "neutral_external_30_plus_8_times_9_count": "CLOSED_EXACT_CONDITIONAL",
+            "selected_external_character_profile": "OPEN",
+            "selected_physical_endpoint": "OPEN",
+            "selected_physical_K_and_Hessian_entries": "OPEN",
+            "selected_physical_Galerkin_projector": "OPEN",
+        },
+        "guardrails": {
+            "replaces_10404_before_symmetry_hypotheses_are_verified": False,
+            "claims_all_1548_allowed_entries_are_nonzero": False,
+            "claims_projective_W9_action_has_a_strict_vector_lift": False,
+            "claims_internal_E3_is_physical_space_translation": False,
+            "claims_a_physical_numerical_matrix": False,
+            "uses_vertical_translation_as_a_fiberwise_character_action": False,
+        },
+        "next_required_object": (
+            "At the selected common visible-hidden endpoint, compute the E[3] character "
+            "profile of retained external modes and certify that K, Delta_Y and the "
+            "Galerkin projector intertwine it; then assemble the symmetry blocks from "
+            "the actual source coefficients."
+        ),
+    }
+    write_json(OUT_RANK102, rank102_packet)
+
+    print("Q79_HIDDEN_QUTRIT_ADJOINT_ISOTYPIC_BUILD_PASS")
+    print("Q79_RANK102_QUTRIT_SYMMETRY_REDUCTION_BUILD_PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,298 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CERTIFICATE = (
+    ROOT
+    / "certificates"
+    / "q79_support_stratified_spectral_strain_boundary_hessian.certificate.json"
+)
+PREDECESSOR = (
+    ROOT
+    / "certificates"
+    / "q79_intrinsic_spectral_strain_quotient_shorted_hessian_cutset.certificate.json"
+)
+THEOREM = (
+    ROOT
+    / "proof_corpus"
+    / "q79_GlobalSupportStratifiedSpectralStrain_and_BoundaryHessian_NoGo_Theorem_v1.md"
+)
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def matrix_rank(matrix: list[list[Fraction]]) -> int:
+    work = [row[:] for row in matrix]
+    row_count = len(work)
+    column_count = len(work[0]) if work else 0
+    pivot_row = 0
+    for column in range(column_count):
+        pivot = next(
+            (
+                row
+                for row in range(pivot_row, row_count)
+                if work[row][column] != 0
+            ),
+            None,
+        )
+        if pivot is None:
+            continue
+        work[pivot_row], work[pivot] = work[pivot], work[pivot_row]
+        pivot_value = work[pivot_row][column]
+        work[pivot_row] = [
+            value / pivot_value for value in work[pivot_row]
+        ]
+        for row in range(row_count):
+            if row == pivot_row:
+                continue
+            coefficient = work[row][column]
+            if coefficient == 0:
+                continue
+            work[row] = [
+                value - coefficient * pivot_entry
+                for value, pivot_entry in zip(
+                    work[row], work[pivot_row], strict=True
+                )
+            ]
+        pivot_row += 1
+        if pivot_row == row_count:
+            break
+    return pivot_row
+
+
+def support_key(mask: int) -> str:
+    return "".join(
+        "1" if mask & (1 << edge) else "0"
+        for edge in range(3)
+    )
+
+
+def canonical_payload_hash(payload: dict[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def main() -> int:
+    certificate = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    predecessor = json.loads(PREDECESSOR.read_text(encoding="utf-8"))
+    theorem = THEOREM.read_text(encoding="utf-8")
+
+    require(
+        certificate["schema"]
+        == "MTTq79SupportStratifiedSpectralStrainBoundaryHessianCertificate.v1",
+        "certificate schema",
+    )
+    require(
+        certificate["predecessor"]["payload_sha256"]
+        == canonical_payload_hash(predecessor),
+        "predecessor payload hash",
+    )
+    require(predecessor["all_checks_pass"], "predecessor checks")
+    require(
+        predecessor["acceptance_counts"][
+            "physical_q79_same_source_instantiation"
+        ]
+        == "0/3",
+        "historical predecessor count",
+    )
+
+    strata = certificate["global_symbol"]["support_strata"]
+    require(len(strata) == 8, "eight strata")
+    rank_distribution: dict[int, int] = {}
+    c4_compatible_sources: list[str] = []
+
+    for mask in range(8):
+        key = support_key(mask)
+        row = strata[key]
+        support = tuple(
+            edge for edge in range(3) if mask & (1 << edge)
+        )
+        absent = tuple(
+            edge for edge in range(3) if edge not in support
+        )
+        support_size = len(support)
+
+        jacobian = [
+            [Fraction(0) for _ in range(9)]
+            for _ in range(6)
+        ]
+        for diagonal in range(3):
+            jacobian[diagonal][diagonal] = Fraction(1)
+        for edge in support:
+            jacobian[3 + edge][3 + 2 * edge] = Fraction(2)
+        exact_rank = matrix_rank(jacobian)
+
+        require(exact_rank == 3 + support_size, f"rank {key}")
+        require(row["Jacobian_rank"] == exact_rank, f"stored rank {key}")
+        require(
+            row["ambient_Jacobian_kernel_dimension"]
+            == 9 - exact_rank,
+            f"kernel {key}",
+        )
+        require(
+            row["source_stratum_dimension"] == 3 + 2 * support_size,
+            f"source dimension {key}",
+        )
+        require(
+            row["target_stratum_dimension"] == 3 + support_size,
+            f"target dimension {key}",
+        )
+        require(
+            row["relative_phase_orbit_dimension"]
+            == min(support_size, 2),
+            f"phase orbit {key}",
+        )
+        require(
+            row["residual_triangle_phase_dimension"]
+            == int(support_size == 3),
+            f"triangle phase {key}",
+        )
+        require(
+            row["parabolic_normal_cone_dimension"]
+            == 3 - support_size,
+            f"normal cone {key}",
+        )
+        require(
+            row["tangent_cone_is_vector_space"]
+            == (support_size == 3),
+            f"tangent vector space {key}",
+        )
+
+        for edge in range(3):
+            z_real = Fraction(1) if edge in support else Fraction(0)
+            z_imag = Fraction(0)
+            v_real = Fraction(2)
+            v_imag = Fraction(-1)
+            parameter = Fraction(2, 3)
+            direct = (z_real + parameter * v_real) ** 2 + (
+                z_imag + parameter * v_imag
+            ) ** 2
+            expanded = (
+                z_real**2
+                + z_imag**2
+                + 2
+                * parameter
+                * (z_real * v_real + z_imag * v_imag)
+                + parameter**2 * (v_real**2 + v_imag**2)
+            )
+            require(direct == expanded, f"quadratic jet {key}:{edge}")
+            if edge in absent:
+                require(
+                    all(value == 0 for value in jacobian[3 + edge]),
+                    f"zero first normal jet {key}:{edge}",
+                )
+                require(
+                    v_real**2 + v_imag**2 > 0,
+                    f"positive parabolic jet {key}:{edge}",
+                )
+
+        expected_c4_targets = ["111"] if support_size == 3 else []
+        require(
+            row["C4_compatible_target_support_masks"]
+            == expected_c4_targets,
+            f"C4 target cones {key}",
+        )
+        if expected_c4_targets:
+            c4_compatible_sources.append(key)
+        else:
+            counterexample = row["C4_counterexample"]
+            require(
+                counterexample["source_is_in_tangent_cone"],
+                f"C4 source cone witness {key}",
+            )
+            require(
+                not counterexample["image_is_in_same_tangent_cone"],
+                f"C4 image cone witness {key}",
+            )
+
+        rank_distribution[support_size] = (
+            rank_distribution.get(support_size, 0) + 1
+        )
+
+    require(
+        rank_distribution == {0: 1, 1: 3, 2: 3, 3: 1},
+        "one-three-three-one distribution",
+    )
+    require(c4_compatible_sources == ["111"], "unique C4 stratum")
+
+    witness = certificate["stratumwise_shorted_operator"][
+        "exact_identity_witness"
+    ]
+    t_value = Fraction(witness["t"])
+    source_cost = Fraction(witness["source_quadratic_cost"])
+    normal_displacement = Fraction(witness["target_normal_displacement"])
+    target_quadratic = Fraction(witness["ordinary_unit_target_quadratic"])
+    linear_cost = Fraction(witness["correct_unit_linear_normal_cost"])
+    require(source_cost == Fraction(1, 2) * t_value**2, "source scaling")
+    require(normal_displacement == t_value**2, "normal scaling")
+    require(target_quadratic == Fraction(1, 2) * t_value**4, "quadratic scaling")
+    require(linear_cost == Fraction(1, 2) * t_value**2, "linear scaling")
+    require(source_cost == linear_cost, "correct boundary cost")
+    require(source_cost != target_quadratic, "ordinary Hessian no-go")
+
+    counts = certificate["acceptance_counts"]
+    require(
+        counts["global_support_stratified_extension"] == "10/10",
+        "closure count",
+    )
+    require(
+        counts["physical_q79_same_source_instantiation"] == "1/3",
+        "physical count",
+    )
+    require(
+        counts["remaining_physical_instantiation_rows"] == 2,
+        "remaining physical rows",
+    )
+    physical_rows = certificate["physical_q79_instantiation_rows"]
+    require(
+        physical_rows[
+            "regular_or_stratified_global_spectral_symbol_on_the_selected_endpoint"
+        ]["accepted"],
+        "regularity row promoted",
+    )
+    require(
+        not physical_rows[
+            "source_hashed_visible_hidden_HYM_endpoint_and_reduced_Green"
+        ]["accepted"],
+        "endpoint remains open",
+    )
+    require(
+        not physical_rows[
+            "physical_S3xC4_symmetry_lift_and_Reynolds_equality"
+        ]["accepted"],
+        "physical symmetry remains open",
+    )
+
+    require(all(certificate["checks"].values()), "all certificate checks")
+    require(certificate["all_checks_pass"], "certificate pass flag")
+    for phrase in (
+        "eight strata",
+        "degree one",
+        "no finite ordinary target Hessian",
+        "forces all three edges to be nonzero",
+        "actual same-source S3 x C4 lift",
+    ):
+        require(phrase in theorem, f"theorem phrase: {phrase}")
+
+    print(
+        "PASS q79 support-stratified strain: "
+        "8/8 strata, 10/10 closure rows, physical 1/3"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

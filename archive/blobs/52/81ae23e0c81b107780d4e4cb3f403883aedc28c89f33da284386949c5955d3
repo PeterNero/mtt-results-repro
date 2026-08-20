@@ -1,0 +1,365 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "source_manifest.json"
+CERTIFICATE = (
+    ROOT
+    / "certificates"
+    / "q79_fourier_mukai_hym_contract_dependency_compression.certificate.json"
+)
+PREDECESSOR = (
+    ROOT
+    / "certificates"
+    / "q79_shared_root_c4_local_system_promotion_hym_invariance_cutset.certificate.json"
+)
+CECH = (
+    ROOT
+    / "certificates"
+    / "q79_explicit_cech_projector_connection_compiler_cutset.certificate.json"
+)
+SHORTED = (
+    ROOT
+    / "certificates"
+    / "q79_intrinsic_spectral_strain_quotient_shorted_hessian_cutset.certificate.json"
+)
+THEOREM = (
+    ROOT
+    / "proof_corpus"
+    / "q79_FourierMukai_HYM_Contract_DependencyCompression_Theorem_v1.md"
+)
+
+SOURCE_IDS = [
+    "GR_Q79_FM_HYM_11_ROW_CONTRACT",
+    "QG_Q79_VISIBLE_PHYSICAL_SPECTRAL_CUTSET",
+    "MLD_Q79_PHYSICAL_PRYM_LATTICE",
+    "MLD_Q79_PHYSICAL_GAUGE_PAIR_SEED",
+    "UST_G3AC_GRAPH_PRYM_ORBIT",
+    "UST_G3AJ_SELECTED_RESIDUE_GRAPH_PRYM",
+    "UST_G3D_COMMON_GAUDUCHON_COMPILER",
+    "UST_G3V_HIDDEN_PROJECTIVE_HYM",
+    "GR_Q79_SHARED_ROOTPLANE_JDE_FUNCTOR",
+]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def main() -> int:
+    manifest = load(MANIFEST)
+    manifest_rows = {row["id"]: row for row in manifest["sources"]}
+    certificate = load(CERTIFICATE)
+    predecessor = load(PREDECESSOR)
+    cech = load(CECH)
+    shorted = load(SHORTED)
+    theorem = THEOREM.read_text(encoding="utf-8")
+
+    require(
+        certificate["schema"]
+        == "MTTq79FourierMukaiHYMContractDependencyCompressionCertificate.v1",
+        "certificate schema",
+    )
+    require(certificate["all_checks_pass"], "certificate pass flag")
+    require(all(certificate["checks"].values()), "all certificate checks")
+    require(predecessor["all_checks_pass"], "C4 predecessor")
+    require(cech["all_checks_pass"], "Cech compiler")
+    require(shorted["all_checks_pass"], "shorted-Hessian compiler")
+
+    sources: dict[str, dict[str, object]] = {}
+    for source_id in SOURCE_IDS:
+        manifest_row = manifest_rows[source_id]
+        source_path = (ROOT / manifest_row["path"]).resolve()
+        require(source_path.is_file(), f"source exists: {source_id}")
+        actual_hash = file_hash(source_path)
+        require(
+            actual_hash == manifest_row["sha256"],
+            f"manifest hash: {source_id}",
+        )
+        require(
+            actual_hash == certificate["sources"][source_id]["sha256"],
+            f"certificate hash: {source_id}",
+        )
+        sources[source_id] = load(source_path)
+
+    contract_source = sources["GR_Q79_FM_HYM_11_ROW_CONTRACT"]
+    contract = contract_source["finite_data"]["derived_kernel_contract"]
+    expected_rows = {
+        "normalized_relative_Poincare_gerbe",
+        "integral_DD_restriction_zero",
+        "holomorphic_Prym_gerbe_trivialization",
+        "inverse_gerbe_twisted_rank_one_spectral_sheaf",
+        "WIT_index_and_locally_free_rank3_inverse_transform",
+        "determinant_zero_and_actual_total_space_c3",
+        "balanced_stability_and_HYM_connection",
+        "same_branch_FM_autoequivalence_stabilizing_Chern_character",
+        "induced_real_map_on_selected_Ext1_six_plane",
+        "induced_map_equals_JDE_and_squares_to_minus_identity",
+        "L2_Gram_and_projected_Hessian_intertwining",
+    }
+    require(set(contract) == expected_rows, "eleven row names")
+    require(len(contract) == 11, "eleven row count")
+    actual_contract_rows = {
+        row for row, payload in contract.items() if payload["available"]
+    }
+    require(
+        actual_contract_rows
+        == {
+            "normalized_relative_Poincare_gerbe",
+            "integral_DD_restriction_zero",
+        },
+        "two historical actual rows",
+    )
+
+    row_audit = certificate["row_audit"]
+    require(set(row_audit) == expected_rows, "audited row set")
+    actual_audit_rows = {
+        row
+        for row, payload in row_audit.items()
+        if payload["actual_available"]
+    }
+    require(actual_audit_rows == actual_contract_rows, "actual rows unchanged")
+    require(
+        certificate["historical_contract"]["literal_status"] == "2/11",
+        "literal 2/11",
+    )
+    require(
+        certificate["acceptance_counts"]["literal_actual_rows_remaining"]
+        == 9,
+        "nine literal rows remain",
+    )
+
+    spectral = sources["QG_Q79_VISIBLE_PHYSICAL_SPECTRAL_CUTSET"]
+    prym = sources["MLD_Q79_PHYSICAL_PRYM_LATTICE"]
+    graph = sources["UST_G3AC_GRAPH_PRYM_ORBIT"]
+    residue = sources["UST_G3AJ_SELECTED_RESIDUE_GRAPH_PRYM"]
+    chamber = sources["UST_G3D_COMMON_GAUDUCHON_COMPILER"]
+    hidden = sources["UST_G3V_HIDDEN_PROJECTIVE_HYM"]
+    gauge_pair = sources["MLD_Q79_PHYSICAL_GAUGE_PAIR_SEED"]
+    rootplane = sources["GR_Q79_SHARED_ROOTPLANE_JDE_FUNCTOR"]
+
+    require(
+        spectral["physical_cover_geometry"]["line_system"]
+        == "|9H+3D0| on K3 x E*",
+        "physical spectral support",
+    )
+    require(
+        spectral["automatic_inverse_BHT_local_freeness"]["consequences"]
+        == [
+            "R^i f_*M=0 for i>0",
+            "f_*M is locally free of rank three",
+            "no separate WIT or local-freeness hypothesis remains",
+        ],
+        "WIT and local-freeness compiler",
+    )
+    require(
+        prym["integral_gerbe_restriction"]["integral_restriction"]
+        == "j^*DD(alpha)=0 in H^3(C_phys,Z)",
+        "integral DD zero",
+    )
+    require(
+        prym["integral_gerbe_restriction"][
+            "holomorphic_or_Deligne_trivialization"
+        ]
+        == "OPEN",
+        "flat Deligne remains open",
+    )
+    require(
+        graph["scope"]["ordinary_prym_value_rows_closed"],
+        "ordinary Prym rows",
+    )
+    require(
+        not graph["visible_consequence"]["alpha_twisted_line_constructed"],
+        "no twisted line promotion",
+    )
+    require(
+        residue["checks"][
+            "the_selected_residue_ball_contains_a_smooth_finite_flat_rank_three_graph_member"
+        ],
+        "selected residue existential member",
+    )
+    require(
+        residue["consequence"]["beta_C_on_this_member"] == "OPEN",
+        "same-member beta remains open",
+    )
+    require(
+        not residue["guardrails"]["claims_MTT_selects_one_member"],
+        "existence is not selection",
+    )
+
+    require(
+        graph["visible_consequence"]["target_Chern_rows"]
+        == ["c1=0", "c2=9u", "c3=+6Omega"],
+        "conditional visible Chern rows",
+    )
+    require(
+        chamber["physical_decision"]["common_chamber_criterion_closed"],
+        "common-chamber compiler",
+    )
+    require(
+        not chamber["physical_decision"]["physical_common_chamber_selected"],
+        "physical chamber remains open",
+    )
+    require(
+        hidden["projective_hym"]["hidden_hym_existence_closed"],
+        "hidden HYM existence",
+    )
+    require(
+        not hidden["scope"]["common_visible_hidden_chamber_closed"],
+        "no common endpoint promotion",
+    )
+
+    compiler_rows = certificate["dependency_compression"][
+        "conditional_compiler_rows"
+    ]
+    require(
+        set(compiler_rows)
+        == {
+            "WIT_index_and_locally_free_rank3_inverse_transform",
+            "determinant_zero_and_actual_total_space_c3",
+            "balanced_stability_and_HYM_connection",
+        },
+        "three conditional compiler rows",
+    )
+    derived_rows = set(
+        gauge_pair["minimal_source_reduction_theorem"][
+            "functorially_derived_not_independent_source_rows"
+        ]
+    )
+    require(
+        "Dbar_Q and the gauge-fixed Hessian/Jacobian" in derived_rows,
+        "Hessian is derived",
+    )
+    require(
+        "the harmonic projector and Green operator" in derived_rows,
+        "Green is derived",
+    )
+
+    require(
+        rootplane["claim_tiers"][
+            "typed_shared_C4_to_rootstack_strain_JDE_functor"
+        ]
+        == "CLOSED_EXACT_ON_FLAT_SHEET_SYMBOL",
+        "flat JDE symbol",
+    )
+    require(
+        rootplane["claim_tiers"][
+            "actual_inverse_Fourier_Mukai_HYM_induced_JDE"
+        ]
+        == "OPEN",
+        "actual HYM JDE open",
+    )
+    symbol_rows = certificate["dependency_compression"][
+        "physical_rows_with_exact_symbol_analogues"
+    ]
+    require(
+        set(symbol_rows)
+        == {
+            "induced_real_map_on_selected_Ext1_six_plane",
+            "induced_map_equals_JDE_and_squares_to_minus_identity",
+        },
+        "two symbol analogues",
+    )
+    require(
+        not any(row_audit[row]["actual_available"] for row in symbol_rows),
+        "symbol analogues are not physical rows",
+    )
+    require(
+        cech["explicit_Cech_compiler_theorem"]["rows"][
+            "adjoint_and_Hessian_transport"
+        ]["accepted_as_implication"],
+        "Cech Hessian implication",
+    )
+    require(
+        shorted["universal_rows"]["shorted_symmetry_inheritance"][
+            "accepted_as_implication"
+        ],
+        "shorted symmetry implication",
+    )
+    require(
+        not predecessor["physical_q79_instantiation_rows"][
+            "selected_nonzero_Chern_HYM_C4_invariance_or_direct_TT_block"
+        ]["accepted"],
+        "physical HYM C4 remains open",
+    )
+
+    packages = certificate["dependency_compression"][
+        "primitive_open_packages"
+    ]
+    require(len(packages) == 3, "three source packages")
+    require(
+        not any(package["accepted"] for package in packages.values()),
+        "three packages remain open",
+    )
+    require(
+        packages["H_same_source_common_HYM_endpoint"]["depends_on"]
+        == ["V_selected_visible_differential_Picard_source"],
+        "visible before HYM",
+    )
+    require(
+        packages["J_physical_C4_HYM_lift_or_direct_TT_block"]["depends_on"]
+        == ["H_same_source_common_HYM_endpoint"],
+        "HYM before physical C4",
+    )
+    require(
+        certificate["acceptance_counts"][
+            "independent_sequential_source_packages_remaining"
+        ]
+        == 3,
+        "compressed package count",
+    )
+    require(
+        certificate["acceptance_counts"]["corrected_geometry_compiler"]
+        == "3/5",
+        "geometry count remains 3/5",
+    )
+    require(
+        "does_not_add_the_unnecessary_full_autoequivalence_row"
+        in certificate["route_selection"]["preferred_current_route"],
+        "direct route selection",
+    )
+    require(
+        certificate["parameter_ledger"]["new_physical_continuous_parameters"]
+        == 0,
+        "zero continuous parameters",
+    )
+    require(
+        certificate["parameter_ledger"]["new_physical_discrete_selectors"]
+        == 0,
+        "zero discrete selectors",
+    )
+
+    for phrase in (
+        "Literal Eleven-Row Audit",
+        "Visible-Source Compression",
+        "WIT and Chern Rows Are Outputs",
+        "Symbol C4 Versus Physical HYM C4",
+        "Three Remaining Source Packages",
+        "Route Selection",
+        "First Nonduplicative Target",
+        "literal physical count remains `2/11`",
+    ):
+        require(phrase in theorem, f"theorem phrase: {phrase}")
+
+    print(
+        "PASS q79 FM/HYM dependency compression: "
+        "literal 2/11, three compiler rows, three sequential source packages"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

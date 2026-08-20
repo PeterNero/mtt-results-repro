@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+QM_ROOT = Path(os.environ.get("MTT_QM_ROOT", TEXPAPERS / "mtt-qm-source-proof"))
+PACKET = ROOT / "q79_hessian_spectral_trajectory_and_deterministic_repair_cutset.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if source.get("all_checks_pass") is True:
+        return True
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def matrix(values: list[list[object]], locals_: dict[str, object] | None = None) -> sp.Matrix:
+    local_values = locals_ or {}
+    return sp.Matrix(
+        [[sp.sympify(entry, locals=local_values) for entry in row] for row in values]
+    )
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    roots = {
+        "closure-dynamics": ROOT,
+        "mtt-qm-source-proof": QM_ROOT,
+    }
+    sources: dict[str, dict] = {}
+    for label, record in packet["inputs"].items():
+        repository = record["repository"]
+        require(repository in roots, f"repository: {label}")
+        path = roots[repository] / record["relative_path"]
+        require(path.is_file(), f"source exists: {label}")
+        require(sha256(path) == record["sha256"], f"source hash: {label}")
+        source = load(path)
+        identity = source.get("schema") or source.get("certificate")
+        require(identity == record["identity"], f"source identity: {label}")
+        require(source["status"] == record["status"], f"source status: {label}")
+        require(source_checks_pass(source), f"source checks: {label}")
+        sources[label] = source
+    require(len(sources) == 6, "six sources")
+    return sources
+
+
+def source_projectors(sources: dict[str, dict]) -> tuple[sp.Matrix, sp.Matrix]:
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    shared = sources["finite_q79_action_and_repair"]
+    p_real = matrix(
+        shared["finite_source_data"]["tangent_or_invariant_projector_P"], locals_
+    )
+    p_proj = p_real[:3, :3]
+    q_proj = sp.eye(3) - p_proj
+    require(is_zero(p_proj.H - p_proj), "P Hermitian")
+    require(is_zero(p_proj**2 - p_proj), "P projector")
+    require(is_zero(q_proj**2 - q_proj), "Q projector")
+    require(is_zero(p_proj * q_proj), "P/Q orthogonal")
+    require((p_proj.rank(), q_proj.rank()) == (1, 2), "P/Q ranks")
+    return p_proj, q_proj
+
+
+def verify_deterministic_cutset(packet: dict, sources: dict[str, dict]) -> None:
+    p_proj, q_proj = source_projectors(sources)
+    e0 = sp.Matrix([1, 0, 0])
+    rho0 = e0 * e0.H
+    p0 = sp.simplify((e0.H * p_proj * e0)[0])
+    require(p0 == sp.Rational(1, 3), "root P weight")
+
+    r = sp.symbols("r", positive=True)
+    repaired = sp.simplify((p_proj + r * q_proj) * e0)
+    repaired_p = sp.simplify(
+        (repaired.H * p_proj * repaired)[0] / (repaired.H * repaired)[0]
+    )
+    require(repaired_p == 1 / (1 + 2 * r**2), "selected repair trajectory")
+    require(sp.limit(repaired_p, r, 0, dir="+") == 1, "selected repair limit")
+
+    stored_selected = packet["selected_Morse_Bott_repair_test"]
+    require(
+        sp.simplify(
+            sp.sympify(stored_selected["normalized_root_P_weight"], locals={"r": r})
+            - repaired_p
+        )
+        == 0,
+        "stored selected trajectory",
+    )
+    require("not a two-record" in stored_selected["conclusion"], "stored selected cutset")
+
+    p = sp.symbols("p", real=True)
+    flow = sp.expand(4 * p * (1 - p) * (2 * p - 1))
+    require(all(flow.subs(p, x) == 0 for x in (0, sp.Rational(1, 2), 1)), "flow fixed points")
+    require(bool(flow.subs(p, sp.Rational(1, 3)) < 0), "root variance direction")
+    require(bool(flow.subs(p, sp.Rational(1, 4)) < 0), "lower direction")
+    require(bool(flow.subs(p, sp.Rational(3, 4)) > 0), "upper direction")
+    density = 2 * (1 - p)
+    masses = (
+        sp.integrate(density, (p, sp.Rational(1, 2), 1)),
+        sp.integrate(density, (p, 0, sp.Rational(1, 2))),
+    )
+    require(masses == (sp.Rational(1, 4), sp.Rational(3, 4)), "Haar basin masses")
+    require(packet["canonical_projector_variance_flow_test"]["Haar_basin_weights"] == ["1/4", "3/4"], "stored Haar masses")
+    require(packet["canonical_projector_variance_flow_test"]["result"].startswith("NO_KNOB"), "stored mismatch")
+
+    root_complement = sp.eye(3) - rho0
+    orthogonal_expectation = sp.simplify(sp.trace(root_complement * rho0))
+    require(rho0.rank() == 1, "pure rank")
+    require(sp.trace(rho0**2) == 1, "pure purity")
+    require(orthogonal_expectation == 0, "orthogonal expectation")
+    cutset = packet["deterministic_pure_state_preparation_cutset"]
+    require(cutset["rank"] == 1 and cutset["purity"] == "1", "stored pure data")
+    require(cutset["orthogonal_expectation"] == "0", "stored orthogonal expectation")
+    require("nontrivial P/Q weights" in cutset["conclusion"], "stored deterministic no-go")
+
+
+def verify_path_trajectory(packet: dict, sources: dict[str, dict]) -> None:
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    p_proj, q_proj = source_projectors(sources)
+    e0 = sp.Matrix([1, 0, 0])
+    rho0 = e0 * e0.H
+    p0 = sp.trace(rho0 * p_proj)
+    q0 = sp.trace(rho0 * q_proj)
+    gamma = sp.log(448)
+    l_p = sp.sqrt(gamma) * p_proj
+    l_q = sp.sqrt(gamma) * q_proj
+    require(
+        is_zero(l_p.H * l_p + l_q.H * l_q - gamma * sp.eye(3)),
+        "total hazard",
+    )
+
+    ready = sp.simplify(sp.exp(-gamma))
+    capture = sp.simplify(1 - ready)
+    require(ready == sp.Rational(1, 448), "survival")
+    p_component = sp.simplify(p_proj * rho0 * p_proj)
+    q_component = sp.simplify(q_proj * rho0 * q_proj)
+    p_state = sp.simplify(p_component / p0)
+    q_state = sp.simplify(q_component / q0)
+    ready_state = sp.simplify(ready * rho0)
+    p_path = sp.simplify(capture * p_component)
+    q_path = sp.simplify(capture * q_component)
+    probabilities = [
+        sp.trace(ready_state),
+        sp.trace(p_path),
+        sp.trace(q_path),
+    ]
+    require(probabilities == [
+        sp.Rational(1, 448),
+        sp.Rational(149, 448),
+        sp.Rational(149, 224),
+    ], "path law")
+    require(sum(probabilities) == 1, "path normalization")
+    require(p_state.rank() == 1 and q_state.rank() == 1, "jump ranks")
+    require(sp.trace(p_state) == 1 and sp.trace(q_state) == 1, "jump normalization")
+
+    normalized_ready = sp.simplify(ready_state / sp.trace(ready_state))
+    require(is_zero(normalized_ready - rho0), "no-count normalized state")
+    nonselective = sp.simplify(ready_state + p_path + q_path)
+    projective_source = sources["projective_operational_record_descent"]
+    imported = matrix(
+        projective_source["nonselective_actualization_nogo_witness"]["finite_u1_state"],
+        locals_,
+    )
+    require(is_zero(nonselective - imported), "instrument state match")
+
+    stored = packet["canonical_Hessian_spectral_count_trajectory"]
+    require(stored["u1_path_probabilities"] == ["1/448", "149/448", "149/224"], "stored path law")
+    require(is_zero(matrix(stored["normalized_no_count_state"], locals_) - rho0), "stored ready state")
+    require(is_zero(matrix(stored["u1_conditional_P_state"], locals_) - p_state), "stored P state")
+    require(is_zero(matrix(stored["u1_conditional_Q_state"], locals_) - q_state), "stored Q state")
+    require(is_zero(matrix(stored["u1_nonselective_state"], locals_) - nonselective), "stored nonselective")
+
+    fock = sources["canonical_q79_Fock_output"]
+    recorder = sources["canonical_q79_Hessian_recorder"]
+    require(
+        fock["source_lock"]["recorder"].endswith("L_q=sqrt(log(448))Q"),
+        "bound Fock operators",
+    )
+    require(
+        recorder["preparation_blind_clock_rigidity"]["theorem"].startswith(
+            "the waiting-time hazard"
+        ),
+        "bound clock rigidity",
+    )
+
+
+def verify_descent_and_ontology(packet: dict, sources: dict[str, dict]) -> None:
+    descent = packet["pathwise_projective_descent_theorem"]
+    require("Tr(" in descent["hazard_invariance"], "hazard formula")
+    require("J_" in descent["jump_intertwining"], "jump formula")
+    require(descent["carrier_tier"] == "PROVEN_OPEN_STRATUM_ONLY", "carrier tier")
+
+    projective = sources["projective_operational_record_descent"]
+    require(
+        projective["claim_tiers"]["projective_open_stratum_chart_independence"]
+        == "CLOSED_EXACT_NEW_COMPOSITION",
+        "projective source tier",
+    )
+    require(
+        projective["claim_tiers"]["objective_single_history_actualization"] == "OPEN",
+        "actualization remains open",
+    )
+
+    ontology = packet["ontology_fork"]
+    require(ontology["status"] == "DECLARATION_READY_AUTHOR_ADOPTION_AND_PHYSICAL_SOURCE_OPEN", "ontology status")
+    require("one compatible output path" in ontology["single_path_declaration_candidate"], "single-path declaration")
+    require("retained pure qutrit ray" in ontology["excluded_shortcut"], "ontology cutset")
+
+    shared_guard = packet["shared_circle_guard"]
+    require(len(shared_guard["not_claimed"]) == 3, "three shared-circle guards")
+    require("invariant measure" in shared_guard["circle_selector_obligation"], "circle source obligation")
+
+
+def verify_packet_contract(packet: dict) -> None:
+    require(
+        packet["schema"]
+        == "MTTQ79HessianSpectralTrajectoryAndDeterministicRepairCutset.v1",
+        "schema",
+    )
+    require(all_boolean_leaves_true(packet["checks"]), "checks")
+    require(all(value is False for value in packet["guardrails"].values()), "guardrails")
+    tiers = packet["claim_tiers"]
+    require(tiers["selected_Morse_Bott_repair_is_two_record_actualization"] == "CLOSED_NOGO", "Morse-Bott tier")
+    require(tiers["canonical_projector_variance_flow_matches_q79_weights"] == "CLOSED_NOGO_EXACT", "variance tier")
+    require(tiers["canonical_q79_Hessian_count_trajectory"] == "CLOSED_EXACT_OPERATIONAL", "trajectory tier")
+    require(tiers["single_path_physical_semantics"] == "CONSISTENT_CANDIDATE_NOT_DERIVED", "ontology tier")
+    require(tiers["many_worlds_false"] == "NOT_CLAIMED", "interpretive tier")
+    require(
+        packet["parameter_ledger"]
+        == {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "new_observed_probabilities": 0,
+            "new_independent_stochastic_primitives": 0,
+            "inherited_clock_anchors": 1,
+            "inherited_categorical_apparatus_contexts": 1,
+            "candidate_ontology_declarations": 1,
+            "candidate_ontology_declaration_promoted": False,
+        },
+        "parameter ledger",
+    )
+    require(
+        packet["frontier_delta"]["next_theorem"]
+        == "mttSelectedPhysicalContinuumRepairToFockCocycleIntertwiner.v1",
+        "next theorem",
+    )
+
+
+def main() -> None:
+    packet = load(PACKET)
+    sources = verify_inputs(packet)
+    verify_deterministic_cutset(packet, sources)
+    verify_path_trajectory(packet, sources)
+    verify_descent_and_ontology(packet, sources)
+    verify_packet_contract(packet)
+    print("Q79_HESSIAN_SPECTRAL_TRAJECTORY_AND_DETERMINISTIC_REPAIR_CUTSET_VERIFY_PASS")
+
+
+if __name__ == "__main__":
+    main()

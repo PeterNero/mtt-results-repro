@@ -1,0 +1,373 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from itertools import permutations
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CERTIFICATE = (
+    ROOT
+    / "certificates"
+    / "q79_shared_root_c4_local_system_promotion_hym_invariance_cutset.certificate.json"
+)
+PREDECESSOR = (
+    ROOT
+    / "certificates"
+    / "q79_binary_monodromy_reynolds_descent_corrected_symmetry_exit.certificate.json"
+)
+ROOTPLANE = (
+    ROOT
+    / "../mtt-protospinor-gr-response-proof/certificates"
+    / "q79_shared_rootplane_twisted_exterior_jde_functor_certificate.json"
+).resolve()
+MARKED_NOGO = (
+    ROOT
+    / "../mtt-protospinor-gr-response-proof/certificates"
+    / "q79_marked_shared_circle_c4_descent_nogo_certificate.json"
+).resolve()
+THEOREM = (
+    ROOT
+    / "proof_corpus"
+    / "q79_SharedRoot_C4_LocalSystem_Promotion_and_HYMInvariance_Cutset_Theorem_v1.md"
+)
+
+Matrix = list[list[Fraction]]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def zeros(rows: int, columns: int) -> Matrix:
+    return [
+        [Fraction(0) for _ in range(columns)]
+        for _ in range(rows)
+    ]
+
+
+def eye(size: int) -> Matrix:
+    return [
+        [Fraction(int(row == column)) for column in range(size)]
+        for row in range(size)
+    ]
+
+
+def transpose(matrix: Matrix) -> Matrix:
+    return [list(row) for row in zip(*matrix, strict=True)]
+
+
+def add(left: Matrix, right: Matrix) -> Matrix:
+    return [
+        [a + b for a, b in zip(left_row, right_row, strict=True)]
+        for left_row, right_row in zip(left, right, strict=True)
+    ]
+
+
+def subtract(left: Matrix, right: Matrix) -> Matrix:
+    return [
+        [a - b for a, b in zip(left_row, right_row, strict=True)]
+        for left_row, right_row in zip(left, right, strict=True)
+    ]
+
+
+def scale(value: Fraction, matrix: Matrix) -> Matrix:
+    return [[value * entry for entry in row] for row in matrix]
+
+
+def multiply(left: Matrix, right: Matrix) -> Matrix:
+    right_transpose = transpose(right)
+    return [
+        [
+            sum(
+                (a * b for a, b in zip(row, column, strict=True)),
+                Fraction(0),
+            )
+            for column in right_transpose
+        ]
+        for row in left
+    ]
+
+
+def permutation_matrix(permutation: tuple[int, ...]) -> Matrix:
+    output = zeros(len(permutation), len(permutation))
+    for column, row in enumerate(permutation):
+        output[row][column] = Fraction(1)
+    return output
+
+
+def block_diagonal(left: Matrix, right: Matrix) -> Matrix:
+    output = zeros(
+        len(left) + len(right),
+        len(left[0]) + len(right[0]),
+    )
+    for row, values in enumerate(left):
+        for column, value in enumerate(values):
+            output[row][column] = value
+    for row, values in enumerate(right):
+        for column, value in enumerate(values):
+            output[len(left) + row][len(left[0]) + column] = value
+    return output
+
+
+def matrix_rank(matrix: Matrix) -> int:
+    work = [row[:] for row in matrix]
+    row_count = len(work)
+    column_count = len(work[0]) if work else 0
+    pivot_row = 0
+    for column in range(column_count):
+        pivot = next(
+            (
+                row
+                for row in range(pivot_row, row_count)
+                if work[row][column] != 0
+            ),
+            None,
+        )
+        if pivot is None:
+            continue
+        work[pivot_row], work[pivot] = work[pivot], work[pivot_row]
+        divisor = work[pivot_row][column]
+        work[pivot_row] = [entry / divisor for entry in work[pivot_row]]
+        for row in range(row_count):
+            if row == pivot_row or work[row][column] == 0:
+                continue
+            coefficient = work[row][column]
+            work[row] = [
+                entry - coefficient * pivot_entry
+                for entry, pivot_entry in zip(
+                    work[row],
+                    work[pivot_row],
+                    strict=True,
+                )
+            ]
+        pivot_row += 1
+        if pivot_row == row_count:
+            break
+    return pivot_row
+
+
+def canonical_payload_hash(payload: dict[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> int:
+    certificate = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    predecessor = json.loads(PREDECESSOR.read_text(encoding="utf-8"))
+    rootplane = json.loads(ROOTPLANE.read_text(encoding="utf-8"))
+    marked_nogo = json.loads(MARKED_NOGO.read_text(encoding="utf-8"))
+    theorem = THEOREM.read_text(encoding="utf-8")
+
+    require(
+        certificate["schema"]
+        == (
+            "MTTq79SharedRootC4LocalSystemPromotionHYMInvarianceCutset"
+            "Certificate.v1"
+        ),
+        "certificate schema",
+    )
+    require(
+        certificate["predecessor"]["payload_sha256"]
+        == canonical_payload_hash(predecessor),
+        "predecessor hash",
+    )
+    require(predecessor["all_checks_pass"], "predecessor pass")
+    require(
+        certificate["sources"][
+            "GR_Q79_SHARED_ROOTPLANE_JDE_FUNCTOR"
+        ]["sha256"]
+        == file_hash(ROOTPLANE),
+        "rootplane source hash",
+    )
+    require(
+        certificate["sources"][
+            "GR_Q79_MARKED_SHARED_CIRCLE_C4_NOGO"
+        ]["sha256"]
+        == file_hash(MARKED_NOGO),
+        "marked no-go source hash",
+    )
+    require(all(rootplane["checks"].values()), "rootplane source checks")
+    require(all(marked_nogo["checks"].values()), "marked no-go checks")
+
+    finite = rootplane["finite_data"]
+    require(finite["shared_C4_subgroup"] == [0, 16, 32, 48], "C4 subgroup")
+    root_j = [
+        [Fraction(entry) for entry in row]
+        for row in finite["shared_root_real_quarterturn"]
+    ]
+    require(
+        root_j == [[Fraction(0), Fraction(-1)], [Fraction(1), Fraction(0)]],
+        "root quarterturn",
+    )
+    require(
+        multiply(root_j, root_j) == scale(Fraction(-1), eye(2)),
+        "root quarterturn square",
+    )
+
+    identity3 = eye(3)
+    zero3 = zeros(3, 3)
+    identity6 = eye(6)
+    j_de = [
+        *(zero3[row] + [-entry for entry in identity3[row]] for row in range(3)),
+        *(identity3[row] + zero3[row] for row in range(3)),
+    ]
+    stored_jde = [
+        [Fraction(entry) for entry in row]
+        for row in finite["induced_JDE"]
+    ]
+    require(stored_jde == j_de, "stored JDE")
+    require(
+        multiply(j_de, j_de) == scale(Fraction(-1), identity6),
+        "JDE square",
+    )
+    require(
+        multiply(multiply(j_de, j_de), multiply(j_de, j_de))
+        == identity6,
+        "JDE order four",
+    )
+
+    records = finite["S3_twisted_exterior_records"]
+    require(len(records) == 6, "six exterior records")
+    for index, record in enumerate(records):
+        sheet = record["sheet_matrix"]
+        sign = record["sign"]
+        require(
+            record["exterior_square_matrix"]
+            == [[sign * entry for entry in row] for row in sheet],
+            f"exterior sign {index}",
+        )
+        require(
+            record["determinant_twisted_exterior_matrix"] == sheet,
+            f"twisted edge action {index}",
+        )
+
+    sheet_actions = [
+        permutation_matrix(permutation)
+        for permutation in permutations(range(3))
+    ]
+    strain_actions = [
+        block_diagonal(action, action)
+        for action in sheet_actions
+    ]
+    reynolds_sum = zeros(6, 6)
+    for action in strain_actions:
+        reynolds_sum = add(reynolds_sum, action)
+        require(
+            multiply(j_de, action) == multiply(action, j_de),
+            "JDE holonomy commutation",
+        )
+    reynolds = scale(Fraction(1, 6), reynolds_sum)
+    tt = subtract(identity6, reynolds)
+    require(
+        multiply(j_de, reynolds) == multiply(reynolds, j_de),
+        "JDE Reynolds preservation",
+    )
+    require(
+        multiply(j_de, tt) == multiply(tt, j_de),
+        "JDE TT preservation",
+    )
+    require(matrix_rank(reynolds) == 2, "Reynolds rank")
+    require(matrix_rank(tt) == 4, "TT rank")
+
+    trace_mode = [Fraction(entry) for entry in finite["trace_mode"]]
+    trace_image = [
+        sum(
+            (entry * trace_mode[column] for column, entry in enumerate(row)),
+            Fraction(0),
+        )
+        for row in j_de
+    ]
+    require(
+        trace_image
+        == [Fraction(entry) for entry in finite["JDE_trace_mode_image"]],
+        "trace mode image",
+    )
+    require(
+        rootplane["claim_tiers"][
+            "direct_unital_Herm3_adjoint_realizes_full_JDE"
+        ]
+        == "CLOSED_NO_GO",
+        "direct Herm3 no-go",
+    )
+
+    tiers = marked_nogo["claim_tiers"]
+    require(
+        tiers[
+            "C4_is_an_automorphism_of_the_active_marked_rank_one_FuYau_branch"
+        ]
+        == "CLOSED_NO_GO",
+        "marked FuYau C4 no-go",
+    )
+    require(
+        tiers["autonomous_Lens_descent_in_current_marked_shared_circle_setup"]
+        == "CLOSED_NO_GO_CONDITIONAL_ON_ACTIVE_TOPOLOGY_TYPING",
+        "autonomous Lens no-go",
+    )
+    require(
+        tiers["nonlocal_same_branch_Fourier_Mukai_JDE"]
+        == "OPEN_11_ROW_CONTRACT_2_AVAILABLE",
+        "FM contract remains open",
+    )
+    require(tiers["direct_projected_HYM_block"] == "OPEN", "direct HYM open")
+
+    counts = certificate["acceptance_counts"]
+    require(counts["corrected_geometry_compiler"] == "3/5", "geometry count")
+    require(counts["remaining_geometry_rows"] == 2, "remaining rows")
+    require(counts["remaining_independent_C4_symbol_lifts"] == 0, "C4 symbol closed")
+    require(
+        counts["remaining_selected_HYM_C4_invariance_or_direct_block_rows"]
+        == 1,
+        "one HYM symmetry row",
+    )
+    require(
+        counts["remaining_autonomous_marked_Lens_descent_routes"] == 0,
+        "no Lens shortcut",
+    )
+    rows = certificate["physical_q79_instantiation_rows"]
+    require(
+        rows[
+            "shared_root_C4_and_parallel_JDE_on_the_q79_strain_symbol"
+        ]["accepted"],
+        "C4 symbol row accepted",
+    )
+    require(
+        not rows[
+            "selected_nonzero_Chern_HYM_C4_invariance_or_direct_TT_block"
+        ]["accepted"],
+        "HYM C4 row remains open",
+    )
+
+    require(all(certificate["checks"].values()), "all certificate checks")
+    require(certificate["all_checks_pass"], "certificate pass flag")
+    for phrase in (
+        "Selected Shared-Root C4",
+        "Determinant-Twisted Sheet-to-Edge Functor",
+        "Globalization on the q79 Local System",
+        "The Marked Fu-Yau No-Go",
+        "What Remains for HYM",
+        "This is `3/5`",
+    ):
+        require(phrase in theorem, f"theorem phrase: {phrase}")
+
+    print(
+        "PASS q79 shared-root C4 promotion: "
+        "parallel JDE closed, marked Lens no-go, geometry 3/5"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

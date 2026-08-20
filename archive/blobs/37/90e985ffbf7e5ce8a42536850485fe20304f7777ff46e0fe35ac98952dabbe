@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+QM_ROOT = Path(os.environ.get("MTT_QM_ROOT", TEXPAPERS / "mtt-qm-source-proof"))
+PACKET = ROOT / "q79_projective_operational_record_measure_descent_and_actualization_cutset.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if source.get("all_checks_pass") is True:
+        return True
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def matrix(values: list[list[object]], locals_: dict[str, object] | None = None) -> sp.Matrix:
+    local_values = locals_ or {}
+    return sp.Matrix(
+        [[sp.sympify(entry, locals=local_values) for entry in row] for row in values]
+    )
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    roots = {
+        "closure-dynamics": ROOT,
+        "mtt-qm-source-proof": QM_ROOT,
+    }
+    sources: dict[str, dict] = {}
+    for label, record in packet["inputs"].items():
+        repository = record["repository"]
+        require(repository in roots, f"repository: {label}")
+        path = roots[repository] / record["relative_path"]
+        require(path.is_file(), f"source exists: {label}")
+        require(sha256(path) == record["sha256"], f"source hash: {label}")
+        source = load(path)
+        identity = source.get("schema") or source.get("certificate")
+        require(identity == record["identity"], f"source identity: {label}")
+        require(source["status"] == record["status"], f"source status: {label}")
+        require(source_checks_pass(source), f"source checks: {label}")
+        sources[label] = source
+    require(len(sources) == 8, "eight sources")
+    return sources
+
+
+def verify_projective_measure(packet: dict, sources: dict[str, dict]) -> None:
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    twisted = sources["twisted_cohesive_overlaps"]["exact_twisted_descent_witness"]
+    shared = sources["finite_q79_repair_source"]
+    open_stratum = sources["open_stratum_qutrit_unitary"]
+    require(
+        open_stratum["open_stratum_cohomology_intertwiner_theorem"]["clock_basis_intertwiner"]
+        == "I_open=I_3",
+        "carrier unitary",
+    )
+
+    g01 = matrix(twisted["G01"], locals_)
+    g12 = matrix(twisted["G12"], locals_)
+    g20 = matrix(twisted["G20"], locals_)
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    cycle = sp.simplify(g01 * g12 * g20)
+    require(is_zero(cycle - omega * sp.eye(3)), "central cycle")
+    require(all(is_zero(g.H * g - sp.eye(3)) for g in (g01, g12, g20)), "unitarity")
+
+    p_real = matrix(shared["finite_source_data"]["tangent_or_invariant_projector_P"], locals_)
+    p0 = p_real[:3, :3]
+    p1 = sp.simplify(g01.H * p0 * g01)
+    p2 = sp.simplify(g12.H * p1 * g12)
+    q0, q1, q2 = (sp.eye(3) - p for p in (p0, p1, p2))
+    projectors = (p0, p1, p2)
+    complements = (q0, q1, q2)
+    require(is_zero(g01 * p1 - p0 * g01), "P 10")
+    require(is_zero(g12 * p2 - p1 * g12), "P 21")
+    require(is_zero(g20 * p0 - p2 * g20), "P 02")
+
+    e0 = sp.Matrix([1, 0, 0])
+    rho0 = e0 * e0.H
+    rho1 = sp.simplify(g01.H * rho0 * g01)
+    rho2 = sp.simplify(g12.H * rho1 * g12)
+    densities = (rho0, rho1, rho2)
+    require(is_zero(g01 * rho1 * g01.H - rho0), "rho 10")
+    require(is_zero(g12 * rho2 * g12.H - rho1), "rho 21")
+    require(is_zero(g20 * rho0 * g20.H - rho2), "rho 02")
+    require(is_zero(cycle * rho0 * cycle.H - rho0), "rho cycle")
+
+    p_weights = [sp.simplify(sp.trace(rho * p)) for rho, p in zip(densities, projectors)]
+    q_weights = [sp.simplify(sp.trace(rho * q)) for rho, q in zip(densities, complements)]
+    require(p_weights == [sp.Rational(1, 3)] * 3, "P chart weights")
+    require(q_weights == [sp.Rational(2, 3)] * 3, "Q chart weights")
+
+    p_residuals = (
+        g01 * (p1 * rho1 * p1) * g01.H - p0 * rho0 * p0,
+        g12 * (p2 * rho2 * p2) * g12.H - p1 * rho1 * p1,
+        g20 * (p0 * rho0 * p0) * g20.H - p2 * rho2 * p2,
+    )
+    q_residuals = (
+        g01 * (q1 * rho1 * q1) * g01.H - q0 * rho0 * q0,
+        g12 * (q2 * rho2 * q2) * g12.H - q1 * rho1 * q1,
+        g20 * (q0 * rho0 * q0) * g20.H - q2 * rho2 * q2,
+    )
+    require(all(is_zero(sp.simplify(value)) for value in p_residuals), "P instrument")
+    require(all(is_zero(sp.simplify(value)) for value in q_residuals), "Q instrument")
+
+    ready = sp.Rational(1, 448)
+    p_record = sp.simplify((1 - ready) * p_weights[0])
+    q_record = sp.simplify((1 - ready) * q_weights[0])
+    require((ready, p_record, q_record) == (
+        sp.Rational(1, 448),
+        sp.Rational(149, 448),
+        sp.Rational(149, 224),
+    ), "checkpoint")
+    require(sp.simplify(ready + p_record + q_record) == 1, "normalization")
+
+    stored = packet["exact_q79_open_stratum_witness"]
+    require(stored["P_weights"] == ["1/3", "1/3", "1/3"], "stored P weights")
+    require(stored["Q_weights"] == ["2/3", "2/3", "2/3"], "stored Q weights")
+    require(
+        stored["ready_P_Q_checkpoint"] == ["1/448", "149/448", "149/224"],
+        "stored checkpoint",
+    )
+    require(stored["carrier_tier"].startswith("PROVEN_OPEN_STRATUM"), "stored carrier tier")
+
+
+def verify_actualization_boundary(packet: dict, sources: dict[str, dict]) -> None:
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    shared = sources["finite_q79_repair_source"]
+    p_real = matrix(shared["finite_source_data"]["tangent_or_invariant_projector_P"], locals_)
+    p = p_real[:3, :3]
+    q = sp.eye(3) - p
+    e0 = sp.Matrix([1, 0, 0])
+    rho = e0 * e0.H
+    wp = sp.trace(rho * p)
+    wq = sp.trace(rho * q)
+    p_component = sp.simplify(p * rho * p)
+    q_component = sp.simplify(q * rho * q)
+    limit = sp.simplify(p_component + q_component)
+    p_state = sp.simplify(p_component / wp)
+    q_state = sp.simplify(q_component / wq)
+    require(limit.rank() == 2, "limit rank")
+    require(sp.trace(limit**2) == sp.Rational(5, 9), "limit purity")
+    require(not is_zero(limit - p_state), "not P state")
+    require(not is_zero(limit - q_state), "not Q state")
+
+    attenuation = sp.Rational(1, 448)
+    finite = sp.simplify(limit + attenuation * (p * rho * q + q * rho * p))
+    require(finite.rank() == 2, "finite rank")
+    require(not is_zero(finite - p_state), "finite not P")
+    require(not is_zero(finite - q_state), "finite not Q")
+
+    stored = packet["nonselective_actualization_nogo_witness"]
+    require(stored["rank"] == 2, "stored rank")
+    require(stored["purity"] == "5/9", "stored purity")
+    require("does not choose" in stored["conclusion"], "stored conclusion")
+
+    fock = sources["canonical_q79_Fock_output_measure"]
+    boundary = fock["noncircularity_and_actualization_boundary"]
+    require("does not choose" in boundary["ontic_guard"], "source ontic guard")
+    require(
+        fock["B_QM_01_assessment"]["objective_single_history_actualization"]
+        == "open",
+        "source actualization open",
+    )
+
+
+def verify_probability_typing(packet: dict, sources: dict[str, dict]) -> None:
+    fock = sources["canonical_q79_Fock_output_measure"]
+    basin = sources["basin_frame_Born_reduction"]
+    preparation = sources["preparation_selection_nogo"]
+    recorder = sources["canonical_Hessian_recorder_source"]
+
+    require(
+        fock["B_QM_01_assessment"]["canonical_binary_outcome_measure"]
+        == "closed_exact",
+        "canonical measure source",
+    )
+    require(
+        fock["B_QM_01_assessment"]["independent_A_PRM_primitive_for_output_measure"]
+        == "not_required",
+        "no stochastic primitive",
+    )
+    require(
+        basin["theorem"]["conclusion"]
+        == "there is a unique density operator rho_x with mu_x(B_C(P))=Tr(rho_x P)",
+        "Gleason reduction",
+    )
+    require(
+        basin["event_level_no_go"]["allowed_structure"]
+        == "context-dependent basin events with context-independent probabilities",
+        "event typing",
+    )
+    require(
+        preparation["interpretation"]["state_data"]
+        == "the physical preparation must select a density operator from the allowed cone",
+        "preparation typing",
+    )
+    require(
+        recorder["nonselection_no_go"]["conclusion"].endswith("actualize one record"),
+        "recorder no-go",
+    )
+
+    reconciliation = packet["probability_layer_reconciliation"]
+    require(reconciliation["canonical_binary_operational_output_measure"] == "CLOSED_EXACT", "reconciled measure")
+    require(reconciliation["objective_single_history_actualization"] == "OPEN", "reconciled actualization")
+    require(reconciliation["general_projective_contexts"] == "OPEN", "reconciled contexts")
+
+    tiers = packet["claim_tiers"]
+    require(tiers["projective_open_stratum_chart_independence"] == "CLOSED_EXACT_NEW_COMPOSITION", "new tier")
+    require(tiers["nonselective_channel_is_objective_actualization"] == "CLOSED_NOGO", "no-go tier")
+    require(tiers["objective_single_history_actualization"] == "OPEN", "ontic tier")
+    require(tiers["many_worlds_false"] == "NOT_CLAIMED", "interpretive tier")
+    require(packet["frontier_delta"]["next_theorem"] == "mttSelectedPhysicalRepairBasinToRecorderInstrumentCoupling.v1", "next theorem")
+
+
+def verify_packet_contract(packet: dict) -> None:
+    require(
+        packet["schema"]
+        == "MTTQ79ProjectiveOperationalRecordMeasureDescentAndActualizationCutset.v1",
+        "schema",
+    )
+    require(all_boolean_leaves_true(packet["checks"]), "checks")
+    require(all(value is False for value in packet["guardrails"].values()), "guardrails")
+    require(
+        packet["parameter_ledger"]
+        == {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "new_observed_probabilities": 0,
+            "new_stochastic_primitives": 0,
+            "inherited_clock_anchors": 1,
+            "inherited_categorical_apparatus_contexts": 1,
+        },
+        "parameter ledger",
+    )
+    separation = packet["typed_object_separation"]
+    require(len(separation) == 4, "four typed objects")
+    require("not emitted" in separation["ontic_actual_history"], "ontic separation")
+
+
+def main() -> None:
+    packet = load(PACKET)
+    sources = verify_inputs(packet)
+    verify_projective_measure(packet, sources)
+    verify_actualization_boundary(packet, sources)
+    verify_probability_typing(packet, sources)
+    verify_packet_contract(packet)
+    print("Q79_PROJECTIVE_OPERATIONAL_RECORD_MEASURE_DESCENT_AND_ACTUALIZATION_CUTSET_VERIFY_PASS")
+
+
+if __name__ == "__main__":
+    main()

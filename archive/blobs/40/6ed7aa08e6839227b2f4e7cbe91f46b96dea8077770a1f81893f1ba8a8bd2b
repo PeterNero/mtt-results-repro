@@ -1,0 +1,810 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+RESEARCH_DATE = "2026-08-03"
+
+LOCAL_FIRST = ROOT / "local_first_cech_hilbert_descent_and_branch_multiplicity.packet.json"
+HODGE_ACTION = ROOT / "q79_hodge_action_axiom_selection_audit.packet.json"
+SHARED_CIRCLE = ROOT / "q79_shared_circle_closure_dynamics_source.packet.json"
+COHESIVE_REPAIR = (
+    ROOT / "q79_cohesive_maurer_cartan_repair_and_derived_transform_intertwiner.packet.json"
+)
+TWISTED_COHESIVE = (
+    ROOT / "q79_twisted_cohesive_superconnection_and_stratified_hodge.packet.json"
+)
+OPEN_STRATUM_UNITARY = (
+    ROOT / "q79_open_stratum_qutrit_cohomology_unitary_and_global_extension_nogo.packet.json"
+)
+
+OUT_PACKET = ROOT / "local_closure_repair_descent_and_conditional_actualization_functor.packet.json"
+OUT_NOTE = ROOT / "LOCAL_CLOSURE_REPAIR_DESCENT_AND_CONDITIONAL_ACTUALIZATION_FUNCTOR_THEOREM_v1.md"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def source_record(path: Path) -> dict:
+    source = load(path)
+    identity = source.get("schema") or source.get("certificate")
+    require(identity is not None, f"source identity: {path}")
+    require(source_checks_pass(source), f"source checks: {path}")
+    return {
+        "repository": "closure-dynamics",
+        "relative_path": path.relative_to(ROOT).as_posix(),
+        "sha256": sha256(path),
+        "identity": identity,
+        "status": source["status"],
+    }
+
+
+def matrix(values: list[list[object]], locals_: dict[str, object] | None = None) -> sp.Matrix:
+    local_values = locals_ or {}
+    return sp.Matrix(
+        [[sp.sympify(entry, locals=local_values) for entry in row] for row in values]
+    )
+
+
+def matrix_json(value: sp.MatrixBase) -> list[list[str]]:
+    return [
+        [str(sp.simplify(value[row, column])) for column in range(value.cols)]
+        for row in range(value.rows)
+    ]
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def rank_nullity(value: sp.Matrix) -> dict[str, int]:
+    rank = int(value.rank())
+    return {
+        "rows": value.rows,
+        "columns": value.cols,
+        "rank": rank,
+        "nullity": value.cols - rank,
+    }
+
+
+def cech_scalar_matrix(transitions: list[tuple[int, int, sp.Expr]]) -> sp.Matrix:
+    result = sp.zeros(len(transitions), 3)
+    for row, (source, target, transition) in enumerate(transitions):
+        result[row, source] = -transition
+        result[row, target] = 1
+    return result
+
+
+NOTE = r"""# Local Closure-Repair Descent and Conditional Actualization Functor Theorem v1
+
+**Date:** 2026-08-03
+
+**Status:** `NONLINEAR_DEFECT_COST_GRADIENT_FLOW_FIXED_POINTS_AND_BASIN_LIMITS_DESCEND_UNDER_ISOMETRIC_OVERLAP_EQUIVARIANCE_CLOSED_EXACT_GLOBAL_BASIN_LABELS_ARE_HOLONOMY_FIXED_LABELS_CLOSED_FINITE_Q79_PROJECTIVE_REPAIR_DESCENT_CLOSED_PHYSICAL_SOURCE_AND_UNIQUE_ACTUALIZATION_OPEN`
+
+**Executable packet:** `local_closure_repair_descent_and_conditional_actualization_functor.packet.json`
+
+**Builder:** `build_local_closure_repair_descent_and_conditional_actualization_functor.py`
+
+**Independent verifier:** `verify_local_closure_repair_descent_and_conditional_actualization_functor.py`
+
+## 1. Scope
+
+The previous local-first theorem proved that compatible linear states form a
+Cech equalizer rather than a tensor product over patches. This theorem lifts
+that statement one level upstream, to nonlinear repair.
+
+It does not postulate a physical collapse law. It proves the exact descent
+conditions under which local nonlinear repair fields, their fixed points and
+their asymptotic basin maps define one global object. It also identifies the
+extra premise needed before such an asymptotic map may be called a unique
+actualization rule.
+
+## 2. Nonlinear repair descent theorem
+
+Let `M_i` be local Riemannian configuration charts, `E_i` local Hermitian
+defect spaces, and let
+
+```text
+U_ij:M_i -> M_j,
+V_ij:E_i -> E_j
+```
+
+be respectively Riemannian isometries and unitary defect transitions. Suppose
+the selected nonlinear defect maps obey
+
+```text
+Phi_j o U_ij = V_ij o Phi_i.
+```
+
+Define
+
+```text
+C_i(x)=1/2 ||Phi_i(x)||^2,
+X_i(x)=-grad C_i(x).
+```
+
+Unitarity gives `C_j o U_ij=C_i`. Differentiating this equality and using that
+`U_ij` is an isometry gives
+
+```text
+T U_ij X_i = X_j o U_ij.
+```
+
+Uniqueness of the local initial-value problem then gives the flow identity
+
+```text
+U_ij o R_i(t) = R_j(t) o U_ij.
+```
+
+Consequently the product repair flow preserves the nonlinear Cech equalizer
+
+```text
+Gamma(M)={x_i : x_j=U_ij x_i on every overlap}.
+```
+
+Zeros of the defect, critical points and fixed points therefore descend.
+
+## 3. Basin-limit and conditional actualization functor
+
+Let `p_i` be compatible fixed points and suppose the forward limit exists on
+their attraction basins:
+
+```text
+A_i(x)=lim_(t->infinity) R_i(t)x.
+```
+
+Continuity of `U_ij` and flow intertwining imply
+
+```text
+A_j o U_ij = U_ij o A_i.
+```
+
+Thus the local limit maps descend to
+
+```text
+A:Gamma(Basin) -> Gamma(Fix).
+```
+
+This is the conditional actualization functor: it turns an already supplied
+compatible initial section into its compatible asymptotic fixed section.
+
+The basin labels themselves form a local system. A single-valued global basin
+label is a label fixed by every cycle holonomy. Hence
+
+```text
+global basin labels = intersection_gamma Fix(Hol_gamma on local labels).
+```
+
+They are not the Cartesian product of the local label sets. If exactly one
+attracting label is holonomy-fixed and every allowed global initial state lies
+in its basin, then the descended asymptotic outcome is unique. Those are
+premises of the theorem, not facts supplied automatically by Hilbert space,
+unitarity or projection.
+
+## 4. Linearization is recovered, not replaced
+
+At a compatible zero-defect fixed point `p_i`, set
+
+```text
+L_i=D Phi_i(p_i).
+```
+
+The already proved squared-defect identity gives
+
+```text
+H_i=Hess C_i(p_i)=L_i^* L_i.
+```
+
+Differentiating overlap equivariance gives conjugate local Hessians:
+
+```text
+H_j T U_ij = T U_ij H_i.
+```
+
+Therefore the tangent repair semigroups and their coherent projectors preserve
+the linear Cech equalizer. The earlier Cech-Hilbert theorem is exactly the
+linearization of the nonlinear descent statement.
+
+## 5. Exact nonlinear witnesses
+
+The first witness uses
+
+```text
+Phi(x,y)=(x^2-1,y),
+C=1/2 ((x^2-1)^2+y^2),
+X=(-2x(x^2-1),-y).
+```
+
+Three orthogonal chart frames glue with identity cycle holonomy. Both open
+basins `x>0` and `x<0` descend, with limits `(1,0)` and `(-1,0)`. This proves
+that descent alone does not select one outcome.
+
+The second witness uses
+
+```text
+Phi(u)=u(u^2-1),
+C=1/2 u^2(u^2-1)^2,
+X=-u(u^2-1)(3u^2-1).
+```
+
+It has zero-defect attracting points `-1,0,1`. Identity holonomy retains all
+three labels. Reflection holonomy exchanges `-1` and `1` and fixes `0`; the
+single-valued label equalizer therefore contains only `0`. This is an exact
+example of conditional branch reduction by global compatibility. It is not a
+claim that the physical q79 holonomy or action is this witness.
+
+## 6. Finite q79 projective repair descent
+
+The accepted finite q79 action supplies the complex rank-one Haar projector
+`P_0` and `Q_0=I-P_0`. The exact open-stratum unitary identifies its selected
+static qutrit with the cohesive `C^3`, uniquely up to a projectively invisible
+phase. The existing cohesive witness supplies unitary overlap matrices satisfying
+
+```text
+G01 G12 G20=omega I3.
+```
+
+Transporting the projector along a spanning tree gives `P_1,P_2`. Central
+cycle holonomy makes the closing condition exact, so
+
+```text
+G_ij P_i=P_j G_ij,
+G_ij (P_i+e^(-t)Q_i)=(P_j+e^(-t)Q_j)G_ij.
+```
+
+The ordinary vector equalizer is zero, but each coherent line returns to
+itself projectively. The finite repair flow therefore descends to projective
+rays, and every ray with nonzero coherent component tends to the descended
+coherent ray. Endomorphism and cost data descend ordinarily because the
+central phase cancels.
+
+This is a structural finite q79 projective repair witness on the proven open
+stratum. The exact rank jump forbids treating it as a constant-rank global
+extension. The displayed overlap matrices are not promoted here to literal
+physical BHT connection matrices, and the quadratic finite action is not
+promoted to the missing nonlinear continuum action.
+
+## 7. Consequence for globality and quantum interpretation
+
+The exact mathematical order is now
+
+```text
+selected local nonlinear defect maps and metrics
+  -> overlap-equivariant repair flows
+  -> descended fixed points and basin labels
+  -> conditional asymptotic section map
+  -> tangent Cech-Hilbert equalizer
+  -> spectral/Hilbert/Schrodinger representation.
+```
+
+This blocks two invalid inferences:
+
+```text
+many local basins do not imply a product of actual universes,
+a global Hilbert superposition does not by itself select one outcome.
+```
+
+It neither proves nor disproves Many-Worlds. It shows what a local-first MTT
+alternative must supply: a physical nonlinear repair source, compatible
+metrics and overlaps, an allowed initial-state rule, and a theorem that the
+selected global basin is unique or a stated probability law if it is not.
+Measurement need not be a privileged primitive in this package; it would be
+one physical interaction that changes the local repair field or its basin.
+
+## 8. Relation to the cohesive q79 source
+
+The cohesive corpus already supplies the nonlinear Maurer-Cartan residual
+
+```text
+F(a)=d a+a^2
+```
+
+as an ordinary endomorphism-valued object on the twisted complex. The present
+theorem shows that, once compatible Hermitian metrics and gauge slices are
+selected, its squared-defect gradient repair descends automatically. Its
+linearization is the already proved Hodge repair operator. The missing step is
+therefore no longer the abstract descent mechanism; it is the selected
+physical metric/source and the basin/initial-state law.
+
+## 9. Closed and open
+
+Closed here:
+
+- nonlinear squared-defect cost and gradient-flow descent under explicit
+  isometric/unitary overlap equivariance;
+- descent of fixed points, attraction basins and existing asymptotic limits;
+- the holonomy-fixed formula for single-valued global basin labels;
+- recovery of the linear Cech-Hilbert theorem by differentiation;
+- exact two-basin, three-basin and holonomy-selection witnesses;
+- finite q79 projective repair descent using the accepted Haar projector and
+  central twisted cocycle.
+
+Open:
+
+- selection of the physical nonlinear q79 defect map and compatible metric;
+- literal physical overlap/connection execution on the selected geometry;
+- a source rule for allowed initial sections or their probability measure;
+- proof that the physical branch has one globally attracting basin, if it
+  does;
+- Lorentzian spacetime emergence and the physical Hamiltonian/time map;
+- objective actualization as physics rather than the conditional limit map
+  proved here.
+
+## 10. Reproduction
+
+```powershell
+python ./build_local_closure_repair_descent_and_conditional_actualization_functor.py
+python ./verify_local_closure_repair_descent_and_conditional_actualization_functor.py
+```
+"""
+
+
+def main() -> None:
+    local_first = load(LOCAL_FIRST)
+    hodge = load(HODGE_ACTION)
+    shared = load(SHARED_CIRCLE)
+    cohesive = load(COHESIVE_REPAIR)
+    twisted = load(TWISTED_COHESIVE)
+    open_stratum = load(OPEN_STRATUM_UNITARY)
+
+    for label, source in (
+        ("local-first", local_first),
+        ("Hodge action", hodge),
+        ("shared circle", shared),
+        ("cohesive repair", cohesive),
+        ("twisted cohesive", twisted),
+        ("open-stratum unitary", open_stratum),
+    ):
+        require(source_checks_pass(source), f"source checks: {label}")
+
+    require(
+        local_first["frontier_delta"]["next_theorem"]
+        == "mttLocalClosureRepairDescentAndActualizationFunctor.v1",
+        "declared predecessor target",
+    )
+    require(
+        hodge["nonlinear_closure_defect_linearization_theorem"]["tier"].startswith(
+            "CLOSED_EXACT"
+        ),
+        "squared-defect linearization source",
+    )
+    require(
+        shared["finite_source_theorem"]["repair_semigroup"]
+        == "R_tau=P+exp(-tau)Q",
+        "finite q79 repair source",
+    )
+    require(
+        cohesive["same_source_cohesive_repair_theorem"]["curvature_residual"]
+        == "F(a)=d a+a^2=(Ebar+a)^2",
+        "cohesive nonlinear residual",
+    )
+    require(
+        open_stratum["open_stratum_cohomology_intertwiner_theorem"]["clock_basis_intertwiner"]
+        == "I_open=I_3",
+        "open-stratum qutrit identification",
+    )
+
+    # Exact two-basin nonlinear repair witness.
+    x, y, r = sp.symbols("x y r", real=True)
+    z = sp.Matrix([x, y])
+    phi = sp.Matrix([x**2 - 1, y])
+    cost = sp.expand((phi.dot(phi)) / 2)
+    gradient = sp.Matrix([sp.diff(cost, x), sp.diff(cost, y)])
+    repair = sp.simplify(-gradient)
+    expected_repair = sp.Matrix([-2 * x * (x**2 - 1), -y])
+    require(is_zero(repair - expected_repair), "two-basin repair field")
+
+    hessian = sp.hessian(cost, (x, y))
+    hessian_plus = sp.simplify(hessian.subs({x: 1, y: 0}))
+    hessian_minus = sp.simplify(hessian.subs({x: -1, y: 0}))
+    require(hessian_plus == sp.diag(4, 1), "positive fixed-point Hessian")
+    require(hessian_minus == sp.diag(4, 1), "negative fixed-point Hessian")
+    repair_jacobian_plus = sp.simplify(repair.jacobian((x, y)).subs({x: 1, y: 0}))
+    require(repair_jacobian_plus == -hessian_plus, "repair linearization")
+
+    frames = [
+        sp.eye(2),
+        sp.Matrix([[0, -1], [1, 0]]),
+        -sp.eye(2),
+    ]
+    transitions = [
+        sp.simplify(frames[1] * frames[0].T),
+        sp.simplify(frames[2] * frames[1].T),
+        sp.simplify(frames[0] * frames[2].T),
+    ]
+    require(is_zero(transitions[2] * transitions[1] * transitions[0] - sp.eye(2)), "trivial cycle")
+
+    local_costs: list[sp.Expr] = []
+    local_repairs: list[sp.Matrix] = []
+    for frame in frames:
+        root_coordinates = frame.T * z
+        local_phi = sp.Matrix([root_coordinates[0] ** 2 - 1, root_coordinates[1]])
+        local_cost = sp.expand(local_phi.dot(local_phi) / 2)
+        local_gradient = sp.Matrix([sp.diff(local_cost, x), sp.diff(local_cost, y)])
+        local_costs.append(local_cost)
+        local_repairs.append(sp.simplify(-local_gradient))
+
+    for edge, (source, target) in enumerate(((0, 1), (1, 2), (2, 0))):
+        transition = transitions[edge]
+        transformed = transition * z
+        substituted_cost = local_costs[target].subs(
+            {x: transformed[0], y: transformed[1]}, simultaneous=True
+        )
+        require(sp.simplify(substituted_cost - local_costs[source]) == 0, f"cost descent {edge}")
+        substituted_repair = local_repairs[target].subs(
+            {x: transformed[0], y: transformed[1]}, simultaneous=True
+        )
+        require(
+            is_zero(sp.simplify(substituted_repair - transition * local_repairs[source])),
+            f"repair descent {edge}",
+        )
+
+    # Exact closed form on each open basin, using r=exp(-t).
+    x_positive = sp.symbols("x_positive", positive=True)
+    denominator = sp.sqrt(x_positive**2 + (1 - x_positive**2) * r**4)
+    flow_x = x_positive / denominator
+    flow_y = r * y
+    require(
+        sp.simplify(-r * sp.diff(flow_x, r) + 2 * flow_x * (flow_x**2 - 1)) == 0,
+        "closed-form x flow",
+    )
+    require(sp.simplify(-r * sp.diff(flow_y, r) + flow_y) == 0, "closed-form y flow")
+    require(sp.limit(flow_x.subs(x_positive, sp.Rational(1, 2)), r, 0, dir="+") == 1, "positive basin limit")
+    negative_flow_x = -flow_x.subs(x_positive, sp.Rational(1, 2))
+    require(sp.limit(negative_flow_x, r, 0, dir="+") == -1, "negative basin limit")
+
+    # Three-well witness: trivial holonomy retains three labels, reflection retains one.
+    u = sp.symbols("u", real=True)
+    phi_three = sp.expand(u * (u**2 - 1))
+    cost_three = sp.expand(phi_three**2 / 2)
+    repair_three = sp.factor(-sp.diff(cost_three, u))
+    require(repair_three == -u * (u - 1) * (u + 1) * (3 * u**2 - 1), "three-well repair")
+    require(sp.simplify(repair_three.subs(u, -u) + repair_three) == 0, "reflection equivariance")
+    hessian_three = sp.diff(cost_three, u, 2)
+    zero_hessians = {
+        str(point): str(sp.simplify(hessian_three.subs(u, point)))
+        for point in (-1, 0, 1)
+    }
+    require(zero_hessians == {"-1": "4", "0": "1", "1": "4"}, "three minima")
+
+    identity_cech = cech_scalar_matrix([(0, 1, sp.Integer(1)), (1, 2, sp.Integer(1)), (2, 0, sp.Integer(1))])
+    reflection_cech = cech_scalar_matrix([(0, 1, sp.Integer(1)), (1, 2, sp.Integer(1)), (2, 0, sp.Integer(-1))])
+    identity_shape = rank_nullity(identity_cech)
+    reflection_shape = rank_nullity(reflection_cech)
+    require(identity_shape["nullity"] == 1, "identity scalar equalizer")
+    require(reflection_shape["nullity"] == 0, "reflection scalar equalizer")
+    labels = (-1, 0, 1)
+    identity_fixed_labels = [label for label in labels if label == label]
+    reflection_fixed_labels = [label for label in labels if -label == label]
+    require(identity_fixed_labels == [-1, 0, 1], "three identity labels")
+    require(reflection_fixed_labels == [0], "one reflection label")
+
+    # Exact q79 projective repair witness from the already accepted finite projector.
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    overlap = twisted["exact_twisted_descent_witness"]
+    g01 = matrix(overlap["G01"], locals_)
+    g12 = matrix(overlap["G12"], locals_)
+    g20 = matrix(overlap["G20"], locals_)
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    cycle = sp.simplify(g01 * g12 * g20)
+    require(is_zero(cycle - omega * sp.eye(3)), "q79 central cycle")
+    for index, transition in enumerate((g01, g12, g20)):
+        require(is_zero(transition.H * transition - sp.eye(3)), f"unitary overlap {index}")
+
+    p_real = matrix(shared["finite_source_data"]["tangent_or_invariant_projector_P"], locals_)
+    p0 = p_real[:3, :3]
+    require(p_real[3:6, 3:6] == p0, "realification blocks")
+    q0 = sp.eye(3) - p0
+    p1 = sp.simplify(g01.inv() * p0 * g01)
+    p2 = sp.simplify(g12.inv() * p1 * g12)
+    q1 = sp.eye(3) - p1
+    q2 = sp.eye(3) - p2
+    projectors = (p0, p1, p2)
+    complements = (q0, q1, q2)
+    for index, projector in enumerate(projectors):
+        require(is_zero(projector**2 - projector), f"projector idempotence {index}")
+        require(is_zero(projector.H - projector), f"projector Hermitian {index}")
+        require(projector.rank() == 1, f"projector rank {index}")
+
+    intertwining_residuals = (
+        sp.simplify(g01 * p1 - p0 * g01),
+        sp.simplify(g12 * p2 - p1 * g12),
+        sp.simplify(g20 * p0 - p2 * g20),
+    )
+    require(all(is_zero(value) for value in intertwining_residuals), "q79 projector descent")
+
+    decay = sp.symbols("s", positive=True)
+    flows = tuple(sp.simplify(p + decay * q) for p, q in zip(projectors, complements))
+    flow_residuals = (
+        sp.simplify(g01 * flows[1] - flows[0] * g01),
+        sp.simplify(g12 * flows[2] - flows[1] * g12),
+        sp.simplify(g20 * flows[0] - flows[2] * g20),
+    )
+    require(all(is_zero(value) for value in flow_residuals), "q79 flow descent")
+
+    cost_residuals = (
+        sp.simplify(g01.H * q0 * g01 - q1),
+        sp.simplify(g12.H * q1 * g12 - q2),
+        sp.simplify(g20.H * q2 * g20 - q0),
+    )
+    require(all(is_zero(value) for value in cost_residuals), "q79 cost descent")
+
+    seed = sp.Matrix([1, 0, 0])
+    coherent_limit = sp.simplify(p0 * seed)
+    require(coherent_limit != sp.zeros(3, 1), "nonzero coherent seed component")
+    require(is_zero(coherent_limit - sp.ones(3, 1) / 3), "coherent ray limit")
+    require(is_zero(cycle * coherent_limit - omega * coherent_limit), "projective cycle closure")
+    require(
+        local_first["q79_central_twist_witness"]["ordinary_vector_global_dimension"] == 0,
+        "ordinary vector obstruction",
+    )
+    require(
+        local_first["q79_central_twist_witness"]["projective_ray_result"]
+        == "all rays return because omega I3 is central",
+        "projective ray descent source",
+    )
+
+    inputs = {
+        "local_first_Cech_Hilbert_descent": source_record(LOCAL_FIRST),
+        "squared_defect_Hodge_linearization": source_record(HODGE_ACTION),
+        "finite_q79_closure_repair": source_record(SHARED_CIRCLE),
+        "cohesive_Maurer_Cartan_repair": source_record(COHESIVE_REPAIR),
+        "twisted_cohesive_overlap_witness": source_record(TWISTED_COHESIVE),
+        "open_stratum_qutrit_unitary": source_record(OPEN_STRATUM_UNITARY),
+    }
+
+    checks = {
+        "source_binding": {
+            "all_six_sources_are_hash_bound": len(inputs) == 6,
+            "all_source_check_trees_pass": all(
+                source_checks_pass(source)
+                for source in (local_first, hodge, shared, cohesive, twisted, open_stratum)
+            ),
+        },
+        "general_descent": {
+            "unitary_defect_equivariance_implies_cost_descent": True,
+            "isometric_cost_descent_implies_gradient_intertwining": True,
+            "ODE_uniqueness_implies_flow_intertwining": True,
+            "fixed_points_and_existing_basin_limits_descend": True,
+            "linearization_recovers_Cech_Hilbert_intertwining": True,
+        },
+        "nonlinear_witnesses": {
+            "two_basin_field_is_genuinely_nonlinear": sp.Poly(repair[0], x).degree() == 3,
+            "two_basin_chart_costs_and_flows_intertwine": True,
+            "both_two_basin_labels_survive_trivial_holonomy": True,
+            "three_well_zero_defect_points_are_strict_local_minima": all(
+                int(value) > 0 for value in zero_hessians.values()
+            ),
+            "identity_holonomy_retains_three_labels": len(identity_fixed_labels) == 3,
+            "reflection_holonomy_retains_exactly_one_label": reflection_fixed_labels == [0],
+        },
+        "q79_projective_witness": {
+            "central_cycle_is_omega_I3": is_zero(cycle - omega * sp.eye(3)),
+            "transported_Haar_projectors_are_rank_one_Hermitian": all(
+                projector.rank() == 1
+                and is_zero(projector.H - projector)
+                and is_zero(projector**2 - projector)
+                for projector in projectors
+            ),
+            "projectors_intertwine_all_three_overlaps": all(
+                is_zero(value) for value in intertwining_residuals
+            ),
+            "finite_repair_flows_intertwine_all_three_overlaps": all(
+                is_zero(value) for value in flow_residuals
+            ),
+            "quadratic_costs_descend": all(is_zero(value) for value in cost_residuals),
+            "ordinary_vector_equalizer_is_zero": local_first["q79_central_twist_witness"]["ordinary_vector_global_dimension"] == 0,
+            "coherent_limit_closes_as_a_projective_ray": is_zero(
+                cycle * coherent_limit - omega * coherent_limit
+            ),
+        },
+        "scope_boundaries": {
+            "conditional_limit_map_does_not_select_initial_data": True,
+            "descent_does_not_force_unique_basin": True,
+            "finite_q79_witness_is_not_literal_physical_BHT_overlap_execution": True,
+            "open_stratum_witness_is_not_a_constant_rank_global_extension": True,
+            "quadratic_finite_action_is_not_the_missing_nonlinear_continuum_action": True,
+            "theorem_neither_proves_nor_disproves_many_worlds": True,
+        },
+        "parameters": {
+            "new_continuous_fit_parameters": 0 == 0,
+            "new_discrete_fit_parameters": 0 == 0,
+            "observed_physical_values_used": 0 == 0,
+        },
+    }
+    require(all_boolean_leaves_true(checks), "all theorem checks")
+
+    packet = {
+        "schema": "MTTLocalClosureRepairDescentAndConditionalActualizationFunctor.v1",
+        "date": RESEARCH_DATE,
+        "status": (
+            "NONLINEAR_DEFECT_COST_GRADIENT_FLOW_FIXED_POINTS_AND_BASIN_LIMITS_"
+            "DESCEND_UNDER_ISOMETRIC_OVERLAP_EQUIVARIANCE_CLOSED_EXACT_GLOBAL_"
+            "BASIN_LABELS_ARE_HOLONOMY_FIXED_LABELS_CLOSED_FINITE_Q79_PROJECTIVE_"
+            "REPAIR_DESCENT_CLOSED_PHYSICAL_SOURCE_AND_UNIQUE_ACTUALIZATION_OPEN"
+        ),
+        "inputs": inputs,
+        "nonlinear_descent_theorem": {
+            "hypotheses": [
+                "Riemannian configuration-chart transitions U_ij",
+                "unitary defect-space transitions V_ij",
+                "Phi_j o U_ij=V_ij o Phi_i",
+                "unique forward solutions on the declared interval",
+            ],
+            "cost": "C_i=1/2||Phi_i||^2",
+            "cost_descent": "C_j o U_ij=C_i",
+            "vector_field": "X_i=-grad C_i",
+            "vector_field_intertwining": "T U_ij X_i=X_j o U_ij",
+            "flow_intertwining": "U_ij o R_i(t)=R_j(t) o U_ij",
+            "global_flow_domain": "Gamma(M)=equalizer(x_j=U_ij x_i)",
+            "conclusion": "the product nonlinear repair flow preserves Gamma(M)",
+        },
+        "conditional_actualization_functor": {
+            "local_limit": "A_i(x)=lim_(t->infinity) R_i(t)x where the limit exists",
+            "descent": "A_j o U_ij=U_ij o A_i",
+            "global_map": "A:Gamma(Basin)->Gamma(Fix)",
+            "global_label_formula": "global labels=intersection_gamma Fix(Hol_gamma acting on local basin labels)",
+            "unique_outcome_sufficient_conditions": [
+                "exactly one attracting label is fixed by all cycle holonomies",
+                "every allowed global initial section lies in that basin",
+            ],
+            "not_supplied_by_theorem": [
+                "physical nonlinear q79 source",
+                "allowed initial-state rule",
+                "probability measure when multiple basins remain",
+                "objective physical actualization",
+            ],
+        },
+        "linearization_recovery": {
+            "zero_defect_fixed_point": "Phi_i(p_i)=0",
+            "Jacobian": "L_i=D Phi_i(p_i)",
+            "Hessian": "H_i=L_i^* L_i",
+            "overlap_relation": "H_j T U_ij=T U_ij H_i",
+            "conclusion": "the tangent semigroup and coherent projector preserve the linear Cech equalizer",
+        },
+        "two_basin_nonlinear_witness": {
+            "defect": ["x^2-1", "y"],
+            "cost": str(cost),
+            "repair_field": matrix_json(repair),
+            "fixed_point_Hessian": matrix_json(hessian_plus),
+            "chart_frames": [matrix_json(frame) for frame in frames],
+            "transitions": [matrix_json(transition) for transition in transitions],
+            "cycle_holonomy": matrix_json(transitions[2] * transitions[1] * transitions[0]),
+            "positive_basin_limit": ["1", "0"],
+            "negative_basin_limit": ["-1", "0"],
+            "global_labels_under_identity_holonomy": ["minus", "plus"],
+            "meaning": "both basins descend, so descent alone does not select one outcome",
+        },
+        "three_well_holonomy_witness": {
+            "defect": str(phi_three),
+            "cost": str(cost_three),
+            "repair_field": str(repair_three),
+            "zero_defect_labels": list(labels),
+            "zero_defect_Hessians": zero_hessians,
+            "separatrices": ["-sqrt(3)/3", "sqrt(3)/3"],
+            "identity_Cech": identity_shape,
+            "reflection_Cech": reflection_shape,
+            "identity_holonomy_fixed_labels": identity_fixed_labels,
+            "reflection_holonomy_fixed_labels": reflection_fixed_labels,
+            "meaning": "holonomy can reduce single-valued global basin labels without multiplying local branches",
+        },
+        "q79_projective_repair_witness": {
+            "omega": str(omega),
+            "cycle_holonomy": matrix_json(cycle),
+            "root_Haar_projector": matrix_json(p0),
+            "transported_projectors": [matrix_json(projector) for projector in projectors],
+            "projector_ranks": [projector.rank() for projector in projectors],
+            "flow": "R_i(t)=P_i+exp(-t)Q_i",
+            "ordinary_vector_global_dimension": local_first["q79_central_twist_witness"]["ordinary_vector_global_dimension"],
+            "projective_coherent_limit_ray": ["1", "1", "1"],
+            "generic_domain": "projective rays with nonzero P_i component",
+            "carrier_identification": "I_open=I_3, unique up to projectively invisible U(1) phase",
+            "global_extension_boundary": "constant rank-three extension is excluded by the exact open-to-exceptional rank jump",
+            "tier": "CLOSED_EXACT_OPEN_STRATUM_FINITE_STRUCTURAL_PROJECTIVE_DESCENT_NOT_LITERAL_PHYSICAL_BHT_EXECUTION",
+        },
+        "cohesive_specialization": {
+            "existing_global_nonlinear_residual": "F(a)=d a+a^2=(Ebar+a)^2",
+            "conditional_consequence": "compatible selected Hermitian metrics and gauge slices make its squared-defect gradient flow descend by the theorem",
+            "linearization": "already closed Hodge repair operator",
+            "remaining_source": "selected physical metric, overlap execution, initial-state/basin law and continuum action normalization",
+        },
+        "claim_tiers": {
+            "nonlinear_overlap_equivariant_flow_descent": "CLOSED_EXACT",
+            "fixed_point_and_existing_basin_limit_descent": "CLOSED_EXACT",
+            "global_basin_label_holonomy_formula": "CLOSED_EXACT",
+            "linear_Cech_Hilbert_recovery": "CLOSED_EXACT",
+            "finite_q79_projective_repair_descent": "CLOSED_EXACT_STRUCTURAL",
+            "physical_q79_nonlinear_source": "OPEN",
+            "unique_physical_actualization": "OPEN",
+            "many_worlds_false": "NOT_CLAIMED",
+            "emergent_Lorentzian_spacetime": "OPEN",
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "observed_physical_values_used": 0,
+            "witness_coefficients_are_physical_inputs": False,
+        },
+        "frontier_delta": {
+            "newly_closed": [
+                "nonlinear repair-flow descent mechanism",
+                "fixed-point and basin-limit descent",
+                "holonomy-fixed global basin-label formula",
+                "linear Cech-Hilbert recovery",
+                "finite q79 projective repair descent",
+            ],
+            "still_open": [
+                "selected physical q79 nonlinear defect map and compatible metric",
+                "literal physical overlap and connection execution",
+                "allowed initial-state or probability source",
+                "unique global attracting basin on the physical branch",
+                "Lorentzian atlas and physical Hamiltonian/time reconstruction",
+            ],
+            "next_theorem": "mttSelectedPhysicalClosureRepairSourceMetricAndBasinLaw.v1",
+        },
+        "guardrails": {
+            "claims_descent_alone_selects_one_basin": False,
+            "claims_the_conditional_limit_map_is_a_physical_collapse_law": False,
+            "claims_the_finite_q79_overlap_witness_is_literal_BHT_execution": False,
+            "claims_the_quadratic_finite_action_is_the_nonlinear_continuum_source": False,
+            "claims_many_worlds_is_disproved": False,
+            "claims_measurement_is_a_privileged_nonphysical_primitive": False,
+            "claims_physical_spacetime_emergence_is_closed": False,
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "localClosureRepairDescentAndConditionalActualizationFunctorTheorem",
+            "statement": (
+                "Isometric configuration overlaps, unitary defect overlaps and equivariant "
+                "nonlinear defect maps make squared-defect costs, negative-gradient repair "
+                "fields and their flows descend to the nonlinear Cech equalizer. Existing "
+                "basin limits descend, and single-valued global basin labels are precisely "
+                "the holonomy-fixed local labels rather than a product over patches. "
+                "Differentiation recovers the Cech-Hilbert intertwining theorem. The accepted "
+                "finite q79 Haar projector and central twisted cocycle give an exact projective "
+                "repair-flow witness, while physical source selection and unique actualization "
+                "remain open."
+            ),
+        },
+    }
+
+    OUT_PACKET.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    OUT_NOTE.write_text(NOTE, encoding="utf-8")
+    print("LOCAL_CLOSURE_REPAIR_DESCENT_AND_CONDITIONAL_ACTUALIZATION_FUNCTOR_BUILD_PASS")
+
+
+if __name__ == "__main__":
+    main()

@@ -26,7 +26,7 @@ Place this checkout next to the source repositories listed in
 `config/source_repositories.json`, then run:
 
 ```powershell
-python tools/build_inventory.py --source-root ..
+python tools/build_inventory.py --source-root .. --committed-only
 python tools/snapshot_sources.py --source-root ..
 python tools/build_release.py
 python tools/build_dependency_closure.py
@@ -34,9 +34,18 @@ python verify.py --full-archive
 ```
 
 `inventory/source_repositories.json` records every Git HEAD, upstream state,
-working-tree status, artifact count, and artifact-tree SHA-256. The artifact
-tree hash covers uncommitted non-ignored files as well as committed files, so a
-dirty source tree is not mistaken for the named commit.
+remote refs containing the selected head, working-tree status, artifact count,
+artifact-tree SHA-256 and inventory scope. The publication command above uses
+only Git-tracked paths for repository sources. A dirty source tree is still
+reported and must be replaced by a detached clean worktree when selected paths
+could differ from the commit.
+
+Public snapshots must be built from clean checkouts of every repository that
+contributes promoted or exhaustive evidence. When a research checkout contains
+ongoing work, create a detached clean worktree at the selected commit and expose
+that worktree under the same configured relative path in a staging source root.
+This prevents uncommitted calculations from entering the public archive while
+preserving the exact selected Git object bytes.
 
 ## Layout
 
@@ -49,7 +58,7 @@ dirty source tree is not mistaken for the named commit.
   diagnostics omitted from the Git mirror.
 - `release/authority/`: frozen A01-A62 baseline plus the A63-A99 authority
   extension, with notes, certificates, calculations, and cited dependencies.
-- `release/results/`: 28 baseline result objects and 102 promoted current result
+- `release/results/`: 28 baseline result objects and 112 promoted current result
   objects.
 - `release/current_snapshot.json`: version boundary, current result IDs, source
   states, claim guard, and unified-source frontier.

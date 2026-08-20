@@ -1,0 +1,412 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from fractions import Fraction
+from itertools import permutations
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CERTIFICATE = (
+    ROOT
+    / "certificates"
+    / "q79_binary_monodromy_reynolds_descent_corrected_symmetry_exit.certificate.json"
+)
+PREDECESSOR = (
+    ROOT
+    / "certificates"
+    / "q79_support_stratified_spectral_strain_boundary_hessian.certificate.json"
+)
+SOURCE = (
+    ROOT
+    / "../mtt-sm-parity-closure/candidate_data/selected_q79signedsheetspinliftreduction"
+    / "q79_signed_sheet_spin_lift_reduction.packet.json"
+).resolve()
+THEOREM = (
+    ROOT
+    / "proof_corpus"
+    / "q79_BinaryMonodromy_ReynoldsDescent_and_CorrectedSymmetryExit_Theorem_v1.md"
+)
+
+Matrix = list[list[Fraction]]
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def zeros(rows: int, columns: int) -> Matrix:
+    return [
+        [Fraction(0) for _ in range(columns)]
+        for _ in range(rows)
+    ]
+
+
+def eye(size: int) -> Matrix:
+    return [
+        [Fraction(int(row == column)) for column in range(size)]
+        for row in range(size)
+    ]
+
+
+def transpose(matrix: Matrix) -> Matrix:
+    return [list(row) for row in zip(*matrix, strict=True)]
+
+
+def add(left: Matrix, right: Matrix) -> Matrix:
+    return [
+        [a + b for a, b in zip(left_row, right_row, strict=True)]
+        for left_row, right_row in zip(left, right, strict=True)
+    ]
+
+
+def subtract(left: Matrix, right: Matrix) -> Matrix:
+    return [
+        [a - b for a, b in zip(left_row, right_row, strict=True)]
+        for left_row, right_row in zip(left, right, strict=True)
+    ]
+
+
+def scale(value: Fraction, matrix: Matrix) -> Matrix:
+    return [[value * entry for entry in row] for row in matrix]
+
+
+def multiply(left: Matrix, right: Matrix) -> Matrix:
+    right_transpose = transpose(right)
+    return [
+        [
+            sum(
+                (a * b for a, b in zip(row, column, strict=True)),
+                Fraction(0),
+            )
+            for column in right_transpose
+        ]
+        for row in left
+    ]
+
+
+def matrix_rank(matrix: Matrix) -> int:
+    work = [row[:] for row in matrix]
+    row_count = len(work)
+    column_count = len(work[0]) if work else 0
+    pivot_row = 0
+    for column in range(column_count):
+        pivot = next(
+            (
+                row
+                for row in range(pivot_row, row_count)
+                if work[row][column] != 0
+            ),
+            None,
+        )
+        if pivot is None:
+            continue
+        work[pivot_row], work[pivot] = work[pivot], work[pivot_row]
+        divisor = work[pivot_row][column]
+        work[pivot_row] = [entry / divisor for entry in work[pivot_row]]
+        for row in range(row_count):
+            if row == pivot_row or work[row][column] == 0:
+                continue
+            coefficient = work[row][column]
+            work[row] = [
+                entry - coefficient * pivot_entry
+                for entry, pivot_entry in zip(
+                    work[row],
+                    work[pivot_row],
+                    strict=True,
+                )
+            ]
+        pivot_row += 1
+        if pivot_row == row_count:
+            break
+    return pivot_row
+
+
+def permutation_matrix(permutation: tuple[int, ...]) -> Matrix:
+    output = zeros(len(permutation), len(permutation))
+    for column, row in enumerate(permutation):
+        output[row][column] = Fraction(1)
+    return output
+
+
+def block_diagonal(left: Matrix, right: Matrix) -> Matrix:
+    output = zeros(
+        len(left) + len(right),
+        len(left[0]) + len(right[0]),
+    )
+    for row, values in enumerate(left):
+        for column, value in enumerate(values):
+            output[row][column] = value
+    for row, values in enumerate(right):
+        for column, value in enumerate(values):
+            output[len(left) + row][len(left[0]) + column] = value
+    return output
+
+
+def parity(permutation: tuple[int, ...]) -> int:
+    inversions = sum(
+        int(permutation[left] > permutation[right])
+        for left in range(len(permutation))
+        for right in range(left + 1, len(permutation))
+    )
+    return -1 if inversions % 2 else 1
+
+
+def apply(matrix: Matrix, vector: list[Fraction]) -> list[Fraction]:
+    return [
+        sum(
+            (
+                entry * vector[column]
+                for column, entry in enumerate(row)
+            ),
+            Fraction(0),
+        )
+        for row in matrix
+    ]
+
+
+def canonical_payload_hash(payload: dict[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> int:
+    certificate = json.loads(CERTIFICATE.read_text(encoding="utf-8"))
+    predecessor = json.loads(PREDECESSOR.read_text(encoding="utf-8"))
+    source = json.loads(SOURCE.read_text(encoding="utf-8"))
+    theorem = THEOREM.read_text(encoding="utf-8")
+
+    require(
+        certificate["schema"]
+        == (
+            "MTTq79BinaryMonodromyReynoldsDescentCorrectedSymmetryExit"
+            "Certificate.v1"
+        ),
+        "certificate schema",
+    )
+    require(
+        certificate["predecessor"]["payload_sha256"]
+        == canonical_payload_hash(predecessor),
+        "predecessor hash",
+    )
+    require(predecessor["all_checks_pass"], "predecessor pass")
+    require(
+        predecessor["acceptance_counts"][
+            "physical_q79_same_source_instantiation"
+        ]
+        == "1/3",
+        "predecessor physical count",
+    )
+    require(
+        certificate["source"]["sha256"] == file_hash(SOURCE),
+        "source hash",
+    )
+    require(
+        source["q79_sheet_monodromy_theorem"]["monodromy_group"]
+        == "S3",
+        "source monodromy",
+    )
+    require(
+        source["binary_spin_theorem"]["generated_group_order"] == 12,
+        "source binary order",
+    )
+    require(
+        not source["binary_spin_theorem"]["extension_splits"],
+        "source nonsplitting",
+    )
+    require(
+        not source["global_spin_contract"]["global_Spin_lift_closed"],
+        "global spin remains open",
+    )
+
+    permutations3 = tuple(permutations(range(3)))
+    sheet_actions = [
+        permutation_matrix(permutation)
+        for permutation in permutations3
+    ]
+    strain_actions = [
+        block_diagonal(action, action)
+        for action in sheet_actions
+    ]
+    deck_centralizer = [
+        permutation
+        for permutation, candidate in zip(
+            permutations3,
+            sheet_actions,
+            strict=True,
+        )
+        if all(
+            multiply(candidate, holonomy)
+            == multiply(holonomy, candidate)
+            for holonomy in sheet_actions
+        )
+    ]
+    require(deck_centralizer == [(0, 1, 2)], "trivial deck group")
+
+    vector = [Fraction(2), Fraction(3), Fraction(5)]
+    squares = [entry**2 for entry in vector]
+    for permutation, action in zip(
+        permutations3,
+        sheet_actions,
+        strict=True,
+    ):
+        signed = [
+            Fraction(parity(permutation)) * entry
+            for entry in apply(action, vector)
+        ]
+        require(
+            [entry**2 for entry in signed] == apply(action, squares),
+            f"signed quadratic descent {permutation}",
+        )
+
+    reynolds_sum = zeros(6, 6)
+    binary_sum = zeros(6, 6)
+    for action in strain_actions:
+        reynolds_sum = add(reynolds_sum, action)
+        binary_sum = add(binary_sum, add(action, action))
+    reynolds_s3 = scale(Fraction(1, 6), reynolds_sum)
+    reynolds_dic3 = scale(Fraction(1, 12), binary_sum)
+    identity6 = eye(6)
+    tt = subtract(identity6, reynolds_s3)
+    require(reynolds_dic3 == reynolds_s3, "binary Reynolds equality")
+    require(
+        multiply(reynolds_s3, reynolds_s3) == reynolds_s3,
+        "Reynolds idempotence",
+    )
+    require(matrix_rank(reynolds_s3) == 2, "Reynolds rank")
+    require(matrix_rank(tt) == 4, "TT rank")
+    for action in strain_actions:
+        require(
+            multiply(reynolds_s3, action)
+            == multiply(action, reynolds_s3),
+            "parallel Reynolds",
+        )
+        require(
+            multiply(tt, action) == multiply(action, tt),
+            "parallel TT",
+        )
+
+    zero3 = zeros(3, 3)
+    identity3 = eye(3)
+    quarterturn = [
+        *(zero3[row] + [-entry for entry in identity3[row]] for row in range(3)),
+        *(identity3[row] + zero3[row] for row in range(3)),
+    ]
+    quarterturn2 = multiply(quarterturn, quarterturn)
+    require(
+        quarterturn2 == scale(Fraction(-1), identity6),
+        "quarterturn square",
+    )
+    require(
+        multiply(quarterturn2, quarterturn2) == identity6,
+        "quarterturn order four",
+    )
+    for action in strain_actions:
+        require(
+            multiply(quarterturn, action)
+            == multiply(action, quarterturn),
+            "S3 and C4 target commutation",
+        )
+    require(
+        identity6 != quarterturn2,
+        "binary center cannot be C4 square on strain",
+    )
+
+    natural_operator = add(
+        scale(Fraction(2), reynolds_s3),
+        scale(Fraction(3), tt),
+    )
+    natural_green = add(
+        scale(Fraction(1, 2), reynolds_s3),
+        scale(Fraction(1, 3), tt),
+    )
+    require(
+        multiply(natural_operator, natural_green) == identity6,
+        "operator Green inverse",
+    )
+    require(
+        multiply(natural_green, natural_operator) == identity6,
+        "Green operator inverse",
+    )
+    for action in strain_actions:
+        require(
+            multiply(natural_operator, action)
+            == multiply(action, natural_operator),
+            "operator naturality",
+        )
+        require(
+            multiply(natural_green, action)
+            == multiply(action, natural_green),
+            "Green naturality",
+        )
+
+    counts = certificate["acceptance_counts"]
+    require(
+        counts["corrected_physical_q79_same_source_instantiation"]
+        == "2/4",
+        "corrected physical count",
+    )
+    require(
+        counts["remaining_physical_instantiation_rows"] == 2,
+        "remaining physical rows",
+    )
+    require(
+        counts["remaining_independent_global_S3_deck_actions"] == 0,
+        "no S3 deck exit",
+    )
+    require(
+        counts["remaining_independent_same_source_C4_lifts"] == 1,
+        "one C4 exit",
+    )
+    physical = certificate["physical_q79_instantiation_rows"]
+    require(
+        physical[
+            "q79_S3_holonomy_local_system_and_parallel_strain_Reynolds_descent"
+        ]["accepted"],
+        "S3 holonomy row closed",
+    )
+    require(
+        not physical[
+            "same_source_C4_lift_and_shorted_Hessian_scalarization"
+        ]["accepted"],
+        "C4 row open",
+    )
+    require(
+        not physical[
+            "source_hashed_visible_hidden_HYM_endpoint_natural_operator_and_reduced_Green"
+        ]["accepted"],
+        "endpoint row open",
+    )
+
+    require(all(certificate["checks"].values()), "all certificate checks")
+    require(certificate["all_checks_pass"], "certificate pass flag")
+    for phrase in (
+        "The Deck-Action No-Go",
+        "associated strain local system",
+        "Binary-Monodromy Reynolds Descent",
+        "Operator Naturality Implies Green Naturality",
+        "C4 Remains Independent",
+        "correctly typed four-row table",
+    ):
+        require(phrase in theorem, f"theorem phrase: {phrase}")
+
+    print(
+        "PASS q79 binary-monodromy Reynolds descent: "
+        "deck group 1, Dic3=S3 average, physical 2/4"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,6 +1,6 @@
 # MTT Results Reproduction
 
-Current snapshot: 2026-08-17
+Current snapshot: 2026-08-20
 
 This repository is a self-contained numerical-results capsule for Modal Triplet
 Theory (MTT). It collects the matrices, spectra, scalar values, covariance
@@ -18,7 +18,7 @@ The repository has three deliberately separate layers:
    Original source paths remain in the inventory and blob map. Open, no-go,
    superseded, and retired routes remain discoverable at their declared tier.
 3. `release/` is curated and versioned. It preserves the 2026-07-12 A01-A62
-   Standard-Model baseline and adds a 2026-08-17 promoted-results layer, with
+   Standard-Model baseline and adds a 2026-08-20 promoted-results layer, with
    explicit claim tiers, stable short paths, provenance hashes, and paper-corpus
    identity data.
 
@@ -51,12 +51,12 @@ boundary and `REPRODUCIBILITY.md` for the complete rebuild procedure.
 ## Snapshot Contents
 
 - 23 configured source trees/documents;
-- 29,082 SHA-256-indexed artifacts;
-- 21,944 byte-mirrored artifacts and 7,138 hash-only bulk diagnostics;
-- 66,975 detected numerical objects;
+- 25,409 SHA-256-indexed committed artifacts;
+- 21,697 byte-mirrored artifacts and 3,712 hash-only bulk diagnostics;
+- 56,290 detected numerical objects;
 - all 99 configured authority entries indexed;
 - 62 frozen A01-A62 baseline entries plus the 37-entry A63-A99 authority extension;
-- 28 baseline short-path results plus 102 current promoted results;
+- 28 baseline short-path results plus 112 current promoted results;
 - a 77-file, 206-edge exact-byte q79 terminal dependency closure;
 - a lock to 139 canonical papers and all 138 latest Zenodo records;
 - zero commercial-book artifacts in the public result archive.
@@ -66,7 +66,7 @@ boundary and `REPRODUCIBILITY.md` for the complete rebuild procedure.
 From a checkout next to the source repositories:
 
 ```powershell
-python tools/build_inventory.py --source-root ..
+python tools/build_inventory.py --source-root .. --committed-only
 python tools/snapshot_sources.py --source-root ..
 python tools/build_release.py
 ```
@@ -92,19 +92,30 @@ while the selected common determinant is proved to provide only a matching-scale
 translation rather than a nonuniversal gauge-coupling prediction.
 
 The August layer adds exact or explicitly conditional results in operational
-QM, free/formal QFT, projective HYM geometry, cohesive-superconnection language,
-Eta9 reductions, the A63-A99 SM authority extension, and the unified-source
-dependency chain through the committed G3FR frontier. The hidden branch now includes a locally free
+QM, free/formal QFT, projective HYM geometry, cohesive-superconnection and
+nonlinear repair-descent language, Eta9 reductions, the A63-A99 SM authority
+extension, and the unified-source dependency chain through the committed G3FR
+frontier. The hidden branch now includes a locally free
 holomorphic projective rank-nine object and an existential projective HYM
 connection at their declared tiers. It does not promote the common visible-hidden
 physical endpoint, the detecting meridian and period computation, the
 interacting nonperturbative QFT construction, or the unified-source hypothesis
-to closed physical theorems. G3FR also gives an exact finite component-20
-inverse-system description, but its same-source characteristic-zero promotion
-is the strict G3FS exit and remains open. The source verifier currently reports
-two stale G3DI artifact locks, so G3FR is retained as the current committed
-frontier rather than promoted as a portable verified proof package. See
-`release/current_snapshot.json` and `STATUS.md`.
+to closed physical theorems.
+
+The new geometry layer closes the global support-stratified strain symbol,
+corrects the former global deck-`S3` requirement to an associated monodromy
+local system, globalizes the shared-root `C4` action, and compresses the literal
+2/11 Fourier-Mukai/HYM checklist to three sequential physical-source packages.
+The hidden qutrit adjoint decomposition also gives a conditional rank-102 mask
+reduction from 10,404 to 1,548 ordered positions. None of these results supplies
+the selected visible/common HYM endpoint or its physical matrix entries.
+
+G3FR gives an exact finite component-20 inverse-system description, but its
+same-source characteristic-zero promotion is the strict G3FS exit and remains
+open. A clean checkout of the committed UST snapshot currently lacks the
+required generated packed-matrix self-test object, so that campaign is retained
+as an ongoing, nonportable frontier rather than a promoted portable proof
+package. See `release/current_snapshot.json` and `STATUS.md`.
 
 The q79 dependency closure under `release/dependency_closures/` is a portability
 layer only. It preserves the exact packets and computer-algebra scripts needed

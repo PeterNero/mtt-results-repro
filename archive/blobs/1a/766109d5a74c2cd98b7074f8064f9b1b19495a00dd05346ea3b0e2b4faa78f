@@ -1,0 +1,351 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+from itertools import product
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+UST_ROOT = Path(
+    os.environ.get("MTT_UST_ROOT", TEXPAPERS / "mtt-unified-source-theorem")
+)
+
+ADJOINT_PACKET = ROOT / "q79_hidden_qutrit_adjoint_isotypic.packet.json"
+RANK102_PACKET = ROOT / "q79_rank102_qutrit_symmetry_reduction.packet.json"
+NOTE = ROOT / "Q79_HIDDEN_QUTRIT_ADJOINT_ISOTYPIC_AND_RANK102_SYMMETRY_REDUCTION_v1.md"
+
+F3 = (0, 1, 2)
+GROUP = tuple(product(F3, repeat=2))
+ZERO = None
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def git_blob(repository: Path, commit: str, relative_path: str) -> bytes:
+    require(repository.is_dir(), f"repository exists: {repository}")
+    subprocess.run(
+        ["git", "-C", str(repository), "cat-file", "-e", f"{commit}^{{commit}}"],
+        check=True,
+        capture_output=True,
+    )
+    return subprocess.run(
+        ["git", "-C", str(repository), "show", f"{commit}:{relative_path}"],
+        check=True,
+        capture_output=True,
+    ).stdout
+
+
+def add(left: tuple[int, int], right: tuple[int, int]) -> tuple[int, int]:
+    return ((left[0] + right[0]) % 3, (left[1] + right[1]) % 3)
+
+
+def sigma(left: tuple[int, int], right: tuple[int, int]) -> int:
+    return (-right[0] * left[1]) % 3
+
+
+def chi(weyl_label: tuple[int, int], group_element: tuple[int, int]) -> int:
+    return (
+        sigma(group_element, weyl_label) - sigma(weyl_label, group_element)
+    ) % 3
+
+
+def qutrit_matrix(a: int, b: int) -> list[list[int | None]]:
+    """Exact monomial matrix for T_(a,b)=X^a Z^b, storing omega exponents."""
+
+    result: list[list[int | None]] = [[ZERO for _ in range(3)] for _ in range(3)]
+    for column in range(3):
+        row = (column + a) % 3
+        result[row][column] = (-b * column) % 3
+    return result
+
+
+def multiply(
+    left: list[list[int | None]], right: list[list[int | None]]
+) -> list[list[int | None]]:
+    result: list[list[int | None]] = [[ZERO for _ in range(3)] for _ in range(3)]
+    for row in range(3):
+        for column in range(3):
+            terms = []
+            for middle in range(3):
+                if left[row][middle] is not ZERO and right[middle][column] is not ZERO:
+                    terms.append((left[row][middle] + right[middle][column]) % 3)
+            require(len(terms) <= 1, "monomial multiplication remains monomial")
+            if terms:
+                result[row][column] = terms[0]
+    return result
+
+
+def inverse(matrix: list[list[int | None]]) -> list[list[int | None]]:
+    result: list[list[int | None]] = [[ZERO for _ in range(3)] for _ in range(3)]
+    for row in range(3):
+        for column in range(3):
+            if matrix[row][column] is not ZERO:
+                result[column][row] = (-matrix[row][column]) % 3
+    require(multiply(matrix, result) == qutrit_matrix(0, 0), "monomial inverse")
+    return result
+
+
+def scale(matrix: list[list[int | None]], exponent: int) -> list[list[int | None]]:
+    return [
+        [ZERO if entry is ZERO else (entry + exponent) % 3 for entry in row]
+        for row in matrix
+    ]
+
+
+def verify_source_locks(packet: dict) -> dict[str, dict]:
+    commit = packet["commit_locks"]["mtt_unified_source_theorem"]
+    parsed: dict[str, dict] = {}
+    for source_label, record in packet["inputs"].items():
+        require(record["commit"] == commit, f"commit lock: {source_label}")
+        raw = git_blob(UST_ROOT, commit, record["relative_path"])
+        require(sha256_bytes(raw) == record["sha256"], f"source hash: {source_label}")
+        if record["relative_path"].endswith(".json"):
+            parsed[source_label] = json.loads(raw.decode("utf-8"))
+        else:
+            text = raw.decode("utf-8")
+            require(record["identity"].split()[0] in text, f"note identity: {source_label}")
+    require(len(packet["inputs"]) == 6, "six hash-bound source blobs")
+    return parsed
+
+
+def verify_adjoint_packet(packet: dict) -> None:
+    require(
+        packet["schema"]
+        == "mtt.closure-dynamics.q79-hidden-qutrit-adjoint-isotypic.v1",
+        "adjoint schema",
+    )
+    sources = verify_source_locks(packet)
+    g3t = sources["UST_G3T_packet"]
+    g3v = sources["UST_G3V_packet"]
+    g3w = sources["UST_G3W_packet"]
+    g2p = sources["UST_G2P_G5A_packet"]
+    require(
+        g3t["two_twist_descent"]["tau_projective_output_on_Y_constructed"],
+        "internal tau-projective output action",
+    )
+    require(
+        g3t["two_twist_descent"]["qutrit_generators"] == ["X", "Z"],
+        "internal qutrit generators",
+    )
+    require(
+        g3t["support_wide_reduction"]["new_support_block"]
+        == "B=N tensor C3_sigma, locally N^3",
+        "internal qutrit multiplicity block",
+    )
+    require(
+        g3t["balanced_transform"]["B_corrected_factors"]
+        == [[3, 0], [3, 0], [3, 0]],
+        "three output factors",
+    )
+    require(g3v["hidden_object"]["physical_rank"] == 9, "rank-nine W9")
+    require(g3v["hidden_object"]["factor_count"] == 3, "three qutrit factors")
+    require(g3v["hidden_object"]["factor_rank"] == 3, "rank-three factors")
+    require(
+        g3v["projective_hym"]["qutrit_equivariant_connection_exists"],
+        "equivariant HYM source",
+    )
+    require(g3w["root_coherence"]["selected_finite_group"] == "F3^2", "F3^2")
+    require(g3w["root_coherence"]["commutator_nondegenerate"], "nondegenerate")
+    require(
+        not g3w["relative_projective_descent"]["strict_action_splitting_inferred"],
+        "strict splitting remains unclaimed",
+    )
+    require(g2p["rank102"]["lane_ranks"] == [3, 8, 8, 80, 3], "G2P ranks")
+
+    associativity = 0
+    for left in GROUP:
+        for middle in GROUP:
+            for right in GROUP:
+                lhs = (sigma(left, middle) + sigma(add(left, middle), right)) % 3
+                rhs = (sigma(middle, right) + sigma(left, add(middle, right))) % 3
+                require(lhs == rhs, "independent cocycle replay")
+                associativity += 1
+    require(associativity == 729, "729 cocycle equations")
+
+    rows = packet["finite_group"]["characters"]
+    require(len(rows) == 9, "nine character rows")
+    signatures = set()
+    for pair, row in zip(GROUP, rows, strict=True):
+        expected = tuple(chi(pair, group_element) for group_element in GROUP)
+        require(
+            tuple(row["character_exponents_in_group_order"]) == expected,
+            f"character row {pair}",
+        )
+        signatures.add(expected)
+    require(len(signatures) == 9, "nine distinct characters independently")
+
+    for group_element in GROUP:
+        group_matrix = qutrit_matrix(*group_element)
+        group_inverse = inverse(group_matrix)
+        for basis_label in GROUP:
+            basis_matrix = qutrit_matrix(*basis_label)
+            require(
+                multiply(group_matrix, basis_matrix)
+                == scale(
+                    qutrit_matrix(*add(group_element, basis_label)),
+                    sigma(group_element, basis_label),
+                ),
+                f"locked projective product: {group_element}, {basis_label}",
+            )
+            conjugated = multiply(multiply(group_matrix, basis_matrix), group_inverse)
+            require(
+                conjugated == scale(basis_matrix, chi(basis_label, group_element)),
+                f"exact Weyl conjugation: {group_element}, {basis_label}",
+            )
+
+    for left in GROUP:
+        for right in GROUP:
+            exponents = [
+                (chi(left, group_element) - chi(right, group_element)) % 3
+                for group_element in GROUP
+            ]
+            counts = [exponents.count(value) for value in F3]
+            require(
+                counts == ([9, 0, 0] if left == right else [3, 3, 3]),
+                "character orthogonality",
+            )
+
+    decomposition = packet["isotypic_decomposition"]
+    require(decomposition["End_W9_rank"] == 9 * 9, "End(W9) rank")
+    require(decomposition["neutral_adjoint_rank"] == 3 * 3 - 1, "neutral rank")
+    require(
+        decomposition["total_adjoint_rank"]
+        == decomposition["neutral_adjoint_rank"]
+        + decomposition["nontrivial_character_count"]
+        * decomposition["rank_per_nontrivial_character"],
+        "8+8*9=80",
+    )
+    require(decomposition["total_adjoint_rank"] == 80, "hidden adjoint rank 80")
+    require(packet["invariant_metric"]["orthogonal_isotypic_projectors"], "orthogonal")
+    require(
+        packet["claim_tiers"]["strict_vector_action_on_W9"]
+        == "NOT_REQUIRED_AND_NOT_CLAIMED",
+        "projective boundary",
+    )
+    require(
+        packet["guardrails"]["uses_internal_G3T_fiber_action_for_isotypic_bundles"],
+        "internal action source",
+    )
+    require(
+        not packet["guardrails"][
+            "infers_fiber_eigensubbundles_from_base_moving_vertical_translation"
+        ],
+        "translation/fiber distinction",
+    )
+
+
+def verify_rank102_packet(packet: dict, adjoint: dict) -> None:
+    require(
+        packet["schema"]
+        == "mtt.closure-dynamics.q79-rank102-qutrit-symmetry-reduction.v1",
+        "rank102 schema",
+    )
+    adjoint_record = packet["inputs"]["hidden_adjoint_isotypic_packet"]
+    require(adjoint_record["relative_path"] == ADJOINT_PACKET.name, "adjoint path")
+    require(
+        sha256_bytes(ADJOINT_PACKET.read_bytes()) == adjoint_record["sha256"],
+        "adjoint packet hash",
+    )
+    require(adjoint_record["schema"] == adjoint["schema"], "adjoint schema binding")
+
+    source_record = packet["inputs"]["UST_G2P_G5A_packet"]
+    commit = packet["commit_locks"]["mtt_unified_source_theorem"]
+    raw = git_blob(UST_ROOT, commit, source_record["relative_path"])
+    require(sha256_bytes(raw) == source_record["sha256"], "G2P source hash")
+    g2p = json.loads(raw.decode("utf-8"))
+    ranks = g2p["rank102"]["lane_ranks"]
+    require(sum(ranks) == 102, "rank 102")
+    require(g2p["rank102"]["corrected_structural_positions"] == 102**2, "fallback")
+
+    hidden = packet["equivariant_selection_theorem"]["hidden_multiplicities"]
+    require(len(hidden) == 9, "nine hidden character multiplicities")
+    require(hidden["chi_0_0"] == 8, "neutral hidden rank")
+    require(sum(hidden.values()) == 80, "hidden multiplicities sum")
+    require(all(hidden[f"chi_{a}_{b}"] == 9 for a, b in GROUP if (a, b) != (0, 0)), "nontrivial multiplicities")
+
+    specialization = packet["neutral_external_specialization"]
+    external_rank = sum(item["rank"] for item in specialization["external_lanes"])
+    require(external_rank == 22, "external rank 22")
+    labels = ["chi_0_0"] * external_rank
+    for a, b in GROUP:
+        labels.extend([f"chi_{a}_{b}"] * hidden[f"chi_{a}_{b}"])
+    require(len(labels) == 102, "102 character labels")
+    allowed_positions = sum(left == right for left in labels for right in labels)
+    require(allowed_positions == 1548, "independent matching-character count")
+    require(
+        specialization["symmetry_allowed_ordered_positions"] == allowed_positions,
+        "stored symmetry count",
+    )
+    require(
+        specialization["forced_cross_character_zero_positions"]
+        == 102**2 - allowed_positions
+        == 8856,
+        "stored forced-zero count",
+    )
+    breakdown = specialization["ordered_position_breakdown"]
+    require(breakdown["external_external"] == 22**2 == 484, "external block")
+    require(
+        breakdown["neutral_hidden_external_both_directions"] == 2 * 22 * 8 == 352,
+        "cross block",
+    )
+    require(
+        breakdown["hidden_hidden_matching_characters"] == 8**2 + 8 * 9**2 == 712,
+        "hidden blocks",
+    )
+    require(sum(breakdown.values()) == 1548, "breakdown total")
+    require(packet["rank102_source"]["unsymmetrized_structural_positions"] == 10404, "10404 retained")
+    require(packet["rank102_source"]["unsymmetrized_mask_remains_valid_fallback"], "fallback guardrail")
+    require(
+        not packet["guardrails"]["replaces_10404_before_symmetry_hypotheses_are_verified"],
+        "no premature replacement",
+    )
+    require(not packet["guardrails"]["claims_a_physical_numerical_matrix"], "no matrix promotion")
+    require(
+        not packet["guardrails"]["uses_vertical_translation_as_a_fiberwise_character_action"],
+        "rank102 uses internal action",
+    )
+    require(
+        packet["claim_tiers"]["selected_external_character_profile"] == "OPEN",
+        "external character profile open",
+    )
+
+
+def main() -> int:
+    adjoint = load(ADJOINT_PACKET)
+    rank102 = load(RANK102_PACKET)
+    verify_adjoint_packet(adjoint)
+    verify_rank102_packet(rank102, adjoint)
+    note = NOTE.read_text(encoding="utf-8")
+    for required_text in (
+        "8+8\\cdot 9=80",
+        "30^2+8\\cdot 9^2=1548",
+        "10404",
+        "conditional",
+        "physical numerical Hessian remains open",
+        "internal tau-projective",
+        "It is not the vertical translation",
+    ):
+        require(required_text in note, f"theorem note boundary: {required_text}")
+    print("Q79_HIDDEN_QUTRIT_ADJOINT_ISOTYPIC_AND_RANK102_SYMMETRY_REDUCTION_VERIFY_PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

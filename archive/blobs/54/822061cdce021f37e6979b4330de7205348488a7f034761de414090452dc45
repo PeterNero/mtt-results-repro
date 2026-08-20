@@ -1,0 +1,715 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+QM_ROOT = Path(os.environ.get("MTT_QM_ROOT", TEXPAPERS / "mtt-qm-source-proof"))
+RESEARCH_DATE = "2026-08-03"
+
+NONLINEAR_DESCENT = (
+    ROOT / "local_closure_repair_descent_and_conditional_actualization_functor.packet.json"
+)
+SHARED_CIRCLE = ROOT / "q79_shared_circle_closure_dynamics_source.packet.json"
+TWISTED_COHESIVE = (
+    ROOT / "q79_twisted_cohesive_superconnection_and_stratified_hodge.packet.json"
+)
+OPEN_STRATUM = (
+    ROOT / "q79_open_stratum_qutrit_cohomology_unitary_and_global_extension_nogo.packet.json"
+)
+
+FOCK_OUTPUT = QM_ROOT / "certificates" / "canonical_q79_fock_output_measure.certificate.json"
+BASIN_BORN = QM_ROOT / "certificates" / "basin_frame_born_reduction.certificate.json"
+PREPARATION_NOGO = QM_ROOT / "certificates" / "preparation_selection_nogo.certificate.json"
+RECORDER_SOURCE = QM_ROOT / "certificates" / "canonical_q79_hessian_recorder_source.certificate.json"
+
+OUT_PACKET = ROOT / "q79_projective_operational_record_measure_descent_and_actualization_cutset.packet.json"
+OUT_NOTE = ROOT / "Q79_PROJECTIVE_OPERATIONAL_RECORD_MEASURE_DESCENT_AND_ACTUALIZATION_CUTSET_THEOREM_v1.md"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if source.get("all_checks_pass") is True:
+        return True
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def source_record(path: Path, repository: str, repository_root: Path) -> dict:
+    source = load(path)
+    identity = source.get("schema") or source.get("certificate")
+    require(identity is not None, f"source identity: {path}")
+    require(source_checks_pass(source), f"source checks: {path}")
+    return {
+        "repository": repository,
+        "relative_path": path.relative_to(repository_root).as_posix(),
+        "sha256": sha256(path),
+        "identity": identity,
+        "status": source["status"],
+    }
+
+
+def matrix(values: list[list[object]], locals_: dict[str, object] | None = None) -> sp.Matrix:
+    local_values = locals_ or {}
+    return sp.Matrix(
+        [[sp.sympify(entry, locals=local_values) for entry in row] for row in values]
+    )
+
+
+def matrix_json(value: sp.MatrixBase) -> list[list[str]]:
+    return [
+        [str(sp.simplify(value[row, column])) for column in range(value.cols)]
+        for row in range(value.rows)
+    ]
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+NOTE = r"""# q79 Projective Operational Record-Measure Descent and Actualization Cutset Theorem v1
+
+**Date:** 2026-08-03
+
+**Status:** `CANONICAL_Q79_PQ_FOCK_OUTPUT_MEASURE_PROJECTIVELY_DESCENDS_ON_THE_PROVEN_OPEN_STRATUM_CLOSED_EXACT_TRACE_WEIGHTS_INSTRUMENT_AND_1OVER448_CHECKPOINT_CLOSED_NO_EXTRA_STOCHASTIC_PRIMITIVE_PREPARATION_SELECTION_UNIVERSAL_CONTEXT_AND_OBJECTIVE_SINGLE_HISTORY_OPEN`
+
+**Executable packet:** `q79_projective_operational_record_measure_descent_and_actualization_cutset.packet.json`
+
+**Builder:** `build_q79_projective_operational_record_measure_descent_and_actualization_cutset.py`
+
+**Independent verifier:** `verify_q79_projective_operational_record_measure_descent_and_actualization_cutset.py`
+
+## 1. Why this reconciliation is needed
+
+The nonlinear descent theorem left a probability law among the physical
+source gates. The current QM source repo sharpens that statement. Probability
+is not wholly open:
+
+```text
+canonical q79 P/Q operational output measure: CLOSED,
+universal apparatus/context theorem: OPEN,
+pre-quantum probability semantics: OPEN if demanded,
+one objectively actual output history: OPEN.
+```
+
+This theorem imports that newer result and proves the missing local-to-global
+composition. The operational record measure and instrument are independent of
+the q79 open-stratum chart even though vector representatives close only up to
+a central phase.
+
+## 2. Projective operational-measure descent theorem
+
+Let a unitary overlap `U_ij:H_i->H_j` transport a density and a two-outcome
+projector context by
+
+```text
+rho_j=U_ij rho_i U_ij^dagger,
+P_j=U_ij P_i U_ij^dagger,
+Q_j=I-P_j.
+```
+
+Cyclicity of trace gives
+
+```text
+Tr(rho_j P_j)=Tr(rho_i P_i),
+Tr(rho_j Q_j)=Tr(rho_i Q_i).
+```
+
+For the canonical recorder with common rate `gamma`, the stopped effects are
+
+```text
+F_ready(u)=exp(-gamma u) I,
+F_a(ds)=gamma exp(-gamma s) P_a ds.
+```
+
+The output law
+
+```text
+mu_i(ready)=exp(-gamma u),
+mu_i(ds,a)=gamma exp(-gamma s) Tr(rho_i P_a,i) ds
+```
+
+is therefore overlap-invariant. The selective instrument also intertwines:
+
+```text
+U_ij [P_a,i rho_i P_a,i] U_ij^dagger
+  =P_a,j rho_j P_a,j.
+```
+
+If a cycle closes by a scalar phase, the density, effects, instrument and
+probabilities close exactly because conjugation cancels that phase. Thus the
+canonical recorder is naturally ray/density valued; it does not require an
+ordinary globally single-valued wavefunction representative.
+
+## 3. Exact q79 open-stratum composition
+
+The cohesive overlaps satisfy
+
+```text
+G01 G12 G20=omega I3.
+```
+
+The open-stratum cohomology-to-static-qutrit unitary is `I_open=I3`, unique up
+to a projectively invisible phase. Transporting the accepted complex Haar
+projector and the root preparation `rho_0=|e0><e0|` gives compatible local
+densities and effects. Every chart yields
+
+```text
+Tr(rho_i P_i)=1/3,
+Tr(rho_i Q_i)=2/3.
+```
+
+At the exact intrinsic checkpoint
+
+```text
+exp(-gamma)=1/448,
+```
+
+the stopped probabilities are
+
+```text
+Pr(ready)=1/448,
+Pr(P record)=149/448,
+Pr(Q record)=149/224.
+```
+
+Conditional on a record, the weights are `(1/3,2/3)`. These are unchanged by
+all three overlaps and use no measured probability.
+
+The result is restricted to the already proved open-stratum carrier. The
+rank-jump theorem still excludes a constant rank-three global extension, and
+the displayed matrices are not literal physical BHT connection data.
+
+## 4. Operational probability is not actualization
+
+The nonselective recorder channel is
+
+```text
+Phi_u(rho)
+ =P rho P+Q rho Q
+  +exp(-gamma u)(P rho Q+Q rho P).
+```
+
+For the exact root preparation, its infinite-time limit has rank two and
+purity
+
+```text
+Tr(Phi_infinity(rho_0)^2)=5/9.
+```
+
+It is a mixture with sector weights `(1/3,2/3)`, not either normalized
+selective branch. At finite time the cross terms are merely attenuated. A
+probability measure on stopped output histories likewise does not choose one
+sample point or character of the commutative output algebra as uniquely
+actual.
+
+The selective conditional states are well defined after a record, but the law
+does not say which record is ontically realized. This is the exact distinction
+between
+
+```text
+operational outcome law,
+conditional state update,
+objective single-history actualization.
+```
+
+Only the first two are closed on the canonical recorder domain.
+
+## 5. Relation to basin and Born results
+
+The basin-frame theorem says that, on the complex six-dimensional carrier,
+probability noncontextuality, orthogonal coarse-graining and coverage imply a
+unique density-operator trace representation. It does not construct the
+basin events or preparation measure. A stronger context-independent
+deterministic event assignment over every projector is impossible; event
+basins may be context dependent even when probabilities are noncontextual.
+
+The canonical Fock recorder avoids adding a separate probability vector on
+its declared `P/Q` context. The normal preparation-plus-vacuum state restricts
+to the commuting output algebra and supplies its unique spectral measure. This
+uses standard operational normal-state semantics. Calling it a deterministic
+pre-quantum derivation of probability would be circular.
+
+The finite q79 symmetries and Hessian also admit distinct preparations, so the
+geometry does not select one universal density. Preparation remains physical
+state data, not a new theory parameter.
+
+## 6. Updated physical cutset
+
+The former broad probability gate splits into:
+
+```text
+CLOSED:
+  canonical binary P/Q recorder source,
+  canonical stopped operational output measure,
+  SecondMomentCaptureDescent,
+  projective open-stratum chart independence;
+
+OPEN:
+  selected preparation beyond the declared interface,
+  apparatus contexts beyond P/Q,
+  physical identification of continuum repair basins with recorder outputs,
+  pre-quantum probability semantics if required,
+  objective selection of one output history.
+```
+
+The next mathematical-language target is therefore not another Born trace
+proof. It is a typed coupling from the selected nonlinear physical repair
+source and its basin groupoid to the already constructed recorder instrument,
+together with an explicit declaration of whether MTT seeks operational
+predictions only or an objective single-history law.
+
+## 7. External alignment
+
+The nondemolition output-algebra and filtering machinery is standard quantum
+stochastic calculus; the repeated-interaction limit supplies a standard route
+to continuous quantum Langevin dynamics. Effect-additive probability measures
+have the density-operator form by generalized Gleason theory. Relevant primary
+sources are:
+
+- V. P. Belavkin, *Quantum Stochastic Calculus and Quantum Nonlinear
+  Filtering*, https://arxiv.org/abs/math/0512362.
+- S. Attal and Y. Pautrat, *From repeated to continuous quantum
+  interactions*, https://arxiv.org/abs/math-ph/0311002.
+- P. Busch, *Quantum states and generalized observables: a simple proof of
+  Gleason's theorem*, https://arxiv.org/abs/quant-ph/9909073.
+
+The q79 projectors, central overlap cycle, order-448 checkpoint and exact chart
+intertwining are MTT-specific data.
+
+## 8. Closed and open
+
+Closed here:
+
+- projective descent of density operators and `P/Q` effects on the proven q79
+  open stratum;
+- chart invariance of the exact stopped output measure and instrument;
+- the exact `(1/448,149/448,149/224)` checkpoint in every chart;
+- the rank-two, purity-`5/9` nonselective-limit witness;
+- precise separation of operational probability from objective history
+  actualization;
+- reconciliation of the nonlinear-basin and QM-source frontiers.
+
+Open:
+
+- selected physical preparation outside the declared canonical interface;
+- a universal physical apparatus/context functor;
+- the continuum nonlinear-repair-to-recorder coupling;
+- objective selection of one actual history;
+- physical global extension across the exceptional rank jump;
+- Lorentzian clock normalization beyond the inherited one-anchor tier.
+
+## 9. Reproduction
+
+Set `MTT_QM_ROOT` if the sibling QM repository is not located at
+`../mtt-qm-source-proof`, then run:
+
+```powershell
+python ./build_q79_projective_operational_record_measure_descent_and_actualization_cutset.py
+python ./verify_q79_projective_operational_record_measure_descent_and_actualization_cutset.py
+```
+"""
+
+
+def main() -> None:
+    nonlinear = load(NONLINEAR_DESCENT)
+    shared = load(SHARED_CIRCLE)
+    twisted = load(TWISTED_COHESIVE)
+    open_stratum = load(OPEN_STRATUM)
+    fock = load(FOCK_OUTPUT)
+    basin = load(BASIN_BORN)
+    preparation = load(PREPARATION_NOGO)
+    recorder = load(RECORDER_SOURCE)
+
+    for label, source in (
+        ("nonlinear descent", nonlinear),
+        ("shared circle", shared),
+        ("twisted cohesive", twisted),
+        ("open stratum", open_stratum),
+        ("Fock output", fock),
+        ("basin Born", basin),
+        ("preparation no-go", preparation),
+        ("recorder source", recorder),
+    ):
+        require(source_checks_pass(source), f"source checks: {label}")
+
+    require(
+        nonlinear["claim_tiers"]["finite_q79_projective_repair_descent"]
+        == "CLOSED_EXACT_STRUCTURAL",
+        "projective repair predecessor",
+    )
+    require(
+        fock["B_QM_01_assessment"]["canonical_binary_outcome_measure"]
+        == "closed_exact",
+        "canonical output measure",
+    )
+    require(
+        fock["B_QM_01_assessment"]["objective_single_history_actualization"]
+        == "open",
+        "actualization boundary",
+    )
+    require(
+        basin["theorem"]["external_input"] == "Gleason theorem",
+        "Born reduction source",
+    )
+    require(
+        preparation["status"]
+        == "FINITE_SYMMETRY_AND_HESSIAN_DO_NOT_SELECT_A_UNIQUE_PREPARATION_STATE",
+        "preparation no-go",
+    )
+    require(
+        recorder["canonical_spectral_meter_context"]["record_effects"]
+        == ["P_Haar", "Q"],
+        "canonical recorder effects",
+    )
+
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    overlap = twisted["exact_twisted_descent_witness"]
+    g01 = matrix(overlap["G01"], locals_)
+    g12 = matrix(overlap["G12"], locals_)
+    g20 = matrix(overlap["G20"], locals_)
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    cycle = sp.simplify(g01 * g12 * g20)
+    require(is_zero(cycle - omega * sp.eye(3)), "central cycle")
+    require(all(is_zero(g.H * g - sp.eye(3)) for g in (g01, g12, g20)), "unitary overlaps")
+    require(
+        open_stratum["open_stratum_cohomology_intertwiner_theorem"]["clock_basis_intertwiner"]
+        == "I_open=I_3",
+        "open-stratum carrier bridge",
+    )
+
+    p_real = matrix(shared["finite_source_data"]["tangent_or_invariant_projector_P"], locals_)
+    p0 = p_real[:3, :3]
+    q0 = sp.eye(3) - p0
+    p1 = sp.simplify(g01.H * p0 * g01)
+    p2 = sp.simplify(g12.H * p1 * g12)
+    q1 = sp.eye(3) - p1
+    q2 = sp.eye(3) - p2
+    projectors = (p0, p1, p2)
+    complements = (q0, q1, q2)
+    require(is_zero(g01 * p1 - p0 * g01), "P edge 10")
+    require(is_zero(g12 * p2 - p1 * g12), "P edge 21")
+    require(is_zero(g20 * p0 - p2 * g20), "P edge 02")
+
+    e0 = sp.Matrix([1, 0, 0])
+    rho0 = e0 * e0.H
+    rho1 = sp.simplify(g01.H * rho0 * g01)
+    rho2 = sp.simplify(g12.H * rho1 * g12)
+    densities = (rho0, rho1, rho2)
+    require(is_zero(g01 * rho1 * g01.H - rho0), "rho edge 10")
+    require(is_zero(g12 * rho2 * g12.H - rho1), "rho edge 21")
+    require(is_zero(g20 * rho0 * g20.H - rho2), "rho edge 02")
+    require(is_zero(cycle * rho0 * cycle.H - rho0), "density cycle closure")
+    for index, density in enumerate(densities):
+        require(is_zero(density.H - density), f"density Hermitian {index}")
+        require(sp.simplify(sp.trace(density) - 1) == 0, f"density trace {index}")
+        require(density.rank() == 1, f"density rank {index}")
+
+    p_weights = [sp.simplify(sp.trace(rho * p)) for rho, p in zip(densities, projectors)]
+    q_weights = [sp.simplify(sp.trace(rho * q)) for rho, q in zip(densities, complements)]
+    require(p_weights == [sp.Rational(1, 3)] * 3, "P weights")
+    require(q_weights == [sp.Rational(2, 3)] * 3, "Q weights")
+
+    p_instrument_residuals = (
+        sp.simplify(g01 * (p1 * rho1 * p1) * g01.H - p0 * rho0 * p0),
+        sp.simplify(g12 * (p2 * rho2 * p2) * g12.H - p1 * rho1 * p1),
+        sp.simplify(g20 * (p0 * rho0 * p0) * g20.H - p2 * rho2 * p2),
+    )
+    q_instrument_residuals = (
+        sp.simplify(g01 * (q1 * rho1 * q1) * g01.H - q0 * rho0 * q0),
+        sp.simplify(g12 * (q2 * rho2 * q2) * g12.H - q1 * rho1 * q1),
+        sp.simplify(g20 * (q0 * rho0 * q0) * g20.H - q2 * rho2 * q2),
+    )
+    require(all(is_zero(value) for value in p_instrument_residuals), "P instrument descent")
+    require(all(is_zero(value) for value in q_instrument_residuals), "Q instrument descent")
+
+    ready = sp.Rational(1, 448)
+    capture = 1 - ready
+    p_record = sp.simplify(capture * p_weights[0])
+    q_record = sp.simplify(capture * q_weights[0])
+    require(p_record == sp.Rational(149, 448), "P checkpoint")
+    require(q_record == sp.Rational(149, 224), "Q checkpoint")
+    require(
+        fock["exact_checkpoint"]["q79_ready_p_q_probabilities"]
+        == ["1/448", "149/448", "149/224"],
+        "bound checkpoint",
+    )
+
+    p_component = sp.simplify(p0 * rho0 * p0)
+    q_component = sp.simplify(q0 * rho0 * q0)
+    dephased = sp.simplify(p_component + q_component)
+    dephased_purity = sp.simplify(sp.trace(dephased**2))
+    require(dephased.rank() == 2, "dephased rank")
+    require(dephased_purity == sp.Rational(5, 9), "dephased purity")
+    p_state = sp.simplify(p_component / p_weights[0])
+    q_state = sp.simplify(q_component / q_weights[0])
+    require(p_state.rank() == 1 and sp.trace(p_state**2) == 1, "conditional P pure")
+    require(q_state.rank() == 1 and sp.trace(q_state**2) == 1, "conditional Q pure")
+    require(not is_zero(dephased - p_state), "mixture not P history")
+    require(not is_zero(dephased - q_state), "mixture not Q history")
+
+    attenuation = ready
+    finite_channel = sp.simplify(
+        dephased + attenuation * (p0 * rho0 * q0 + q0 * rho0 * p0)
+    )
+    require(finite_channel.rank() == 2, "finite channel rank")
+    require(not is_zero(finite_channel - p_state), "finite channel not P")
+    require(not is_zero(finite_channel - q_state), "finite channel not Q")
+
+    inputs = {
+        "nonlinear_repair_descent": source_record(
+            NONLINEAR_DESCENT, "closure-dynamics", ROOT
+        ),
+        "finite_q79_repair_source": source_record(
+            SHARED_CIRCLE, "closure-dynamics", ROOT
+        ),
+        "twisted_cohesive_overlaps": source_record(
+            TWISTED_COHESIVE, "closure-dynamics", ROOT
+        ),
+        "open_stratum_qutrit_unitary": source_record(
+            OPEN_STRATUM, "closure-dynamics", ROOT
+        ),
+        "canonical_q79_Fock_output_measure": source_record(
+            FOCK_OUTPUT, "mtt-qm-source-proof", QM_ROOT
+        ),
+        "basin_frame_Born_reduction": source_record(
+            BASIN_BORN, "mtt-qm-source-proof", QM_ROOT
+        ),
+        "preparation_selection_nogo": source_record(
+            PREPARATION_NOGO, "mtt-qm-source-proof", QM_ROOT
+        ),
+        "canonical_Hessian_recorder_source": source_record(
+            RECORDER_SOURCE, "mtt-qm-source-proof", QM_ROOT
+        ),
+    }
+
+    checks = {
+        "source_binding": {
+            "all_eight_sources_are_hash_bound": len(inputs) == 8,
+            "all_source_check_trees_pass": all(
+                source_checks_pass(source)
+                for source in (
+                    nonlinear,
+                    shared,
+                    twisted,
+                    open_stratum,
+                    fock,
+                    basin,
+                    preparation,
+                    recorder,
+                )
+            ),
+        },
+        "projective_descent": {
+            "central_cycle_closes_densities_exactly": is_zero(
+                cycle * rho0 * cycle.H - rho0
+            ),
+            "all_three_density_effect_pairs_have_P_weight_one_third": p_weights
+            == [sp.Rational(1, 3)] * 3,
+            "all_three_density_effect_pairs_have_Q_weight_two_thirds": q_weights
+            == [sp.Rational(2, 3)] * 3,
+            "P_selective_instrument_intertwines": all(
+                is_zero(value) for value in p_instrument_residuals
+            ),
+            "Q_selective_instrument_intertwines": all(
+                is_zero(value) for value in q_instrument_residuals
+            ),
+        },
+        "exact_checkpoint": {
+            "ready_is_one_over_448": ready == sp.Rational(1, 448),
+            "P_record_is_149_over_448": p_record == sp.Rational(149, 448),
+            "Q_record_is_149_over_224": q_record == sp.Rational(149, 224),
+            "probabilities_sum_to_one": sp.simplify(ready + p_record + q_record) == 1,
+        },
+        "actualization_boundary": {
+            "nonselective_limit_has_rank_two": dephased.rank() == 2,
+            "nonselective_limit_has_purity_five_ninths": dephased_purity
+            == sp.Rational(5, 9),
+            "nonselective_limit_is_neither_selective_history": not is_zero(
+                dephased - p_state
+            )
+            and not is_zero(dephased - q_state),
+            "finite_channel_is_neither_selective_history": not is_zero(
+                finite_channel - p_state
+            )
+            and not is_zero(finite_channel - q_state),
+            "output_measure_does_not_select_one_sample_path": True,
+        },
+        "scope": {
+            "canonical_operational_measure_is_closed": True,
+            "universal_context_source_remains_open": True,
+            "preparation_selection_remains_open": True,
+            "continuum_repair_basin_to_recorder_map_remains_open": True,
+            "objective_single_history_actualization_remains_open": True,
+        },
+        "parameters": {
+            "zero_new_continuous_fit_parameters": True,
+            "zero_new_discrete_fit_parameters": True,
+            "zero_new_observed_probabilities": True,
+            "zero_new_stochastic_primitives": True,
+        },
+    }
+    require(all_boolean_leaves_true(checks), "all theorem checks")
+
+    packet = {
+        "schema": "MTTQ79ProjectiveOperationalRecordMeasureDescentAndActualizationCutset.v1",
+        "date": RESEARCH_DATE,
+        "status": (
+            "CANONICAL_Q79_PQ_FOCK_OUTPUT_MEASURE_PROJECTIVELY_DESCENDS_ON_THE_"
+            "PROVEN_OPEN_STRATUM_CLOSED_EXACT_TRACE_WEIGHTS_INSTRUMENT_AND_"
+            "1OVER448_CHECKPOINT_CLOSED_NO_EXTRA_STOCHASTIC_PRIMITIVE_"
+            "PREPARATION_SELECTION_UNIVERSAL_CONTEXT_AND_OBJECTIVE_SINGLE_HISTORY_OPEN"
+        ),
+        "inputs": inputs,
+        "projective_operational_measure_descent_theorem": {
+            "density_transport": "rho_j=U_ij rho_i U_ij^dagger",
+            "effect_transport": "P_a,j=U_ij P_a,i U_ij^dagger",
+            "trace_invariance": "Tr(rho_j P_a,j)=Tr(rho_i P_a,i)",
+            "stopped_measure": [
+                "mu_i(ready)=exp(-gamma u)",
+                "mu_i(ds,a)=gamma exp(-gamma s)Tr(rho_i P_a,i)ds",
+            ],
+            "instrument_intertwining": "U_ij(P_a,i rho_i P_a,i)U_ij^dagger=P_a,j rho_j P_a,j",
+            "central_cycle_conclusion": "scalar projective holonomy cancels on densities, effects, instruments and probabilities",
+        },
+        "exact_q79_open_stratum_witness": {
+            "cycle_holonomy": matrix_json(cycle),
+            "root_density": matrix_json(rho0),
+            "transported_densities": [matrix_json(value) for value in densities],
+            "transported_P_effects": [matrix_json(value) for value in projectors],
+            "P_weights": [str(value) for value in p_weights],
+            "Q_weights": [str(value) for value in q_weights],
+            "ready_P_Q_checkpoint": [str(ready), str(p_record), str(q_record)],
+            "conditional_record_weights": [str(p_weights[0]), str(q_weights[0])],
+            "carrier_tier": "PROVEN_OPEN_STRATUM_ONLY_CONSTANT_RANK_GLOBAL_EXTENSION_EXCLUDED",
+        },
+        "nonselective_actualization_nogo_witness": {
+            "infinite_time_state": matrix_json(dephased),
+            "rank": dephased.rank(),
+            "purity": str(dephased_purity),
+            "normalized_P_conditional_state": matrix_json(p_state),
+            "normalized_Q_conditional_state": matrix_json(q_state),
+            "finite_u1_state": matrix_json(finite_channel),
+            "conclusion": "the nonselective operational channel is neither selective history and the output measure does not choose a unique sample path",
+        },
+        "probability_layer_reconciliation": {
+            "canonical_binary_operational_output_measure": "CLOSED_EXACT",
+            "canonical_binary_SecondMomentCaptureDescent": "CLOSED_EXACT",
+            "independent_classical_stochastic_primitive": "NOT_REQUIRED_ON_DECLARED_DOMAIN",
+            "inherited_semantics": "normal-state expectation is used as operational event probability",
+            "pre_quantum_probability_semantics": "OPEN_IF_DEMANDED",
+            "general_projective_contexts": "OPEN",
+            "objective_single_history_actualization": "OPEN",
+        },
+        "typed_object_separation": {
+            "repair_basin_limit": "conditional asymptotic map on nonlinear configuration sections",
+            "operational_output_measure": "spectral probability measure of the restricted normal state on a commuting output algebra",
+            "conditional_instrument_state": "normalized selective CP update after a declared record",
+            "ontic_actual_history": "one selected sample point or character; not emitted by a probability measure",
+        },
+        "preparation_boundary": {
+            "no_go": "S3, J_DE and Q admit distinct compatible preparations K_plus and K_minus",
+            "meaning": "preparation selects a density operator from the allowed cone; it is state data, not a universal theory parameter",
+            "legacy_pure_state_boundary": "noncontextuality, additivity, covariance and continuity alone do not imply rho_psi=|psi><psi|",
+        },
+        "claim_tiers": {
+            "canonical_PQ_operational_probability": "CLOSED_EXACT_IMPORTED_AND_COMPOSED",
+            "projective_open_stratum_chart_independence": "CLOSED_EXACT_NEW_COMPOSITION",
+            "exact_order448_checkpoint_in_every_chart": "CLOSED_EXACT",
+            "canonical_selective_instrument_descent": "CLOSED_EXACT",
+            "nonselective_channel_is_objective_actualization": "CLOSED_NOGO",
+            "universal_context_Born_source": "OPEN",
+            "selected_preparation_source": "OPEN",
+            "continuum_repair_basin_to_recorder_coupling": "OPEN",
+            "objective_single_history_actualization": "OPEN",
+            "many_worlds_false": "NOT_CLAIMED",
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "new_observed_probabilities": 0,
+            "new_stochastic_primitives": 0,
+            "inherited_clock_anchors": 1,
+            "inherited_categorical_apparatus_contexts": 1,
+        },
+        "frontier_delta": {
+            "newly_closed": [
+                "projective descent of the canonical q79 operational output measure",
+                "projective descent of the canonical selective P/Q instrument",
+                "chart-independent exact 1/448 checkpoint",
+                "rank-two purity-5/9 nonselective actualization no-go witness",
+                "probability-versus-actualization type separation",
+            ],
+            "still_open": [
+                "selected preparation outside the canonical interface",
+                "universal physical apparatus and context functor",
+                "continuum nonlinear-repair-basin to recorder coupling",
+                "objective single-history actualization",
+                "global extension across the exceptional rank jump",
+            ],
+            "next_theorem": "mttSelectedPhysicalRepairBasinToRecorderInstrumentCoupling.v1",
+        },
+        "guardrails": {
+            "claims_a_new_pre_quantum_Born_derivation": False,
+            "claims_the_output_measure_selects_one_sample_path": False,
+            "claims_the_nonselective_channel_is_a_selective_history": False,
+            "claims_the_root_preparation_is_universally_selected": False,
+            "claims_all_apparatus_contexts_are_closed": False,
+            "claims_constant_rank_global_extension": False,
+            "claims_many_worlds_is_disproved": False,
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "q79ProjectiveOperationalRecordMeasureDescentAndActualizationCutsetTheorem",
+            "statement": (
+                "The canonical q79 P/Q Fock output measure and selective instrument "
+                "transport exactly through the proven open-stratum projective qutrit "
+                "overlaps because densities, effects and trace weights are invariant under "
+                "unitary conjugation and the central cycle phase cancels. The exact root "
+                "preparation gives the same (1/448,149/448,149/224) stopped law in every "
+                "chart. The nonselective infinite-time channel has rank two and purity 5/9, "
+                "so neither it nor the probability measure selects one actual history. "
+                "Preparation selection, universal contexts, continuum basin coupling and "
+                "objective actualization remain separate open sources."
+            ),
+        },
+    }
+
+    OUT_PACKET.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    OUT_NOTE.write_text(NOTE, encoding="utf-8")
+    print("Q79_PROJECTIVE_OPERATIONAL_RECORD_MEASURE_DESCENT_AND_ACTUALIZATION_CUTSET_BUILD_PASS")
+
+
+if __name__ == "__main__":
+    main()

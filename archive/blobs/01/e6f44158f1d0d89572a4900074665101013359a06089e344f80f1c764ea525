@@ -1,0 +1,256 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+PACKET = ROOT / "local_first_cech_hilbert_descent_and_branch_multiplicity.packet.json"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def verify_inputs(packet: dict) -> dict[str, dict]:
+    sources: dict[str, dict] = {}
+    for label, record in packet["inputs"].items():
+        require(record["repository"] == "closure-dynamics", f"repository: {label}")
+        path = ROOT / record["relative_path"]
+        require(path.is_file(), f"source exists: {label}")
+        require(sha256(path) == record["sha256"], f"source hash: {label}")
+        source = load(path)
+        identity = source.get("schema") or source.get("certificate")
+        require(identity == record["identity"], f"source identity: {label}")
+        require(source["status"] == record["status"], f"source status: {label}")
+        require(source_checks_pass(source), f"source checks: {label}")
+        sources[label] = source
+    require(len(sources) == 5, "five bound sources")
+    return sources
+
+
+def matrix(values: list[list[object]], locals_: dict[str, object]) -> sp.Matrix:
+    return sp.Matrix(
+        [[sp.sympify(entry, locals=locals_) for entry in row] for row in values]
+    )
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+def cech_matrix(
+    fiber_dimension: int,
+    patch_count: int,
+    transitions: list[tuple[int, int, sp.Matrix]],
+) -> sp.Matrix:
+    result: sp.Matrix | None = None
+    for source, target, transition in transitions:
+        row = sp.zeros(fiber_dimension, patch_count * fiber_dimension)
+        row[:, source * fiber_dimension : (source + 1) * fiber_dimension] = -transition
+        row[:, target * fiber_dimension : (target + 1) * fiber_dimension] = sp.eye(
+            fiber_dimension
+        )
+        result = row if result is None else result.col_join(row)
+    require(result is not None, "nonempty cover nerve")
+    return result
+
+
+def conjugation_matrix(value: sp.Matrix) -> sp.Matrix:
+    return sp.kronecker_product(value.inv().T, value)
+
+
+def verify_source_contracts(sources: dict[str, dict]) -> None:
+    closure = sources["closure_Hilbert_Schrodinger"]
+    retained = sources["retained_state_spectral_charts"]
+    cauchy = sources["local_Cauchy_geometry"]
+    cohesive = sources["twisted_cohesive_descent"]
+    fitting = sources["global_Fitting_descent"]
+
+    require(
+        closure["abstract_operator_theorem"]["real_form"]["complex_form"]
+        == "i partial_t psi=A psi",
+        "Schrodinger source",
+    )
+    require(
+        "make orthogonal projection optimal in norm" in closure["Hilbert_role"]["does"],
+        "Hilbert projection role",
+    )
+    require(
+        "make every trace or product finite" in closure["Hilbert_role"]["does_not"],
+        "Hilbert infinity boundary",
+    )
+    require(
+        retained["one_state_three_spectral_measures_theorem"]["state"]
+        == "psi in H_coh=Ran(P)",
+        "retained state",
+    )
+    require(
+        cauchy["curved_Cauchy_spectral_geometry"]["local_algebra"]
+        == "C_c^infinity(Sigma) acts by multiplication",
+        "local algebra",
+    )
+    require(
+        cohesive["exact_twisted_descent_witness"]["chain_triple_multiplier"]
+        == "-1/2 + sqrt(3)*I/2",
+        "twisted multiplier",
+    )
+    require(
+        fitting["claim_tiers"]["intrinsic_global_Fitting_ideal_sheaves"]
+        == "CLOSED_STANDARD_EXACT",
+        "Fitting descent source",
+    )
+
+
+def verify_ordinary_equalizers(packet: dict) -> None:
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    identity3 = sp.eye(3)
+    identity = cech_matrix(
+        3,
+        3,
+        [(0, 1, identity3), (1, 2, identity3), (2, 0, identity3)],
+    )
+    require(identity.rank() == 6 and len(identity.nullspace()) == 3, "identity equalizer")
+
+    holonomy = sp.diag(1, omega, omega**2)
+    reducing = cech_matrix(
+        3,
+        3,
+        [(0, 1, identity3), (1, 2, identity3), (2, 0, holonomy)],
+    )
+    require(reducing.rank() == 8 and len(reducing.nullspace()) == 1, "reduced equalizer")
+    require((holonomy - identity3).nullspace() == [sp.Matrix([1, 0, 0])], "fixed line")
+
+    stored = packet["exact_ordinary_witnesses"]
+    require(stored["local_direct_sum_dimension"] == 9, "direct sum dimension")
+    require(stored["naive_tensor_product_dimension"] == 27, "tensor dimension")
+    require(stored["identity_global_dimension"] == 3, "stored identity dimension")
+    require(stored["reducing_global_dimension"] == 1, "stored reduced dimension")
+    require(stored["reducing_cech"] == {"columns": 9, "nullity": 1, "rank": 8, "rows": 9}, "stored rank-nullity")
+
+
+def verify_projection_descent(packet: dict) -> None:
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    holonomy = sp.diag(1, omega, omega**2)
+    identity3 = sp.eye(3)
+    projector = sp.diag(1, 0, 0)
+    require(is_zero(holonomy * projector - projector * holonomy), "projector intertwining")
+    retained_dimension = len(
+        sp.Matrix.vstack(holonomy - identity3, identity3 - projector).nullspace()
+    )
+    require(retained_dimension == 1, "retained global dimension")
+
+    line = sp.Matrix([1, 1, 0])
+    bad = (line * line.T) / line.dot(line)
+    require(not is_zero(holonomy * bad - bad * holonomy), "bad projector")
+
+    stored = packet["coherent_projector_descent"]
+    require(stored["condition"] == "U_ij P_i=P_j U_ij on every overlap", "stored condition")
+    require(stored["global_retained_dimension"] == 1, "stored retained dimension")
+
+
+def verify_twisted_witness(packet: dict, sources: dict[str, dict]) -> None:
+    omega = sp.Rational(-1, 2) + sp.sqrt(3) * sp.I / 2
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    witness = sources["twisted_cohesive_descent"]["exact_twisted_descent_witness"]
+    g01 = matrix(witness["G01"], locals_)
+    g12 = matrix(witness["G12"], locals_)
+    g20 = matrix(witness["G20"], locals_)
+    triple = sp.simplify(g01 * g12 * g20)
+    require(is_zero(triple - omega * sp.eye(3)), "central triple")
+
+    vector_cech = cech_matrix(
+        3,
+        3,
+        [(1, 0, g01), (2, 1, g12), (0, 2, g20)],
+    )
+    require(vector_cech.rank() == 9 and len(vector_cech.nullspace()) == 0, "vector descent")
+
+    ad01 = conjugation_matrix(g01)
+    ad12 = conjugation_matrix(g12)
+    ad20 = conjugation_matrix(g20)
+    ad_triple = sp.simplify(ad01 * ad12 * ad20)
+    require(is_zero(ad_triple - sp.eye(9)), "endomorphism triple")
+    end_cech = cech_matrix(
+        9,
+        3,
+        [(1, 0, ad01), (2, 1, ad12), (0, 2, ad20)],
+    )
+    require(end_cech.rank() == 18 and len(end_cech.nullspace()) == 9, "endomorphism descent")
+
+    stored = packet["q79_central_twist_witness"]
+    require(stored["ordinary_vector_global_dimension"] == 0, "stored vector dimension")
+    require(stored["endomorphism_global_dimension"] == 9, "stored end dimension")
+    require(stored["projective_ray_result"] == "all rays return because omega I3 is central", "ray result")
+
+
+def main() -> None:
+    packet = load(PACKET)
+    require(
+        packet["schema"] == "MTTLocalFirstCechHilbertDescentAndBranchMultiplicity.v1",
+        "schema",
+    )
+    sources = verify_inputs(packet)
+    verify_source_contracts(sources)
+    verify_ordinary_equalizers(packet)
+    verify_projection_descent(packet)
+    verify_twisted_witness(packet, sources)
+
+    theorem = packet["cech_equalizer_theorem"]
+    require(theorem["global_sections"] == "Gamma(H)=ker(d0)", "global equalizer")
+    require(
+        theorem["isomorphism"]
+        == "Gamma(H) isomorphic to intersection_gamma Fix(Hol_gamma)",
+        "holonomy theorem",
+    )
+    require(theorem["naive_tensor_product_is_the_wrong_globalization"] is True, "no tensor globalization")
+
+    scope = packet["local_first_globality"]
+    require("does not imply Many Worlds" in scope["many_worlds_scope"], "interpretation boundary")
+    require("nonlinear local closure-repair" in scope["actualization_boundary"], "actualization boundary")
+    require(all_boolean_leaves_true(packet["checks"]), "packet checks")
+    require(packet["parameter_ledger"]["new_continuous_parameters"] == 0, "continuous parameters")
+    require(packet["parameter_ledger"]["new_discrete_fit_parameters"] == 0, "discrete parameters")
+    require(packet["parameter_ledger"]["observed_physical_values_used"] == 0, "observed values")
+    require(packet["guardrails"] and all(value is False for value in packet["guardrails"].values()), "guardrails")
+    require(
+        packet["frontier_delta"]["next_theorem"]
+        == "mttLocalClosureRepairDescentAndActualizationFunctor.v1",
+        "next theorem",
+    )
+
+    print("LOCAL_FIRST_CECH_HILBERT_DESCENT_AND_BRANCH_MULTIPLICITY_VERIFY_PASS")
+
+
+if __name__ == "__main__":
+    main()

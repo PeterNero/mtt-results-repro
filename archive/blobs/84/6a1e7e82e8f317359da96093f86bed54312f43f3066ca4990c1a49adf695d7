@@ -1,0 +1,1568 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from mtt_qm_source.build import build_all  # noqa: E402
+
+
+def main() -> int:
+    outputs = build_all()
+    payloads = [json.loads(path.read_text(encoding="utf-8")) for path in outputs]
+    freshness, finite, cauchy, operational, output_measure, born, preparation, effects, moment, descent, hazard, completion, pq_context, clock_nogo, apparatus, interaction, dilation, penrose_bridge, instrument_nogo, clock_lift, profile_nogo, profile_factor, context_source, recorder_action, hessian_recorder_source, poisson_actualization, qft_dirac, qft_sm_bv, qft_sm_hyperbolic, qft_sm_renormalized, qft_sm_state, qft_sm_state_space, qft_sm_state_transport, qft_sm_free_cstar, qft_sm_regulator, qft_sm_local_regulator, qft_sm_shell_comparison, qft_sm_orbit, qft_sm_diff_orbit, qft_metric_rigidity, qft_temporal_independence, qft_determinant_phase, qft_boundary_crossing, qft_boundary_source, qft_boundaryless_gluing, qft_cofinal_cutoff, qft_heat_counterterm, qft_hk, qft_ct, qft_el, qft_lorentzian, qft_fixed_coupling, qft_first_tangent, qft_ward_reduction, qft_orbitwise_measure, qft_family_dependency, qft_geometry_naturality, qft_cech_compiler, qft_strain_quotient, qft_strain_boundary, qft_binary_monodromy, qft_c4_promotion, qft_fm_hym_compression = payloads
+    ok = (
+        freshness["all_current"]
+        and finite["all_exact_checks_pass"]
+        and cauchy["all_checks_pass"]
+        and operational["all_checks_pass"]
+        and output_measure["all_checks_pass"]
+        and born["all_checks_pass"]
+        and preparation["all_checks_pass"]
+        and effects["all_checks_pass"]
+        and moment["all_checks_pass"]
+        and descent["all_checks_pass"]
+        and hazard["all_checks_pass"]
+        and completion["all_checks_pass"]
+        and pq_context["all_checks_pass"]
+        and clock_nogo["all_checks_pass"]
+        and apparatus["all_checks_pass"]
+        and interaction["all_checks_pass"]
+        and dilation["all_checks_pass"]
+        and penrose_bridge["all_checks_pass"]
+        and instrument_nogo["all_checks_pass"]
+        and clock_lift["all_checks_pass"]
+        and profile_nogo["all_checks_pass"]
+        and profile_factor["all_checks_pass"]
+        and context_source["all_checks_pass"]
+        and recorder_action["all_checks_pass"]
+        and hessian_recorder_source["all_checks_pass"]
+        and poisson_actualization["all_checks_pass"]
+        and qft_dirac["all_checks_pass"]
+        and qft_sm_bv["all_checks_pass"]
+        and qft_sm_hyperbolic["all_checks_pass"]
+        and qft_sm_renormalized["all_checks_pass"]
+        and qft_sm_state["all_checks_pass"]
+        and qft_sm_state_space["all_checks_pass"]
+        and qft_sm_state_transport["all_checks_pass"]
+        and qft_sm_free_cstar["all_checks_pass"]
+        and qft_sm_regulator["all_checks_pass"]
+        and qft_boundaryless_gluing["all_checks_pass"]
+        and qft_cofinal_cutoff["all_checks_pass"]
+        and qft_heat_counterterm["all_checks_pass"]
+        and qft_hk["all_checks_pass"]
+        and qft_ct["all_checks_pass"]
+        and qft_el["all_checks_pass"]
+        and qft_lorentzian["all_checks_pass"]
+        and qft_fixed_coupling["all_checks_pass"]
+        and qft_first_tangent["all_checks_pass"]
+        and qft_ward_reduction["all_checks_pass"]
+        and qft_orbitwise_measure["all_checks_pass"]
+        and qft_family_dependency["all_checks_pass"]
+        and qft_geometry_naturality["all_checks_pass"]
+        and qft_cech_compiler["all_checks_pass"]
+        and qft_strain_quotient["all_checks_pass"]
+        and qft_strain_boundary["all_checks_pass"]
+        and qft_binary_monodromy["all_checks_pass"]
+        and qft_c4_promotion["all_checks_pass"]
+        and qft_fm_hym_compression["all_checks_pass"]
+        and qft_fixed_coupling["acceptance_counts"][
+            "regulated_fixed_coupling"
+        ]
+        == "5/5"
+        and qft_fixed_coupling["acceptance_counts"][
+            "continuum_reduced_product"
+        ]
+        == "0/9"
+        and qft_fixed_coupling["acceptance_counts"][
+            "Borel_promotion"
+        ]
+        == "1/6"
+        and qft_fixed_coupling["blocker_assessment"][
+            "B.QFT.02_fixed_nonzero_coupling_finite_regulator_Cstar"
+        ]
+        == "closed_for_auxiliary_finite_regulators"
+        and qft_fixed_coupling["blocker_assessment"][
+            "B.QFT.02_fixed_nonzero_coupling_continuum_Cstar"
+        ]
+        == "open"
+        and qft_first_tangent["acceptance_counts"][
+            "continuum_reduced_product"
+        ]
+        == "1/9"
+        and qft_first_tangent["continuum_promotion_rows"][
+            "formal_EG_tangent_identification"
+        ]["accepted"]
+        and not qft_first_tangent["continuum_promotion_rows"][
+            "geometry_selected_q79_external_regulator_family"
+        ]["accepted"]
+        and qft_first_tangent["blocker_assessment"][
+            "B.QFT.02_formal_EG_first_tangent_identification"
+        ]
+        == (
+            "closed_for_common_source_relative_S_and_cocycle_"
+            "generator_on_the_auxiliary_gauge_covariant_spectral_"
+            "family_at_formal_coefficientwise_tier_with_SP_"
+            "transported_observables"
+        )
+        and qft_first_tangent["blocker_assessment"][
+            "B.QFT.02_fixed_nonzero_coupling_continuum_Cstar"
+        ]
+        == "open"
+        and qft_ward_reduction["acceptance_counts"][
+            "continuum_reduced_product"
+        ]
+        == "1/9"
+        and not qft_ward_reduction["continuum_promotion_rows"][
+            "vanishing_Gauss_BRST_Ward_defect"
+        ]["accepted"]
+        and qft_ward_reduction["continuum_promotion_rows"][
+            "vanishing_Gauss_BRST_Ward_defect"
+        ]["reduced_to"]
+        == "full_nonabelian_chiral_measure_at_fixed_cutoff"
+        and qft_ward_reduction["continuum_exit_dependency_graph"][
+            "independent_open_count"
+        ]
+        == 7
+        and qft_ward_reduction["blocker_assessment"][
+            "B.QFT.02_uniform_compact_gauge_norm_defect"
+        ]
+        == (
+            "closed_exact_zero_at_every_admitted_finite_regulator_"
+            "and_in_every_Cstar_reduced_product"
+        )
+        and qft_ward_reduction["blocker_assessment"][
+            "B.QFT.02_uniform_ghostzero_BRST_observable_defect"
+        ]
+        == (
+            "closed_exact_zero_on_the_compact_gauge_physical_"
+            "algebra_and_preserved_by_gauge_invariant_dynamics"
+        )
+        and qft_ward_reduction["blocker_assessment"][
+            "B.QFT.02_full_quantum_Ward_defect"
+        ]
+        == (
+            "open_dependency_reduced_to_full_nonabelian_chiral_"
+            "measure_and_determinant_Jacobian"
+        )
+        and qft_ward_reduction["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_orbitwise_measure["acceptance_counts"][
+            "orbitwise_finite_spectral_measure"
+        ]
+        == "7/7"
+        and qft_orbitwise_measure["acceptance_counts"][
+            "full_domain_measure_extension"
+        ]
+        == "0/4"
+        and qft_orbitwise_measure["acceptance_counts"][
+            "continuum_reduced_product"
+        ]
+        == "1/9"
+        and not qft_orbitwise_measure["continuum_promotion_rows"][
+            "full_nonabelian_chiral_measure_at_fixed_cutoff"
+        ]["accepted"]
+        and not qft_orbitwise_measure["continuum_promotion_rows"][
+            "vanishing_Gauss_BRST_Ward_defect"
+        ]["accepted"]
+        and qft_orbitwise_measure["blocker_assessment"][
+            "B.QFT.02_orbitwise_finite_spectral_chiral_measure"
+        ]
+        == (
+            "closed_nonperturbatively_on_each_connected_gapped_"
+            "anomaly_free_certified_presentation_component"
+        )
+        and qft_orbitwise_measure["blocker_assessment"][
+            "B.QFT.02_orbitwise_measure_Jacobian"
+        ]
+        == (
+            "closed_exact_one_with_zero_norm_defect_at_every_"
+            "admitted_finite_regulator_and_reduced_product"
+        )
+        and qft_orbitwise_measure["blocker_assessment"][
+            "B.QFT.02_full_nonabelian_chiral_measure"
+        ]
+        == (
+            "open_reduced_to_full_domain_locality_quotient_moduli_"
+            "crossing_strata_and_disconnected_sector_gluing"
+        )
+        and qft_orbitwise_measure["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_family_dependency["acceptance_counts"][
+            "conditional_analytic_completion"
+        ]
+        == "8/8"
+        and qft_family_dependency["acceptance_counts"][
+            "actual_physical_source_payload"
+        ]
+        == "0/3"
+        and qft_family_dependency["acceptance_counts"][
+            "full_domain_measure_extension"
+        ]
+        == "0/4"
+        and qft_family_dependency["acceptance_counts"][
+            "continuum_reduced_product"
+        ]
+        == "1/9"
+        and not qft_family_dependency["full_domain_extension_rows"][
+            "selected_physical_chiral_projector_and_Hessian_family"
+        ]["accepted"]
+        and qft_family_dependency["full_domain_extension_rows"][
+            "selected_physical_chiral_projector_and_Hessian_family"
+        ]["reduced_to"]
+        == ["B.HS.01", "B.GEO.01", "B.ACTION.01"]
+        and qft_family_dependency[
+            "full_domain_extension_dependency_graph"
+        ]["independent_open_count"]
+        == 3
+        and qft_family_dependency["blocker_assessment"][
+            "B.QFT.02_analytic_physical_family_completion"
+        ]
+        == (
+            "closed_as_a_canonical_implication_after_selected_"
+            "physical_source_and_regular_spectral_chart"
+        )
+        and qft_family_dependency["blocker_assessment"][
+            "B.QFT.02_finite_source_to_smooth_family_selection"
+        ]
+        == "excluded_by_exact_finite_projection_noninjectivity"
+        and qft_family_dependency["blocker_assessment"][
+            "B.QFT.02_selected_physical_family"
+        ]
+        == (
+            "open_dependency_reduced_to_B.HS.01_B.GEO.01_"
+            "B.ACTION.01"
+        )
+        and qft_family_dependency["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_geometry_naturality["acceptance_counts"][
+            "universal_projective_naturality"
+        ]
+        == "10/10"
+        and qft_geometry_naturality["acceptance_counts"][
+            "physical_q79_same_source_instantiation"
+        ]
+        == "0/3"
+        and qft_geometry_naturality["acceptance_counts"][
+            "full_domain_measure_extension"
+        ]
+        == "0/4"
+        and qft_geometry_naturality["acceptance_counts"][
+            "continuum_reduced_product"
+        ]
+        == "1/9"
+        and qft_geometry_naturality[
+            "exact_nonzero_Chern_HYM_witness"
+        ]["first_Chern_number"]
+        == "1"
+        and qft_geometry_naturality[
+            "finite_compression_and_Feshbach_theorem"
+        ]["coupled_residual_squared"]
+        == "1/4"
+        and qft_geometry_naturality[
+            "finite_compression_and_Feshbach_theorem"
+        ]["self_energy_at_zero"]
+        == [["1/12", "0"], ["0", "0"]]
+        and qft_geometry_naturality["blocker_assessment"][
+            "B.GEO.01_overall"
+        ]
+        == "open"
+        and qft_geometry_naturality["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_cech_compiler["acceptance_counts"][
+            "explicit_Cech_connection_compiler"
+        ]
+        == "12/12"
+        and qft_cech_compiler["acceptance_counts"][
+            "physical_q79_same_source_instantiation"
+        ]
+        == "0/3"
+        and qft_cech_compiler["acceptance_counts"][
+            "independent_post_endpoint_symbol_selectors"
+        ]
+        == 0
+        and qft_cech_compiler[
+            "presentation_independence_and_cutoff_witness"
+        ]["cutoff_leakage"]["1"]["leaked_norm_squared"]
+        == "16/25"
+        and qft_cech_compiler[
+            "twisted_hidden_adjoint_compiler"
+        ]["adjoint_composition_rows_checked"]
+        == 729
+        and not qft_cech_compiler[
+            "twisted_hidden_adjoint_compiler"
+        ]["adjoint_composition_failures"]
+        and qft_cech_compiler[
+            "rank_102_coupled_complex_compiler"
+        ]["total_rank_complex"]
+        == 102
+        and qft_cech_compiler["blocker_assessment"][
+            "B.GEO.01_overall"
+        ]
+        == "open"
+        and qft_cech_compiler["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_strain_quotient["acceptance_counts"][
+            "intrinsic_spectral_strain_quotient"
+        ]
+        == "14/14"
+        and qft_strain_quotient["acceptance_counts"][
+            "physical_q79_same_source_instantiation"
+        ]
+        == "0/3"
+        and qft_strain_quotient["acceptance_counts"][
+            "independent_finite_subspace_or_cutoff_selectors"
+        ]
+        == 0
+        and qft_strain_quotient["acceptance_counts"][
+            "remaining_structural_same_source_S3xC4_symmetry_lifts"
+        ]
+        == 1
+        and qft_strain_quotient["acceptance_counts"][
+            "remaining_independent_dimensionless_TT_equalities_after_symmetry_lift"
+        ]
+        == 0
+        and qft_strain_quotient["acceptance_counts"][
+            "physical_TT_shape_equalities_conditionally_forced"
+        ]
+        == 2
+        and not qft_strain_quotient["acceptance_counts"][
+            "physical_TT_shape_unconditionally_accepted"
+        ]
+        and qft_strain_quotient["acceptance_counts"][
+            "remaining_independent_physical_TT_shape_numbers"
+        ]
+        == 0
+        and qft_strain_quotient[
+            "relative_phase_invariant_ring"
+        ]["generic_real_dimension"]
+        == 7
+        and qft_strain_quotient[
+            "relative_phase_invariant_ring"
+        ]["sample"]["relation_value"]
+        == "250"
+        and qft_strain_quotient[
+            "linear_rank_six_subspace_no_go"
+        ]["full_root_plane_character"]
+        == [6, 0, 0]
+        and qft_strain_quotient[
+            "linear_rank_six_subspace_no_go"
+        ]["selected_two_permutation_character"]
+        == [6, 2, 0]
+        and qft_strain_quotient[
+            "TT_Reynolds_comparison"
+        ]["anisotropic_counterwitness"]["one_scale_repairs"]
+        is False
+        and qft_strain_quotient[
+            "TT_Reynolds_comparison"
+        ]["isotropic_witness"]["kappa_fin"]
+        == "1/2"
+        and qft_strain_quotient[
+            "S3xC4_shorted_symmetry_inheritance"
+        ]["TT_commutant_dimension"]
+        == 1
+        and qft_strain_quotient[
+            "S3xC4_shorted_symmetry_inheritance"
+        ]["independent_dimensionless_TT_equalities_after_lift"]
+        == 0
+        and not qft_strain_quotient[
+            "S3xC4_shorted_symmetry_inheritance"
+        ]["exact_nonphysical_witness"]["physical_q79_endpoint"]
+        and qft_strain_quotient["blocker_assessment"][
+            "B.GEO.01_direct_linear_Wfin_subspace_route"
+        ]
+        == "excluded_by_relative_phase_and_S3_character_no_go"
+        and qft_strain_quotient["blocker_assessment"][
+            "B.GEO.01_TT_shape_equalities"
+        ]
+        == (
+            "conditional_implication_closed_exact_physical_"
+            "instantiation_open_on_one_same_source_S3xC4_"
+            "symmetry_lift"
+        )
+        and qft_strain_quotient["blocker_assessment"][
+            "B.GEO.01_overall"
+        ]
+        == "open"
+        and qft_strain_quotient["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_strain_boundary["acceptance_counts"][
+            "predecessor_intrinsic_spectral_strain_quotient"
+        ]
+        == "14/14"
+        and qft_strain_boundary["acceptance_counts"][
+            "global_support_stratified_extension"
+        ]
+        == "10/10"
+        and qft_strain_boundary["acceptance_counts"][
+            "physical_q79_same_source_instantiation"
+        ]
+        == "1/3"
+        and qft_strain_boundary["acceptance_counts"][
+            "remaining_physical_instantiation_rows"
+        ]
+        == 2
+        and qft_strain_boundary["global_symbol"][
+            "support_rank_distribution"
+        ]
+        == {"0": 1, "1": 3, "2": 3, "3": 1}
+        and qft_strain_boundary["global_symbol"]["support_strata"][
+            "111"
+        ]["Jacobian_rank"]
+        == 6
+        and all(
+            qft_strain_boundary["global_symbol"]["support_strata"][key][
+                "Jacobian_rank"
+            ]
+            < 6
+            for key in ("000", "100", "010", "001", "110", "101", "011")
+        )
+        and qft_strain_boundary["physical_q79_instantiation_rows"][
+            "regular_or_stratified_global_spectral_symbol_on_the_selected_endpoint"
+        ]["accepted"]
+        and not qft_strain_boundary["physical_q79_instantiation_rows"][
+            "source_hashed_visible_hidden_HYM_endpoint_and_reduced_Green"
+        ]["accepted"]
+        and not qft_strain_boundary["physical_q79_instantiation_rows"][
+            "physical_S3xC4_symmetry_lift_and_Reynolds_equality"
+        ]["accepted"]
+        and qft_strain_boundary["blocker_assessment"][
+            "B.GEO.01_global_symbol_regularity"
+        ]
+        == (
+            "closed_exact_by_global_support_stratification_"
+            "boundary_second_jet_law_and_rank6_C4_regular_"
+            "locus_forcing"
+        )
+        and qft_strain_boundary["blocker_assessment"][
+            "B.GEO.01_overall"
+        ]
+        == "open"
+        and qft_strain_boundary["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_binary_monodromy["acceptance_counts"][
+            "corrected_physical_q79_same_source_instantiation"
+        ]
+        == "2/4"
+        and qft_binary_monodromy["acceptance_counts"][
+            "remaining_physical_instantiation_rows"
+        ]
+        == 2
+        and qft_binary_monodromy["acceptance_counts"][
+            "remaining_independent_global_S3_deck_actions"
+        ]
+        == 0
+        and qft_binary_monodromy["acceptance_counts"][
+            "remaining_independent_same_source_C4_lifts"
+        ]
+        == 1
+        and qft_binary_monodromy["cover_and_deck_action"][
+            "deck_group_order"
+        ]
+        == 1
+        and qft_binary_monodromy["binary_monodromy_descent"][
+            "Reynolds_over_Dic3_via_projection"
+        ]
+        == qft_binary_monodromy["binary_monodromy_descent"][
+            "Reynolds_over_S3"
+        ]
+        and qft_binary_monodromy["associated_strain_local_system"][
+            "parallel_invariant_rank"
+        ]
+        == 2
+        and qft_binary_monodromy["associated_strain_local_system"][
+            "parallel_TT_rank"
+        ]
+        == 4
+        and qft_binary_monodromy["blocker_assessment"][
+            "B.GEO.01_global_S3_deck_action"
+        ]
+        == "retired_as_mistyped_and_excluded_by_trivial_deck_group"
+        and qft_binary_monodromy["blocker_assessment"][
+            "B.GEO.01_independent_same_source_C4_lift"
+        ]
+        == "open"
+        and qft_binary_monodromy["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_c4_promotion["acceptance_counts"][
+            "corrected_geometry_compiler"
+        ]
+        == "3/5"
+        and qft_c4_promotion["acceptance_counts"][
+            "remaining_geometry_rows"
+        ]
+        == 2
+        and qft_c4_promotion["acceptance_counts"][
+            "remaining_independent_C4_symbol_lifts"
+        ]
+        == 0
+        and qft_c4_promotion["acceptance_counts"][
+            "remaining_selected_HYM_C4_invariance_or_direct_block_rows"
+        ]
+        == 1
+        and qft_c4_promotion["acceptance_counts"][
+            "remaining_autonomous_marked_Lens_descent_routes"
+        ]
+        == 0
+        and qft_c4_promotion["shared_root_C4_source"][
+            "subgroup"
+        ]
+        == [0, 16, 32, 48]
+        and not qft_c4_promotion["shared_root_C4_source"][
+            "root_choice_required"
+        ]
+        and not qft_c4_promotion["marked_FuYau_descent_cutset"][
+            "autonomous_Lens_descent_available"
+        ]
+        and qft_c4_promotion["blocker_assessment"][
+            "B.GEO.01_shared_root_C4_symbol_source"
+        ]
+        == "closed_exact_root_independent"
+        and qft_c4_promotion["blocker_assessment"][
+            "B.GEO.01_selected_HYM_C4_invariance_or_direct_TT_block"
+        ]
+        == "open"
+        and qft_c4_promotion["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_fm_hym_compression["acceptance_counts"][
+            "literal_FM_HYM_contract"
+        ]
+        == "2/11"
+        and qft_fm_hym_compression["acceptance_counts"][
+            "literal_actual_rows_remaining"
+        ]
+        == 9
+        and qft_fm_hym_compression["acceptance_counts"][
+            "conditional_compiler_rows_closed"
+        ]
+        == 3
+        and qft_fm_hym_compression["acceptance_counts"][
+            "physical_rows_with_exact_symbol_analogues"
+        ]
+        == 2
+        and qft_fm_hym_compression["acceptance_counts"][
+            "independent_sequential_source_packages_remaining"
+        ]
+        == 3
+        and qft_fm_hym_compression["acceptance_counts"][
+            "corrected_geometry_compiler"
+        ]
+        == "3/5"
+        and qft_fm_hym_compression["blocker_assessment"][
+            "B.HS.01_selected_visible_twisted_source"
+        ]
+        == "open_on_same_member_beta_C_and_alpha_twisted_line"
+        and qft_fm_hym_compression["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_cofinal_cutoff["blocker_assessment"][
+            "B.QFT.02_cofinal_free_BV_spectral_cutoff_family"
+        ]
+        == "closed_on_each_admissible_compact_auxiliary_chart"
+        and qft_cofinal_cutoff["blocker_assessment"][
+            "B.QFT.02_raw_interacting_cutoff_removal"
+        ]
+        == "excluded_without_local_counterterms"
+        and qft_cofinal_cutoff["blocker_assessment"][
+            "B.QFT.02_spectral_cutoff_to_EG_counterterm_bridge"
+        ]
+        == "open_six_row_contract"
+        and qft_heat_counterterm["blocker_assessment"][
+            "B.QFT.02_spectral_cutoff_to_EG_counterterm_bridge"
+        ]
+        == "open_three_independent_q79_work_packages_HK_CT_GLUE"
+        and qft_hk["blocker_assessment"][
+            "B.QFT.02_HK_selected_mixed_BV_heat_kernel_hypotheses"
+        ]
+        == (
+            "closed_on_declared_boundaryless_compact_support_"
+            "auxiliary_Euclidean_regulator_tier"
+        )
+        and qft_hk["blocker_assessment"][
+            "B.QFT.02_spectral_or_heat_to_EG_counterterm_bridge"
+        ]
+        == "open_two_independent_work_packages_CT_and_EL"
+        and qft_ct["blocker_assessment"][
+            "B.QFT.02_CT_graphwise_local_counterterms"
+        ]
+        == "closed_at_every_finite_perturbative_bidegree"
+        and qft_ct["blocker_assessment"][
+            "B.QFT.02_CT_QME_BRST_primitives"
+        ]
+        == (
+            "closed_by_zero_local_anomaly_class_and_all_orders_"
+            "compatible_scheme"
+        )
+        and qft_ct["blocker_assessment"][
+            "B.QFT.02_spectral_or_heat_to_EG_counterterm_bridge"
+        ]
+        == "open_one_independent_work_package_EL"
+        and qft_el["blocker_assessment"][
+            "B.QFT.02_EL_pointwise_temporal_reflection"
+        ]
+        == "closed_consumed_from_MLD_and_q79_normal_certificates"
+        and qft_el["blocker_assessment"][
+            "B.QFT.02_EL_free_physical_OS_on_reflection_contract"
+        ]
+        == "closed_exact_conditionally_at_finite_positive_shell"
+        and qft_el["blocker_assessment"][
+            "B.QFT.02_EL_global_reflection_from_generic_smooth_source"
+        ]
+        == (
+            "automatic_promotion_excluded_by_exact_collar_"
+            "counterexample"
+        )
+        and qft_el["blocker_assessment"][
+            "B.QFT.02_EL_selected_global_reflection_contract"
+        ]
+        == "open_eight_rows"
+        and qft_el["blocker_assessment"][
+            "B.QFT.02_EL_analytic_Calderon_continuation"
+        ]
+        == "open_six_rows"
+        and qft_el["blocker_assessment"][
+            "B.QFT.02_EL_direct_Lorentzian_counterterm_comparison"
+        ]
+        == "open_alternative_exit"
+        and qft_el["blocker_assessment"]["B.QFT.02_EL_overall"]
+        == "open_sharpened"
+        and qft_lorentzian["blocker_assessment"][
+            "B.QFT.02_spectral_cutoff_to_EG_counterterm_bridge"
+        ]
+        == "closed_six_of_six_at_local_formal_direct_Lorentzian_tier"
+        and qft_lorentzian["blocker_assessment"][
+            "B.QFT.02_EL_direct_Lorentzian_counterterm_comparison"
+        ]
+        == (
+            "closed_as_local_BRST_compatible_SP_orbit_not_"
+            "coefficient_equality"
+        )
+        and qft_lorentzian["blocker_assessment"][
+            "B.QFT.02_EL_renormalized_equicausal_Cauchy_transport"
+        ]
+        == "closed_at_formal_physical_H0_on_declared_q79_charts"
+        and qft_lorentzian["blocker_assessment"][
+            "B.QFT.02_EL_required_for_formal_Lorentzian_q79_QFT"
+        ]
+        == "retired_by_direct_Lorentzian_route"
+        and qft_lorentzian["blocker_assessment"][
+            "B.QFT.02_Euclidean_Costello_to_Lorentzian_EG_"
+            "coefficient_map"
+        ]
+        == "open_optional_cross_signature_comparison"
+        and qft_lorentzian["blocker_assessment"]["B.QFT.02_overall"]
+        == "open"
+        and qft_lorentzian["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_boundaryless_gluing["blocker_assessment"][
+            "B.QFT.02_selected_physical_noncollar_boundary_family"
+        ]
+        == "retired_as_false_exit_on_current_boundaryless_QFT_domain"
+        and qft_boundaryless_gluing["blocker_assessment"][
+            "B.QFT.02_auxiliary_boundary_phase_after_gluing"
+        ]
+        == "closed_formal_exact_as_dual_line_cancellation"
+        and qft_boundaryless_gluing["blocker_assessment"][
+            "B.QFT.02_uniform_interacting_cutoff_removal"
+        ]
+        == "open"
+        and cauchy["blocker_readiness"]["B.QM.02_overall"] == "open"
+        and cauchy["blocker_readiness"]["B.QM.02_gauge_comparison_functor"] == "closed_exact_zero_error"
+        and operational["blocker_assessment"]["B.QM.02_exit_certificate"]
+        == "complete_at_canonical_q79_binary_one_anchor_finite_symbol_tier"
+        and operational["blocker_assessment"]["strict_unaugmented_upper_MTT_selection_of_clock_anchor"]
+        == "open"
+        and output_measure["B_QM_01_assessment"]["exit_certificate"]
+        == "complete_at_canonical_q79_binary_one_anchor_operational_output_measure_tier"
+        and output_measure["B_QM_01_assessment"][
+            "canonical_binary_SecondMomentCaptureDescent"
+        ]
+        == "closed_exact"
+        and output_measure["B_QM_01_assessment"][
+            "objective_single_history_actualization"
+        ]
+        == "open"
+        and output_measure["parameter_ledger"][
+            "new_structural_stochastic_primitives_for_output_measure"
+        ]
+        == 0
+        and finite["blocker_readiness"]["B.QM.02_physical_time_and_energy"] == "open"
+        and born["blocker_readiness"]["B.QM.01_preparation_measure"] == "open"
+        and effects["blocker_readiness"]["B.QM.01_selected_physical_effect_map"] == "open"
+        and moment["blocker_readiness"]["B.QM.01_physical_capture_calibration"] == "open"
+        and descent["blocker_readiness"]["B.QM.01_second_moment_capture_descent"] == "open_single_gate"
+        and hazard["blocker_readiness"]["B.QM.01_selected_clock_source"] == "open"
+        and completion["adoption_state"] == "candidate_only"
+        and pq_context["status"] == "CANONICAL_BINARY_RESPONSE_SELECTED_CLOCK_OPEN"
+        and clock_nogo["status"] == "DAMPING_SELECTS_ASYMPTOTIC_RESPONSE_NOT_CAPTURE_CLOCK"
+        and apparatus["status"] == "GENERAL_CONTEXT_NORMALIZATION_EXACT_RAW_CHANNEL_SOURCE_OPEN"
+        and interaction["status"] == "CHANNEL_EXTRACTION_FUNCTOR_EXACT_PHYSICAL_INTERACTION_DERIVATIVE_OPEN"
+        and dilation["status"] == "CANONICAL_PQ_POINTER_DILATION_EXACT_OUTCOME_SELECTION_OPEN"
+        and penrose_bridge["status"] == "CANONICAL_PQ_DEPHASING_SEMIGROUP_RIGID_PENROSE_RATE_SOURCE_OPEN"
+        and instrument_nogo["status"] == "PQ_CHANNEL_EXACT_INSTRUMENT_AND_OUTCOME_UNRAVELLING_NOT_SELECTED"
+        and clock_lift["status"] == "ONE_ANCHOR_CLOCK_LIFT_EXACT_RATE_COEFFICIENT_PENROSE_ENERGY_OPEN"
+        and profile_nogo["status"] == "UNIVERSAL_PQ_PENROSE_RATE_NOGO_CONTEXTUAL_RATE_REPAIR_EXACT"
+        and profile_factor["status"] == "PENROSE_CONTEXT_FACTOR_ANCHOR_CANCELLED_PROFILE_MAP_SOURCE_OPEN"
+        and context_source["status"] == "SAME_SOURCE_FIVE_OUTPUT_FUNCTOR_EXACT_SELECTED_ACTION_PAYLOAD_OPEN"
+        and recorder_action["status"] == "Q79_MINIMAL_RECORDER_ACTION_GAUGE_CLASS_EXACT_ADOPTION_AND_RATE_SOURCE_OPEN"
+        and hessian_recorder_source["status"] == "Q79_HESSIAN_RESIDUAL_AND_SPECTRAL_RECORDER_SOURCE_EXACT_CONTEXT_AND_ACTUALIZATION_OPEN"
+        and poisson_actualization["status"] == "SHARED_CIRCLE_MARKED_POISSON_ACTUALIZATION_EXACT_ONE_PRIMITIVE_NOT_SELECTED"
+        and qft_dirac["B_QFT_01_assessment"]["exit_certificate"]
+        == "complete_at_selected_q79_framed_free_massless_dirac_even_observable_net_tier"
+        and qft_dirac["B_QFT_01_assessment"]["full_interacting_or_SM_QFT"]
+        == "open"
+        and qft_dirac["parameter_ledger"]["new_continuous_parameters"] == 0
+        and qft_sm_bv["blocker_assessment"][
+            "B.QFT.02_typed_continuum_SM_carrier"
+        ]
+        == "closed_exact"
+        and qft_sm_bv["blocker_assessment"][
+            "B.QFT.02_classical_BRST_and_BV_CME"
+        ]
+        == "closed_exact_on_the_composed_continuum_field_stack"
+        and qft_sm_bv["blocker_assessment"]["B.QFT.02_overall"]
+        == "open"
+        and qft_sm_bv["blocker_assessment"]["B.ACTION.01_overall"]
+        == "open"
+        and qft_sm_bv["parameter_ledger"][
+            "new_continuous_parameters_from_composition"
+        ]
+        == 0
+        and qft_sm_hyperbolic["blocker_assessment"][
+            "B.QFT.02_gauge_fixed_hyperbolic_free_BV_complex"
+        ]
+        == "closed_on_declared_onshell_background_chart"
+        and qft_sm_hyperbolic["blocker_assessment"][
+            "B.QFT.02_equicausal_Peierls_star_and_time_slice_algebra"
+        ]
+        == "closed_on_declared_background_chart"
+        and qft_sm_hyperbolic["blocker_assessment"][
+            "B.QFT.02_unrestricted_microcausal_closure"
+        ]
+        == "superseded_false_in_general_by_primary_counterexample"
+        and qft_sm_hyperbolic["blocker_assessment"][
+            "B.QFT.02_interacting_time_ordered_products"
+        ]
+        == "open"
+        and qft_sm_hyperbolic["blocker_assessment"]["B.QFT.02_overall"]
+        == "open"
+        and qft_sm_hyperbolic["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_renormalized["local_QME_anomaly"]["class_vector"]
+        == [0, 0, 0, 0, 0]
+        and qft_sm_renormalized["blocker_assessment"][
+            "B.QFT.02_interacting_time_ordered_products"
+        ]
+        == "closed_as_formal_Epstein_Glaser_products_on_declared_charts"
+        and qft_sm_renormalized["blocker_assessment"][
+            "B.QFT.02_all_orders_perturbative_QME_scheme"
+        ]
+        == (
+            "closed_by_exact_one_loop_zero_plus_Adler_Bardeen_"
+            "and_renormalized_BV_theorems"
+        )
+        and qft_sm_renormalized["blocker_assessment"][
+            "B.QFT.02_global_spin_gauge_anomaly_obstruction"
+        ]
+        == "closed_zero_for_the_faithful_Z6_group"
+        and qft_sm_renormalized["blocker_assessment"][
+            "B.QFT.02_positive_physical_interacting_state"
+        ]
+        == "open"
+        and qft_sm_renormalized["blocker_assessment"][
+            "B.QFT.02_overall"
+        ]
+        == "open"
+        and qft_sm_renormalized["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_state["exact_free_quartet"][
+            "ghost_zero_closed_Gram"
+        ]
+        == [["1", "0", "0"], ["0", "1", "0"], ["0", "0", "0"]]
+        and qft_sm_state["exact_free_quartet"][
+            "physical_cohomology_Gram"
+        ]
+        == [["1", "0"], ["0", "1"]]
+        and qft_sm_state["free_field_extension"][
+            "physical_gauge_polarizations_per_spatial_eigenmode"
+        ]
+        == 24
+        and qft_sm_state["free_field_extension"][
+            "Weyl_complex_field_components"
+        ]
+        == 96
+        and qft_sm_state["blocker_assessment"][
+            "B.QFT.02_positive_physical_interacting_state"
+        ]
+        == (
+            "closed_as_local_formal_existence_on_bounded_H1_zero_"
+            "q79_charts"
+        )
+        and qft_sm_state["blocker_assessment"][
+            "B.QFT.02_preferred_or_global_interacting_state"
+        ]
+        == "open"
+        and qft_sm_state["blocker_assessment"]["B.QFT.02_overall"]
+        == "open"
+        and qft_sm_state["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_state_space["blocker_assessment"][
+            "B.QFT.02_local_formal_state_space_functor"
+        ]
+        == "closed_exact_on_q79Chart_0"
+        and qft_sm_state_space["blocker_assessment"][
+            "B.QFT.02_common_parent_finite_compatible_family"
+        ]
+        == "closed_exact"
+        and qft_sm_state_space["blocker_assessment"][
+            "B.QFT.02_arbitrary_overlap_state_sheaf_gluing"
+        ]
+        == "impossible_in_general_by_exact_Bell_monogamy_witness"
+        and qft_sm_state_space["blocker_assessment"][
+            "B.QFT.02_single_global_interacting_q79_state"
+        ]
+        == "open"
+        and qft_sm_state_space["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_state_transport["blocker_assessment"][
+            "B.QFT.02_formal_physical_state_cone_transport"
+        ]
+        == "closed_up_to_specified_formal_star_isomorphism"
+        and qft_sm_state_transport["blocker_assessment"][
+            "B.QFT.02_literal_interacting_local_quasi_equivalence"
+        ]
+        == (
+            "not_yet_well_typed_without_fixed_coupling_Cstar_"
+            "von_Neumann_completion"
+        )
+        and qft_sm_state_transport["blocker_assessment"][
+            "B.QFT.02_fixed_coupling_local_quasi_equivalence"
+        ]
+        == "open"
+        and qft_sm_state_transport["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_free_cstar["blocker_assessment"][
+            "B.QFT.02_free_physical_Cstar_reference_net"
+        ]
+        == "closed_exact_at_lambda_zero"
+        and qft_sm_free_cstar["blocker_assessment"][
+            "B.QFT.02_free_local_quasiequivalence"
+        ]
+        == "closed_on_declared_implementable_Hadamard_folia"
+        and qft_sm_free_cstar["blocker_assessment"][
+            "B.QFT.02_formal_to_fixed_nonzero_coupling_promotion"
+        ]
+        == (
+            "nonunique_without_extra_nonperturbative_selection_by_"
+            "exact_flat_ambiguity"
+        )
+        and qft_sm_free_cstar["blocker_assessment"][
+            "B.QFT.02_interacting_fixed_coupling_Cstar_net"
+        ]
+        == "open"
+        and qft_sm_free_cstar["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_regulator["blocker_assessment"][
+            "B.QFT.02_finite_BV_regulator_criterion"
+        ]
+        == "closed_exact"
+        and qft_sm_regulator["blocker_assessment"][
+            "B.QFT.02_internal_projector_as_spacetime_regulator"
+        ]
+        == "excluded_by_exact_tensor_rank_and_type_theorem"
+        and qft_sm_regulator["blocker_assessment"][
+            "B.QFT.02_selected_external_BV_Laplacian_and_domain"
+        ]
+        == "open_single_operator_domain_package"
+        and qft_sm_regulator[
+            "internal_projector_nonpromotion_theorem"
+        ]["accepted_complete_physical_regulator_sources"]
+        == []
+        and qft_sm_regulator["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_local_regulator["all_checks_pass"]
+        and qft_sm_local_regulator["blocker_assessment"][
+            "B.QFT.02_local_auxiliary_external_BV_operator_existence"
+        ]
+        == "closed_on_one_rounded_trivial_symmetric_q79_chart"
+        and qft_sm_local_regulator["blocker_assessment"][
+            "B.QFT.02_selected_external_BV_Laplacian_and_domain"
+        ]
+        == "open_or_replaceable_by_regulator_choice_independence"
+        and qft_sm_local_regulator["regulator_capability"][
+            "accepted_local_auxiliary_operator_sources"
+        ]
+        == ["q79_local_auxiliary_elliptic_BV_package"]
+        and qft_sm_local_regulator["regulator_capability"][
+            "accepted_complete_physical_regulator_sources"
+        ]
+        == []
+        and qft_sm_local_regulator["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_shell_comparison["all_checks_pass"]
+        and qft_sm_shell_comparison["blocker_assessment"][
+            "B.QFT.02_UV_Hodge_Lagrangian_cycle"
+        ]
+        == (
+            "closed_for_every_positive_finite_BV_Hodge_"
+            "compatible_shell"
+        )
+        and qft_sm_shell_comparison["blocker_assessment"][
+            "B.QFT.02_free_finite_shell_QME_pushforward"
+        ]
+        == "closed_up_to_the_transported_determinant_line_scalar"
+        and qft_sm_shell_comparison["blocker_assessment"][
+            "B.QFT.02_actual_q79_regulator_choice_independence"
+        ]
+        == "open_five_component_obstruction_vector"
+        and qft_sm_shell_comparison[
+            "exact_contractible_shell_witness"
+        ]["restricted_quadratic_determinant"]
+        == "-36"
+        and qft_sm_shell_comparison["crossing_cutset"][
+            "spectral_flow"
+        ]
+        == 1
+        and qft_sm_shell_comparison["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_orbit["all_checks_pass"]
+        and qft_sm_orbit["blocker_assessment"][
+            "B.QFT.02_actual_q79_regulator_path"
+        ]
+        == "closed_on_connected_boundary_identity_gauge_frame_orbit"
+        and qft_sm_orbit["boundary_result"]["APS_spectral_flow"] == 0
+        and qft_sm_orbit["boundary_result"]["BV_BFV_boundary_flux"]
+        == "0"
+        and qft_sm_orbit["exact_boundary_interior_witness"][
+            "shell_determinant"
+        ]
+        == "4"
+        and qft_sm_orbit["blocker_assessment"][
+            "B.QFT.02_regulator_choice_independence"
+        ]
+        == "closed_on_presentation_orbit_open_on_quotient_moduli"
+        and qft_sm_orbit["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_sm_diff_orbit["all_checks_pass"]
+        and qft_sm_diff_orbit["blocker_assessment"][
+            "B.QFT.02_q79_diffeomorphism_regulator_path"
+        ]
+        == "closed_on_spin_liftable_identity_component"
+        and qft_sm_diff_orbit["boundary_result"][
+            "transported_region_relative_APS_spectral_flow"
+        ]
+        == 0
+        and qft_sm_diff_orbit["boundary_result"][
+            "transported_region_relative_BV_BFV_flux"
+        ]
+        == "0"
+        and qft_sm_diff_orbit["blocker_assessment"][
+            "B.QFT.02_region_shape_or_embedding_choice"
+        ]
+        == "closed_mod_ambient_isotopic_pushforward_open_beyond_it"
+        and qft_sm_diff_orbit["blocker_assessment"][
+            "B.QFT.02_regulator_choice_independence"
+        ]
+        == (
+            "closed_on_extended_presentation_orbit_open_on_"
+            "reduced_quotient"
+        )
+        and qft_sm_diff_orbit["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_metric_rigidity["all_checks_pass"]
+        and qft_metric_rigidity["exact_rational_witness"][
+            "initial_scalar_principal_symbol"
+        ]
+        == "1"
+        and qft_metric_rigidity["exact_rational_witness"][
+            "boosted_scalar_principal_symbol"
+        ]
+        == "41/9"
+        and qft_metric_rigidity["blocker_assessment"][
+            "B.QFT.02_auxiliary_positive_metric_formula"
+        ]
+        == "closed_unique_given_future_unit_Cauchy_normal"
+        and qft_metric_rigidity["blocker_assessment"][
+            "B.QFT.02_full_local_Lorentz_boost_regulator_neutrality"
+        ]
+        == "excluded_by_exact_scalar_symbol_counterexample"
+        and qft_metric_rigidity["blocker_assessment"][
+            "B.QFT.02_positive_metric_and_normal_choice_count"
+        ]
+        == "reduced_from_two_named_rows_to_one_source_object"
+        and qft_metric_rigidity["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_temporal_independence["all_checks_pass"]
+        and qft_temporal_independence[
+            "positive_cutoff_crossing_theorem"
+        ]["projector_ranks"]
+        == {"before": 6, "after": 2}
+        and qft_temporal_independence["blocker_assessment"][
+            "B.QFT.02_Cauchy_normal_Euclideanization_source"
+        ]
+        == (
+            "closed_as_auxiliary_quotient_for_normalized_free_"
+            "finite_shell_observables"
+        )
+        and qft_temporal_independence["blocker_assessment"][
+            "B.QFT.02_absolute_unnormalized_determinant_line"
+        ]
+        == "open"
+        and qft_temporal_independence["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_determinant_phase["all_checks_pass"]
+        and qft_determinant_phase["blocker_assessment"][
+            "B.QFT.02_determinant_line_gauge_anomaly_obstruction"
+        ]
+        == "closed_zero"
+        and qft_determinant_phase["blocker_assessment"][
+            "B.QFT.02_absolute_common_determinant_phase"
+        ]
+        == "excluded_as_unidentifiable_U1_convention_torsor"
+        and qft_determinant_phase["blocker_assessment"][
+            "B.QFT.02_absolute_unnormalized_determinant_line"
+        ]
+        == "retyped_not_a_physical_exit_on_one_connected_normalized_sector"
+        and qft_determinant_phase["blocker_assessment"][
+            "B.QFT.02_relative_phase_between_disconnected_sectors"
+        ]
+        == "open"
+        and qft_determinant_phase["relative_phase_cutset"][
+            "same_phase_sector_intensity"
+        ]
+        == "4"
+        and qft_determinant_phase["relative_phase_cutset"][
+            "relative_i_sector_intensity"
+        ]
+        == "2"
+        and qft_determinant_phase["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_boundary_crossing["all_checks_pass"]
+        and qft_boundary_crossing["exact_APS_crossing"][
+            "negative_ranks"
+        ]
+        == {"minus": 2, "zero": 1, "plus": 1}
+        and qft_boundary_crossing["exact_APS_crossing"][
+            "spectral_flow"
+        ]
+        == 1
+        and qft_boundary_crossing["shared_line_parity_shadow"][
+            "crossing_value"
+        ]
+        == {
+            "spectral_flow": 1,
+            "Z64_image": 32,
+            "shared_sign_holonomy": "-1",
+        }
+        and qft_boundary_crossing["blocker_assessment"][
+            "B.QFT.02_finite_APS_crossing_line_reduction"
+        ]
+        == "closed_exact"
+        and qft_boundary_crossing["blocker_assessment"][
+            "B.QFT.02_source_free_crossing_phase_selection"
+        ]
+        == "excluded_by_U1_stabilizer_nogo"
+        and qft_boundary_crossing["blocker_assessment"][
+            "B.QFT.02_flavor_holonomy_as_analytic_phase_source"
+        ]
+        == "excluded_by_determinant_object_type_mismatch"
+        and qft_boundary_crossing["blocker_assessment"][
+            "B.QFT.02_full_relative_Dai_Freed_phase"
+        ]
+        == "open"
+        and qft_boundary_crossing["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+        and qft_boundary_source["all_checks_pass"]
+        and qft_boundary_source["continuum_circle_family"][
+            "crossing"
+        ]["spectral_flow"]
+        == 1
+        and qft_boundary_source["continuum_circle_family"][
+            "counterfamily"
+        ]["spectral_flow"]
+        == 0
+        and qft_boundary_source["blocker_assessment"][
+            "B.QFT.02_bulk_to_boundary_Dirac_BFV_functor"
+        ]
+        == "closed_conditional_exact_after_boundary_source_package"
+        and qft_boundary_source["blocker_assessment"][
+            "B.QFT.02_finite_crossing_differential_operator_origin"
+        ]
+        == "closed_exact_by_circle_Fourier_Galerkin_homotopy"
+        and qft_boundary_source["blocker_assessment"][
+            "B.QFT.02_bulk_only_boundary_family_selection"
+        ]
+        == "excluded_by_same_basepoint_sf_zero_vs_one_counterfamily"
+        and qft_boundary_source["blocker_assessment"][
+            "B.QFT.02_selected_physical_noncollar_boundary_family"
+        ]
+        == "open_reduced_to_typed_boundary_source_package"
+        and qft_boundary_source["blocker_assessment"][
+            "B.QFT.02_full_relative_Dai_Freed_phase"
+        ]
+        == "open"
+        and qft_boundary_source["parameter_ledger"][
+            "new_physical_continuous_parameters"
+        ]
+        == 0
+    )
+    summary = {
+        "ok": ok,
+        "sources_current": freshness["all_current"],
+        "finite_exact_checks": sum(finite["checks"].values()),
+        "finite_exact_checks_total": len(finite["checks"]),
+        "cauchy_kinematics_checks": sum(cauchy["checks"].values()),
+        "cauchy_kinematics_checks_total": len(cauchy["checks"]),
+        "operational_model_checks": sum(operational["checks"].values()),
+        "operational_model_checks_total": len(operational["checks"]),
+        "fock_output_measure_checks": sum(output_measure["checks"].values()),
+        "fock_output_measure_checks_total": len(output_measure["checks"]),
+        "born_checks": sum(born["checks"].values()),
+        "born_checks_total": len(born["checks"]),
+        "preparation_nogo_checks": sum(preparation["checks"].values()),
+        "preparation_nogo_checks_total": len(preparation["checks"]),
+        "effect_checks": sum(effects["checks"].values()),
+        "effect_checks_total": len(effects["checks"]),
+        "moment_checks": sum(moment["checks"].values()),
+        "moment_checks_total": len(moment["checks"]),
+        "descent_checks": sum(descent["checks"].values()),
+        "descent_checks_total": len(descent["checks"]),
+        "hazard_checks": sum(hazard["checks"].values()),
+        "hazard_checks_total": len(hazard["checks"]),
+        "completion_checks": sum(completion["checks"].values()),
+        "completion_checks_total": len(completion["checks"]),
+        "pq_context_checks": sum(pq_context["checks"].values()),
+        "pq_context_checks_total": len(pq_context["checks"]),
+        "clock_nogo_checks": sum(clock_nogo["checks"].values()),
+        "clock_nogo_checks_total": len(clock_nogo["checks"]),
+        "apparatus_checks": sum(apparatus["checks"].values()),
+        "apparatus_checks_total": len(apparatus["checks"]),
+        "interaction_checks": sum(interaction["checks"].values()),
+        "interaction_checks_total": len(interaction["checks"]),
+        "dilation_checks": sum(dilation["checks"].values()),
+        "dilation_checks_total": len(dilation["checks"]),
+        "penrose_bridge_checks": sum(penrose_bridge["checks"].values()),
+        "penrose_bridge_checks_total": len(penrose_bridge["checks"]),
+        "instrument_nogo_checks": sum(instrument_nogo["checks"].values()),
+        "instrument_nogo_checks_total": len(instrument_nogo["checks"]),
+        "clock_lift_checks": sum(clock_lift["checks"].values()),
+        "clock_lift_checks_total": len(clock_lift["checks"]),
+        "profile_nogo_checks": sum(profile_nogo["checks"].values()),
+        "profile_nogo_checks_total": len(profile_nogo["checks"]),
+        "profile_factor_checks": sum(profile_factor["checks"].values()),
+        "profile_factor_checks_total": len(profile_factor["checks"]),
+        "context_source_checks": sum(context_source["checks"].values()),
+        "context_source_checks_total": len(context_source["checks"]),
+        "recorder_action_checks": sum(recorder_action["checks"].values()),
+        "recorder_action_checks_total": len(recorder_action["checks"]),
+        "hessian_recorder_source_checks": sum(hessian_recorder_source["checks"].values()),
+        "hessian_recorder_source_checks_total": len(hessian_recorder_source["checks"]),
+        "poisson_actualization_checks": sum(poisson_actualization["checks"].values()),
+        "poisson_actualization_checks_total": len(poisson_actualization["checks"]),
+        "qft_dirac_checks": sum(qft_dirac["checks"].values()),
+        "qft_dirac_checks_total": len(qft_dirac["checks"]),
+        "qft_sm_classical_bv_checks": sum(qft_sm_bv["checks"].values()),
+        "qft_sm_classical_bv_checks_total": len(qft_sm_bv["checks"]),
+        "qft_sm_hyperbolic_equicausal_checks": sum(
+            qft_sm_hyperbolic["checks"].values()
+        ),
+        "qft_sm_hyperbolic_equicausal_checks_total": len(
+            qft_sm_hyperbolic["checks"]
+        ),
+        "qft_sm_renormalized_local_qme_checks": sum(
+            qft_sm_renormalized["checks"].values()
+        ),
+        "qft_sm_renormalized_local_qme_checks_total": len(
+            qft_sm_renormalized["checks"]
+        ),
+        "qft_sm_local_formal_physical_state_checks": sum(
+            qft_sm_state["checks"].values()
+        ),
+        "qft_sm_local_formal_physical_state_checks_total": len(
+            qft_sm_state["checks"]
+        ),
+        "qft_sm_local_formal_state_space_gluing_checks": sum(
+            qft_sm_state_space["checks"].values()
+        ),
+        "qft_sm_local_formal_state_space_gluing_checks_total": len(
+            qft_sm_state_space["checks"]
+        ),
+        "qft_sm_equicausal_formal_state_transport_checks": sum(
+            qft_sm_state_transport["checks"].values()
+        ),
+        "qft_sm_equicausal_formal_state_transport_checks_total": len(
+            qft_sm_state_transport["checks"]
+        ),
+        "qft_sm_free_physical_cstar_reference_checks": sum(
+            qft_sm_free_cstar["checks"].values()
+        ),
+        "qft_sm_free_physical_cstar_reference_checks_total": len(
+            qft_sm_free_cstar["checks"]
+        ),
+        "qft_sm_finite_bv_regulator_criterion_checks": sum(
+            qft_sm_regulator["checks"].values()
+        ),
+        "qft_sm_finite_bv_regulator_criterion_checks_total": len(
+            qft_sm_regulator["checks"]
+        ),
+        "qft_sm_local_auxiliary_elliptic_bv_regulator_checks": sum(
+            qft_sm_local_regulator["checks"].values()
+        ),
+        "qft_sm_local_auxiliary_elliptic_bv_regulator_checks_total": len(
+            qft_sm_local_regulator["checks"]
+        ),
+        "qft_sm_finite_shell_bv_pushforward_comparison_checks": sum(
+            qft_sm_shell_comparison["checks"].values()
+        ),
+        "qft_sm_finite_shell_bv_pushforward_comparison_checks_total": len(
+            qft_sm_shell_comparison["checks"]
+        ),
+        "qft_sm_based_gauge_frame_regulator_orbit_checks": sum(
+            qft_sm_orbit["checks"].values()
+        ),
+        "qft_sm_based_gauge_frame_regulator_orbit_checks_total": len(
+            qft_sm_orbit["checks"]
+        ),
+        "qft_sm_diffeomorphism_transported_regulator_orbit_checks": sum(
+            qft_sm_diff_orbit["checks"].values()
+        ),
+        "qft_sm_diffeomorphism_transported_regulator_orbit_checks_total": len(
+            qft_sm_diff_orbit["checks"]
+        ),
+        "qft_cauchy_normal_euclidean_metric_rigidity_checks": sum(
+            qft_metric_rigidity["checks"].values()
+        ),
+        "qft_cauchy_normal_euclidean_metric_rigidity_checks_total": len(
+            qft_metric_rigidity["checks"]
+        ),
+        "qft_temporal_companion_free_shell_independence_checks": sum(
+            qft_temporal_independence["checks"].values()
+        ),
+        "qft_temporal_companion_free_shell_independence_checks_total": len(
+            qft_temporal_independence["checks"]
+        ),
+        "qft_determinant_phase_torsor_quotient_checks": sum(
+            qft_determinant_phase["checks"].values()
+        ),
+        "qft_determinant_phase_torsor_quotient_checks_total": len(
+            qft_determinant_phase["checks"]
+        ),
+        "qft_APS_boundary_crossing_line_reduction_checks": sum(
+            qft_boundary_crossing["checks"].values()
+        ),
+        "qft_APS_boundary_crossing_line_reduction_checks_total": len(
+            qft_boundary_crossing["checks"]
+        ),
+        "qft_bulk_to_boundary_Dirac_source_cutset_checks": sum(
+            qft_boundary_source["checks"].values()
+        ),
+        "qft_bulk_to_boundary_Dirac_source_cutset_checks_total": len(
+            qft_boundary_source["checks"]
+        ),
+        "qft_boundaryless_BV_BFV_gluing_phase_reduction_checks": sum(
+            qft_boundaryless_gluing["checks"].values()
+        ),
+        "qft_boundaryless_BV_BFV_gluing_phase_reduction_checks_total": len(
+            qft_boundaryless_gluing["checks"]
+        ),
+        "qft_cofinal_free_BV_cutoff_counterterm_cutset_checks": sum(
+            qft_cofinal_cutoff["checks"].values()
+        ),
+        "qft_cofinal_free_BV_cutoff_counterterm_cutset_checks_total": len(
+            qft_cofinal_cutoff["checks"]
+        ),
+        "qft_heat_kernel_counterterm_seed_checks": sum(
+            qft_heat_counterterm["checks"].values()
+        ),
+        "qft_heat_kernel_counterterm_seed_checks_total": len(
+            qft_heat_counterterm["checks"]
+        ),
+        "qft_gaugefixed_Laplace_interior_heat_kernel_checks": sum(
+            qft_hk["checks"].values()
+        ),
+        "qft_gaugefixed_Laplace_interior_heat_kernel_checks_total": len(
+            qft_hk["checks"]
+        ),
+        "qft_firstorder_Costello_BV_counterterm_checks": sum(
+            qft_ct["checks"].values()
+        ),
+        "qft_firstorder_Costello_BV_counterterm_checks_total": len(
+            qft_ct["checks"]
+        ),
+        "qft_Euclidean_reflection_free_OS_EL_cutset_checks": sum(
+            qft_el["checks"].values()
+        ),
+        "qft_Euclidean_reflection_free_OS_EL_cutset_checks_total": len(
+            qft_el["checks"]
+        ),
+        "qft_Lorentzian_spectral_SP_QME_Cauchy_bridge_checks": sum(
+            qft_lorentzian["checks"].values()
+        ),
+        "qft_Lorentzian_spectral_SP_QME_Cauchy_bridge_checks_total": len(
+            qft_lorentzian["checks"]
+        ),
+        "qft_fixed_coupling_regulated_Cstar_promotion_checks": sum(
+            qft_fixed_coupling["checks"].values()
+        ),
+        "qft_fixed_coupling_regulated_Cstar_promotion_checks_total": len(
+            qft_fixed_coupling["checks"]
+        ),
+        "qft_auxiliary_spectral_fixed_coupling_EG_first_tangent_checks": sum(
+            qft_first_tangent["checks"].values()
+        ),
+        "qft_auxiliary_spectral_fixed_coupling_EG_first_tangent_checks_total": len(
+            qft_first_tangent["checks"]
+        ),
+        "qft_uniform_Gauss_ghostzero_BRST_Ward_reduction_checks": sum(
+            qft_ward_reduction["checks"].values()
+        ),
+        "qft_uniform_Gauss_ghostzero_BRST_Ward_reduction_checks_total": len(
+            qft_ward_reduction["checks"]
+        ),
+        "qft_orbitwise_finite_spectral_chiral_measure_checks": sum(
+            qft_orbitwise_measure["checks"].values()
+        ),
+        "qft_orbitwise_finite_spectral_chiral_measure_checks_total": len(
+            qft_orbitwise_measure["checks"]
+        ),
+        "qft_physical_family_source_dependency_checks": sum(
+            qft_family_dependency["checks"].values()
+        ),
+        "qft_physical_family_source_dependency_checks_total": len(
+            qft_family_dependency["checks"]
+        ),
+        "qft_covariant_projective_module_HYM_naturality_checks": sum(
+            qft_geometry_naturality["checks"].values()
+        ),
+        "qft_covariant_projective_module_HYM_naturality_checks_total": len(
+            qft_geometry_naturality["checks"]
+        ),
+        "qft_explicit_Cech_connection_compiler_checks": sum(
+            qft_cech_compiler["checks"].values()
+        ),
+        "qft_explicit_Cech_connection_compiler_checks_total": len(
+            qft_cech_compiler["checks"]
+        ),
+        "qft_intrinsic_spectral_strain_quotient_checks": sum(
+            qft_strain_quotient["checks"].values()
+        ),
+        "qft_intrinsic_spectral_strain_quotient_checks_total": len(
+            qft_strain_quotient["checks"]
+        ),
+        "qft_support_stratified_spectral_strain_checks": sum(
+            qft_strain_boundary["checks"].values()
+        ),
+        "qft_support_stratified_spectral_strain_checks_total": len(
+            qft_strain_boundary["checks"]
+        ),
+        "qft_binary_monodromy_reynolds_descent_checks": sum(
+            qft_binary_monodromy["checks"].values()
+        ),
+        "qft_binary_monodromy_reynolds_descent_checks_total": len(
+            qft_binary_monodromy["checks"]
+        ),
+        "qft_shared_root_C4_local_system_promotion_checks": sum(
+            qft_c4_promotion["checks"].values()
+        ),
+        "qft_shared_root_C4_local_system_promotion_checks_total": len(
+            qft_c4_promotion["checks"]
+        ),
+        "qft_FM_HYM_contract_dependency_compression_checks": sum(
+            qft_fm_hym_compression["checks"].values()
+        ),
+        "qft_FM_HYM_contract_dependency_compression_checks_total": len(
+            qft_fm_hym_compression["checks"]
+        ),
+        "B.QM.01": (
+            "exit_complete_on_canonical_q79_binary_one_anchor_operational_"
+            "output_measure_tier; universal_context_and_objective_"
+            "actualization_open"
+        ),
+        "B.QM.02": "exit_complete_on_canonical_q79_binary_one_anchor_finite_symbol_tier",
+        "B.QFT.01": (
+            "exit_complete_on_selected_q79_framed_free_massless_dirac_"
+            "even_observable_net_tier; interacting_SM_and_universal_"
+            "background_tiers_open"
+        ),
+        "B.QFT.02": (
+            "formal_renormalized_EG_time_ordering_local_interacting_BV_"
+            "algebra_zero_local_gauge_anomaly_all_orders_QME_scheme_and_"
+            "zero_Z6_spin_bordism_obstruction_closed_on_declared_onshell_"
+            "charts; local_formal_positive_state_and_physical_preHilbert_"
+            "existence_closed_on_bounded_H1_zero_regions; contravariant_"
+            "physical_state_space_and_common_parent_finite_compatibility_"
+            "closed_with_arbitrary_state_sheaf_gluing_exactly_obstructed; "
+            "equicausal_domain_and_formal_Hadamard_renormalization_gauge_"
+            "state_transport_closed; free_physical_Cstar_reference_net_"
+            "and_declared_Hadamard_local_quasiequivalent_folia_closed_at_"
+            "lambda_zero; formal_to_fixed_nonzero_coupling_promotion_"
+            "nonunique_by_exact_flat_ambiguity; Hodge_spectral_finite_"
+            "BV_regulator_criterion_and_internal_projector_nonpromotion_"
+            "closed; one_local_auxiliary_full_linear_BV_elliptic_"
+            "compact_resolvent_operator_package_exists; positive_finite_"
+            "shell_Hodge_Lagrangian_cycle_and_free_QME_pushforward_"
+            "closed_with_gapped_path_comparison_theorem; actual_q79_based_"
+            "faithful_gauge_and_residual_frame_path_closed_with_zero_APS_"
+            "flow_zero_BFV_flux_and_canonical_determinant_transport_on_"
+            "the_connected_presentation_orbit; q79_spin_liftable_diff_"
+            "and_ambient_isotopic_full_data_region_transport_closed_with_"
+            "relative_zero_APS_flow_and_BFV_flux; auxiliary_positive_metric_"
+            "unique_given_Cauchy_normal_and_full_boost_neutrality_excluded_"
+            "so_metric_and_normal_reduce_to_one_source_object; A_causal_"
+            "selects_only_the_future_retarded_component_and_collar_relative_"
+            "temporal_companions_are_one_auxiliary_homotopy_class; positive_"
+            "cutoff_crossings_are_contractible_so_normalized_free_finite_"
+            "shell_temporal_polarization_independence_is_closed; anomaly_"
+            "free_determinant_line_trivializability_is_closed_and_the_common_"
+            "absolute_phase_is_retired_as_a_U1_convention_torsor_for_one_"
+            "connected_normalized_sector; relative_disconnected_sector_"
+            "holonomy_remains_physical; the_first_finite_APS_noncollar_"
+            "target_is_reduced_to_one_crossing_line_with_source_free_phase_"
+            "selection_excluded_and_its_abstract_shared_sign_parity_shadow_"
+            "equal_to_minus_one; the_finite_crossing_now_has_an_exact_"
+            "continuum_circle_Dirac_Galerkin_origin_and_the_bulk_to_boundary_"
+            "Dirac_BFV_functor_is_closed_after_a_typed_boundary_package; "
+            "bulk_geometry_plus_sign_holonomy_cannot_select_that_package_by_"
+            "the_exact_sf_zero_vs_one_loop_counterfamily; on_the_actual_"
+            "boundaryless_compact_support_QFT_domain_the_auxiliary_moving_"
+            "regulator_boundary_collar_and_common_BFV_phase_are_retired_as_"
+            "physical_selectors_and_cancel_by_dual_line_gluing; actual_"
+            "free_cofinal_spectral_cutoff_and_tail_control_closed_while_raw_"
+            "interacting_removal_is_excluded_without_local_counterterms; "
+            "exact_heat_semigroup_and_normalized_counterterm_cocycle_seeds_"
+            "closed; naive_adjoint_Hodge_Laplace_promotion_excluded; "
+            "corrected_gaugefixed_Laplace_and_interior_HK_closed_with_local_"
+            "UV_boundary_dependence_O_t_infinity; firstorder_local_BV_"
+            "Costello_presentation_graphwise_counterterm_recursion_and_"
+            "QME_BRST_primitive_induction_closed_at_the_auxiliary_Euclidean_"
+            "formal_tier; pointwise_temporal_reflection_consumed_and_free_"
+            "physical_OS_closed_conditionally_on_an_eight_row_global_"
+            "reflection_contract; automatic_global_reflection_promotion_"
+            "from_generic_smooth_q79_data_and_formal_to_fixed_coupling_OS_"
+            "promotion_excluded; the_direct_Lorentzian_Cauchy_spectral_"
+            "presentation_now_closes_all_six_cutoff_to_EG_rows_up_to_one_"
+            "local_BRST_compatible_SP_map_and_closes_renormalized_"
+            "equicausal_Cauchy_transport_on_formal_physical_H0; a_physical_"
+            "Wick_rotation_is_not_required_for_that_formal_Lorentzian_"
+            "construction_while_explicit_Euclidean_Costello_to_Lorentzian_"
+            "EG_coefficients_remain_an_optional_cross_signature_problem; "
+            "fixed_nonzero_coupling_compact_gauge_Cstar_dynamics_and_a_"
+            "positive_state_now_exist_at_each_auxiliary_finite_regulator; "
+            "Cstar_reduced_product_and_Borel_uniqueness_promotion_theorems_"
+            "are_closed_but_their_q79_uniform_estimates_selection_and_"
+            "uniqueness_rows_are_open; the_auxiliary_gauge_covariant_"
+            "spectral_fixed_coupling_common_source_relative_S_and_cocycle_"
+            "generator_first_tangent_now_matches_the_normalized_formal_"
+            "Lorentzian_EG_SP_first_tangent_with_SP_transported_observables_"
+            "so_one_of_nine_continuum_rows_is_accepted_while_higher_jets_"
+            "and_Cstar_norm_finite_time_convergence_remain_open; compact_"
+            "gauge_and_ghostzero_BRST_observable_defects_are_exact_uniform_"
+            "zero_and_descend_through_every_Cstar_reduced_product; the_"
+            "remaining_quantum_Ward_defect_is_the_chiral_measure_Jacobian_"
+            "so_that_row_is_dependency_reduced; on_each_certified_connected_"
+            "gapped_presentation_component_a_path_independent_parallel_unit_"
+            "determinant_section_now_defines_a_nonperturbative_finite_"
+            "spectral_chiral_Berezin_measure_with_exact_unit_gauge_Jacobian_"
+            "and_zero_reduced_product_norm_defect; full_domain_locality_"
+            "quotient_moduli_crossing_strata_and_disconnected_sector_gluing_"
+            "remain_open; the_analytic_Dirac_Hessian_Riesz_Kato_and_"
+            "determinant_family_completion_is_closed_once_a_selected_"
+            "smooth_physical_source_exists_while_exact_finite_projection_"
+            "noninjectivity_excludes_selecting_that_source_from_the_current_"
+            "finite_rows; the_selected_family_subrow_is_dependency_reduced_"
+            "to_B_HS_01_B_GEO_01_and_B_ACTION_01_with_three_independent_"
+            "full_domain_measure_subrows_and_seven_independent_continuum_"
+            "exits_remaining; "
+            "actual_relative_"
+            "sector_or_physical_"
+            "edge_phase_interacting_continuum_limit_and_Cstar_completion_open; "
+            "preferred_global_states_numerical_RG_matching_upper_action_"
+            "and_nonperturbative_completion_open"
+        ),
+        "B.ACTION.01": (
+            "downward_continuum_action_form_closed_at_profile_covariance_"
+            "tier; selected_upper_q79_action_and_coefficients_open"
+        ),
+        "B.GEO.01": (
+            "universal_curvature_preserving_projective_module_and_explicit_"
+            "finite_Cech_projector_connection_correction_compilers_closed_"
+            "with_hidden_twist_cancellation_in_the_adjoint_rank102_block_"
+            "transport_and_zero_postendpoint_symbol_selectors; direct_"
+            "linear_rank6_Wfin_subspace_route_excluded; intrinsic_relative_"
+            "phase_invariant_seven_dimensional_quotient_nonlinear_six_"
+            "coordinate_strain_shadow_and_reduced_Green_shorted_Hessian_"
+            "closed_on_the_regular_spectral_locus; global_eight_stratum_"
+            "boundary_second_jet_and_tangential_shorting_closed_with_"
+            "ordinary_boundary_Hessian_excluded_and_rank6_C4_regular_"
+            "locus_forcing_exact; global_S3_deck_action_retired_for_the_"
+            "connected_full_monodromy_cover_and_replaced_by_the_parallel_"
+            "q79_associated_strain_local_system_with_exact_Dic3_to_S3_"
+            "Reynolds_descent; selected_shared_root_twisted_exterior_C4_"
+            "now_globalizes_as_parallel_JDE_on_that_strain_local_system_"
+            "while_autonomous_descent_on_the_marked_FuYau_branch_is_"
+            "excluded; actual_q79_source_endpoint_reduced_Green_HYM_C4_"
+            "invariance_or_direct_TT_block_and_action_scale_open"
+        ),
+        "outputs": [str(path.relative_to(ROOT)) for path in outputs],
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

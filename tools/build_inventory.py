@@ -305,6 +305,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument(
+        "--committed-only",
+        action="store_true",
+        help="Index only Git-tracked paths for repository sources.",
+    )
+    parser.add_argument(
         "--repository",
         action="append",
         dest="repositories",
@@ -352,7 +357,21 @@ def main() -> int:
         git_source = exists and repo_path.is_dir() and (repo_path / ".git").exists()
         head = git(repo_path, "rev-parse", "HEAD") if git_source else None
         upstream = git(repo_path, "rev-parse", "@{upstream}") if git_source else None
-        remote = git(repo_path, "remote", "get-url", "origin") if git_source else None
+        remote_name = str(repo.get("git_remote_name") or "origin")
+        remote_refs = (
+            git(
+                repo_path,
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "--contains",
+                "HEAD",
+                f"refs/remotes/{remote_name}",
+            )
+            if git_source
+            else None
+        )
+        remote_ref_lines = remote_refs.splitlines() if remote_refs else []
+        remote = git(repo_path, "remote", "get-url", remote_name) if git_source else None
         status_porcelain = git(repo_path, "status", "--porcelain") if git_source else None
         status_lines = status_porcelain.splitlines() if status_porcelain else []
         status_lines = [
@@ -368,9 +387,23 @@ def main() -> int:
                 "git_repository": git_source,
                 "git_head": head,
                 "git_upstream": upstream,
-                "git_synced": bool(head and upstream and head == upstream),
+                "git_remote_name": remote_name,
+                "git_remote_refs_containing_head": remote_ref_lines,
+                "git_synced": bool(
+                    head
+                    and (
+                        (upstream and head == upstream)
+                        or remote_ref_lines
+                    )
+                ),
                 "git_dirty": dirty,
                 "git_status_porcelain": status_lines,
+                "inventory_scope": (
+                    "git_tracked_only"
+                    if git_source
+                    and (args.committed_only or repo.get("git_tracked_only", False))
+                    else "configured_worktree"
+                ),
                 "remote": remote,
             }
         )
@@ -380,7 +413,10 @@ def main() -> int:
         for path in iter_artifacts(
             repo_path,
             repo.get("source_type", "repository"),
-            bool(repo.get("git_tracked_only", False)),
+            bool(
+                repo.get("git_tracked_only", False)
+                or (args.committed_only and git_source)
+            ),
         ):
             relative = Path(path.name) if repo_path.is_file() else path.relative_to(repo_path)
             if not artifact_allowed(relative, repo):

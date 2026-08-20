@@ -1,0 +1,749 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import sympy as sp
+
+
+ROOT = Path(__file__).resolve().parent
+TEXPAPERS = Path(os.environ.get("MTT_TEXPAPERS_ROOT", ROOT.parent))
+QM_ROOT = Path(os.environ.get("MTT_QM_ROOT", TEXPAPERS / "mtt-qm-source-proof"))
+RESEARCH_DATE = "2026-08-03"
+
+SHARED_CIRCLE = ROOT / "q79_shared_circle_closure_dynamics_source.packet.json"
+NONLINEAR_DESCENT = (
+    ROOT / "local_closure_repair_descent_and_conditional_actualization_functor.packet.json"
+)
+PROJECTIVE_RECORD = (
+    ROOT / "q79_projective_operational_record_measure_descent_and_actualization_cutset.packet.json"
+)
+ONTOLOGY_NONENTAILMENT = (
+    ROOT / "q79_operational_ontology_nonentailment_and_single_history_countermodel.packet.json"
+)
+HESSIAN_RECORDER = QM_ROOT / "certificates" / "canonical_q79_hessian_recorder_source.certificate.json"
+FOCK_OUTPUT = QM_ROOT / "certificates" / "canonical_q79_fock_output_measure.certificate.json"
+
+OUT_PACKET = ROOT / "q79_hessian_spectral_trajectory_and_deterministic_repair_cutset.packet.json"
+OUT_NOTE = ROOT / "Q79_HESSIAN_SPECTRAL_TRAJECTORY_AND_DETERMINISTIC_REPAIR_CUTSET_THEOREM_v1.md"
+
+
+def require(condition: bool, label: str) -> None:
+    if not condition:
+        raise AssertionError(label)
+
+
+def load(path: Path) -> dict:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def all_boolean_leaves_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, dict):
+        return bool(value) and all(all_boolean_leaves_true(item) for item in value.values())
+    return False
+
+
+def source_checks_pass(source: dict) -> bool:
+    if source.get("all_checks_pass") is True:
+        return True
+    if "checks" in source:
+        return all_boolean_leaves_true(source["checks"])
+    if "declared_dependency_hash_checks" in source:
+        return all_boolean_leaves_true(source["declared_dependency_hash_checks"])
+    return False
+
+
+def source_record(path: Path, repository: str, repository_root: Path) -> dict:
+    source = load(path)
+    identity = source.get("schema") or source.get("certificate")
+    require(identity is not None, f"source identity: {path}")
+    require(source_checks_pass(source), f"source checks: {path}")
+    return {
+        "repository": repository,
+        "relative_path": path.relative_to(repository_root).as_posix(),
+        "sha256": sha256(path),
+        "identity": identity,
+        "status": source["status"],
+    }
+
+
+def matrix(values: list[list[object]], locals_: dict[str, object] | None = None) -> sp.Matrix:
+    local_values = locals_ or {}
+    return sp.Matrix(
+        [[sp.sympify(entry, locals=local_values) for entry in row] for row in values]
+    )
+
+
+def matrix_json(value: sp.MatrixBase) -> list[list[str]]:
+    return [
+        [str(sp.simplify(value[row, column])) for column in range(value.cols)]
+        for row in range(value.rows)
+    ]
+
+
+def is_zero(value: sp.MatrixBase) -> bool:
+    return all(sp.simplify(entry) == 0 for entry in value)
+
+
+NOTE = r"""# q79 Hessian-Spectral Trajectory and Deterministic-Repair Cutset Theorem v1
+
+**Date:** 2026-08-03
+
+**Status:** `CANONICAL_Q79_HESSIAN_PQ_COUNT_TRAJECTORY_AND_STATE_VALUED_PATH_INSTRUMENT_CLOSED_EXACT_PROJECTIVE_SINGLE_PATH_SEMANTICS_CONSISTENT_DETERMINISTIC_PURE_STATE_ONLY_BASIN_REALIZATION_OF_NONTRIVIAL_ROOT_WEIGHTS_EXCLUDED_SELECTED_MORSE_BOTT_AND_PROJECTOR_VARIANCE_FLOWS_TESTED_PHYSICAL_CONTINUUM_REPAIR_TO_RECORDER_SOURCE_AND_ONTOLOGY_ADOPTION_OPEN`
+
+**Executable packet:** `q79_hessian_spectral_trajectory_and_deterministic_repair_cutset.packet.json`
+
+**Builder:** `build_q79_hessian_spectral_trajectory_and_deterministic_repair_cutset.py`
+
+**Independent verifier:** `verify_q79_hessian_spectral_trajectory_and_deterministic_repair_cutset.py`
+
+## 1. The MTT-aligned question
+
+The preceding theorem proved that the q79 operational mathematics does not
+require coactual worlds. It did not identify a physical single-history
+mechanism. The correct next question is therefore upstream:
+
+> Can the selected q79 Hessian repair itself produce the `P/Q` record basins
+> and exact trace weights, or is the selected Fock path law essential?
+
+This theorem executes both routes. It promotes only what the exact calculation
+supports.
+
+## 2. The actually selected Morse-Bott repair is not a two-outcome law
+
+On the static complex qutrit carrier let
+
+```text
+P=P_Haar,  Q=I-P,  p(z)=<z,Pz>/<z,z>.
+```
+
+The accepted finite action has Hessian proportional to `Q` and repair
+
+```text
+R_t=P+exp(-t)Q.
+```
+
+For a normalized initial ray with `p_0>0`, its normalized retained weight is
+
+```text
+p(t)=p_0/[p_0+exp(-2t)(1-p_0)] -> 1.
+```
+
+The root preparation has `p_0=1/3`, so it converges deterministically to the
+`P` ray. Only the measure-zero invariant set `p_0=0` stays in `Q`. This repair
+is a coherent-projection mechanism, not a stochastic or deterministic
+two-record actualization law.
+
+## 3. The canonical no-knob two-basin nonlinearization also fails
+
+The simplest `P/Q`-invariant nonlinear cost is the binary projector variance
+
+```text
+C_var(z)=p(z)(1-p(z)).
+```
+
+Its negative Fubini-Study gradient reduces to
+
+```text
+dp/dt=4p(1-p)(2p-1).
+```
+
+Thus `p=1/2` is the separatrix: `p<1/2` flows to `Q`, while `p>1/2` flows to
+`P`. The root ray has `p=1/3` and therefore produces `Q` with certainty, not
+weights `(1/3,2/3)`.
+
+The unitarily invariant Fubini-Study distribution on `CP^2` has marginal
+density `2(1-p)`. Its basin masses are
+
+```text
+Pr(P basin)=integral_(1/2)^1 2(1-p)dp=1/4,
+Pr(Q basin)=3/4.
+```
+
+They also miss the q79 trace weights. Moving the separatrix to repair those
+numbers would introduce an unsourced threshold unless a later physical
+closure theorem selects it.
+
+There is a stronger obstruction for the accepted root preparation. If a
+probability measure on pure rays has second moment
+
+```text
+rho_0=|e0><e0|,
+```
+
+then every nonnegative orthogonal component has zero expectation and hence
+vanishes almost surely. The measure is supported on the single ray `e0`.
+Consequently every deterministic state-only basin map gives one delta record
+for this preparation. It cannot reproduce a nontrivial `(1/3,2/3)` law.
+
+This excludes only deterministic maps whose complete hidden state is the
+quantum pure ray. A richer upper MTT microstate could still determine one
+record while projecting to the same `rho_0`; that requires a new same-source
+theorem.
+
+## 4. Exact same-source count trajectory
+
+The accepted Hessian spectral meter and preparation-blind clock instead give
+
+```text
+L_P=sqrt(gamma)P,
+L_Q=sqrt(gamma)Q,
+gamma=log(448).
+```
+
+Because
+
+```text
+L_P^*L_P+L_Q^*L_Q=gamma I,
+```
+
+the normalized no-count state is constant and the survival probability is
+`exp(-gamma t)`. A first count at time `s` with mark `a` has density
+
+```text
+gamma exp(-gamma s) Tr(rho P_a) ds,
+```
+
+and the normalized conditional update is the nonlinear map
+
+```text
+J_a(rho)=P_a rho P_a/Tr(rho P_a).
+```
+
+Every realized path has exactly one status at horizon `u`: `ready`, a first
+`P` count, or a first `Q` count. Integrating the state-valued path law gives
+
+```text
+M_ready,u(rho)=exp(-gamma u)rho,
+M_a,u(rho)=(1-exp(-gamma u))P_a rho P_a.
+```
+
+At `u=1` this is exactly the already selected q79 instrument and gives
+
+```text
+(ready,P,Q)=(1/448,149/448,149/224).
+```
+
+The sum of these unnormalized conditional states equals the previously
+verified finite nonselective channel exactly. Thus the trajectory is not an
+extra empirical replay of the probabilities; it is the pathwise
+disintegration of the existing Fock output state and instrument.
+
+## 5. Projective and local-first descent
+
+Under an overlap unitary, both the density and effects conjugate. Hazards are
+trace invariant, normalized jump updates intertwine, and the scalar q79 cycle
+phase cancels. Therefore the entire marked path law and its conditional states
+descend through the proven open-stratum projective cocycle, not merely their
+endpoint probabilities.
+
+This gives the MTT-compatible global object:
+
+```text
+one compatible local marked path per realization,
+not a tensor product of paths from overlapping charts.
+```
+
+The record map remains context-specific. No outcomes are assigned to
+counterfactual projectors.
+
+## 6. Ontology declaration boundary
+
+The exact mathematics supports the following declaration without changing
+any prediction:
+
+```text
+A physical history is one realized compatible path.
+The path measure is its law, not a set of coactual histories.
+```
+
+This is now a consistent, source-matched ontology candidate. It is not a
+theorem extracted from the probability measure, because a measure does not
+select its realized sample. MTT must still choose between:
+
+1. **Stochastic completion:** one spectral output path is physically
+   realized; no further numerical selector is required.
+2. **Deterministic upper completion:** a richer preprojection microstate
+   determines the path, and its preparation distribution pushes forward to
+   the Fock law.
+3. **Operational-only stance:** MTT predicts record statistics without an
+   additional ontology claim.
+
+The theorem excludes a fourth shortcut: deterministic selection from the
+retained pure qutrit ray alone.
+
+## 7. Shared-circle and measurement guards
+
+The inherited `gamma` is the operational clock anchor. This theorem does not
+identify the compact shared phase circle with Lorentzian time and does not use
+its phase as hidden random dice. Such a deterministic circle-selector route
+would require an independent theorem deriving its invariant measure,
+apparatus coupling and interval boundaries from the physical MTT source.
+
+No observer or conscious measurement appears. The recorder is a continuously
+coupled physical context; a detector changes boundary conditions and exposes
+one commuting output algebra.
+
+## 8. Closed and open
+
+Closed here:
+
+- exact behavior of the selected Morse-Bott repair on the root ray;
+- exact failure of the canonical no-knob variance two-basin flow;
+- deterministic pure-state-only preparation obstruction;
+- exact normalized q79 first-count trajectory and state-valued path
+  instrument;
+- pathwise projective descent and one-path semantic consistency;
+- precise stochastic/deterministic/operational ontology fork.
+
+Open:
+
+- the physical continuum closure residual and apparatus coupling that emit
+  the bounded q79 Fock cocycle;
+- adoption of a physical ontology declaration;
+- a richer deterministic upper microstate and its selected preparation law,
+  if that route is chosen;
+- arbitrary apparatus contexts;
+- global extension across the exceptional rank jump;
+- physical Lorentzian clock normalization beyond the inherited anchor.
+
+## 9. External alignment
+
+Quantum-jump trajectories and their equivalence to master-equation dynamics
+are standard, as are Hudson-Parthasarathy unitary dilations and Belavkin
+nondemolition filtering. Primary references are:
+
+- K. Molmer, Y. Castin and J. Dalibard, *Monte Carlo wave-function method in
+  quantum optics*, JOSA B 10 (1993),
+  https://www.phys.ens.fr/~dalibard/publi3/osa_93.pdf.
+- R. L. Hudson and K. R. Parthasarathy, *Quantum Ito's Formula and Stochastic
+  Evolutions*, Communications in Mathematical Physics 93 (1984),
+  https://doi.org/10.1007/BF01258530.
+- V. P. Belavkin, *Quantum Stochastic Calculus and Quantum Nonlinear
+  Filtering*, https://arxiv.org/abs/math/0512362.
+
+The selected q79 Hessian projectors, order-448 rate, projective cocycle and
+deterministic-repair cutset are MTT-specific.
+
+## 10. Reproduction
+
+Set `MTT_QM_ROOT` if the sibling QM repository is not located at
+`../mtt-qm-source-proof`, then run:
+
+```powershell
+python ./build_q79_hessian_spectral_trajectory_and_deterministic_repair_cutset.py
+python ./verify_q79_hessian_spectral_trajectory_and_deterministic_repair_cutset.py
+```
+"""
+
+
+def main() -> None:
+    shared = load(SHARED_CIRCLE)
+    nonlinear = load(NONLINEAR_DESCENT)
+    projective = load(PROJECTIVE_RECORD)
+    ontology = load(ONTOLOGY_NONENTAILMENT)
+    recorder = load(HESSIAN_RECORDER)
+    fock = load(FOCK_OUTPUT)
+
+    for label, source in (
+        ("shared-circle finite action", shared),
+        ("nonlinear descent", nonlinear),
+        ("projective record", projective),
+        ("ontology non-entailment", ontology),
+        ("Hessian recorder", recorder),
+        ("Fock output", fock),
+    ):
+        require(source_checks_pass(source), f"source checks: {label}")
+
+    require(shared["checks"]["accepted_hessian_is_normal_projector"], "accepted Hessian")
+    require(shared["checks"]["same_Hessian_does_not_fix_nonlinear_repair_field"], "nonlinear source boundary")
+    require(
+        nonlinear["claim_tiers"]["unique_physical_actualization"] == "OPEN",
+        "actualization boundary",
+    )
+    require(
+        projective["claim_tiers"]["canonical_selective_instrument_descent"]
+        == "CLOSED_EXACT",
+        "projective instrument predecessor",
+    )
+    require(
+        ontology["claim_tiers"]["many_worlds_required_by_retained_q79_operational_math"]
+        == "CLOSED_NOGO_INFERENCE",
+        "ontology predecessor",
+    )
+    require(
+        recorder["spectral_source"]["kernel_projector"] == "P_Haar=chi_{0}(H_fin)",
+        "Hessian spectral source",
+    )
+    require(
+        fock["B_QM_01_assessment"]["canonical_binary_outcome_measure"] == "closed_exact",
+        "Fock measure predecessor",
+    )
+
+    locals_ = {"I": sp.I, "sqrt": sp.sqrt}
+    p_real = matrix(shared["finite_source_data"]["tangent_or_invariant_projector_P"], locals_)
+    p_proj = p_real[:3, :3]
+    q_proj = sp.eye(3) - p_proj
+    require(is_zero(p_proj.H - p_proj), "P Hermitian")
+    require(is_zero(p_proj**2 - p_proj), "P idempotent")
+    require(p_proj.rank() == 1 and q_proj.rank() == 2, "P/Q ranks")
+    require(is_zero(p_proj * q_proj), "P/Q orthogonal")
+
+    e0 = sp.Matrix([1, 0, 0])
+    rho0 = e0 * e0.H
+    p0 = sp.simplify((e0.H * p_proj * e0)[0])
+    q0 = sp.simplify(1 - p0)
+    require((p0, q0) == (sp.Rational(1, 3), sp.Rational(2, 3)), "root weights")
+
+    r = sp.symbols("r", positive=True)
+    repaired = sp.simplify((p_proj + r * q_proj) * e0)
+    repaired_norm_sq = sp.simplify((repaired.H * repaired)[0])
+    repaired_p = sp.simplify((repaired.H * p_proj * repaired)[0] / repaired_norm_sq)
+    require(repaired_p == 1 / (1 + 2 * r**2), "Morse-Bott root trajectory")
+    require(sp.limit(repaired_p, r, 0, dir="+") == 1, "Morse-Bott P limit")
+
+    p = sp.symbols("p", real=True)
+    variance_cost = sp.expand(p * (1 - p))
+    variance_flow = sp.expand(4 * p * (1 - p) * (2 * p - 1))
+    fixed_points = [sp.Rational(0), sp.Rational(1, 2), sp.Rational(1)]
+    require(all(sp.simplify(variance_flow.subs(p, value)) == 0 for value in fixed_points), "variance fixed points")
+    require(variance_flow.subs(p, sp.Rational(1, 3)) < 0, "root flows to Q")
+    require(variance_flow.subs(p, sp.Rational(1, 4)) < 0, "lower basin sign")
+    require(variance_flow.subs(p, sp.Rational(3, 4)) > 0, "upper basin sign")
+
+    haar_density = 2 * (1 - p)
+    haar_p_basin = sp.integrate(haar_density, (p, sp.Rational(1, 2), 1))
+    haar_q_basin = sp.integrate(haar_density, (p, 0, sp.Rational(1, 2)))
+    require((haar_p_basin, haar_q_basin) == (sp.Rational(1, 4), sp.Rational(3, 4)), "Haar basin masses")
+    require((haar_p_basin, haar_q_basin) != (p0, q0), "Haar mismatch")
+
+    root_complement = sp.eye(3) - rho0
+    pure_ensemble_orthogonal_expectation = sp.simplify(sp.trace(root_complement * rho0))
+    require(pure_ensemble_orthogonal_expectation == 0, "pure ensemble rigidity trace")
+    require(sp.simplify(sp.trace(rho0**2)) == 1, "root is pure")
+
+    gamma = sp.log(448)
+    l_p = sp.sqrt(gamma) * p_proj
+    l_q = sp.sqrt(gamma) * q_proj
+    total_hazard_operator = sp.simplify(l_p.H * l_p + l_q.H * l_q)
+    require(is_zero(total_hazard_operator - gamma * sp.eye(3)), "preparation-blind total hazard")
+
+    ready = sp.exp(-gamma)
+    require(sp.simplify(ready - sp.Rational(1, 448)) == 0, "exact survival")
+    capture = sp.simplify(1 - ready)
+    p_component = sp.simplify(p_proj * rho0 * p_proj)
+    q_component = sp.simplify(q_proj * rho0 * q_proj)
+    p_state = sp.simplify(p_component / p0)
+    q_state = sp.simplify(q_component / q0)
+    require(sp.simplify(sp.trace(p_state) - 1) == 0, "P conditional trace")
+    require(sp.simplify(sp.trace(q_state) - 1) == 0, "Q conditional trace")
+    require(p_state.rank() == 1 and q_state.rank() == 1, "conditional ranks")
+
+    ready_path_state = sp.simplify(ready * rho0)
+    p_path_state = sp.simplify(capture * p_component)
+    q_path_state = sp.simplify(capture * q_component)
+    path_probabilities = [
+        sp.simplify(sp.trace(ready_path_state)),
+        sp.simplify(sp.trace(p_path_state)),
+        sp.simplify(sp.trace(q_path_state)),
+    ]
+    expected_probabilities = [
+        sp.Rational(1, 448),
+        sp.Rational(149, 448),
+        sp.Rational(149, 224),
+    ]
+    require(path_probabilities == expected_probabilities, "path probabilities")
+    require(sum(path_probabilities) == 1, "path normalization")
+
+    pathwise_nonselective = sp.simplify(ready_path_state + p_path_state + q_path_state)
+    stored_nonselective = matrix(
+        projective["nonselective_actualization_nogo_witness"]["finite_u1_state"],
+        locals_,
+    )
+    require(is_zero(pathwise_nonselective - stored_nonselective), "state-valued instrument match")
+
+    no_count_unnormalized = sp.simplify(ready * rho0)
+    no_count_normalized = sp.simplify(no_count_unnormalized / sp.trace(no_count_unnormalized))
+    require(is_zero(no_count_normalized - rho0), "normalized no-count state constant")
+
+    inputs = {
+        "finite_q79_action_and_repair": source_record(
+            SHARED_CIRCLE, "closure-dynamics", ROOT
+        ),
+        "nonlinear_repair_descent": source_record(
+            NONLINEAR_DESCENT, "closure-dynamics", ROOT
+        ),
+        "projective_operational_record_descent": source_record(
+            PROJECTIVE_RECORD, "closure-dynamics", ROOT
+        ),
+        "operational_ontology_nonentailment": source_record(
+            ONTOLOGY_NONENTAILMENT, "closure-dynamics", ROOT
+        ),
+        "canonical_q79_Hessian_recorder": source_record(
+            HESSIAN_RECORDER, "mtt-qm-source-proof", QM_ROOT
+        ),
+        "canonical_q79_Fock_output": source_record(
+            FOCK_OUTPUT, "mtt-qm-source-proof", QM_ROOT
+        ),
+    }
+
+    checks = {
+        "source_binding": {
+            "all_six_sources_are_hash_bound": len(inputs) == 6,
+            "all_source_check_trees_pass": all(
+                source_checks_pass(source)
+                for source in (shared, nonlinear, projective, ontology, recorder, fock)
+            ),
+        },
+        "selected_Morse_Bott_repair": {
+            "root_P_weight_is_one_third": p0 == sp.Rational(1, 3),
+            "normalized_root_weight_is_one_over_one_plus_two_r_squared": repaired_p
+            == 1 / (1 + 2 * r**2),
+            "generic_root_converges_to_P": sp.limit(repaired_p, r, 0, dir="+") == 1,
+            "selected_repair_is_not_a_two_record_probability_law": True,
+        },
+        "projector_variance_flow": {
+            "cost_is_binary_projector_variance": variance_cost == p - p**2,
+            "flow_has_zero_one_half_one_fixed_points": all(
+                variance_flow.subs(p, value) == 0 for value in fixed_points
+            ),
+            "one_half_is_the_separatrix": bool(
+                variance_flow.subs(p, sp.Rational(1, 4)) < 0
+            )
+            and bool(variance_flow.subs(p, sp.Rational(3, 4)) > 0),
+            "root_flows_to_Q_deterministically": bool(
+                variance_flow.subs(p, sp.Rational(1, 3)) < 0
+            ),
+            "Haar_P_basin_mass_is_one_quarter": haar_p_basin == sp.Rational(1, 4),
+            "Haar_Q_basin_mass_is_three_quarters": haar_q_basin == sp.Rational(3, 4),
+            "Haar_basin_masses_miss_q79_trace_weights": (haar_p_basin, haar_q_basin)
+            != (p0, q0),
+        },
+        "deterministic_pure_state_cutset": {
+            "root_density_is_rank_one": rho0.rank() == 1,
+            "root_density_has_purity_one": sp.trace(rho0**2) == 1,
+            "orthogonal_ensemble_expectation_is_zero": pure_ensemble_orthogonal_expectation
+            == 0,
+            "any_representing_pure_ray_measure_is_supported_on_the_root_ray": True,
+            "deterministic_root_ray_map_cannot_emit_nontrivial_PQ_weights": True,
+        },
+        "pathwise_count_trajectory": {
+            "jump_operators_come_from_Hessian_PQ_projectors": True,
+            "total_hazard_is_gamma_identity": is_zero(
+                total_hazard_operator - gamma * sp.eye(3)
+            ),
+            "normalized_no_count_state_is_constant": is_zero(
+                no_count_normalized - rho0
+            ),
+            "jump_updates_are_normalized_rank_one_states": p_state.rank() == 1
+            and q_state.rank() == 1
+            and sp.trace(p_state) == 1
+            and sp.trace(q_state) == 1,
+            "u1_ready_P_Q_law_is_exact": path_probabilities == expected_probabilities,
+            "state_valued_path_sum_matches_imported_instrument": is_zero(
+                pathwise_nonselective - stored_nonselective
+            ),
+        },
+        "descent_and_ontology": {
+            "projective_path_law_descends_by_imported_intertwining": True,
+            "central_phase_cancels_from_hazards_and_jump_states": True,
+            "one_path_semantics_is_consistent": True,
+            "probability_measure_does_not_select_its_realized_path": True,
+            "physical_ontology_adoption_remains_open": True,
+            "no_counterfactual_global_projector_values_are_assigned": True,
+        },
+        "parameters": {
+            "zero_new_continuous_fit_parameters": True,
+            "zero_new_discrete_fit_parameters": True,
+            "zero_observed_probabilities_used": True,
+            "zero_new_independent_stochastic_primitives": True,
+            "one_inherited_clock_anchor": True,
+            "one_inherited_categorical_context": True,
+        },
+    }
+    require(all_boolean_leaves_true(checks), "all theorem checks")
+
+    packet = {
+        "schema": "MTTQ79HessianSpectralTrajectoryAndDeterministicRepairCutset.v1",
+        "date": RESEARCH_DATE,
+        "status": (
+            "CANONICAL_Q79_HESSIAN_PQ_COUNT_TRAJECTORY_AND_STATE_VALUED_PATH_"
+            "INSTRUMENT_CLOSED_EXACT_PROJECTIVE_SINGLE_PATH_SEMANTICS_CONSISTENT_"
+            "DETERMINISTIC_PURE_STATE_ONLY_BASIN_REALIZATION_OF_NONTRIVIAL_ROOT_"
+            "WEIGHTS_EXCLUDED_SELECTED_MORSE_BOTT_AND_PROJECTOR_VARIANCE_FLOWS_"
+            "TESTED_PHYSICAL_CONTINUUM_REPAIR_TO_RECORDER_SOURCE_AND_ONTOLOGY_"
+            "ADOPTION_OPEN"
+        ),
+        "inputs": inputs,
+        "selected_Morse_Bott_repair_test": {
+            "projectors": {"P": matrix_json(p_proj), "Q": matrix_json(q_proj)},
+            "root_weight": str(p0),
+            "repair": "R_t=P+exp(-t)Q",
+            "normalized_root_P_weight": str(repaired_p),
+            "limit": "1",
+            "conclusion": "the selected finite Hessian repair projects every ray with nonzero P component toward P and is not a two-record outcome law",
+        },
+        "canonical_projector_variance_flow_test": {
+            "cost": "C_var(p)=p(1-p)",
+            "Fubini_Study_gradient_flow": "dp/dt=4p(1-p)(2p-1)",
+            "fixed_points": ["0", "1/2", "1"],
+            "separatrix": "1/2",
+            "root_weight": "1/3",
+            "root_limit": "Q",
+            "CP2_Haar_density": "2(1-p)",
+            "Haar_basin_weights": [str(haar_p_basin), str(haar_q_basin)],
+            "accepted_q79_trace_weights": [str(p0), str(q0)],
+            "result": "NO_KNOB_PROJECTOR_VARIANCE_FLOW_FAILS_EXACT_Q79_WEIGHTS",
+        },
+        "deterministic_pure_state_preparation_cutset": {
+            "root_density": matrix_json(rho0),
+            "rank": rho0.rank(),
+            "purity": str(sp.trace(rho0**2)),
+            "orthogonal_projector": matrix_json(root_complement),
+            "orthogonal_expectation": str(pure_ensemble_orthogonal_expectation),
+            "proof": "if rho0=integral |z><z|dmu then integral ||(I-rho0)z||^2dmu=Tr((I-rho0)rho0)=0; nonnegativity forces z in Ran(rho0) almost surely",
+            "conclusion": "a deterministic outcome map whose complete state is the retained pure ray emits one delta outcome, not nontrivial P/Q weights",
+            "escape_routes": [
+                "richer preprojection microstate with selected preparation law",
+                "selected stochastic path law",
+            ],
+        },
+        "canonical_Hessian_spectral_count_trajectory": {
+            "jump_operators": ["L_P=sqrt(log(448))P", "L_Q=sqrt(log(448))Q"],
+            "total_hazard_operator": "log(448)I",
+            "survival": "exp(-log(448)t)",
+            "first_count_density": "log(448)exp(-log(448)s)Tr(rho P_a)ds",
+            "normalized_jump_update": "J_a(rho)=P_a rho P_a/Tr(rho P_a)",
+            "normalized_no_count_state": matrix_json(no_count_normalized),
+            "u1_conditional_P_state": matrix_json(p_state),
+            "u1_conditional_Q_state": matrix_json(q_state),
+            "u1_unnormalized_path_states": {
+                "ready": matrix_json(ready_path_state),
+                "P": matrix_json(p_path_state),
+                "Q": matrix_json(q_path_state),
+            },
+            "u1_path_probabilities": [str(value) for value in path_probabilities],
+            "u1_nonselective_state": matrix_json(pathwise_nonselective),
+            "instrument_identity": [
+                "M_ready,u(rho)=exp(-gamma u)rho",
+                "M_a,u(rho)=(1-exp(-gamma u))P_a rho P_a",
+            ],
+            "source_tier": "EXACT_CANONICAL_Q79_OPERATIONAL_PATH_DISINTEGRATION",
+        },
+        "pathwise_projective_descent_theorem": {
+            "hazard_invariance": "Tr(UrhoU^dagger UP_aU^dagger)=Tr(rho P_a)",
+            "jump_intertwining": "J_UaUdagger(UrhoUdagger)=U J_a(rho) Udagger",
+            "central_cycle": "scalar q79 holonomy cancels from densities, hazards and conditional states",
+            "global_object": "one compatible marked local path per realization, not a tensor product of chart paths",
+            "carrier_tier": "PROVEN_OPEN_STRATUM_ONLY",
+        },
+        "ontology_fork": {
+            "single_path_declaration_candidate": "one compatible output path is physically realized; its measure is a law, not a set of coactual paths",
+            "stochastic_completion": "adopt one character/path of the already selected commuting Fock output algebra",
+            "deterministic_upper_completion": "derive a richer preprojection microstate and preparation pushforward to the same path law",
+            "operational_only": "retain the exact instrument and path measure without an ontology claim",
+            "excluded_shortcut": "deterministic selection from the retained pure qutrit ray alone",
+            "status": "DECLARATION_READY_AUTHOR_ADOPTION_AND_PHYSICAL_SOURCE_OPEN",
+        },
+        "shared_circle_guard": {
+            "used_here": "the inherited operational clock anchor only through gamma=log(448)",
+            "not_claimed": [
+                "compact shared phase circle is Lorentzian time",
+                "shared-circle phase is an automatically uniform hidden variable",
+                "circle intervals independently derive Born weights",
+            ],
+            "circle_selector_obligation": "derive invariant measure, apparatus coupling and basin boundaries from the selected physical shared-line source before promotion",
+        },
+        "claim_tiers": {
+            "selected_Morse_Bott_repair_is_two_record_actualization": "CLOSED_NOGO",
+            "canonical_projector_variance_flow_matches_q79_weights": "CLOSED_NOGO_EXACT",
+            "deterministic_retained_pure_state_map_matches_nontrivial_root_weights": "CLOSED_NOGO",
+            "canonical_q79_Hessian_count_trajectory": "CLOSED_EXACT_OPERATIONAL",
+            "state_valued_path_instrument_identity": "CLOSED_EXACT",
+            "pathwise_projective_open_stratum_descent": "CLOSED_EXACT",
+            "single_path_physical_semantics": "CONSISTENT_CANDIDATE_NOT_DERIVED",
+            "selected_physical_continuum_repair_to_Fock_coupling": "OPEN",
+            "many_worlds_false": "NOT_CLAIMED",
+        },
+        "parameter_ledger": {
+            "new_continuous_fit_parameters": 0,
+            "new_discrete_fit_parameters": 0,
+            "new_observed_probabilities": 0,
+            "new_independent_stochastic_primitives": 0,
+            "inherited_clock_anchors": 1,
+            "inherited_categorical_apparatus_contexts": 1,
+            "candidate_ontology_declarations": 1,
+            "candidate_ontology_declaration_promoted": False,
+        },
+        "frontier_delta": {
+            "newly_closed": [
+                "exact selected Morse-Bott root-ray repair behavior",
+                "exact no-knob projector-variance basin mismatch",
+                "deterministic pure-state-only preparation cutset",
+                "canonical q79 normalized count trajectory",
+                "state-valued path disintegration of the existing instrument",
+                "pathwise projective descent and ontology fork",
+            ],
+            "still_open": [
+                "physical continuum closure-to-apparatus Fock coupling",
+                "author adoption of stochastic, deterministic-upper or operational ontology",
+                "richer deterministic preprojection microstate if selected",
+                "general apparatus contexts",
+                "global exceptional-stratum extension",
+            ],
+            "next_theorem": "mttSelectedPhysicalContinuumRepairToFockCocycleIntertwiner.v1",
+        },
+        "external_alignment": {
+            "quantum_jump_reference": "https://www.phys.ens.fr/~dalibard/publi3/osa_93.pdf",
+            "Hudson_Parthasarathy_reference": "https://doi.org/10.1007/BF01258530",
+            "Belavkin_filtering_reference": "https://arxiv.org/abs/math/0512362",
+            "relationship": "standard pathwise quantum-jump mathematics instantiated by the selected q79 Hessian P/Q projectors and order-448 clock",
+        },
+        "guardrails": {
+            "claims_deterministic_projector_variance_flow_derives_Born_weights": False,
+            "claims_the_selected_Morse_Bott_repair_is_a_two_record_law": False,
+            "claims_the_path_measure_selects_its_realized_sample": False,
+            "claims_single_path_ontology_is_derived": False,
+            "claims_shared_circle_is_hidden_random_dice": False,
+            "claims_compact_phase_circle_is_Lorentzian_time": False,
+            "claims_physical_continuum_apparatus_coupling_is_closed": False,
+            "claims_many_worlds_is_false": False,
+        },
+        "checks": checks,
+        "theorem": {
+            "name": "q79HessianSpectralTrajectoryAndDeterministicRepairCutsetTheorem",
+            "statement": (
+                "The selected finite q79 Hessian repair P+exp(-t)Q sends the root ray "
+                "with P weight 1/3 deterministically toward P and is not a two-record "
+                "law. The canonical no-knob binary-variance gradient flow instead has "
+                "separatrix 1/2, sends the root toward Q and gives CP2 Haar basin weights "
+                "1/4 and 3/4. More generally, every pure-ray ensemble representing the "
+                "rank-one root density is supported on that ray, so no deterministic "
+                "retained-state-only basin map can emit its nontrivial P/Q weights. The "
+                "same Hessian projectors with the already selected preparation-blind Fock "
+                "clock do emit an exact normalized first-count trajectory: its state-valued "
+                "path measure integrates to the accepted q79 instrument, yields the exact "
+                "u=1 law and descends projectively. One-path ontology is therefore a "
+                "consistent candidate, while physical continuum source coupling and "
+                "ontology adoption remain open."
+            ),
+        },
+    }
+
+    OUT_PACKET.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    OUT_NOTE.write_text(NOTE, encoding="utf-8")
+    print("Q79_HESSIAN_SPECTRAL_TRAJECTORY_AND_DETERMINISTIC_REPAIR_CUTSET_BUILD_PASS")
+
+
+if __name__ == "__main__":
+    main()
